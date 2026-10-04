@@ -1,3 +1,13 @@
+# Current local update — 2026-10-04
+
+Migration 0005_account_management adds billing_methods (UUID, nullable owner for platform methods, encrypted details, type/label/enabled), account_audit (actor, subject, action, timestamp), password_resets (owner, unique token hash, expiry, consumed flag), and github_connections.user_token/token_expires_at. Prior imported migrations add plans/platform_policy/GitHub states/provider credentials. Encryption key is outside the DB. Deletion requests preserve user and workspace rows.
+
+See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
+
+---
+
+## Earlier audit (historical)
+
 # Database reference
 
 Updated 2026-10-03. SQLAlchemy models are runtime authority. PostgreSQL is the application target; SQLite is explicitly test-only. No customer repository source content or raw authentication token is stored in Gateway PostgreSQL.

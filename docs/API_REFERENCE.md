@@ -1,3 +1,13 @@
+# Current local update — 2026-10-04
+
+Management additions: PUT /api/account/password; POST /api/auth/forgot-password and /reset-password; POST /api/account/lifecycle; GET /api/account/sessions; DELETE /api/account/sessions/{id}; GET /api/account/logs; GET/POST /api/billing/methods; PUT/DELETE /api/billing/methods/{id}; GET /api/billing/available-methods; GET /api/admin/logs and /connections; DELETE /api/admin/connections/{user_id}; PUT /api/admin/users/{user_id}/role; GET/POST /api/admin/locations/{kind}; PUT/DELETE /api/admin/locations/{kind}/{id}. platform=true selects admin payment scope; DELETE location disables it. Password inputs are current_password/new_password; recovery uses email then token/password; lifecycle uses action/password/confirmation. All account APIs require authentication except generic recovery request and token-authorized reset. See OpenAPI /docs for field schemas. GitHub callbacks now require code and verified membership.
+
+See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
+
+---
+
+## Earlier audit (historical)
+
 # API reference
 
 Updated 2026-10-03. Current local implementation; no deployment claim. Same-origin browser requests use an opaque HttpOnly SameSite=Strict cookie. Session tokens are never returned in JSON. `Secure=true` is the default; only local HTTP testing sets false. Mutating cross-site Origin / Fetch Metadata requests are rejected.

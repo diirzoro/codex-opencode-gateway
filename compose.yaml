@@ -2,10 +2,10 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: gateway
-      POSTGRES_USER: gateway
-      POSTGRES_PASSWORD: gateway
-    ports: ["5432:5432"]
+      POSTGRES_DB: ${GATEWAY_PG_DB:-gateway_local}
+      POSTGRES_USER: ${GATEWAY_PG_USER:-gateway_local}
+      POSTGRES_PASSWORD: ${GATEWAY_PG_PASSWORD:-gateway_local}
+    ports: ["${GATEWAY_PG_PORT:-55432}:5432"]
     volumes: ["gateway-postgres:/var/lib/postgresql/data"]
 volumes:
   gateway-postgres:

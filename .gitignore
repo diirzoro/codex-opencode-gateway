@@ -42,3 +42,4 @@ playwright.config.cjs
 .playwright-mcp/
 .snapshot*.yml
 !deployment/.env.production.example
+reference/theme-backup-*/

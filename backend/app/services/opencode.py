@@ -5,7 +5,15 @@ from urllib.parse import quote
 import httpx
 from fastapi import HTTPException
 from ..config import settings
+from .policy import DEFAULT_PERMISSION, permission_config
 from .workspaces import root_for
+
+# Admin provider/model/tool policy is applied when a per-workspace runtime starts.
+_policy_permission = dict(DEFAULT_PERMISSION)
+
+def configure_policy(policy):
+    global _policy_permission
+    _policy_permission = permission_config(policy) if policy is not None else dict(DEFAULT_PERMISSION)
 
 @dataclass
 class Runtime:
@@ -69,7 +77,7 @@ def for_workspace(workspace):
         for key_env,folder in {"HOME":"home","USERPROFILE":"home","APPDATA":"config","LOCALAPPDATA":"data","XDG_CONFIG_HOME":"config","XDG_DATA_HOME":"data","XDG_STATE_HOME":"state","XDG_CACHE_HOME":"cache"}.items():
             path=context/folder; path.mkdir(exist_ok=True); env[key_env]=str(path)
         password=secrets.token_urlsafe(32)
-        env.update(OPENCODE_SERVER_PASSWORD=password,OPENCODE_CONFIG_CONTENT=json.dumps({"autoupdate":False,"share":"disabled","plugin":[],"permission":{"*":"ask","external_directory":"deny"}}))
+        env.update(OPENCODE_SERVER_PASSWORD=password,OPENCODE_CONFIG_CONTENT=json.dumps({"autoupdate":False,"share":"disabled","plugin":[],"permission":_policy_permission}))
         with socket.socket() as sock:
             sock.bind(("127.0.0.1",0)); port=sock.getsockname()[1]
         log=open(context/"runtime.log","a",encoding="utf-8")

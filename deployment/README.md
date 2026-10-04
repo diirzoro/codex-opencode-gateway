@@ -45,3 +45,7 @@ curl --fail --silent --show-error http://127.0.0.1:8000/api/health
 Migration failure: keep the service stopped, preserve backup and diagnose; do not rerun destructively or downgrade new workspace tables. Health is process liveness, not proof of account/DB/runtime/GitHub functionality. Run the approved acceptance checks over HTTPS before public release. Rollback requires a reviewed source/database plan; restoring source alone may not match schema.
 
 Existing service template is illustrative and has not been installed or validated against the VPS. Do not run a second public OpenCode UI; internal ports must remain firewalled. Do not use production secrets in local tests.
+
+## Account management release (2026-10-04)
+
+Expected migration head: `0005_account_management`. Preserve `CREDENTIALS_ENCRYPTION_KEY`; losing it prevents decryption of saved credentials/payment details. Configure SMTP and an HTTPS PUBLIC_BASE_URL for reset links. GitHub App must request user OAuth authorization during installation; existing connections must reconnect. Client tokens expire after at most 8 hours; automatic refresh is pending. Payment methods are configuration only.

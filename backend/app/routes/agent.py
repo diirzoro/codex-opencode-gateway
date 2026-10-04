@@ -10,11 +10,34 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
 from ..models import User, Workspace, WorkspaceSession, ExecutionEvent
-from ..services import workspaces, opencode
+from ..services import workspaces, opencode, policy
 from .dependencies import require_user
 
 router=APIRouter(prefix="/api/sessions",tags=["agent"])
 tasks={}
+
+_SECRET_RE = re.compile(r"(?:sk-[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})")
+
+def _sanitize(text, workspace):
+    text=str(text).replace(str(workspaces.root_for(workspace)),"[workspace]")
+    return _SECRET_RE.sub("[redacted]",text)
+
+def normalize_states(parts):
+    """Map real OpenCode tool parts to Gateway execution states (order preserving)."""
+    states=[]
+    for part in parts or []:
+        if not isinstance(part,dict) or part.get("type")!="tool": continue
+        tool=str(part.get("tool") or "").lower()
+        if tool in {"read","list","glob","grep","webfetch","fetch","ls"}: state="reading_files"
+        elif tool in {"edit","write","patch","multiedit","apply_patch"}: state="editing"
+        elif tool in {"bash","shell"}:
+            state_obj=part.get("state") or {}
+            inp=state_obj.get("input") if isinstance(state_obj,dict) else {}
+            command=str((inp or {}).get("command","")) if isinstance(inp,dict) else ""
+            state="running_tests" if re.search(r"\b(test|pytest|jest|vitest|go test|cargo test|npm test|yarn test|pnpm test)\b",command,re.I) else "running_command"
+        else: state="analyzing"
+        if not states or states[-1]!=state: states.append(state)
+    return states
 
 class MessageRequest(BaseModel):
     text: str=Field(min_length=1,max_length=20000)
@@ -35,13 +58,20 @@ def event(db,session_id,kind,data=None):
 
 async def execute(session_id,service,runtime_id,data):
     try:
+        with SessionLocal() as db:
+            session=db.get(WorkspaceSession,session_id)
+            if session and session.status!="cancelled": event(db,session.id,"analyzing")
         response=await asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),{"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}},600)
         failure=bool(response.get("info",{}).get("error")) if isinstance(response,dict) else True
         with SessionLocal() as db:
             session=db.get(WorkspaceSession,session_id)
             if session and session.status!="cancelled":
-                session.status="failed" if failure else "completed"
-                event(db,session.id,session.status)
+                if failure:
+                    session.status="failed"; event(db,session.id,"failed")
+                else:
+                    for state in normalize_states(response.get("parts") if isinstance(response,dict) else []):
+                        event(db,session.id,state)
+                    session.status="completed"; event(db,session.id,"completed")
     except Exception:
         with SessionLocal() as db:
             session=db.get(WorkspaceSession,session_id)
@@ -58,6 +88,12 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
     # One mutating agent at a time per workspace to protect shared files.
     busy=db.scalar(select(WorkspaceSession).where(WorkspaceSession.workspace_id==workspace.id,WorkspaceSession.status.in_(["submitted","waiting_approval"])))
     if busy: raise HTTPException(409,"Another session is using this workspace")
+    policy_row=policy.load(db)
+    if not policy.provider_allowed(policy_row,data.provider_id):
+        raise HTTPException(403,"Provider is disabled by platform policy")
+    if not policy.model_allowed(policy_row,data.model_id):
+        raise HTTPException(403,"Model is disabled by platform policy")
+    opencode.configure_policy(policy_row)
     service=await asyncio.to_thread(opencode.for_workspace,workspace)
     provider_data=await asyncio.to_thread(service.request,"GET","/provider")
     if data.provider_id not in provider_data.get("connected",[]):
@@ -76,9 +112,18 @@ def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=
     output=[]
     for item in result:
         text="\n".join(p.get("text","") for p in item.get("parts",[]) if p.get("type")=="text")[:50000]
-        text=text.replace(str(workspaces.root_for(workspace)),"[workspace]")
-        text=re.sub(r"(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})","[redacted]",text)
-        output.append({"role":item.get("info",{}).get("role"),"text":text})
+        output.append({"role":item.get("info",{}).get("role"),"text":_sanitize(text,workspace)})
+    return output
+
+@router.get("/{session_id}/diff")
+def session_diff(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    service=opencode.for_workspace(workspace)
+    rows=service.request("GET",service.session_path(session.opencode_session_id,"/diff"))
+    output=[]
+    for item in rows or []:
+        patch=_sanitize(item.get("patch",""),workspace)
+        output.append({"file":item.get("file"),"status":item.get("status"),"additions":item.get("additions"),"deletions":item.get("deletions"),"patch":patch[:200000]})
     return output
 
 @router.post("/{session_id}/stop")

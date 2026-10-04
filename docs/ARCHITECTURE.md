@@ -1,3 +1,13 @@
+# Current local update — 2026-10-04
+
+The active deliverable is codex project/project. management.js extends existing account/admin pages. FastAPI management routes persist owned payment details, reset hashes and audit records. GitHub customer calls use encrypted customer user tokens after installation-membership verification. OpenCode remains a separate owned-workspace runtime; no VPS is contacted.
+
+See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
+
+---
+
+## Earlier audit (historical)
+
 # Architecture
 
 Updated 2026-10-03. Independent local development project, not affiliated with OpenCode or GitHub. No deployment performed.

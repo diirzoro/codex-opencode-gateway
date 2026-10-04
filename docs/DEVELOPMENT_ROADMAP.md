@@ -1,3 +1,13 @@
+# Current local update — 2026-10-04
+
+Next: configure and verify real GitHub App OAuth/clone/push, SMTP recovery and local provider execution with user-supplied test credentials; add refresh-token rotation, OAuth credential persistence, public-runtime isolation/quotas, complete billing ledger/checkout, retention/deletion processing and full audited permission management. No server deployment is authorized.
+
+See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
+
+---
+
+## Earlier audit (historical)
+
 # Development roadmap
 
 Updated 2026-10-03. Work locally; upload later manually only when explicitly authorized. No SSH or deployment in the current scope.

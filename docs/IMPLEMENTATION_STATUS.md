@@ -1,3 +1,13 @@
+# Current local update — 2026-10-04
+
+Current additions/status and evidence are in PHASE_REPORT.md. Its table supersedes overlapping legacy rows below; the original 224-entry audit remains historical, not a fresh end-to-end certification.
+
+See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
+
+---
+
+## Earlier audit (historical)
+
 # Implementation status — requirements v2.1
 
 Updated 2026-10-03. Local development only; no VPS connection, upload or deployment in this phase. Development deliverable: `D:/opencodde agent/opencode project`.

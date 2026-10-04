@@ -1,12 +1,13 @@
 import uuid
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..models import User, Project, Workspace, WorkspaceSession, ExecutionEvent
-from ..services import workspaces as manager, opencode, providers, github
+from ..models import ExecutionEvent, Project, ProviderCredential, User, Workspace, WorkspaceSession
+from ..services import credentials, github, opencode, policy, providers
+from ..services import workspaces as manager
 from .dependencies import require_user
 
 router=APIRouter(prefix="/api",tags=["workspaces"])
@@ -29,8 +30,32 @@ class NewSession(BaseModel):
 class CommitRequest(BaseModel):
     message: str=Field(min_length=1,max_length=500,pattern=r"^[^\x00]+$")
 
+class PublishProject(BaseModel):
+    model_config=ConfigDict(extra="forbid",str_strip_whitespace=True)
+    repository: str=Field(min_length=3,max_length=255)
+    branch: str|None=Field(default=None,max_length=120)
+
+class ApiKeyCredential(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    api_key: str=Field(min_length=8,max_length=4000)
+
+class OAuthAuthorize(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    method: int=Field(ge=0,le=20)
+    inputs: dict[str,str]|None=None
+
+class OAuthCallback(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    method: int=Field(ge=0,le=20)
+    code: str|None=Field(default=None,max_length=4000)
+
 def session_payload(row):
     return {"id":str(row.id),"workspace_id":str(row.workspace_id),"title":row.title,"status":row.status,"created_at":row.created_at}
+
+def _workspace_and_project(db,user,workspace_id):
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    project=db.get(Project,workspace.project_id)
+    return workspace,project
 
 @router.get("/opencode/health")
 def health(user: User=Depends(require_user)):
@@ -44,16 +69,26 @@ def runtime_status(user: User=Depends(require_user)):
     return {**health,"runtime_mode":settings.runtime_mode,"public_multi_user_ready":False}
 
 @router.get("/github/status")
-def github_status(user: User=Depends(require_user)):
-    return github.connection_status()
+def github_status(user: User=Depends(require_user),db: Session=Depends(get_db)):
+    return github.connection_status(db,user)
 
 @router.get("/templates")
 def templates(user: User=Depends(require_user)):
     return [{"id":key,"name":key} for key in manager.TEMPLATES]
 
+def _github_source(db,user,data):
+    connection=github.connection_for(db,user)
+    if not manager.valid_repository(data.repository) or not manager.valid_branch(data.branch):
+        raise HTTPException(422,"A valid repository (owner/name) and branch are required")
+    repo=next((r for r in github.list_repositories(connection) if r["full_name"]==data.repository),None)
+    if repo is None:
+        raise HTTPException(404,"Repository is not available to the connected GitHub installation")
+    return {"clone_url":repo["clone_url"],"branch":data.branch,"token":github.installation_token(connection),"repository_id":repo["id"],"installation_id":connection.installation_id}
+
 @router.post("/projects",status_code=201)
 def create_project(data: CreateProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    project,workspace=manager.create(db,user,data.project_name,data.source_type,data.template,data.repository,data.branch)
+    github_source=_github_source(db,user,data) if data.source_type=="github" else None
+    project,workspace=manager.create(db,user,data.project_name,data.source_type,data.template,data.repository,data.branch,github_source)
     return {"project":manager.project_payload(project),"workspace":manager.workspace_payload(workspace)}
 
 @router.post("/workspaces",status_code=201)
@@ -79,6 +114,26 @@ def delete_project(project_id: uuid.UUID,user: User=Depends(require_user),db: Se
     manager.owned(db,Project,project_id,user.id)
     raise HTTPException(409,"Deletion is unavailable until verified remote backup and retention safeguards are implemented")
 
+@router.post("/projects/{project_id}/publish")
+def publish_project(project_id: uuid.UUID,data: PublishProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    project=manager.owned(db,Project,project_id,user.id)
+    connection=github.connection_for(db,user)
+    if not manager.valid_repository(data.repository):
+        raise HTTPException(422,"A repository in owner/name form is required")
+    branch=data.branch or "work"
+    if not manager.valid_branch(branch):
+        raise HTTPException(422,"A valid branch name is required")
+    repo=next((r for r in github.list_repositories(connection) if r["full_name"]==data.repository),None)
+    if repo is None:
+        raise HTTPException(404,"Repository is not available to the connected GitHub installation")
+    project.repository=data.repository
+    project.github_repository_id=repo["id"]
+    project.github_installation_id=connection.installation_id
+    project.remote_url=repo["clone_url"]
+    project.remote_branch=branch
+    db.commit()
+    return manager.project_payload(project)
+
 @router.get("/workspaces")
 def workspaces(user: User=Depends(require_user),db: Session=Depends(get_db)):
     return [manager.workspace_payload(w) for w in db.scalars(select(Workspace).where(Workspace.user_id==user.id).order_by(Workspace.created_at.desc()))]
@@ -101,9 +156,21 @@ def file_content(workspace_id: uuid.UUID,path: str=Query(...,max_length=1000),us
     row=manager.owned(db,Workspace,workspace_id,user.id)
     return {"path":path,"content":manager.content(row,path)}
 
+def _git_status(db,user,workspace_id):
+    workspace,project=_workspace_and_project(db,user,workspace_id)
+    state=manager.status(workspace)
+    connected=False
+    if project.remote_url:
+        status=github.connection_status(db,user)
+        connected=bool(status.get("connected"))
+    state["push_available"]=bool(project.remote_url and project.remote_branch and connected)
+    state["remote_url"]=project.remote_url
+    state["remote_branch"]=project.remote_branch
+    return workspace,project,state
+
 @router.get("/workspaces/{workspace_id}/git/status")
 def git_status(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return manager.status(manager.owned(db,Workspace,workspace_id,user.id))
+    return _git_status(db,user,workspace_id)[2]
 
 @router.get("/workspaces/{workspace_id}/changes")
 def changes(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -125,8 +192,20 @@ def commit(workspace_id: uuid.UUID,data: CommitRequest,user: User=Depends(requir
 
 @router.post("/workspaces/{workspace_id}/git/push")
 def push(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    manager.owned(db,Workspace,workspace_id,user.id)
-    raise HTTPException(503,"GitHub App connection and remote verification are not implemented; no push was attempted")
+    workspace,project=_workspace_and_project(db,user,workspace_id)
+    if not project.remote_url or not project.remote_branch:
+        raise HTTPException(503,"This project has no GitHub remote; publish or create it from a GitHub repository first")
+    connection=github.connection_for(db,user)
+    state=manager.status(workspace)
+    if not state["head"]:
+        raise HTTPException(409,"There is no commit to push")
+    token=github.installation_token(connection)
+    manager.push_remote(workspace,project.remote_url,project.remote_branch,token)
+    verified=github.verify_remote_commit(connection,project.repository,project.remote_branch,state["head"])
+    if not verified:
+        raise HTTPException(502,"Push finished but the expected commit was not verified on the remote branch")
+    workspace.status="pushed"; db.commit()
+    return {"pushed":True,"branch":project.remote_branch,"head":state["head"],"verified":True}
 
 @router.post("/workspaces/{workspace_id}/sessions",status_code=201)
 def new_session(workspace_id: uuid.UUID,data: NewSession,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -145,7 +224,70 @@ def sessions(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Sessio
 def session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     return session_payload(manager.owned(db,WorkspaceSession,session_id,user.id))
 
+def _workspace_service(db,user,workspace_id):
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    opencode.configure_policy(policy.load(db))
+    service=opencode.for_workspace(row)
+    _install_stored_credentials(db,row,service)
+    return row,service
+
+def _install_stored_credentials(db,workspace,service):
+    rows=db.scalars(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.user_id==workspace.user_id))
+    for row in rows:
+        try:
+            providers.set_api_key(service,row.provider_id,credentials.decrypt(row.ciphertext))
+        except Exception:
+            # A stale or undecryptable credential must not break provider discovery.
+            continue
+
 @router.get("/workspaces/{workspace_id}/providers")
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    row=manager.owned(db,Workspace,workspace_id,user.id)
-    return providers.discover(opencode.for_workspace(row))
+    _,service=_workspace_service(db,user,workspace_id)
+    return policy.filter_providers(providers.discover(service),policy.load(db))
+
+@router.post("/workspaces/{workspace_id}/providers/{provider_id}/credentials")
+def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKeyCredential,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
+    if not credentials.available():
+        raise HTTPException(503,'Encrypted credential storage must be configured first')
+    workspace,service=_workspace_service(db,user,workspace_id)
+    try:
+        providers.set_api_key(service,provider_id,data.api_key)
+    except Exception:
+        raise HTTPException(502,"The runtime did not accept this credential")
+    persisted=False
+    if credentials.available():
+        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
+        if row is None:
+            row=ProviderCredential(workspace_id=workspace.id,user_id=user.id,provider_id=provider_id,ciphertext="",last4="")
+            db.add(row)
+        row.ciphertext=credentials.encrypt(data.api_key)
+        row.last4=data.api_key[-4:]
+        db.commit(); persisted=True
+    return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],"persisted":persisted}
+
+@router.delete("/workspaces/{workspace_id}/providers/{provider_id}",status_code=204)
+def remove_provider_credential(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    workspace,service=_workspace_service(db,user,workspace_id)
+    providers.remove(service,provider_id)
+    row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
+    if row is not None:
+        db.delete(row); db.commit()
+
+@router.post("/workspaces/{workspace_id}/providers/{provider_id}/test")
+def test_provider(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    _,service=_workspace_service(db,user,workspace_id)
+    return {"connected":providers.is_connected(service,provider_id)}
+
+@router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/authorize")
+def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAuthAuthorize,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
+    _,service=_workspace_service(db,user,workspace_id)
+    return providers.oauth_authorize(service,provider_id,data.method,data.inputs)
+
+@router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/callback")
+def provider_oauth_callback(workspace_id: uuid.UUID,provider_id: str,data: OAuthCallback,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
+    _,service=_workspace_service(db,user,workspace_id)
+    accepted=providers.oauth_callback(service,provider_id,data.method,data.code)
+    return {"connected":bool(accepted)}

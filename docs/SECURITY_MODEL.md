@@ -1,3 +1,13 @@
+# Current local update — 2026-10-04
+
+Change/reset revokes all account sessions and reset tokens. Suspension stops owned local runtimes before revoking access. Payment records are owner-scoped; platform method mutation requires owner/admin/finance. Role mutation requires owner and cannot demote the existing owner. GitHub callback requires a user authorization code and membership proof, not installation_id alone. User tokens expire and reconnect is required. SMTP delivery uses STARTTLS and HTTPS reset URLs; tokens occur in fragments and are removed immediately. Public runtime sandboxing, global recovery throttling, full retention/purge, OAuth token DB backup and production acceptance remain launch gaps.
+
+See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
+
+---
+
+## Earlier audit (historical)
+
 # Security model
 
 Updated 2026-10-03. Local testing only. **Not approved for public multi-tenant agent execution.** No VPS access or secrets were used.

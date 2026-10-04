@@ -36,6 +36,7 @@ class User(Base):
     country_id: Mapped[int] = mapped_column(ForeignKey("countries.id"))
     region_id: Mapped[int | None] = mapped_column(ForeignKey("regions.id"), nullable=True)
     city_id: Mapped[int | None] = mapped_column(ForeignKey("cities.id"), nullable=True)
+    plan_id: Mapped[int | None] = mapped_column(ForeignKey("plans.id"), nullable=True)
     role: Mapped[str] = mapped_column(String(20), default="customer")
     status: Mapped[str] = mapped_column(String(20), default="active")
     preferred_language: Mapped[str] = mapped_column(String(5), default="ar")
@@ -48,6 +49,7 @@ class User(Base):
     country: Mapped[Country] = relationship()
     region: Mapped[Region | None] = relationship()
     city: Mapped[City | None] = relationship()
+    plan = relationship("Plan", lazy="selectin")
 
 class AuthSession(Base):
     __tablename__ = "auth_sessions"

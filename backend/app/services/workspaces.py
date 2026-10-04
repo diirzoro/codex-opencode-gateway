@@ -1,7 +1,7 @@
 """Owned filesystem and Git operations; no shell strings or client local paths."""
 from pathlib import Path, PureWindowsPath
 from datetime import datetime, timezone
-import difflib, os, subprocess, uuid
+import base64, difflib, os, re, subprocess, uuid
 from fastapi import HTTPException
 from sqlalchemy import select
 from ..config import settings
@@ -12,6 +12,9 @@ TEMPLATES = {
     "python": {"main.py": "def main():\n    print('New project')\n\nif __name__ == '__main__':\n    main()\n", "requirements.txt": "# Add project dependencies here.\n"},
     "node": {"package.json": '{"name":"new-project","private":true,"scripts":{"start":"node index.js"}}\n', "index.js": "console.log('New project');\n"},
 }
+
+_FULL_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
 
 def owned(db, model, identifier, user_id):
     row = db.scalar(select(model).where(model.id == identifier, model.user_id == user_id))
@@ -47,14 +50,18 @@ def safe_path(workspace, relative=""):
         raise HTTPException(403, "Path is outside workspace")
     return candidate
 
-def git(workspace, *arguments, check=True):
-    root = root_for(workspace)
-    if not root.is_dir():
-        raise HTTPException(409, "Workspace files are unavailable")
+def _git_env():
     hooks = settings.runtime_root / "empty-hooks"
     hooks.mkdir(parents=True, exist_ok=True)
     env = {k:v for k,v in os.environ.items() if not k.upper().startswith("GIT_")}
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+    return env, hooks
+
+def git(workspace, *arguments, check=True):
+    root = root_for(workspace)
+    if not root.is_dir():
+        raise HTTPException(409, "Workspace files are unavailable")
+    env, hooks = _git_env()
     try:
         result = subprocess.run(["git", "-c", f"core.hooksPath={hooks}", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "protocol.file.allow=never", *arguments], cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.TimeoutExpired):
@@ -64,26 +71,67 @@ def git(workspace, *arguments, check=True):
         raise HTTPException(409, "Git operation failed; workspace files were preserved")
     return result
 
-def create(db, user, name, source_type, template=None, repository=None, branch=None):
+def _auth_header(token):
+    return "AUTHORIZATION: basic " + base64.b64encode(f"x-access-token:{token}".encode()).decode()
+
+def _run_git(cwd, arguments, check=True):
+    env, hooks = _git_env()
+    try:
+        result = subprocess.run(["git", "-c", f"core.hooksPath={hooks}", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "protocol.file.allow=never", *arguments], cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
+    except (OSError, subprocess.TimeoutExpired):
+        raise HTTPException(503, "Git command unavailable or timed out")
+    if check and result.returncode:
+        raise HTTPException(409, "Git operation failed; workspace files were preserved")
+    return result
+
+def valid_repository(value):
+    return bool(value and _FULL_NAME.fullmatch(value))
+
+def valid_branch(value):
+    return bool(value and _BRANCH.fullmatch(value) and ".." not in value and "//" not in value and not value.endswith(".lock"))
+
+def clone_github(workspace, clone_url, branch, token):
+    root = root_for(workspace)
+    header = _auth_header(token)
+    result = _run_git(root, ["-c", f"http.extraHeader={header}", "clone", "--depth", "1", "--single-branch", "--branch", branch, clone_url, "."])
+    if result.returncode:
+        raise HTTPException(409, "GitHub clone failed; the selected repository or branch may be unavailable")
+    git(workspace, "checkout", "-b", "work")
+
+def create(db, user, name, source_type, template=None, repository=None, branch=None, github_source=None):
     if source_type == "github":
-        raise HTTPException(503, "GitHub App is not connected yet")
-    if source_type == "template" and template not in TEMPLATES:
-        raise HTTPException(422, "Unsupported template")
-    if source_type != "template" and template:
-        raise HTTPException(422, "Template is only valid for template projects")
-    if repository or branch:
-        raise HTTPException(422, "Repository and branch apply to GitHub projects only")
+        if github_source is None:
+            raise HTTPException(503, "GitHub App is not connected or the repository was not selected")
+        if not valid_repository(repository) or not valid_branch(github_source.get("branch")):
+            raise HTTPException(422, "A valid repository and branch are required for a GitHub project")
+    else:
+        if template and source_type != "template":
+            raise HTTPException(422, "Template is only valid for template projects")
+        if source_type == "template" and template not in TEMPLATES:
+            raise HTTPException(422, "Unsupported template")
+        if repository or branch:
+            raise HTTPException(422, "Repository and branch apply to GitHub projects only")
     project = Project(id=uuid.uuid4(), user_id=user.id, name=name, source_type=source_type, template=template, default_branch="work")
+    if source_type == "github":
+        project.repository = repository
+        project.github_repository_id = github_source.get("repository_id")
+        project.github_installation_id = github_source.get("installation_id")
+        project.remote_url = github_source.get("clone_url")
+        project.remote_branch = "work"
     workspace = Workspace(id=uuid.uuid4(), project_id=project.id, user_id=user.id, status="creating")
     db.add(project); db.flush(); db.add(workspace); db.flush()
     path = root_for(workspace)
     try:
         path.mkdir(parents=True, exist_ok=False)
-        (path/".gitignore").write_text(".env\n.env.*\n!.env.example\n.venv/\nnode_modules/\n__pycache__/\n",encoding="utf-8")
-        (path/"README.md").write_text("# "+name+"\n",encoding="utf-8")
-        for filename, content in TEMPLATES.get(template,{}).items():
-            (path/filename).write_text(content,encoding="utf-8")
-        git(workspace,"init","--initial-branch=work")
+        if source_type == "github":
+            clone_github(workspace, github_source["clone_url"], github_source["branch"], github_source["token"])
+            workspace.base_commit_sha = git(workspace, "rev-parse", "HEAD").stdout.strip()
+        else:
+            (path/".gitignore").write_text(".env\n.env.*\n!.env.example\n.venv/\nnode_modules/\n__pycache__/\n",encoding="utf-8")
+            (path/"README.md").write_text("# "+name+"\n",encoding="utf-8")
+            for filename, content in TEMPLATES.get(template,{}).items():
+                (path/filename).write_text(content,encoding="utf-8")
+            git(workspace,"init","--initial-branch=work")
         workspace.status="ready"
         db.commit()
     except Exception:
@@ -94,7 +142,7 @@ def create(db, user, name, source_type, template=None, repository=None, branch=N
     return project, workspace
 
 def project_payload(row):
-    return {"id":str(row.id),"name":row.name,"source_type":row.source_type,"repository":row.repository,"branch":row.default_branch,"template":row.template,"created_at":row.created_at}
+    return {"id":str(row.id),"name":row.name,"source_type":row.source_type,"repository":row.repository,"branch":row.default_branch,"template":row.template,"remote_url":row.remote_url,"remote_branch":row.remote_branch,"created_at":row.created_at}
 
 def workspace_payload(row):
     return {"id":str(row.id),"project_id":str(row.project_id),"status":row.status,"base_commit_sha":row.base_commit_sha,"created_at":row.created_at,"last_activity_at":row.last_activity_at}
@@ -146,3 +194,10 @@ def commit(workspace,user,message):
     git(workspace,"add","--all")
     git(workspace,"-c",f"user.name={user.username}","-c",f"user.email={user.email}","commit","-m",message)
     return status(workspace)
+
+def push_remote(workspace, remote_url, branch, token):
+    root = root_for(workspace)
+    header = _auth_header(token)
+    result = _run_git(root, ["-c", f"http.extraHeader={header}", "push", remote_url, f"HEAD:refs/heads/{branch}"])
+    if result.returncode:
+        raise HTTPException(409, "Git push was rejected; the remote was not updated")
