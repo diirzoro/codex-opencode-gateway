@@ -375,7 +375,7 @@ GitHub App installation/callback/repos/branches/webhooks; provider credential co
     "username": {
       "type": "string",
       "maxLength": 50,
-      "minLength": 3,
+      "minLength": 6,
       "pattern": "^[A-Za-z0-9_.-]+$",
       "title": "Username"
     },
@@ -387,7 +387,7 @@ GitHub App installation/callback/repos/branches/webhooks; provider credential co
     "password": {
       "type": "string",
       "maxLength": 128,
-      "minLength": 10,
+      "minLength": 8,
       "title": "Password"
     },
     "phone": {
@@ -581,3 +581,7 @@ GitHub App installation/callback/repos/branches/webhooks; provider credential co
 }
 ```
 
+
+## Registration policy update — 2026-10-04
+
+New usernames require 6–50 ASCII letters/digits/underscore/dot/hyphen. New passwords require 8–128 characters with at least one ASCII number and one punctuation symbol (e.g. ! or @). No uppercase or letter requirement; spaces do not count as symbols. Existing login remains valid and is not revalidated against registration constraints. Frontend hints/errors use Arabic/English and match backend validation. No migration is needed.

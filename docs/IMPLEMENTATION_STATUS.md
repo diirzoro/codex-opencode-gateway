@@ -2050,3 +2050,5 @@ Counts: REAL=21, PARTIAL=96, SIMULATED=0, MISSING=93, BLOCKED=14.
 - **API / DB:** See exact implemented inventory in API_REFERENCE.md and DATABASE_REFERENCE.md; absence there is not implied implementation.
 - **Gap / next action:** Resolve before the affected phase; never infer an accepted decision.
 
+
+Registration update (2026-10-04): username minimum 6, password minimum 8 with number and punctuation symbol; no uppercase requirement, existing logins unchanged. See API_REFERENCE.md. No migration.

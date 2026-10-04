@@ -25,3 +25,5 @@ Production runtime isolation/capacity, retention duration/grace, plan pricing/li
 ## Phase completion report contract
 
 For each phase report changed files, migrations, APIs, tests (actual engine/version and test-double limits), REAL/PARTIAL/SIMULATED/MISSING/BLOCKED status changes, security implications and exact later deployment commands. Update the six references together. Deployment instructions in deployment/README.md are documentation only and do not claim readiness or authorization.
+
+Registration update (2026-10-04): username minimum 6, password minimum 8 with number and punctuation symbol; no uppercase requirement, existing logins unchanged. See API_REFERENCE.md. No migration.

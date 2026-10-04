@@ -27,3 +27,5 @@ HTTPS/reverse proxy/Host validation/rate limits, password reset/verification, su
 ## Evidence
 
 Backend tests cover auth expiry/revocation, admin/owner/other-user access, static-source denial, traversal/symlinks, real filesystem/Git and unconfigured-provider rejection. Actual OpenCode two-session test covers file preservation. Playwright covers registration/project/files/diff/commit, truthful disabled runtime/push, responsive drawers, language/theme and no JavaScript errors. See PHASE_REPORT.md for exact results.
+
+Registration update (2026-10-04): username minimum 6, password minimum 8 with number and punctuation symbol; no uppercase requirement, existing logins unchanged. See API_REFERENCE.md. No migration.

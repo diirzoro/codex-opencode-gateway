@@ -14,7 +14,7 @@ Completed local phase: 2026-10-04. No VPS connection, upload, deployment, migrat
 
 ## Validation
 
-- Backend: **23 passed**, including installed OpenCode two-session/file-preservation test, actual Git operations, ownership/path/static access and auth/admin checks. One third-party Starlette/AnyIO deprecation warning.
+- Backend: **25 passed**, including installed OpenCode two-session/file-preservation test, actual Git operations, ownership/path/static access and auth/admin checks. One third-party Starlette/AnyIO deprecation warning.
 - Playwright: **2 passed**: full local account → template → file → diff → commit flow; desktop/mobile review drawers, SVG branding, Arabic/English and dark mode. No uncaught browser JS errors in visual-navigation test. Additional screenshot smoke flow passed.
 - Alembic: fresh SQLite upgrade from zero to **0002_workspaces**, current revision confirmed. PostgreSQL offline SQL generated. PostgreSQL 16 and production target Python 3.12 not executed; local Python 3.13 used.
 - Agent approval/provider/ownership tests use transport doubles. They do not prove provider-authenticated model edits, sensitive-command execution or complete streaming/recovery.
@@ -275,3 +275,7 @@ Exact later manual backup/copy/install/migration/service/health commands are in 
 - `README.md`
 - `styles.css`
 - `tests/browser/workspace.spec.cjs`
+
+## Final registration simplification
+
+Username minimum 6 characters; password minimum 8 characters including an ASCII number and punctuation symbol, without uppercase/letter requirements. Updated backend and Arabic/English frontend hints/validation. No migration. Existing short-username/old-password logins are unchanged. Two additional backend policy/legacy-login regressions passed; Playwright registered and completed the project flow using an eight-character password. Final local result: 25 backend tests and 2 browser tests passed.
