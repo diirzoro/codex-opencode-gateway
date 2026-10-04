@@ -1,0 +1,44 @@
+# Secrets and local overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local data and runtime output
+*.db
+*.sqlite
+*.sqlite3
+*.log
+runtime/
+workspaces/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+
+node_modules/
+playwright-report/
+test-results/
+.test-runtime/
+.venv-local/
+
+# User requested source publication without test files
+tests/
+backend/tests/
+playwright.config.cjs
+.playwright-mcp/
+.snapshot*.yml
+!deployment/.env.production.example
