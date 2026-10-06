@@ -1,0 +1,125 @@
+name: Deploy master to production VPS
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+
+      - name: Prepare SSH
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          : "${VPS_HOST:?Missing VPS_HOST secret}"
+          : "${VPS_SSH_KEY:?Missing VPS_SSH_KEY secret}"
+          port="${VPS_SSH_PORT:-22}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload reviewed master release
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          : "${VPS_HOST:?Missing VPS_HOST secret}"
+          : "${VPS_USER:?Missing VPS_USER secret}"
+          port="${VPS_SSH_PORT:-22}"
+          ssh -p "$port" "$VPS_USER@$VPS_HOST" 'mkdir -p /home/tahir/opencode-gateway-release'
+          rsync -az --delete             --exclude='.git/'             --exclude='.github/'             --exclude='.env'             --exclude='.env.*'             --exclude='.venv*'             --exclude='node_modules/'             --exclude='runtime/'             --exclude='workspaces/'             --exclude='test-results/'             --exclude='playwright-report/'             --exclude='logs/'             --exclude='receipts/'             -e "ssh -p $port"             ./ "$VPS_USER@$VPS_HOST:/home/tahir/opencode-gateway-release/"
+
+      - name: Deploy, migrate, restart, and health-check
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${VPS_SSH_PORT:-22}"
+          ssh -p "$port" "$VPS_USER@$VPS_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+
+          APP_DIR="/home/tahir/opencode-gateway"
+          RELEASE_DIR="/home/tahir/opencode-gateway-release"
+          BACKUP_ROOT="/home/tahir/opencode-backups"
+          SERVICE="opencode-gateway"
+
+          mkdir -p "$APP_DIR" "$BACKUP_ROOT"
+          test -d "$RELEASE_DIR/backend"
+
+          if [ ! -f "$APP_DIR/.env" ]; then
+            echo "ERROR: $APP_DIR/.env is missing. Complete the one-time production bootstrap first."
+            exit 20
+          fi
+
+          backup_dir="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)"
+          mkdir -p "$backup_dir"
+
+          set -a
+          . "$APP_DIR/.env"
+          set +a
+
+          if command -v pg_dump >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
+            echo "Creating PostgreSQL backup..."
+            pg_dump -Fc "$DATABASE_URL" > "$backup_dir/database.dump"
+          else
+            echo "ERROR: pg_dump or DATABASE_URL is unavailable; refusing migration without a database backup."
+            exit 21
+          fi
+
+          if systemctl list-unit-files | grep -q '^opencode-gateway\.service'; then
+            sudo -n systemctl stop "$SERVICE"
+          else
+            echo "ERROR: opencode-gateway.service is not installed. Complete the one-time server bootstrap first."
+            exit 22
+          fi
+
+          rsync -a --delete             --exclude='.env'             --exclude='.env.*'             --exclude='.venv*'             --exclude='runtime/'             --exclude='workspaces/'             --exclude='logs/'             --exclude='receipts/'             "$RELEASE_DIR/" "$APP_DIR/"
+
+          cd "$APP_DIR"
+          test -x .venv/bin/python || python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r backend/requirements.txt
+
+          set -a
+          . "$APP_DIR/.env"
+          set +a
+
+          cd backend
+          ../.venv/bin/python -m alembic upgrade head
+          ../.venv/bin/python -m alembic current
+          cd ..
+
+          sudo -n systemctl start "$SERVICE"
+          sudo -n systemctl is-active --quiet "$SERVICE"
+
+          curl --fail --silent --show-error --retry 10 --retry-delay 2             http://127.0.0.1:8000/api/health
+
+          echo
+          echo "Production deployment completed successfully."
+          REMOTE
