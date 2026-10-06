@@ -6,14 +6,14 @@ import asyncio, json, re, uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
 from ..models import User, Workspace, WorkspaceSession, ExecutionEvent
 from ..services import workspaces, opencode, policy
-from .dependencies import require_user
+from .dependencies import require_user, require_workspace_entitlement
 
-router=APIRouter(prefix="/api/sessions",tags=["agent"])
+router=APIRouter(prefix="/api/sessions",tags=["agent"],dependencies=[Depends(require_workspace_entitlement)])
 tasks={}
 
 _SECRET_RE = re.compile(r"(?:sk-[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})")
@@ -43,6 +43,7 @@ class MessageRequest(BaseModel):
     text: str=Field(min_length=1,max_length=20000)
     provider_id: str=Field(min_length=1,max_length=120,pattern=r"^[A-Za-z0-9_.-]+$")
     model_id: str=Field(min_length=1,max_length=200)
+    agent_id: str|None=Field(default=None,min_length=1,max_length=120)
 
 class Approval(BaseModel):
     reply: str=Field(pattern="^(once|reject)$")
@@ -56,27 +57,35 @@ def event(db,session_id,kind,data=None):
     db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
     db.commit()
 
+def finish_execution(db,session_id,kind,states=(),data=None):
+    # Abort and the background HTTP response can finish concurrently. Evaluate
+    # cancellation in the database, not on a previously loaded ORM snapshot.
+    changed=db.execute(update(WorkspaceSession).where(
+        WorkspaceSession.id==session_id,WorkspaceSession.status!='cancelled'
+    ).values(status=kind).execution_options(synchronize_session=False)).rowcount
+    if changed:
+        for state in states:
+            db.add(ExecutionEvent(session_id=session_id,kind=state,data='{}'))
+        db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
+    db.commit()
+
 async def execute(session_id,service,runtime_id,data):
     try:
         with SessionLocal() as db:
             session=db.get(WorkspaceSession,session_id)
             if session and session.status!="cancelled": event(db,session.id,"analyzing")
-        response=await asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),{"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}},600)
+        payload={"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
+        if data.agent_id: payload["agent"]=data.agent_id
+        response=await asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),payload,600)
         failure=bool(response.get("info",{}).get("error")) if isinstance(response,dict) else True
         with SessionLocal() as db:
-            session=db.get(WorkspaceSession,session_id)
-            if session and session.status!="cancelled":
-                if failure:
-                    session.status="failed"; event(db,session.id,"failed")
-                else:
-                    for state in normalize_states(response.get("parts") if isinstance(response,dict) else []):
-                        event(db,session.id,state)
-                    session.status="completed"; event(db,session.id,"completed")
+            if failure:
+                finish_execution(db,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'})
+            else:
+                finish_execution(db,session_id,'completed',normalize_states(response.get('parts',[])))
     except Exception:
         with SessionLocal() as db:
-            session=db.get(WorkspaceSession,session_id)
-            if session and session.status!="cancelled":
-                session.status="failed"; event(db,session.id,"failed",{"reason":"Runtime request failed or timed out; inspect session before retrying"})
+            finish_execution(db,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'})
     finally:
         tasks.pop(str(session_id),None)
 
@@ -95,6 +104,10 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         raise HTTPException(403,"Model is disabled by platform policy")
     opencode.configure_policy(policy_row)
     service=await asyncio.to_thread(opencode.for_workspace,workspace)
+    if data.agent_id:
+        from .workspaces import agent_choices
+        agents=await asyncio.to_thread(agent_choices,service)
+        if data.agent_id not in {a["id"] for a in agents}: raise HTTPException(422,"Agent is unavailable")
     provider_data=await asyncio.to_thread(service.request,"GET","/provider")
     if data.provider_id not in provider_data.get("connected",[]):
         raise HTTPException(503,"Provider authentication is not configured in this workspace runtime")
@@ -129,7 +142,7 @@ def session_diff(session_id: uuid.UUID,user: User=Depends(require_user),db: Sess
 @router.post("/{session_id}/stop")
 def stop(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,start=False)
     if service.request("POST",service.session_path(session.opencode_session_id,"/abort")) is not True:
         raise HTTPException(502,"Runtime did not confirm cancellation")
     session.status="cancelled"; event(db,session.id,"cancelled")

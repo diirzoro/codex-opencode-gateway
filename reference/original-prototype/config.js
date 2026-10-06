@@ -1,4 +1,4 @@
 window.OPENCODE_CONFIG = {
-  // Change this later when you add a domain / HTTPS.
-  openCodeUrl: "http://162.35.127.135:4096"
+  // Reference snapshot: direct runtime access was retired. Use Gateway APIs only.
+  apiBase: "/api"
 };

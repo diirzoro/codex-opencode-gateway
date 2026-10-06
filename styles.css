@@ -34,6 +34,86 @@ label,input,select,.auth-form p,.onboard-panel p,.onboard-story p{font-size:13px
 
 .auth-form label>small{display:block;margin-top:7px;color:var(--muted);font-weight:400;font-size:12px;line-height:1.6}
 
+/* ===================== Unified App Shell =====================
+   One fixed header + one fixed sidebar; only #app-main changes per page. */
+html,body{height:100%}
+.app-shell{display:grid;grid-template-rows:auto minmax(0,1fr);height:100vh;height:100dvh;overflow:hidden}
+.app-header{display:flex;align-items:center;gap:12px;padding:8px 22px;min-height:64px;background:var(--panel);border-bottom:1px solid var(--line);position:relative;z-index:60}
+.app-header .app-brand-text{font-size:19px;font-weight:650;letter-spacing:-.5px}
+.app-header .header-integrations{margin-inline-start:auto}
+.app-header .topbar-actions{display:flex;align-items:center;gap:8px;margin-inline-start:0}
+.app-header .topbar-actions .button{display:inline-flex}
+.app-user{font-size:12px;color:var(--muted);white-space:nowrap;max-width:190px;overflow:hidden;text-overflow:ellipsis}
+.app-header .icon,.app-header .button,.app-header .text-link{flex-shrink:0}
+.app-back{color:var(--muted)}
+.app-back:hover{color:var(--text)}
+.app-profile{background:var(--panel2);border:1px solid var(--line);border-radius:50%}
+.app-menu-toggle{display:none}
+.app-frame{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:0}
+.app-sidebar{width:248px;background:var(--sidebar);border-inline-end:1px solid var(--line);overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;min-height:0}
+.app-main{overflow:auto;min-width:0;min-height:0;position:relative;display:flex;flex-direction:column}
+.app-main>.page{min-height:0}
+.app-main>.page.active{display:block;min-height:0;width:100%}
+.app-main>.workspace-page.active{height:100%;flex:1 1 auto}
+.app-main>.workspace-page.active .workspace-shell{height:100%}
+
+/* Sidebar navigation panels share one frame. */
+.app-sidebar .shell-nav{display:flex!important;flex-direction:column;flex:1 1 auto;width:100%;min-height:0;border:0;background:transparent}
+.app-sidebar .shell-nav[hidden]{display:none!important}
+.app-sidebar .welcome-sidebar{min-height:0;border-inline-end:0;padding:18px 16px 14px}
+.app-sidebar .welcome-sidebar .brand{display:none}
+.app-sidebar .portal-nav{padding:18px 14px;border-inline-end:0;align-items:stretch}
+.app-sidebar .portal-nav button{width:100%}
+.app-sidebar .portal-nav b{padding:0 10px}
+
+/* The old per-page chrome is replaced by the shell. */
+.welcome-topbar,.onboard-top,.portal-header{display:none!important}
+.app-main .welcome-shell{display:block;min-height:0}
+.app-main .welcome-main{min-height:0;padding-bottom:0}
+.app-main .admin-shell{display:block;min-height:0}
+.app-main .portal-content{max-width:1180px;margin:0 auto;width:100%}
+.app-main .onboard-shell,.app-main .auth-shell{margin-top:56px}
+
+@media(max-width:900px){
+  .app-frame{grid-template-columns:minmax(0,1fr)}
+  .app-sidebar{display:none;position:fixed;top:0;bottom:0;inset-inline-start:0;width:270px;max-width:85vw;z-index:100;box-shadow:0 0 40px #0003}
+  .app-sidebar.open{display:flex}
+  .app-menu-toggle{display:inline-grid}
+  .app-user{display:none}
+}
+@media(max-width:520px){
+  .app-header{padding:8px 10px;gap:6px}
+  .app-header .header-brand{gap:6px}
+  .app-header .opencode-wordmark{width:104px;height:22px}
+  .app-header .brand-service{width:34px;height:34px;border-radius:10px}
+  .app-header .service-logo{width:22px;height:22px}
+  .app-header .topbar-actions{gap:2px}
+  .app-header .topbar-actions .icon{width:32px;height:32px}
+  .app-header [data-start]{display:none!important}
+}
+@media(max-width:390px){
+  .app-header{padding:8px 8px;gap:4px}
+  .app-header .opencode-wordmark{width:92px;height:20px}
+}
+
 .manage-layout{max-width:1200px;margin:24px auto;padding:20px;display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px}.manage-nav{display:flex;flex-direction:column;gap:8px;align-self:start}.manage-nav .active{border-color:var(--primary);background:var(--soft)}.manage-body{min-width:0}.manage-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:20px}.manage-card h2{font-size:18px;margin:0 0 18px}.manage-card p{color:var(--muted);font-size:13px}.manage-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.manage-form label{display:flex;flex-direction:column;gap:8px;font-size:13px}.manage-form input,.manage-form select,.manage-card>label select{background:var(--bg);color:var(--text);padding:11px;border:1px solid var(--line);border-radius:8px;min-width:0}.manage-form>.button{align-self:end}.manage-row{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding:14px 0}.manage-row strong,.manage-row small{display:block;overflow-wrap:anywhere}.manage-row small{color:var(--muted)}.manage-actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.workspace-links{margin:8px 18px}.workspace-links .button{font-size:12px;padding:8px 12px}.recovery-box{max-width:650px;margin:24px auto}.portal-header{flex-wrap:wrap}
 @media(max-width:700px){.manage-layout{grid-template-columns:1fr;padding:12px}.manage-nav{flex-direction:row;overflow:auto}.manage-form{grid-template-columns:1fr}.manage-row{flex-direction:column;align-items:stretch}.manage-card{padding:16px}}
 .landing-connect{width:min(100%,720px);min-height:86px;margin:18px auto;font-size:16px!important;gap:18px!important}.landing-connect svg{width:40px;height:40px;flex-shrink:0}
+.review-panel.open,.session-sidebar.open{z-index:90}
+/* Compact hosted checkout: real configured methods, with comfortable targets. */
+.checkout-dialog{width:min(620px,calc(100vw - 32px));max-height:85dvh;padding:28px;border:1px solid #bdd0ec;border-radius:22px;box-shadow:0 24px 80px #173b7026;overflow:auto}
+.checkout-dialog::backdrop{background:#172b4d70;backdrop-filter:blur(5px)}
+.checkout-plans{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0}
+.checkout-plans button{min-height:42px;border-radius:12px}
+.checkout-plans [aria-pressed=true]{background:#e4efff;border-color:#3978c9;color:#133d76}
+.checkout-summary{display:flex;flex-direction:column;gap:8px;padding:20px;background:linear-gradient(135deg,#edf4ff,#f6f8ff);border-radius:16px;color:#172b4d}
+.checkout-summary b{font-size:32px;line-height:1.2}
+.checkout-methods{border:0;padding:0;display:grid;gap:10px;margin:18px 0}
+.checkout-methods legend{font-weight:600;margin-bottom:10px}
+.checkout-method{display:flex;align-items:center;gap:14px;padding:16px;border:1px solid #9ab7df;border-radius:14px;cursor:pointer;background:#f7faff}
+.checkout-method:has(input:checked){background:#e9f2ff;border:2px solid #3978c9;padding:15px}
+.checkout-method input[type=radio]{width:20px;height:20px;accent-color:#3978c9;flex:0 0 auto}
+.checkout-method span{display:grid;gap:5px}.checkout-method small{color:#344d70}
+.checkout-dialog #createPaymentOrder,.checkout-dialog form button,.checkout-hosted-link{width:100%;min-height:46px;border-radius:12px;justify-content:center;margin:12px 0}
+.checkout-receipt form{display:grid;gap:8px;margin-top:16px}.checkout-receipt input{width:100%;min-height:44px}
+.checkout-details dd{overflow-wrap:anywhere}.checkout-dialog>small{display:block;text-align:center;margin-top:18px}

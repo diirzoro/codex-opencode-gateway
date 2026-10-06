@@ -41,7 +41,7 @@ python -m alembic upgrade head
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Default runtime is disabled. Setting OPENCODE_RUNTIME_MODE=local starts per-workspace OpenCode processes with separate runtime data, but **does not sandbox the host OS/network**. Use trusted local projects and one Gateway worker. Never make local mode publicly reachable. The shared OPENCODE_URL is used only for health diagnostics.
+Default runtime is disabled. Setting OPENCODE_RUNTIME_MODE=local starts per-workspace OpenCode processes with separate runtime data, but **does not sandbox the host OS/network**. Use trusted local projects and one Gateway worker. Never make local mode publicly reachable. Backend-only `OPENCODE_BASE_URL=http://127.0.0.1:4096` refers to the internal reference service and is used only for health diagnostics, without shared login credentials. Frontend requests use `/api/...`; customers never access OpenCode directly. Existing environments must replace the old `OPENCODE_URL` variable with `OPENCODE_BASE_URL` (the old name is no longer read). No shared-runtime execution fallback is enabled.
 
 ## References
 
@@ -58,3 +58,7 @@ Default runtime is disabled. Setting OPENCODE_RUNTIME_MODE=local starts per-work
 ## GitHub source publication
 
 At the owner's request, automated test files/configuration and results remain local and are excluded from this repository. The test commands above apply to the complete local development copy, not a fresh source-only clone. Validation results and limitations are recorded in docs/PHASE_REPORT.md. Production secrets, runtime data and dependencies are never included.
+
+## Latest local acceptance
+
+Real isolated OpenCode/DeepSeek chat and Stop were verified; see docs/REAL_AGENT_ACCEPTANCE.md. Payment checkout supports admin-owned transfer methods, plan-bound hosted links and server-only PayPal Orders/capture verification. Configure merchant credentials locally before provider testing; see docs/PAYMENT_CHECKOUT_REPORT.md. No successful PayPal transaction is claimed without merchant acceptance. Backend migration head: 0008_paypal_checkout. Test/evidence files remain outside the committed deliverable according to the user's publication preference.

@@ -1,21 +1,3 @@
-# Verified local phase update — 2026-10-06
-
-See [REAL_AGENT_ACCEPTANCE.md](REAL_AGENT_ACCEPTANCE.md) for real isolated OpenCode/DeepSeek prompt, Stop and secret-boundary evidence, and [PAYMENT_CHECKOUT_REPORT.md](PAYMENT_CHECKOUT_REPORT.md) for admin-owned receiving methods, customer checkout, hosted links, PayPal backend create/capture verification, migration 0008 and remaining merchant-configuration/production gaps. These reports supersede overlapping historical payment/runtime claims below. No push or deployment.
-
-# Infrastructure status update — 2026-10-05
-
-The internal-only reference configuration and API/browser boundary are implemented locally; the Ubuntu service checks are user-reported. Per-workspace directories/HOME/XDG/auth/processes exist in trusted local mode (PARTIAL production isolation), while OS/network sandboxing, quotas and supervised lifecycle/recovery remain MISSING. Previous shared-login/public-reference details are superseded. See [INTERNAL_OPENCODE_INFRASTRUCTURE.md](INTERNAL_OPENCODE_INFRASTRUCTURE.md) for the full initial report and current status.
-
-# Current local update — 2026-10-04
-
-Current additions/status and evidence are in PHASE_REPORT.md. Its table supersedes overlapping legacy rows below; the original 224-entry audit remains historical, not a fresh end-to-end certification.
-
-See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
-
----
-
-## Earlier audit (historical)
-
 # Implementation status — requirements v2.1
 
 Updated 2026-10-03. Local development only; no VPS connection, upload or deployment in this phase. Development deliverable: `D:/opencodde agent/opencode project`.
@@ -2072,18 +2054,6 @@ Counts: REAL=21, PARTIAL=96, SIMULATED=0, MISSING=93, BLOCKED=14.
 Registration update (2026-10-04): username minimum 6, password minimum 8 with number and punctuation symbol; no uppercase requirement, existing logins unchanged. See API_REFERENCE.md. No migration.
 
 
-## OpenCode synchronization (2026-10-05)
+## Codex merge, 2026-10-05
 
-The current Codex workspace now includes the newer OpenCode subscriptions, project archiving, client/admin dashboards, reports, shell and grid UI, together with the merged account-management features. See MERGE_REPORT.md for current verification. The preserved OpenCode document is in reference/opencode/. This workspace uses migration head `0006_subscriptions_archive` after the existing `0005_account_management`. No VPS access or push was performed.
-
-
-### Current synchronized implementation
-
-Current merged feature classifications and verified test counts are in MERGE_REPORT.md. Persisted subscriptions and archiving are REAL; payment charges/invoices/revenue remain MISSING. No fake paid status was added.
-
-
-## Workspace/payment update — 2026-10-05
-
-Customer/admin payment forms and platform method permissions are separated. Manual checkout, receipt review, subscription activation, ten-day work entitlement, workspace-first routing and mirrored secondary pane are REAL with local evidence. Automatic card checkout is MISSING; authenticated paid model and live GitHub integration verification remain BLOCKED by external setup.
-
-See [WORKSPACE_FIRST_REPORT.md](WORKSPACE_FIRST_REPORT.md) for scope, evidence and limits. This update supersedes conflicting historical statements.
+Account management, recovery, audit, locations, encrypted payment methods and user-authorized GitHub integration were merged while preserving subscriptions and project archiving. See [MERGE_REPORT.md](MERGE_REPORT.md) and [Codex reference](reference/codex/IMPLEMENTATION_STATUS.md). New migration: `0006_account_management`. External integrations still require configuration; no production connection or deployment was tested.

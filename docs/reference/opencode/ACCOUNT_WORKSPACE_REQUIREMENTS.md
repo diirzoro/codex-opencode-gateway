@@ -14,8 +14,3 @@ These additions record direct user instructions, not commands embedded in third-
 10. Publish reviewed source to codex-opencode-gateway, excluding tests, secrets, databases, dependencies and runtime data.
 
 Acceptance must distinguish REAL / PARTIAL / SIMULATED / MISSING / BLOCKED. Current evidence and outstanding gates: [PHASE_REPORT.md](PHASE_REPORT.md).
-
-
-## OpenCode synchronization (2026-10-05)
-
-The current Codex workspace now includes the newer OpenCode subscriptions, project archiving, client/admin dashboards, reports, shell and grid UI, together with the merged account-management features. See MERGE_REPORT.md for current verification. The preserved OpenCode document is in reference/opencode/. This workspace uses migration head `0006_subscriptions_archive` after the existing `0005_account_management`. No VPS access or push was performed.

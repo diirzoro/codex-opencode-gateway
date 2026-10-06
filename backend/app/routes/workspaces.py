@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -8,9 +9,9 @@ from ..database import get_db
 from ..models import ExecutionEvent, Project, ProviderCredential, User, Workspace, WorkspaceSession
 from ..services import credentials, github, opencode, policy, providers
 from ..services import workspaces as manager
-from .dependencies import require_user
+from .dependencies import require_user, require_workspace_entitlement
 
-router=APIRouter(prefix="/api",tags=["workspaces"])
+router=APIRouter(prefix="/api",tags=["workspaces"],dependencies=[Depends(require_workspace_entitlement)])
 
 class CreateProject(BaseModel):
     model_config=ConfigDict(extra="forbid",str_strip_whitespace=True)
@@ -98,7 +99,7 @@ def create_workspace(data: CreateProject,user: User=Depends(require_user),db: Se
 
 @router.get("/projects")
 def projects(user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return [manager.project_payload(p) for p in db.scalars(select(Project).where(Project.user_id==user.id).order_by(Project.created_at.desc()))]
+    return [manager.project_payload(p) for p in db.scalars(select(Project).where(Project.user_id==user.id,Project.archived_at.is_(None)).order_by(Project.created_at.desc()))]
 
 @router.get("/projects/{project_id}")
 def project(project_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -109,10 +110,16 @@ def rename(project_id: uuid.UUID,data: RenameProject,user: User=Depends(require_
     row=manager.owned(db,Project,project_id,user.id); row.name=data.name; db.commit()
     return manager.project_payload(row)
 
+@router.post("/projects/{project_id}/archive")
+def archive_project(project_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    row=manager.owned(db,Project,project_id,user.id)
+    row.archived_at=datetime.now(timezone.utc); db.commit()
+    return manager.project_payload(row)
+
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     manager.owned(db,Project,project_id,user.id)
-    raise HTTPException(409,"Deletion is unavailable until verified remote backup and retention safeguards are implemented")
+    raise HTTPException(409,"Deletion is unavailable; use archive to hide it safely until verified remote backup and retention safeguards are implemented")
 
 @router.post("/projects/{project_id}/publish")
 def publish_project(project_id: uuid.UUID,data: PublishProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -244,6 +251,19 @@ def _install_stored_credentials(db,workspace,service):
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     _,service=_workspace_service(db,user,workspace_id)
     return policy.filter_providers(providers.discover(service),policy.load(db))
+
+@router.get("/workspaces/{workspace_id}/agents")
+def available_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    opencode.configure_policy(policy.load(db))
+    return agent_choices(opencode.for_workspace(row))
+
+def agent_choices(service):
+    rows=service.request("GET","/agent")
+    if not isinstance(rows,list): raise HTTPException(502,"Runtime returned an invalid agent list")
+    return [{"id":r["name"],"name":r["name"],"description":str(r.get("description", ""))[:500]} for r in rows
+            if isinstance(r,dict) and isinstance(r.get("name"),str) and 0<len(r["name"])<=120
+            and not r.get("hidden") and r.get("mode") in {"primary","all"}]
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/credentials")
 def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKeyCredential,user: User=Depends(require_user),db: Session=Depends(get_db)):

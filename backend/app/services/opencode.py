@@ -56,10 +56,11 @@ class OpenCodeService:
         return "/session/"+quote(identifier,safe="")+suffix
 
 def shared_health():
-    # Health only; never forward shared sessions/providers/auth to customers.
-    return OpenCodeService(settings.opencode_url,os.getenv("OPENCODE_SERVER_PASSWORD")).health()
+    # Unauthenticated internal reference service: health only. Never forward its
+    # shared sessions/providers/auth to customers or reuse removed shared secrets.
+    return OpenCodeService(settings.opencode_url).health()
 
-def for_workspace(workspace):
+def for_workspace(workspace, *, start=True):
     if settings.runtime_mode!="local":
         raise HTTPException(503,"Local runtime is disabled; enable only for trusted local development")
     key=str(workspace.id)
@@ -67,6 +68,8 @@ def for_workspace(workspace):
         runtime=_runtimes.get(key)
         if runtime and runtime.process.poll() is None:
             return OpenCodeService(runtime.url,runtime.password,root_for(workspace))
+        if not start:
+            raise HTTPException(409,"No running OpenCode runtime to stop")
         binary=shutil.which(settings.opencode_binary)
         if not binary: raise HTTPException(503,"OpenCode executable is not installed")
         repo=root_for(workspace)

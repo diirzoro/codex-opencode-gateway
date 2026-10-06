@@ -19,6 +19,7 @@ class Project(Base):
     github_installation_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     remote_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     remote_branch: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 class Workspace(Base):

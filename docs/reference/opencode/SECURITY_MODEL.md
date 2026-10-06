@@ -1,21 +1,3 @@
-# Verified local phase update — 2026-10-06
-
-See [REAL_AGENT_ACCEPTANCE.md](REAL_AGENT_ACCEPTANCE.md) for real isolated OpenCode/DeepSeek prompt, Stop and secret-boundary evidence, and [PAYMENT_CHECKOUT_REPORT.md](PAYMENT_CHECKOUT_REPORT.md) for admin-owned receiving methods, customer checkout, hosted links, PayPal backend create/capture verification, migration 0008 and remaining merchant-configuration/production gaps. These reports supersede overlapping historical payment/runtime claims below. No push or deployment.
-
-# Internal runtime boundary — 2026-10-05
-
-The reference OpenCode service is now user-reported localhost-only without the previous shared login. Gateway never returns its URL or credentials to the customer. `OPENCODE_BASE_URL` is backend-only, restricted to a loopback HTTP origin without credentials; shared health ignores obsolete passwords. Generated credentials for separate local workspace processes remain private. No shared process is used as a multi-user execution fallback. OS/network sandboxing, quotas and supervised recovery are still required for public production. See [INTERNAL_OPENCODE_INFRASTRUCTURE.md](INTERNAL_OPENCODE_INFRASTRUCTURE.md).
-
-# Current local update — 2026-10-04
-
-Change/reset revokes all account sessions and reset tokens. Suspension stops owned local runtimes before revoking access. Payment records are owner-scoped; platform method mutation requires owner/admin/finance. Role mutation requires owner and cannot demote the existing owner. GitHub callback requires a user authorization code and membership proof, not installation_id alone. User tokens expire and reconnect is required. SMTP delivery uses STARTTLS and HTTPS reset URLs; tokens occur in fragments and are removed immediately. Public runtime sandboxing, global recovery throttling, full retention/purge, OAuth token DB backup and production acceptance remain launch gaps.
-
-See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
-
----
-
-## Earlier audit (historical)
-
 # Security model
 
 Updated 2026-10-03. Local testing only. **Not approved for public multi-tenant agent execution.** No VPS access or secrets were used.
@@ -49,18 +31,6 @@ Backend tests cover auth expiry/revocation, admin/owner/other-user access, stati
 Registration update (2026-10-04): username minimum 6, password minimum 8 with number and punctuation symbol; no uppercase requirement, existing logins unchanged. See API_REFERENCE.md. No migration.
 
 
-## OpenCode synchronization (2026-10-05)
+## Codex merge, 2026-10-05
 
-The current Codex workspace now includes the newer OpenCode subscriptions, project archiving, client/admin dashboards, reports, shell and grid UI, together with the merged account-management features. See MERGE_REPORT.md for current verification. The preserved OpenCode document is in reference/opencode/. This workspace uses migration head `0006_subscriptions_archive` after the existing `0005_account_management`. No VPS access or push was performed.
-
-
-### Current synchronized implementation
-
-Source and destination secrets/runtime data were excluded. User GitHub tokens remain encrypted and membership-checked; roles may only be granted by owners. All billing queries are per authenticated user; platform aggregates require admin/owner. External credentials were not used for synchronization.
-
-
-## Workspace/payment update — 2026-10-05
-
-Expired trials/subscriptions are rejected server-side on work APIs before runtime access. Checkout rejects private, disabled or currency-incompatible receiving methods. Customer cannot administer platform methods or confirm receipts; other-customer payment references are inaccessible. Admin review is idempotent and transactional. Card collection is not implemented; processor-hosted secure fields and verified webhooks are required before enabling automated checkout.
-
-See [WORKSPACE_FIRST_REPORT.md](WORKSPACE_FIRST_REPORT.md) for scope, evidence and limits. This update supersedes conflicting historical statements.
+Account management, recovery, audit, locations, encrypted payment methods and user-authorized GitHub integration were merged while preserving subscriptions and project archiving. See [MERGE_REPORT.md](MERGE_REPORT.md) and [Codex reference](reference/codex/SECURITY_MODEL.md). New migration: `0006_account_management`. External integrations still require configuration; no production connection or deployment was tested.

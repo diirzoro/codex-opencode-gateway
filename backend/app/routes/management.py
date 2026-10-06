@@ -1,4 +1,6 @@
 import json, secrets, uuid
+from urllib.parse import urlsplit
+import ipaddress
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, ConfigDict, Field, EmailStr, field_validator
@@ -103,7 +105,7 @@ def logout_session(session_id:uuid.UUID,user:User=Depends(require_user),db:Sessi
 
 class MethodInput(BaseModel):
     model_config=ConfigDict(extra='forbid',str_strip_whitespace=True)
-    kind: str=Field(pattern='^(paypal|bank|wallet|other)$')
+    kind: str=Field(pattern='^(paypal|bank|wallet|googlepay|binance|other)$')
     label: str=Field(min_length=1,max_length=100)
     account_name: str=Field(default='',max_length=150)
     account_reference: str=Field(default='',max_length=200)
@@ -111,14 +113,49 @@ class MethodInput(BaseModel):
     currency: str=Field(default='USD',pattern='^[A-Z]{3}$')
     network: str=Field(default='',max_length=100)
     instructions: str=Field(default='',max_length=1000)
+    checkout_mode: str=Field(default='manual',pattern='^(manual|link|paypal)$')
+    payment_url: str=Field(default='',max_length=2000)
+    plan_id: int|None=Field(default=None,ge=1)
     enabled: bool=True
+    @field_validator('payment_url')
+    @classmethod
+    def public_payment_link(cls,value):
+        if not value:return value
+        try:
+            url=urlsplit(value)
+            host=(url.hostname or '').lower()
+            if url.scheme!='https' or not host or url.username or url.password or url.port not in (None,443):raise ValueError()
+            if host=='localhost' or host.endswith(('.localhost','.local','.internal')) or '.' not in host:raise ValueError()
+            try:
+                address=ipaddress.ip_address(host)
+            except ValueError:address=None
+            if address is not None and not address.is_global:raise ValueError()
+        except ValueError:raise ValueError('Use a public HTTPS payment link without credentials')
+        return value
 def scope(user,platform):
     if platform and user.role not in {'owner','admin','finance'}: raise HTTPException(403,'Billing administration required')
     return None if platform else user.id
 def method_payload(row): return {'id':str(row.id),'kind':row.kind,'label':row.label,'enabled':row.enabled,'details':json.loads(credentials.decrypt(row.details))}
 def method_values(data):
-    values=data.model_dump(); detail={key:values.pop(key) for key in ['account_name','account_reference','bank_name','currency','network','instructions']}
+    values=data.model_dump(); detail={key:values.pop(key) for key in ['account_name','account_reference','bank_name','currency','network','instructions','checkout_mode','payment_url','plan_id']}
     return {**values,'details':credentials.encrypt(json.dumps(detail))}
+def validate_receiving_method(db,data,platform):
+    from ..models import Plan
+    if data.checkout_mode=='link' and (not platform or (data.enabled and (not data.payment_url or not data.plan_id))):
+        raise HTTPException(422,'Hosted payment links require a platform method, payment URL and matching plan')
+    if data.checkout_mode=='manual' and data.payment_url:
+        raise HTTPException(422,'Select hosted payment link mode to use a payment URL')
+    if data.checkout_mode=='paypal' and (not platform or data.kind!='paypal' or data.payment_url):
+        raise HTTPException(422,'PayPal API checkout requires a platform PayPal method without a static link')
+    if data.kind=='googlepay' and data.enabled and data.checkout_mode!='link':
+        raise HTTPException(422,'Google Pay requires a configured hosted checkout link from a supported payment processor')
+    if data.enabled:
+        host=(urlsplit(data.payment_url).hostname or '').lower()
+        if host=='example.com' or host.endswith(('.example','.example.com','.example.org','.example.net')) or any('EXAMPLE_REPLACE' in value.upper() for value in [data.account_name,data.account_reference,data.network]):
+            raise HTTPException(422,'Replace example receiving details before enabling this payment method')
+    if data.plan_id:
+        plan=db.get(Plan,data.plan_id)
+        if not plan or not plan.active or plan.currency!=data.currency:raise HTTPException(422,'Choose an active plan with matching currency')
 @router.get('/billing/methods')
 def methods(platform:bool=False,user:User=Depends(require_user),db:Session=Depends(get_db)):
     owner=scope(user,platform)
@@ -128,6 +165,7 @@ def receiving(user:User=Depends(require_user),db:Session=Depends(get_db)):
     return [method_payload(row) for row in db.scalars(select(BillingMethod).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)))]
 @router.post('/billing/methods',status_code=201)
 def create_method(data:MethodInput,platform:bool=False,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    scope(user,platform);validate_receiving_method(db,data,platform)
     row=BillingMethod(user_id=scope(user,platform),**method_values(data)); db.add(row); audit(db,user,'billing.method_created'); db.commit(); return method_payload(row)
 def owned_method(db,user,platform,method_id):
     owner=scope(user,platform); row=db.get(BillingMethod,method_id)
@@ -136,6 +174,7 @@ def owned_method(db,user,platform,method_id):
 @router.put('/billing/methods/{method_id}')
 def edit_method(method_id:uuid.UUID,data:MethodInput,platform:bool=False,user:User=Depends(require_user),db:Session=Depends(get_db)):
     row=owned_method(db,user,platform,method_id)
+    validate_receiving_method(db,data,platform)
     for key,value in method_values(data).items(): setattr(row,key,value)
     audit(db,user,'billing.method_updated'); db.commit(); return method_payload(row)
 @router.delete('/billing/methods/{method_id}',status_code=204)

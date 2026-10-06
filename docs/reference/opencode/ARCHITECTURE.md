@@ -1,17 +1,3 @@
-# Internal OpenCode update — 2026-10-05
-
-This infrastructure note supersedes earlier shared/public service descriptions: customer browsers authenticate only with Gateway and use `/api/...`. Backend-only `OPENCODE_BASE_URL=http://127.0.0.1:4096` addresses the user-reported localhost-only OpenCode reference service without a shared login. It is health-only in this implementation. Coding actions remain owned per-workspace runtime calls; no shared execution fallback. See [INTERNAL_OPENCODE_INFRASTRUCTURE.md](INTERNAL_OPENCODE_INFRASTRUCTURE.md) for the initial comparison, changes and production isolation gaps. No VPS deployment was performed.
-
-# Current local update — 2026-10-04
-
-The active deliverable is codex project/project. management.js extends existing account/admin pages. FastAPI management routes persist owned payment details, reset hashes and audit records. GitHub customer calls use encrypted customer user tokens after installation-membership verification. OpenCode remains a separate owned-workspace runtime; no VPS is contacted.
-
-See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
-
----
-
-## Earlier audit (historical)
-
 # Architecture
 
 Updated 2026-10-03. Independent local development project, not affiliated with OpenCode or GitHub. No deployment performed.
@@ -49,20 +35,6 @@ GitHub App, cloning/private repository/token/webhook flow, push/PR/conflict/remo
 Testing and run commands: README.md. Exact endpoint/schema inventory: API_REFERENCE.md and DATABASE_REFERENCE.md. Public launch gates: SECURITY_MODEL.md.
 
 
-## OpenCode synchronization (2026-10-05)
+## Codex merge, 2026-10-05
 
-The current Codex workspace now includes the newer OpenCode subscriptions, project archiving, client/admin dashboards, reports, shell and grid UI, together with the merged account-management features. See MERGE_REPORT.md for current verification. The preserved OpenCode document is in reference/opencode/. This workspace uses migration head `0006_subscriptions_archive` after the existing `0005_account_management`. No VPS access or push was performed.
-
-
-### Current synchronized implementation
-
-The preserved OpenCode app shell loads app.js → enhancements.js → management.js → dashboards.js. Role home routing lives in enhancements.js; account management is connected through existing panel loaders. subscriptions and management routers are both registered.
-
-The subsequent section-mapping correction renders each management form directly in its owning sidebar panel through `renderManagement`. The shared cross-section menu was removed. See [SECTION_MAPPING.md](SECTION_MAPPING.md) for current grouping and browser verification.
-
-
-## Workspace/payment update — 2026-10-05
-
-Customers enter Workspace/Home; administrators enter Admin Overview. Settings connects providers/GitHub/runtime; the workspace composer uses those choices. Main navigation and the single secondary work pane occupy opposite sides in RTL/LTR. Customer checkout and platform receiving-method administration are separate render paths; the customer never receives the admin editor.
-
-See [WORKSPACE_FIRST_REPORT.md](WORKSPACE_FIRST_REPORT.md) for scope, evidence and limits. This update supersedes conflicting historical statements.
+Account management, recovery, audit, locations, encrypted payment methods and user-authorized GitHub integration were merged while preserving subscriptions and project archiving. See [MERGE_REPORT.md](MERGE_REPORT.md) and [Codex reference](reference/codex/ARCHITECTURE.md). New migration: `0006_account_management`. External integrations still require configuration; no production connection or deployment was tested.

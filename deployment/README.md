@@ -4,6 +4,10 @@ Current authorization is local-only. Do not run these commands until explicitly 
 
 ## Preconditions
 
+### Internal OpenCode configuration (2026-10-05)
+
+The operator reports that the existing `opencode-web.service` binds only `127.0.0.1:4096`, without the retired shared login. Keep that service and port private. Configure `OPENCODE_BASE_URL=http://127.0.0.1:4096` only in the Gateway backend environment. Replace the obsolete `OPENCODE_URL` name manually in the existing environment when deployment is later authorized; remove retired shared OpenCode credential entries. Do not add OpenCode URLs/credentials to frontend config or reverse-proxy its raw UI/port for customers. The current adapter uses this reference for health only; public customer execution stays disabled pending per-workspace production isolation. See `docs/INTERNAL_OPENCODE_INFRASTRUCTURE.md`. No commands below change the OpenCode service or firewall.
+
 Validate the finished release on target Python 3.12/PostgreSQL 16, resolve dependencies/security/recovery/quotas, review HTTPS reverse proxy and service account permissions. Existing server state, service file and DB credentials have not been inspected. Preserve `.env`, runtime/workspaces and backups. Do not replace secrets with example values.
 
 ## Package locally later
@@ -46,6 +50,6 @@ Migration failure: keep the service stopped, preserve backup and diagnose; do no
 
 Existing service template is illustrative and has not been installed or validated against the VPS. Do not run a second public OpenCode UI; internal ports must remain firewalled. Do not use production secrets in local tests.
 
-## Account management release (2026-10-04)
+## Merged account management
 
-Expected migration head: `0005_account_management`. Preserve `CREDENTIALS_ENCRYPTION_KEY`; losing it prevents decryption of saved credentials/payment details. Configure SMTP and an HTTPS PUBLIC_BASE_URL for reset links. GitHub App must request user OAuth authorization during installation; existing connections must reconnect. Client tokens expire after at most 8 hours; automatic refresh is pending. Payment methods are configuration only.
+Expected migration head: `0006_subscriptions_archive`, after the existing `0005_account_management`. Back up the database before running `python -m alembic upgrade head`. Keep CREDENTIALS_ENCRYPTION_KEY outside Git and preserve it across releases. Configure SMTP and HTTPS PUBLIC_BASE_URL for recovery. Existing GitHub connections must reconnect to grant user authorization; tokens expire within 8 hours. Payment methods store configuration only; no charge processing is implemented. No server connection or deployment was performed during this merge.

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#ffffff"><meta name="description" content="Your projects, conversations, and reviewed code changes in one OpenCode workspace."><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 20'%3E%3Cpath fill='%2324272d' d='M12 4H4V16H12V4ZM16 20H0V0H16V20Z'/%3E%3C/svg%3E"><title>OpenCode Gateway — Hosted OpenCode</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20261006-checkout">
   <style>
     .pricing{padding:2.5rem 0;border-top:1px solid var(--border,#e6e6e6)}
     .pricing-head{text-align:center;margin-bottom:1.25rem}
@@ -73,10 +73,437 @@
     #chatGithub,#openTools{width:auto;min-width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--text)}
     #chatGithub:hover,#openTools:hover{background:var(--panel2)}
     .event-line{font-size:11px;color:var(--muted);padding:2px 0;text-transform:lowercase}
+    .admin-view{display:none}
+    .admin-view.active{display:block}
+    #adminOverviewStats{grid-template-columns:repeat(4,1fr)}
+    #adminNav button{width:100%}
+    .admin-role-select{width:auto;min-width:104px}
+    .admin-row-actions{display:flex;gap:6px;flex-wrap:wrap}
+    .client-view{display:none}
+    .client-view.active{display:block}
+    #clientNav button{width:100%}
+    .client-summary{grid-template-columns:repeat(4,1fr)}
+    @media(max-width:900px){#adminOverviewStats{grid-template-columns:repeat(2,1fr)}.client-summary{grid-template-columns:repeat(2,1fr)}}
+    /* --- Professional SaaS control-panel layer (2026-10-04) --- */
+    body{font-size:15px}
+    .portal-content,.admin-content,.client-content{padding:28px 40px;max-width:1180px}
+    #clientNav button,#adminNav button{display:flex;align-items:center;gap:10px;width:100%}
+    .nav-icon{width:16px;height:16px;flex-shrink:0;opacity:.72}
+    #clientNav button.active .nav-icon,#adminNav button.active .nav-icon{opacity:1;color:var(--primary)}
+    .page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin:4px 0 22px}
+    .page-head h1{font-size:22px;margin:0;letter-spacing:-.3px}
+    .page-head .lead{margin:6px 0 0}
+    .page-head .head-actions{display:flex;gap:8px;flex-shrink:0}
+    .badge{display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:600;line-height:1.7;white-space:nowrap}
+    .badge.good{background:var(--soft);color:var(--primary)}
+    .badge.info{background:rgba(6,182,212,.13);color:#0891b2}
+    .badge.muted{background:var(--panel2);color:var(--muted)}
+    .badge.danger{background:rgba(220,38,38,.1);color:var(--danger)}
+    .card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+    .summary-card{display:flex;gap:13px;align-items:center;padding:17px 18px;border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:var(--card-shadow)}
+    .summary-card .sc-icon{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:var(--soft);color:var(--primary);flex-shrink:0}
+    .summary-card .sc-icon svg{width:18px;height:18px}
+    .summary-card b{font-size:18px;display:block;letter-spacing:-.3px}
+    .summary-card small{color:var(--muted);font-size:12px}
+    .quick-actions{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 6px}
+    .section-title{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin:26px 0 12px}
+    .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:52px 20px;text-align:center;border:1px dashed var(--line);border-radius:16px;background:var(--panel2)}
+    .empty-state .es-icon{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;background:var(--soft);color:var(--primary)}
+    .empty-state .es-icon svg{width:22px;height:22px}
+    .empty-state h3{margin:0;font-size:15px}
+    .empty-state p{margin:0;color:var(--muted);font-size:13px;max-width:360px}
+    .list-card{display:flex;align-items:center;gap:14px;padding:15px 16px;border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:var(--card-shadow);margin-bottom:10px}
+    .list-card .lc-icon{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:var(--soft);color:var(--primary);flex-shrink:0}
+    .list-card .lc-icon svg{width:18px;height:18px}
+    .list-card .lc-main{flex:1;min-width:0}
+    .list-card .lc-main b{font-size:14px}
+    .list-card .lc-main small{display:block;color:var(--muted);font-size:12px}
+    .list-card .lc-actions{display:flex;gap:6px;flex-shrink:0}
+    .banner{display:flex;gap:10px;align-items:center;padding:13px 16px;border-radius:12px;background:var(--soft);color:var(--primary);font-size:13px;font-weight:500;margin:14px 0}
+    .banner svg{width:18px;height:18px;flex-shrink:0}
+    .banner.warn{background:rgba(6,182,212,.12);color:#0891b2}
+    .connect-panel{max-width:520px;margin:20px auto;text-align:center;padding:40px 28px;border:1px solid var(--line);border-radius:18px;background:var(--panel);box-shadow:var(--card-shadow)}
+    .connect-panel .cp-icon{width:64px;height:64px;border-radius:16px;margin:0 auto 16px;display:grid;place-items:center;background:var(--soft);color:var(--primary)}
+    .connect-panel .cp-icon svg{width:30px;height:30px}
+    .connect-panel h3{margin:0 0 6px;font-size:17px}
+    .connect-panel p{color:var(--muted);font-size:13px;margin:0 0 18px}
+    .segmented{display:inline-flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:11px;background:var(--panel2);margin-bottom:14px}
+    .segmented button{border:0;background:none;padding:7px 14px;border-radius:8px;font-size:12px;color:var(--muted);cursor:pointer}
+    .segmented button.active{background:var(--panel);color:var(--text);box-shadow:var(--card-shadow)}
+    .setting-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 0;border-bottom:1px solid var(--line);font-size:13px}
+    .setting-row:last-child{border:0}
+    .setting-row small{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+    .price-card .plan-tag{position:absolute;top:12px;inset-inline-start:12px;font-size:10px;font-weight:700;letter-spacing:.4px;padding:3px 8px;border-radius:999px;background:var(--soft);color:var(--primary)}
+    .price-card .plan-check{position:absolute;top:12px;inset-inline-end:12px;width:20px;height:20px;border-radius:50%;background:var(--primary);color:#fff;display:grid;place-items:center;font-size:11px}
+    /* --- Standard international typography --- */
+    body{font-size:17px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+    .button{font-size:15px}
+    .button.small{font-size:14px}
+    label{font-size:14px}
+    input,select,textarea{font-size:15px}
+    td,th{font-size:14px}
+    th{font-size:13px}
+    .lead{font-size:15px}
+    .eyebrow{font-size:12.5px}
+    .preview-badge{font-size:12px}
+    .badge{font-size:13px}
+    .section-title{font-size:14px}
+    .page-head h1{font-size:26px}
+    .summary-card b{font-size:22px}
+    .summary-card small{font-size:14px}
+    .list-card .lc-main b{font-size:16px}
+    .list-card .lc-main small{font-size:13.5px}
+    .empty-state h3{font-size:17px}
+    .empty-state p{font-size:15px}
+    .banner{font-size:15px}
+    .portal-nav button{font-size:15px}
+    .portal-nav b{font-size:13px}
+    .portal-nav .nav-icon{width:18px;height:18px}
+    .settings-list{font-size:15px}
+    .settings-list small{font-size:13.5px}
+    .settings-list>div{font-size:15px}
+    .account-grid h3,.stat-grid h3{font-size:17px}
+    .account-grid small,.stat-grid small{font-size:13.5px}
+    .account-grid p{font-size:13.5px}
+    .stat-grid b{font-size:28px}
+    .project-card strong{font-size:16px}
+    .project-card small{font-size:13.5px}
+    .connect-panel p{font-size:15px}
+    .connect-panel h3{font-size:19px}
+    .toast{font-size:15px}
+    .table-wrap table{font-size:14px}
+    .admin-actions button{font-size:13px}
+    .admin-section small{font-size:12.5px}
+    .admin-section h2{font-size:18px}
+    .price-card span{font-size:15px}
+    .price-card small{font-size:13.5px}
+    .price-card b{font-size:30px}
+    .pricing-summary{font-size:15px}
+    .api-message{font-size:13.5px}
+
+/* ---- fixed page headers ---- */
+.welcome-topbar,.onboard-top,.portal-header,.project-bar{position:sticky;top:0;z-index:30;background:var(--bg)}
+.portal-header,.onboard-top,.project-bar{backdrop-filter:blur(6px)}
+.header-actions{display:flex;align-items:center;gap:8px}
+.header-actions .text-link{display:inline-flex;align-items:center;gap:7px}
+[dir=rtl] .header-actions svg.ui-icon{transform:scaleX(-1)}
+.page-back{display:inline-grid}
+
+/* ---- data grid ---- */
+.datagrid{border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
+.datagrid-tools{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.grid-search{position:relative;display:flex;align-items:center;min-width:220px;flex:1 1 220px}
+.grid-search svg{position:absolute;inset-inline-start:11px;width:17px;height:17px;color:var(--muted);pointer-events:none}
+.grid-search input{margin:0;padding:9px 13px;border-radius:9px;font-size:13px}
+[dir=rtl] .grid-search input{padding-inline-start:36px}
+.grid-count{color:var(--muted);font-size:12.5px;margin-inline-start:auto;white-space:nowrap}
+    .grid-scroll{overflow:auto;max-height:min(68vh,760px)}
+.datagrid table{font-size:13px}
+.datagrid thead th{position:sticky;top:0;z-index:2;background:var(--panel2);font-size:12px;font-weight:600;color:var(--text);white-space:nowrap}
+.datagrid thead th.sortable{cursor:pointer;user-select:none}
+.datagrid thead th.sortable:hover{color:var(--primary)}
+.datagrid thead th .sort-ind{margin-inline-start:6px;color:var(--muted);font-size:10px}
+.datagrid tbody tr{border-bottom:1px solid var(--line)}
+.datagrid tbody tr:last-child{border-bottom:0}
+.datagrid tbody tr:hover{background:var(--panel2)}
+.datagrid td{font-size:13px;vertical-align:middle}
+.grid-actions{display:flex;gap:6px;justify-content:flex-end}
+.grid-btn{width:33px;height:33px;display:inline-grid;place-items:center;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:8px}
+.grid-btn:hover{background:var(--panel2)}
+.grid-btn[aria-disabled=true]{opacity:.35;cursor:not-allowed}
+.grid-btn.danger:hover{border-color:var(--danger);color:var(--danger)}
+.grid-empty{padding:26px;text-align:center;color:var(--muted);font-size:13px}
+.grid-note{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}
+.readonly-pill{display:inline-block;padding:2px 8px;border-radius:20px;background:var(--panel2);color:var(--muted);font-size:11px}
+
+/* ---- grid modal ---- */
+.grid-modal{position:fixed;inset:0;background:#0006;display:none;place-items:center;z-index:120;padding:20px}
+.grid-modal.open{display:grid}
+.grid-modal-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(600px,100%);max-height:86vh;overflow:auto;box-shadow:var(--shadow)}
+.grid-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:17px 20px;border-bottom:1px solid var(--line)}
+.grid-modal-head h3{margin:0;font-size:17px;font-weight:600}
+.grid-modal-body{padding:20px}
+.grid-modal-foot{display:flex;gap:10px;justify-content:flex-end;padding:15px 20px;border-top:1px solid var(--line)}
+.kv{display:grid;grid-template-columns:160px 1fr;gap:9px 16px;margin:0}
+.kv dt{color:var(--muted);font-size:12.5px}
+.kv dd{margin:0;font-size:13.5px;word-break:break-word}
+[dir=rtl] .kv{direction:rtl}
+.modal-alert{margin:0 0 14px;padding:10px 12px;border-radius:9px;background:var(--soft);color:var(--muted);font-size:12.5px}
+.signout-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+.signout-row p{margin:0;color:var(--muted);font-size:12.5px}
+
+/* ---- responsive header controls ---- */
+@media(max-width:800px){
+  .header-actions{gap:5px}
+  .header-actions .button{padding:7px 10px;gap:0}
+  .header-actions .button span{display:none}
+  .welcome-topbar{gap:8px}
+  .datagrid-tools{padding:10px}
+  .grid-search{min-width:0}
+  .grid-count{width:100%;margin-inline-start:0}
+  .kv{grid-template-columns:1fr}
+  .kv dt{margin-top:6px}
+}
   </style>
+<style>
+/* App Shell layout: normal pages fill the body; workbench panels belong only to a workspace. */
+.app-main .portal-content,.app-main .admin-content,.app-main .client-content{max-width:none!important;width:100%;margin:0!important;padding:32px clamp(20px,2.2vw,42px);font-size:16px}
+.app-main .portal-content h1{font-size:30px!important;line-height:1.35}
+.app-main .portal-content .lead,.app-main .manage-card p,.app-main .manage-form label{font-size:15px}
+.app-main .portal-content table{width:100%;font-size:15px}
+.app-main .portal-content td{font-size:15px!important;padding:16px 18px;white-space:normal;overflow-wrap:anywhere}
+.app-main .portal-content th{font-size:14px!important;padding:15px 18px}
+.app-main .portal-content .datagrid-tools{padding:16px;gap:14px}
+.app-main .portal-content .grid-search input{font-size:15px;min-height:44px;padding-inline-start:38px}
+.app-main .portal-content .grid-btn{width:40px;height:40px}
+.app-main .portal-content .grid-count,.app-main .portal-content .grid-note,.app-main .portal-content .lc-sub,.app-main .portal-content .stat-grid small{font-size:14px}
+#workspacePage .workspace-shell{display:grid;grid-template-columns:220px minmax(0,1fr) 250px;height:100%;min-height:0;overflow:hidden}
+#workspacePage .agent-column{grid-column:2;grid-row:1;min-width:0;height:100%;overflow:hidden;display:flex;flex-direction:column}
+#workspacePage .session-sidebar{grid-column:1;grid-row:1}
+#workspacePage .connection-sidebar{grid-column:3;grid-row:1}
+#workspacePage .session-sidebar{position:static;display:flex;width:auto;min-width:0;overflow:auto}
+#workspacePage .connection-sidebar{background:var(--sidebar);border-inline-start:1px solid var(--line);padding:16px;overflow:auto;min-width:0;display:flex;flex-direction:column;gap:16px}
+.connection-sidebar header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.connection-sidebar p,.workspace-activity p{font-size:14px;color:var(--muted);overflow-wrap:anywhere}
+.workspace-activity h3,#workspacePage .session-sidebar h3{font-size:15px}
+#workspacePage .review-content .file-item,#workspacePage #gitSummary{font-size:14px}
+.app-main .portal-content td code,.app-main .portal-content td time{direction:ltr;unicode-bidi:isolate}
+#billingPlans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;max-width:none;gap:20px;margin:20px 0}
+#billingPlans .price-card{min-width:0}
+.price-card:has(.plan-tag)::after{display:none}
+[dir=rtl] .price-card:nth-child(3)::after{content:"الأفضل قيمة"}
+[dir=rtl] .price-card .plan-tag+*{margin-top:12px}
+.connection-sidebar .statuses{display:flex;flex-direction:column;align-items:stretch;max-width:none;font-size:13px;gap:12px}
+.connection-sidebar .statuses>span{display:block!important}
+.connection-sidebar label{display:flex;flex-direction:column;gap:8px;font-size:14px}
+.connection-sidebar select{width:100%;min-width:0;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text)}
+.connection-sidebar .workspace-links{margin:0;display:flex;flex-direction:column;gap:10px}
+.connection-sidebar #toolsPanel{margin:0;padding:12px;font-size:14px}
+.workbench-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+.workbench-toolbar button{font-size:13px;padding:8px 12px}
+#workspacePage .project-bar{min-height:58px;padding:10px 16px;flex-wrap:wrap}
+#workspacePage #openSessions,#workspacePage #closeSessions{display:inline-grid}
+#workspacePage .agent-feed{flex:1;min-height:80px;overflow:auto;padding:20px}
+#workspacePage .workspace-empty{margin:30px auto;max-width:460px}
+#workspacePage .review-panel{position:static;inset:auto;width:100%;max-width:none;display:flex;flex:0 1 40%;min-height:160px;overflow:hidden;border-inline-start:0;border-top:1px solid var(--line)}
+#workspacePage .review-panel header{display:none}
+#workspacePage .review-panel .review-content{min-height:60px;overflow:auto}
+#workspacePage .review-panel .git-actions{padding:8px 14px}
+#workspacePage #reviewButton{display:none}
+#workspacePage .workspace-shell.sessions-collapsed{grid-template-columns:0 minmax(0,1fr) 250px}
+#workspacePage .workspace-shell.connections-collapsed{grid-template-columns:220px minmax(0,1fr) 0}
+#workspacePage .workspace-shell.sessions-collapsed.connections-collapsed{grid-template-columns:0 minmax(0,1fr) 0}
+#workspacePage .sessions-collapsed .session-sidebar,#workspacePage .connections-collapsed .connection-sidebar{display:none}
+#workspacePage .chat-only .review-panel{display:none}
+#workspacePage .review-only .agent-feed,#workspacePage .review-only #promptForm,#workspacePage .review-only #approvalBox{display:none}
+#workspacePage .review-only .review-panel{flex:1;min-height:0}
+#workspacePage .review-only .review-content{flex:1}
+.workspace-preview{padding:24px;font-size:15px}
+@media(max-width:1100px){
+ #workspacePage .workspace-shell{grid-template-columns:minmax(0,1fr)!important}
+ #workspacePage .agent-column{grid-column:1}
+ #workspacePage .session-sidebar,#workspacePage .connection-sidebar{display:none;position:fixed;top:69px;bottom:0;width:min(310px,88vw);z-index:95;box-shadow:var(--shadow)}
+ #workspacePage .session-sidebar{inset-inline-start:0;inset-inline-end:auto}
+ #workspacePage .connection-sidebar{inset-inline-end:0;inset-inline-start:auto}
+ #workspacePage .session-sidebar.open,#workspacePage .connection-sidebar.open{display:flex}
+ #workspacePage .review-panel{display:none}
+ #workspacePage .review-panel.open{display:flex;flex:1}
+ #workspacePage .review-panel.open header{display:flex}
+ #workspacePage #reviewButton{display:block}
+ #workspacePage .agent-column{height:100%}
+ #workspacePage .prompt-box{margin:10px;max-width:calc(100% - 20px)}
+ .app-main .portal-content{padding:24px 18px}
+}
+@media(max-width:600px){#billingPlans{grid-template-columns:1fr}}
+</style>
+<style>
+/* Workspace first: one review pane, focused bottom composer, Gateway theme retained. */
+#workspacePage .workspace-shell.workspace-first{grid-template-columns:minmax(0,1fr) 250px}
+#workspacePage .workspace-first.sessions-collapsed{grid-template-columns:minmax(0,1fr) 0}
+#workspacePage .workspace-first .agent-column{grid-column:1}
+#workspacePage .workspace-first .session-sidebar{grid-column:2;border-inline-start:1px solid var(--line);border-inline-end:0}
+#workspacePage .workspace-first .project-bar{min-height:46px}
+#workspacePage .workspace-first .prompt-box{order:10;margin:12px 24px 24px;flex:none;max-width:none;border-radius:18px}
+#workspacePage .workspace-first .composer-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px;justify-content:flex-start}
+#workspacePage .workspace-first .composer-controls select{max-width:230px;width:auto;min-width:100px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);font-size:13px;color:var(--text)}
+#workspacePage .workspace-first .composer-context{display:flex;align-items:center;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-bottom:10px}
+#workspacePage .workspace-first .composer-context b{color:var(--text);font-size:13px}
+#workspacePage .workspace-first .prompt-box textarea{min-height:85px;font-size:16px}
+#workspacePage .workspace-first .workspace-empty{margin:clamp(40px,12vh,140px) auto;max-width:520px}
+#workspacePage .workspace-first .agent-feed{font-size:15px}
+#workspacePage .workspace-first .workspace-activity h2{font-size:15px;margin:18px 0 12px}
+#workspacePage .workspace-first .prompt-box{width:min(920px,calc(100% - 48px));margin-inline:auto}
+#workspacePage .workspace-first #approvalBox{order:9}
+#workspacePage .workspace-first .review-panel{order:5;flex:1;min-height:0}
+#workspacePage .workspace-first .review-only #promptForm{display:block}
+#workspacePage .workspace-first .review-only .review-panel header{display:flex}
+#workspacePage .workspace-first .side-brand{padding-bottom:10px}
+#workspacePage .workspace-first .pane-review-actions{display:flex;flex-direction:column;gap:8px;margin-block:18px}
+#workspaceSessionSearch{width:100%;padding:10px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:13px;margin-bottom:12px}
+.workspace-home{max-width:none!important;width:100%;padding:clamp(26px,4vw,64px)!important}
+.work-home-heading h1{font-size:34px!important;margin:8px 0 12px}.home-actions{display:flex;gap:12px;flex-wrap:wrap;margin:26px 0}
+.session-search input{width:100%;padding:14px 18px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text);font-size:15px}
+.workspace-home section{margin-top:32px}.workspace-home h2{font-size:17px;margin-bottom:16px}
+.home-project-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding:18px 0}.home-project-row strong{font-size:16px}.home-project-row small{margin-inline-end:auto;color:var(--muted)}
+.home-session-row{display:block;background:transparent;border:0;border-bottom:1px solid var(--line);text-align:start;padding:16px 0;width:100%;font-size:15px}.home-session-row small{display:block;color:var(--muted);margin-top:6px}.home-empty{color:var(--muted);font-size:15px}
+.connections-content{max-width:none!important}.connections-heading{margin-bottom:24px}.connections-heading h1{font-size:30px}.connections-content>div:not(.connections-heading){margin:24px 0}.connections-content h2{font-size:19px}
+.workspace-repository-dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:16px;padding:24px;width:min(560px,calc(100% - 32px));max-height:85vh;overflow:auto}.workspace-repository-dialog::backdrop{background:#0008}.workspace-repository-dialog form{display:grid;gap:16px;margin-top:18px}.workspace-repository-dialog select,.workspace-repository-dialog input{width:100%;padding:12px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px}
+.checkout-dialog{position:fixed;padding:28px;width:min(580px,calc(100% - 32px))}.checkout-dialog h2{font-size:24px;margin:0 0 20px}.checkout-dialog #checkoutClose{position:absolute;inset-inline-end:22px;top:22px}.checkout-summary{display:grid;grid-template-columns:1fr auto;gap:10px;padding:20px;border:1px solid var(--line);border-radius:12px;margin-top:24px}.checkout-summary b{font-size:24px}.checkout-summary span{color:var(--muted);font-size:14px}.checkout-lead{font-size:14px;color:var(--muted);line-height:1.8}.checkout-dialog #createPaymentOrder{width:100%;margin:16px 0}.checkout-dialog #checkoutMethod{width:100%;min-height:46px;background:var(--bg);color:var(--text);padding:10px;border:1px solid var(--line);border-radius:9px}.checkout-dialog form .button{width:100%}.checkout-dialog p{overflow-wrap:anywhere}.connections-content .manage-card{box-shadow:none}
+@media(max-width:1100px){#workspacePage .workspace-first .agent-column{grid-column:1}#workspacePage .workspace-first .session-sidebar{inset-inline-end:0;inset-inline-start:auto}#workspacePage .workspace-first .prompt-box{margin:10px 12px 16px}#workspacePage .workspace-first .composer-controls select{max-width:calc(50% - 8px)}.work-home-heading h1{font-size:28px!important}.home-project-row small{width:100%}}
+</style>
+<style>
+.checkout-dialog .checkout-details{display:grid;grid-template-columns:minmax(100px,.75fr) minmax(0,1fr);gap:8px 16px;margin:14px 0;font-size:14px;line-height:1.5}
+.checkout-details dt{color:var(--muted)}.checkout-details dd{margin:0;overflow-wrap:anywhere}
+.checkout-dialog form{display:grid;gap:10px;margin-top:16px}.checkout-dialog form label{font-size:14px;font-weight:600}
+.checkout-dialog #paymentReference{width:100%;box-sizing:border-box;min-height:44px;margin:0}
+.checkout-dialog p{font-size:14px;line-height:1.6}.checkout-dialog .checkout-summary{margin-top:14px;padding:14px}
+.checkout-dialog label[for=checkoutMethod]{display:block;font-size:14px;margin:12px 0 8px}
+[data-billing-role=admin] .manage-form label:has(input[hidden]),[data-billing-role=admin] .manage-form label[hidden]{display:none}
+@media(max-width:600px){.checkout-dialog{padding:20px}.checkout-dialog h2{font-size:20px;padding-inline-end:75px}.checkout-dialog .checkout-details{grid-template-columns:1fr;gap:4px}.checkout-details dd{margin-bottom:8px}}
+</style>
+<style id="readable-contrast-theme">
+/* Shared text and edge contrast: normal text stays dark on light surfaces. */
+:root:not(.dark){--text:#172033;--muted:#24324a;--line:#2563eb;--border:#2563eb;--primary:#1e40af;--primary2:#1e3a8a}
+:root.dark{--line:#60a5fa;--border:#60a5fa}
+:root *{border-color:var(--line)}
+:root:not(.dark) :is(h1,h2,h3,h4,h5,h6,p,small,label,legend,dt,dd,th,td,a,button,input,select,textarea,kbd,.lead,.eyebrow,.section-title,.brand-caption,.gateway-label,.app-user,.sidebar-section-label,.sidebar-empty,.composer-context,.badge,.banner){color:var(--text)}
+:root:not(.dark) :is(.price-card,.project-card,.trial-dates) small,:root:not(.dark) .trial-dates{opacity:1}
+:root:not(.dark) :is(.sidebar-links button,.sidebar-links button>span,.sidebar-profile small,.feature-icon,.nav-icon,.composer-context span,.home-project-row span,.home-session-row span,.price-card span,.plan-tag,.pricing-summary){color:var(--text);opacity:1}
+:root:not(.dark) .price-card b{background:none;background-clip:border-box;-webkit-background-clip:border-box;color:var(--text)}
+:root:not(.dark) :is(.button,.send-circle,.brand-mark,.logo){background:#dbeafe;color:var(--text);border-color:var(--line);box-shadow:none}
+:root:not(.dark) .button.ghost{background:var(--panel);color:var(--text)}
+:root:not(.dark) button:disabled{opacity:1;color:var(--muted);background:var(--panel2);border-style:dashed}
+:root :is(input:not([type=checkbox]):not([type=radio]),select,textarea){border:1.5px solid var(--line);color:var(--text)}
+:root :is(input,textarea)::placeholder{color:var(--muted);opacity:1}
+:root :is(input,select,textarea):focus-visible{outline:2px solid var(--line);outline-offset:2px;box-shadow:0 0 0 3px color-mix(in srgb,var(--line) 15%,transparent)}
+:root :is(.price-card,.project-card,.summary-card,.list-card,.manage-card,.auth-card,.onboard-panel,.settings-list,.admin-section,.billing-section,.subscription-card,.feature-cards article,.account-grid article,.stat-grid article,.checkout-summary,.prompt-box,.checkout-dialog,.workspace-repository-dialog){border:1.5px solid var(--line)}
+:root :is(.price-card,.feature-cards article):hover{border-color:var(--line)}
+:root hr{border-color:var(--line);opacity:1}
+</style>
+<style id="soft-shell-surfaces">
+/* Tint separates navigation from content without hard divider lines. */
+:root{--shell-header:linear-gradient(110deg,#eef4ff 0%,#f0f9ff 60%,#f2f6ff 100%);--shell-sidebar:linear-gradient(180deg,#eef3ff 0%,#f4f2ff 65%,#edf8fc 100%);--shell-review:linear-gradient(180deg,#edf8ff 0%,#f2f5ff 100%);--shell-hover:#e0ecff;--shell-active:#d5e5ff}
+:root.dark{--shell-header:linear-gradient(110deg,#172238,#152b35);--shell-sidebar:linear-gradient(180deg,#172238,#242039);--shell-review:linear-gradient(180deg,#172b38,#1d2538);--shell-hover:#263954;--shell-active:#304664}
+#app-header{background:var(--shell-header);border:0;box-shadow:0 3px 14px rgba(30,64,175,.06)}
+#app-sidebar,#app-sidebar .shell-nav,#app-sidebar .welcome-sidebar{background:var(--shell-sidebar);border:0}
+#app-sidebar .shell-nav{background:transparent}
+#workspacePage .workspace-first .session-sidebar{background:var(--shell-review);border:0}
+#app-header :is(.gateway-label,.brand-service,.app-profile,.button),#app-sidebar :is(button,.connection-note),#sessionSidebar :is(button,.side-brand,.pane-review-actions,.workspace-activity){border:0;box-shadow:none}
+#app-header :is(.brand-service,.app-profile){background:rgba(255,255,255,.55)}
+:root.dark #app-header :is(.brand-service,.app-profile){background:rgba(255,255,255,.07)}
+#app-sidebar button:hover,#sessionSidebar button:hover{background:var(--shell-hover)}
+#app-sidebar button.active,#app-sidebar button[aria-current=page],#sessionSidebar button.active{background:var(--shell-active);box-shadow:none}
+#app-sidebar .connection-note{background:var(--shell-hover)}
+#app-sidebar hr,#sessionSidebar hr{display:none}
+</style>
+<style id="product-control-hierarchy">
+/* Actions, fields and content surfaces have distinct visual weight. */
+:root{--control-fill:#f1f7ff;--control-edge:#477fe0;--surface-edge:#94b5e8;--surface-depth:0 2px 5px rgba(25,57,109,.04),0 14px 32px -20px rgba(37,99,235,.3);--action-depth:0 4px 8px rgba(37,99,235,.1),0 9px 20px -9px rgba(37,99,235,.4)}
+:root.dark{--control-fill:#1b2b43;--control-edge:#71a9ff;--surface-edge:#426795;--surface-depth:0 10px 28px -10px rgba(0,0,0,.5);--action-depth:0 6px 20px -8px rgba(59,130,246,.5)}
+:root:not(.dark) .button:not(.ghost):not(:disabled),:root:not(.dark) .send-circle:not(:disabled){background:linear-gradient(135deg,#a8d5ff,#60a5fa);color:#10213c;border:1px solid #3475d6;box-shadow:var(--action-depth);font-weight:700}
+:root:not(.dark) .button.ghost{background:linear-gradient(180deg,#fff,#eff6ff);color:var(--text);border:1px solid var(--control-edge);box-shadow:0 2px 5px rgba(30,64,175,.07);font-weight:600}
+.button{border-radius:12px;min-height:42px;transition:background .18s,box-shadow .18s,transform .18s}
+.button.small{min-height:36px}
+:root .button:not(:disabled):hover{transform:translateY(-1px);box-shadow:var(--action-depth);filter:none}
+:root:not(.dark) .button:not(.ghost):not(:disabled):hover{background:linear-gradient(135deg,#93c5fd,#60a5fa)}
+:root button:disabled{box-shadow:none;transform:none}
+:root :is(input:not([type=checkbox]):not([type=radio]),select,textarea){background:var(--control-fill);border:1.5px solid var(--control-edge);border-radius:11px;box-shadow:inset 0 1px 2px rgba(30,64,175,.04);transition:border-color .18s,box-shadow .18s,background .18s}
+:root :is(input:not([type=checkbox]):not([type=radio]),select){min-height:44px;padding:10px 13px}
+:root :is(input,select,textarea):hover{border-color:#2563eb}
+:root :is(input,select,textarea):focus-visible{outline:0;border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.16);background:var(--panel)}
+:root :is(.price-card,.project-card,.summary-card,.list-card,.manage-card,.auth-card,.onboard-panel,.settings-list,.admin-section,.billing-section,.subscription-card,.feature-cards article,.account-grid article,.stat-grid article){border:1px solid var(--surface-edge);border-radius:18px;box-shadow:var(--surface-depth)}
+:root:not(.dark) :is(.price-card,.summary-card,.manage-card,.feature-cards article,.account-grid article,.stat-grid article){background:linear-gradient(145deg,#fff 45%,#f3f8ff)}
+:root :is(.price-card,.feature-cards article):hover{border-color:#2563eb;box-shadow:0 12px 28px -12px rgba(37,99,235,.3)}
+:root .manage-card h2{font-size:20px;font-weight:750;letter-spacing:-.3px;margin-bottom:20px}
+:root .manage-form label{font-weight:600;gap:9px}
+:root .manage-form{gap:22px 24px;align-items:start}
+:root .manage-form :is(input,select){margin:0;width:100%;height:46px}
+:root .manage-card p{font-size:14px;line-height:1.75}
+:root :is(.page-head h1,.work-home-heading h1,.connections-heading h1){font-weight:750;letter-spacing:-.6px}
+:root .checkout-summary{background:var(--control-fill);border:1px solid var(--control-edge);border-radius:14px}
+:root .checkout-dialog{box-shadow:0 24px 80px rgba(15,35,75,.28);border:1px solid var(--surface-edge);border-radius:22px}
+:root .prompt-box,:root .welcome-composer{box-shadow:0 8px 32px -14px rgba(37,99,235,.3);border-color:var(--control-edge)}
+:root .welcome-composer{padding:20px;border-radius:20px;background:var(--panel)}
+:root .welcome-composer textarea{padding:12px 14px;line-height:1.7;border:0;background:var(--control-fill);border-radius:12px;box-shadow:none}
+:root .welcome-composer textarea:focus-visible{box-shadow:0 0 0 3px rgba(37,99,235,.14)}
+:root:not(.dark) :is(.intro-badge,.composer-mode,.composer-mode span){color:var(--text);opacity:1}
+:root .composer-mode{font-size:13px}
+:root .feature-cards{gap:20px;align-items:stretch}
+:root .feature-cards article{padding:22px;text-align:start}
+:root .feature-cards h3{font-size:16px;font-weight:700;line-height:1.45;margin:16px 0 8px}
+:root .feature-cards p{font-size:14px;line-height:1.7;margin:0}
+:root .feature-icon{border:0;background:var(--control-fill);width:40px;height:40px;display:grid;place-items:center;border-radius:12px}
+:root .quick-actions [data-quick],:root .welcome-center .quick-actions [data-go]{background:var(--control-fill);border:1px solid var(--control-edge);border-radius:11px;min-height:42px;padding:10px 15px;font-size:13px;color:var(--text)}
+:root .quick-actions [data-quick]:hover,:root .welcome-center .quick-actions [data-go]:hover{background:var(--shell-hover);box-shadow:0 4px 12px rgba(37,99,235,.1)}
+#app-sidebar .avatar{border:0;background:var(--shell-hover)}
+:root:not(.dark) #homeNewProject{background:linear-gradient(135deg,#a8d5ff,#60a5fa);color:#10213c;border:1px solid #3475d6;box-shadow:var(--action-depth);font-weight:700}
+:root .home-project-row,:root .home-session-row{background:var(--panel);border:1px solid var(--surface-edge);border-radius:14px;padding:16px 20px;margin:12px 0;box-shadow:0 4px 15px -9px rgba(37,99,235,.24)}
+:root .home-project-row:hover,:root .home-session-row:hover{background:var(--control-fill);border-color:var(--control-edge)}
+#app-sidebar :is(button.active,button[aria-current=page]){background:linear-gradient(115deg,#bfdbfe,#d8eaff);font-weight:700;box-shadow:0 5px 14px -7px rgba(37,99,235,.24)}
+:root.dark #app-sidebar :is(button.active,button[aria-current=page]){background:linear-gradient(115deg,#294970,#293d5d)}
+#app-sidebar button,#sessionSidebar button{border:0}
+#app-header :is(.brand-service,.app-profile){box-shadow:0 3px 12px rgba(30,64,175,.09)}
+@media(prefers-reduced-motion:reduce){:root .button,:root input,:root select,:root textarea{transition:none}:root .button:not(:disabled):hover{transform:none}}
+</style>
+<style id="centered-action-forms">
+.action-form-dialog{position:fixed;inset:0;margin:auto;width:min(600px,calc(100% - 32px));max-height:calc(100dvh - 48px);padding:0;overflow:auto;background:var(--panel);color:var(--text);border:1px solid var(--surface-edge);border-radius:20px;box-shadow:0 24px 90px rgba(15,35,75,.24)}
+.action-form-dialog::backdrop,.grid-modal::backdrop{background:rgba(15,23,42,.4);backdrop-filter:blur(4px)}
+.action-dialog-head{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:22px 26px;background:var(--control-fill);border:0}
+.action-dialog-head h2{margin:0!important;font-size:21px!important;line-height:1.4;font-weight:700}
+.action-dialog-head .icon{font-size:25px;flex-shrink:0;border:0;background:var(--panel);border-radius:10px}
+.action-dialog-body{padding:24px 26px}.action-dialog-footer{padding:0 26px 24px;display:flex;justify-content:flex-end;gap:10px;border:0}
+.action-form-dialog :is(.manage-form,.inline-form,.policy-form,.onboard-panel){display:grid;grid-template-columns:minmax(0,1fr);gap:18px;margin:0;padding:0;border:0;box-shadow:none;background:transparent;max-width:none}
+.action-form-dialog label{display:flex;flex-direction:column;gap:8px;margin:0;font-size:14px;font-weight:600}
+.action-form-dialog label.checkbox-row{flex-direction:row;align-items:center}
+.action-form-dialog :is(input:not([type=checkbox]):not([type=radio]),select,textarea){width:100%;min-width:0;box-sizing:border-box;margin:0;min-height:44px;padding:10px 13px}
+.action-form-dialog form>.button{justify-self:end;width:auto;min-width:120px;margin-top:8px}
+.action-form-actions{display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:10px;margin-top:8px}
+.action-form-actions .button{width:auto;min-width:110px}
+.action-form-dialog :is(input,select,textarea){font-size:15px}
+.auth-action-dialog .auth-card{padding:0;margin:0;max-width:none;border:0;box-shadow:none;background:transparent}
+.auth-action-dialog .auth-form label{font-size:14px}
+.auth-action-dialog .auth-form label small{font-size:12px;font-weight:400}
+.auth-action-dialog .field-grid{gap:16px}
+.auth-action-dialog .auth-tabs button{font-size:15px;padding:8px 12px}
+.action-form-dialog [role=alert]{color:var(--danger);margin:0}
+.action-form-dialog .onboard-panel label{display:flex}
+.action-form-dialog form>h2{display:none}
+dialog.grid-modal{inset:0;margin:auto;width:min(640px,calc(100% - 32px));max-height:calc(100dvh - 48px);height:fit-content;padding:0;overflow:auto;border:0;border-radius:20px;background:var(--panel)}
+dialog.grid-modal.open{display:block}
+dialog.grid-modal .grid-modal-card{width:100%;max-width:none;max-height:none;border:1px solid var(--surface-edge);border-radius:20px;box-shadow:none}
+dialog.grid-modal :is(input:not([type=checkbox]),select,textarea){width:100%;min-width:0;min-height:44px}
+dialog.grid-modal .grid-modal-head{background:var(--control-fill);padding:20px 24px;border:0}
+dialog.grid-modal .grid-modal-body{padding:24px}
+dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
+:is([data-client-panel=account],[data-admin-panel=account]) .settings-list{max-width:860px;margin:24px auto;padding:24px}
+:is([data-client-panel=account],[data-admin-panel=account]) .settings-list .settings-row{border-color:var(--surface-edge)}
+:is([data-client-panel=account],[data-admin-panel=account],[data-client-panel=security],[data-admin-panel=security]) .manage-card{max-width:860px;margin:20px auto}
+:is([data-client-panel=account],[data-admin-panel=account]) :is(#accountSummary,.card-grid){max-width:860px;margin-inline:auto}
+.auth-shell{width:min(100%,980px);margin-inline:auto}.auth-card{width:100%;max-width:480px;margin-inline:auto}
+@media(max-width:600px){.action-form-dialog{width:calc(100% - 20px);max-height:calc(100dvh - 24px)}.action-dialog-head,.action-dialog-body{padding:20px}.action-dialog-footer{padding:0 20px 20px}.action-dialog-head h2{font-size:19px!important}}
+</style>
+<style id="simple-opencode-home">
+.workspace-home{display:grid;grid-template-columns:minmax(260px,320px) minmax(0,1fr);column-gap:44px;row-gap:26px;align-items:start}
+.workspace-home .work-home-heading{grid-column:1/-1}.workspace-home .work-home-heading h1{font-size:28px!important}
+.workspace-home .home-actions{grid-column:1;grid-row:2;margin:0;gap:8px}.workspace-home .home-actions .button{font-size:13px;padding:10px 12px}
+.workspace-home .session-search{grid-column:2;grid-row:2;margin:0}.workspace-home .session-search input{margin:0}
+.workspace-home>section:has(#homeProjects){grid-column:1;grid-row:3;margin:0}
+.workspace-home>section:has(#homeSessions){grid-column:2;grid-row:3;margin:0}
+.workspace-home .home-project-row{padding:14px;gap:10px}.workspace-home .home-project-row strong{width:100%;overflow-wrap:anywhere}.workspace-home .home-project-row small{width:100%;font-size:13px}
+.workspace-home .home-project-row .button{font-size:12px;padding:7px 11px}
+.refund-policy{font-size:14px;line-height:1.7;color:var(--text);padding:12px 0;margin:8px 0}
+#landing .pricing>.refund-policy{text-align:center;margin:12px 24px}.checkout-dialog .refund-policy{border-top:1px solid var(--surface-edge);padding-top:14px}
+#billingSummary article{padding:18px;background:var(--control-fill);border:1px solid var(--surface-edge);border-radius:14px}
+#billingSummary article h3{font-size:20px;margin:8px 0 0}#billingSummary article small{font-size:14px}
+@media(max-width:900px){.workspace-home{grid-template-columns:1fr;gap:20px}.workspace-home .work-home-heading,.workspace-home .home-actions,.workspace-home .session-search,.workspace-home>section:has(#homeProjects),.workspace-home>section:has(#homeSessions){grid-column:1;grid-row:auto}}
+</style>
+<style>
+.access-notice{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;background:var(--control-fill);color:var(--text);border-radius:12px;padding:14px 18px;font-size:14px;margin:20px 0 0}
+#workspaceAccessState{margin:16px 24px}.trial-entry-note{font-size:14px;line-height:1.7;margin:0 0 22px;padding:12px;background:var(--control-fill);border-radius:10px}
+</style>
 </head>
 <body>
-  <svg class="icon-sprite" aria-hidden="true"><symbol id="icon-github" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .8a11.4 11.4 0 0 0-3.6 22.2c.6.1.8-.2.8-.6v-2.2c-3.4.7-4.1-1.4-4.1-1.4-.5-1.4-1.4-1.8-1.4-1.8-1.1-.8.1-.8.1-.8 1.3.1 1.9 1.3 1.9 1.3 1.1 1.9 2.9 1.4 3.6 1.1.1-.8.4-1.4.8-1.7-2.7-.3-5.5-1.4-5.5-5.7 0-1.3.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.1 1.2a10.8 10.8 0 0 1 5.7 0C15.1 4.7 16 5 16 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.8 5.4-5.5 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6A11.4 11.4 0 0 0 12 .8Z"/></symbol><symbol id="icon-opencode" viewBox="0 0 16 20" fill="none"><path d="M12 16H4V8H12V16Z" fill="currentColor" opacity=".22"/><path d="M12 4H4V16H12V4ZM16 20H0V0H16V20Z" fill="currentColor"/></symbol><symbol id="icon-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></symbol><symbol id="icon-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol><symbol id="icon-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></symbol><symbol id="icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m9 3-.6 2.3-2 .9-2.1-.7-2 3.5 1.6 1.6v2.8L2.3 15l2 3.5 2.2-.7 1.9 1 .6 2.2h4l.6-2.3 2-.9 2.1.7 2-3.5-1.6-1.6v-2.8L19.7 9l-2-3.5-2.2.7-1.9-1L13 3Z"/><circle cx="11" cy="12" r="3"/></symbol><symbol id="icon-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol><symbol id="icon-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol><symbol id="icon-diff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h6l5 5v13H5V3Z M14 3v5h5M8 12h6M11 9v6M8 18h6"/></symbol><symbol id="icon-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H5v20h14V7ZM14 2v5h5M8 12h8M8 16h6"/></symbol><symbol id="icon-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol><symbol id="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></symbol><symbol id="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M6 18 18 6"/></symbol><symbol id="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 13A9 9 0 0 1 11 3.2 9 9 0 1 0 20.8 13Z"/></symbol><symbol id="icon-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7v11h-6v-7H9v7H3Z"/></symbol><symbol id="icon-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a9 9 0 0 1-9.5 9L3 22l1.5-7A9 9 0 1 1 21 11.5Z"/></symbol><symbol id="icon-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6ZM8 12l3 3 5-6"/></symbol><symbol id="icon-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3H4v18h6M9 12h12m-5-5 5 5-5 5"/></symbol><symbol id="icon-more" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol><symbol id="icon-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14 14 10M8 16l-2 2a3 3 0 0 1-4-4l5-5a3 3 0 0 1 4 0m2 6a3 3 0 0 0 4 0l5-5a3 3 0 0 0-4-4l-2 2"/></symbol><symbol id="icon-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol><symbol id="icon-commit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M3 12h5m8 0h5"/></symbol><symbol id="icon-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="m6 8 4 4-4 4m7 0h5"/></symbol></svg>
+  <svg class="icon-sprite" aria-hidden="true"><symbol id="icon-github" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .8a11.4 11.4 0 0 0-3.6 22.2c.6.1.8-.2.8-.6v-2.2c-3.4.7-4.1-1.4-4.1-1.4-.5-1.4-1.4-1.8-1.4-1.8-1.1-.8.1-.8.1-.8 1.3.1 1.9 1.3 1.9 1.3 1.1 1.9 2.9 1.4 3.6 1.1.1-.8.4-1.4.8-1.7-2.7-.3-5.5-1.4-5.5-5.7 0-1.3.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.1 1.2a10.8 10.8 0 0 1 5.7 0C15.1 4.7 16 5 16 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.8 5.4-5.5 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6A11.4 11.4 0 0 0 12 .8Z"/></symbol><symbol id="icon-opencode" viewBox="0 0 16 20" fill="none"><path d="M12 16H4V8H12V16Z" fill="currentColor" opacity=".22"/><path d="M12 4H4V16H12V4ZM16 20H0V0H16V20Z" fill="currentColor"/></symbol><symbol id="icon-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></symbol><symbol id="icon-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol><symbol id="icon-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></symbol><symbol id="icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m9 3-.6 2.3-2 .9-2.1-.7-2 3.5 1.6 1.6v2.8L2.3 15l2 3.5 2.2-.7 1.9 1 .6 2.2h4l.6-2.3 2-.9 2.1.7 2-3.5-1.6-1.6v-2.8L19.7 9l-2-3.5-2.2.7-1.9-1L13 3Z"/><circle cx="11" cy="12" r="3"/></symbol><symbol id="icon-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol><symbol id="icon-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol><symbol id="icon-diff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h6l5 5v13H5V3Z M14 3v5h5M8 12h6M11 9v6M8 18h6"/></symbol><symbol id="icon-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H5v20h14V7ZM14 2v5h5M8 12h8M8 16h6"/></symbol><symbol id="icon-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol><symbol id="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></symbol><symbol id="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M6 18 18 6"/></symbol><symbol id="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 13A9 9 0 0 1 11 3.2 9 9 0 1 0 20.8 13Z"/></symbol><symbol id="icon-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7v11h-6v-7H9v7H3Z"/></symbol><symbol id="icon-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a9 9 0 0 1-9.5 9L3 22l1.5-7A9 9 0 1 1 21 11.5Z"/></symbol><symbol id="icon-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6ZM8 12l3 3 5-6"/></symbol><symbol id="icon-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3H4v18h6M9 12h12m-5-5 5 5-5 5"/></symbol><symbol id="icon-more" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol><symbol id="icon-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14 14 10M8 16l-2 2a3 3 0 0 1-4-4l5-5a3 3 0 0 1 4 0m2 6a3 3 0 0 0 4 0l5-5a3 3 0 0 0-4-4l-2 2"/></symbol><symbol id="icon-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol><symbol id="icon-commit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M3 12h5m8 0h5"/></symbol><symbol id="icon-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5m6 6-6-6 6-6"/></symbol><symbol id="icon-login" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h5v18h-5M4 12h11m-5-5 5 5-5 5"/></symbol><symbol id="icon-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol><symbol id="icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol><symbol id="icon-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L20 8l-4-4L4 16v4Z"/><path d="m14 6 4 4"/></symbol><symbol id="icon-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5h6v2m-8 0 1 13h8l1-13"/></symbol><symbol id="icon-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="m6 8 4 4-4 4m7 0h5"/></symbol></svg>
   <header id="siteHeader" hidden></header>
 
   <main class="page active" id="landing"><div class="welcome-shell">
@@ -131,17 +558,270 @@
 <section class="agent-column"><header class="project-bar"><button class="mobile-menu" id="openSessions"><svg class="ui-icon" aria-hidden="true"><use href="#icon-menu"/></svg></button><div class="repo-title"><span><b id="workspaceRepo">No project selected</b><small><code id="workspaceBranch">—</code></small></span></div><div class="statuses"><span><span data-i18n="ui14">GitHub: Not connected</span></span><span id="runtimeStatus">Session not connected</span><button class="icon workspace-theme" aria-label="Toggle theme" title="Toggle theme"><svg class="ui-icon" aria-hidden="true"><use href="#icon-moon"/></svg></button></div></header>
 <div class="agent-feed" id="agentFeed"></div><div id="approvalBox"></div><form class="prompt-box" id="promptForm"><textarea id="promptInput" required rows="2" data-i18n-placeholder="taskPlaceholder" placeholder="Describe your task"></textarea><div><select id="providerSelect" aria-label="Provider"><option value="" data-i18n="ui15">Select provider</option></select><select id="modelSelect" aria-label="Model"><option value="" data-i18n="ui16">Select model</option></select><button id="chatGithub" type="button" class="icon" title="GitHub is not connected" aria-label="GitHub"><svg class="ui-icon" aria-hidden="true"><use href="#icon-github"/></svg></button><button id="openTools" type="button" class="icon" title="OpenCode tools and settings" aria-label="OpenCode tools and settings"><svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"/></svg></button><button id="sendMessage" type="submit" disabled aria-label="Send message" title="Send message"><svg class="ui-icon" aria-hidden="true"><use href="#icon-arrow"/></svg></button><button id="stopAgent" type="button" disabled aria-label="Stop generation" title="Stop generation"><svg class="ui-icon" aria-hidden="true"><use href="#icon-stop"/></svg></button></div></form><button class="button ghost" id="reviewButton"><span data-i18n="ui13">Files / Diff / Logs</span></button></section>
 <aside class="review-panel" id="reviewPanel"><header><b><span data-i18n="ui5">Review</span></b><button class="review-close" id="closeReview"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></header><nav class="review-tabs"><button data-tab="files" class="active"><svg class="ui-icon" aria-hidden="true"><use href="#icon-folder"/></svg><span data-i18n="ui6">Files</span></button><button data-tab="diff"><svg class="ui-icon" aria-hidden="true"><use href="#icon-diff"/></svg><span data-i18n="ui7">Diff</span></button><button data-tab="logs"><svg class="ui-icon" aria-hidden="true"><use href="#icon-terminal"/></svg><span data-i18n="ui8">Logs</span></button></nav><p id="gitSummary">—</p><div id="reviewContent" class="review-content"></div><div class="git-actions"><button class="button ghost" id="commitButton"><span data-i18n="ui11">Commit</span></button><button class="button" id="pushButton" disabled title="GitHub App is not connected"><span data-i18n="ui12">Push — unavailable</span></button></div></aside></div></main>
-  <main class="page portal-page" id="accountPage"><header class="portal-header"><button class="brand" data-go="landing"><span class="logo"><svg><use href="#icon-opencode"/></svg></span><span>OpenCode <b>Gateway</b></span></button><span class="preview-badge"><span data-i18n="ui56">ACCOUNT</span></span><button class="text-link" id="logoutButton"><svg class="ui-icon" aria-hidden="true"><use href="#icon-logout"/></svg><span data-i18n="ui57">Logout</span></button><button class="icon lang-mirror">EN</button><button class="icon theme-mirror" aria-label="Theme" aria-label="Toggle theme" title="Toggle theme"><svg class="ui-icon" aria-hidden="true"><use href="#icon-moon"/></svg></button><button class="button ghost" data-go="onboarding"><span data-i18n="ui3">New project</span></button></header><section class="portal-shell"><aside class="portal-nav"><b><span data-i18n="ui58">Account</span></b><button disabled title="Not available yet" class="active"><span data-i18n="ui59">Profile</span></button><button disabled title="Not available yet"><span data-i18n="ui60">GitHub connection</span></button><button data-go="billingPage"><span data-i18n="ui61">Plan & billing</span></button><button disabled title="Not available yet"><span data-i18n="ui62">AI provider</span></button><button disabled title="Not available yet"><span data-i18n="ui63">Sessions</span></button><button disabled title="Not available yet"><span data-i18n="ui64">Security</span></button></aside><div class="portal-content"><span class="eyebrow"><span data-i18n="ui65">CUSTOMER ACCOUNT</span></span><h1><span data-i18n="ui66">Account and connections</span></h1><p class="lead"><span data-i18n="ui67">A simple control area separate from your coding workspace.</span></p><div class="account-grid"><article><small><span data-i18n="ui68">Account status</span></small><h3><i class="status-dot"></i> <span id="profileStatus">Loading…</span></h3><p id="profileTrial">—</p><p id="profileTrialDates">—</p></article><article><small>GitHub</small><h3><svg><use href="#icon-github"/></svg> <span id="githubCardState">Loading…</span></h3><p id="githubCardDetail"><span data-i18n="ui70">GitHub App is not configured</span></p><button class="button small" id="connectGithubButton" type="button" hidden>Connect GitHub</button><button class="button ghost small" id="disconnectGithubButton" type="button" hidden>Disconnect</button></article><article><small><span data-i18n="ui62">AI provider</span></small><h3><svg><use href="#icon-opencode"/></svg> <span id="providerCardState">Per workspace</span></h3><p><span data-i18n="ui72">Connect a provider inside a workspace so the key stays server-side.</span></p></article></div><section class="settings-list"><h2><span data-i18n="ui73">Projects</span></h2><button class="button" data-go="onboarding"><span data-i18n="ui55">Create project</span></button><div id="projectList"></div><h2><span data-i18n="ui59">Profile</span></h2><div><span id="profileUsername">—<small><span data-i18n="ui37">Username</span></small></span></div><div><span id="profileEmail">—<small><span data-i18n="ui39">Email</span></small></span></div><div><span id="profilePhone">—<small><span data-i18n="ui74">Phone</span></small></span></div><div><span id="profileLocation">—<small><span data-i18n="ui75">Location / postal code</span></small></span></div><div><span id="profilePreferences">—<small><span data-i18n="ui76">Language / theme</span></small></span></div></section></div></section></main>
-  <main class="page portal-page" id="billingPage"><header class="portal-header"><button class="brand" data-go="landing">OpenCode Gateway</button><button class="button ghost" data-go="accountPage"><span data-i18n="ui58">Account</span></button></header><section class="portal-content"><h1><span data-i18n="ui61">Plan & billing</span></h1><p class="lead"><span data-i18n="ui77">Billing is not available yet. No payments are collected.</span></p></section></main>
-  <main class="page portal-page" id="adminPage"><header class="portal-header"><button class="brand" data-go="landing"><span class="logo"><svg><use href="#icon-opencode"/></svg></span><span>Gateway <b>Admin</b></span></button><span class="preview-badge">ADMIN · REGISTERED USERS</span></header><section class="admin-shell"><aside class="portal-nav"><b>Operations</b><button disabled title="Not available yet" class="active">Overview</button><button disabled title="Not available yet">Users</button><button disabled title="Not available yet">Payments</button><button disabled title="Not available yet">Countries & regions</button><button disabled title="Not available yet"><span data-i18n="ui63">Sessions</span></button><button disabled title="Not available yet">Activity logs</button><button disabled title="Not available yet">Security logs</button><button disabled title="Not available yet">Settings</button></aside><div class="portal-content admin-content"><span class="eyebrow">ADMIN CONSOLE</span><h1>Operations overview</h1><p class="lead">Compact operational statistics and management—no business analytics charts.</p>
-  <div class="stat-grid"><article><small>Registered users</small><b data-overview="total">—</b></article><article><small>Active accounts</small><b data-overview="active">—</b></article><article><small>Active trials</small><b data-overview="trial_active">—</b></article><article><small>Projects</small><b data-admin="projects.total">—</b></article><article><small>Workspaces</small><b data-admin="workspaces.total">—</b></article><article><small>Sessions</small><b data-admin="sessions.total">—</b></article><article><small>GitHub connected</small><b data-admin="integrations.github.connected_users">—</b></article><article><small>Runtime</small><b data-admin="runtime.mode">—</b></article></div>
-  <section class="admin-section"><header><div><small>USERS & SUBSCRIPTIONS</small><h2>User management</h2></div><button disabled title="Not available yet">Export preview</button></header><div class="table-wrap wide-table"><table><thead><tr><th>Name / Email</th><th><span data-i18n="ui74">Phone</span></th><th>Location</th><th>Trial</th><th>Plan</th><th>Subscription</th><th>Remaining</th><th>Payment</th><th>Method</th><th>Last login</th><th>Actions</th></tr></thead><tbody id="adminUsersBody"></tbody></table></div><div class="admin-actions"><button disabled title="Not available yet">Activate</button><button disabled title="Not available yet">Suspend</button><button disabled title="Not available yet">Extend trial</button><button disabled title="Not available yet">Change plan</button><button disabled title="Not available yet">Add time</button><button disabled title="Not available yet">Reduce time</button><button disabled title="Not available yet">Mark paid / unpaid</button><button disabled title="Not available yet">Review bank payment</button></div></section>
-  <section class="admin-section"><header><div><small>PLANS</small><h2>Plan management</h2></div></header><div class="table-wrap"><table><thead><tr><th>Code</th><th>Name</th><th>Price (USD cents)</th><th>Days</th><th>Active</th><th>Actions</th></tr></thead><tbody id="adminPlansBody"></tbody></table></div><form id="adminPlanForm" class="inline-form"><input id="planCode" placeholder="code" pattern="[a-z0-9_]+" required><input id="planName" placeholder="name" required><input id="planPrice" type="number" min="0" step="1" placeholder="price cents" required><input id="planDays" type="number" min="1" step="1" placeholder="duration days" required><button class="button" type="submit">Add plan</button></form><div id="adminPlanMessage" class="api-message"></div></section>
-  <section class="admin-section"><header><div><small>PROVIDER / MODEL / TOOL POLICY</small><h2>Platform policy</h2></div></header><form id="adminPolicyForm" class="policy-form"><label>Allowed providers (comma separated)<input id="policyProviders" placeholder="openai, anthropic"></label><label>Allowed models (comma separated)<input id="policyModels" placeholder="gpt-4o, claude-3-5-sonnet"></label><label>Allowed tools (comma separated)<input id="policyTools" placeholder="read, edit, bash"></label><label class="checkbox-row"><input id="policyApproval" type="checkbox"> Require approval before running tools</label><button class="button" type="submit">Save policy</button></form><div id="adminPolicyMessage" class="api-message"></div></section>
-  <section class="admin-section"><header><div><small>LOCATION MANAGEMENT</small><h2>Countries, regions, and cities</h2></div><div><button disabled title="Not available yet">Add country</button><button disabled title="Not available yet">Add region</button></div></header><div class="location-grid"><p>Location administration is not available yet.</p></div></section>
+
+
+  <main class="page portal-page" id="clientPage"><header class="portal-header"><button class="brand" data-go="landing"><span class="logo"><svg><use href="#icon-opencode"/></svg></span><span>OpenCode <b>Gateway</b></span></button><span class="preview-badge" data-i18n="clientDashboardBadge">CLIENT DASHBOARD</span><button class="text-link" id="logoutButton" title="Logout"><svg class="ui-icon" aria-hidden="true"><use href="#icon-logout"/></svg><span data-i18n="ui57">Logout</span></button><button class="icon lang-mirror">EN</button><button class="icon theme-mirror" aria-label="Theme"><svg class="ui-icon" aria-hidden="true"><use href="#icon-moon"/></svg></button><button class="button ghost" data-go="onboarding"><span data-i18n="ui3">New project</span></button><button class="button ghost" data-go="adminPage" hidden data-i18n="adminConsole">Admin Console</button></header><section class="admin-shell"><aside class="portal-nav" id="clientNav"><b data-i18n="clientNavTitle">Client</b><button type="button" data-client-view="dashboard" class="active" data-i18n="clientDashboard">Dashboard</button><button type="button" data-client-view="projects" data-i18n="clientProjects">Projects</button><button type="button" data-client-view="sessions" data-i18n="clientSessions">Sessions</button><button type="button" data-client-view="ai" data-i18n="clientAi">OpenCode</button><button type="button" data-client-view="github" data-i18n="adminGithub">GitHub</button><button type="button" data-client-view="billing" data-i18n="ui61">Plan &amp; Billing</button><button type="button" data-client-view="account" data-i18n="clientAccount">Account / Profile</button><button type="button" data-client-view="security" data-i18n="ui64">Security</button></aside><div class="portal-content client-content">
+  <section class="client-view active" data-client-panel="dashboard"><div class="page-head"><div><h1 data-i18n="clientDashboard">Dashboard</h1><p class="lead" data-i18n="clientDashboardLead">Your trial, connections, projects and recent activity in one place.</p></div><div class="head-actions"><button class="button" data-go="onboarding"><span data-i18n="ui3">New project</span></button></div></div><div class="quick-actions" id="clientQuickActions"></div><div class="card-grid" id="clientSummary"></div><div class="section-title" data-i18n="clientRecentProjects">Recent projects</div><div id="clientRecentProjects"></div><div class="section-title" data-i18n="clientRecentSessionsTitle">Recent sessions</div><div id="clientRecentSessions"></div></section>
+  <section class="client-view" data-client-panel="projects"><div class="page-head"><div><h1 data-i18n="clientProjects">Projects</h1><p class="lead" data-i18n="clientProjectsLead">Your projects and workspaces.</p></div><div class="head-actions"><button class="button" data-go="onboarding"><span data-i18n="ui3">New project</span></button></div></div><div id="clientProjectsList"></div></section>
+  <section class="client-view" data-client-panel="sessions"><div class="page-head"><div><h1 data-i18n="clientSessions">Sessions</h1><p class="lead" data-i18n="clientSessionsLead">Workspaces and their OpenCode sessions.</p></div></div><div id="clientSessionsList"></div></section>
+  <section class="client-view" data-client-panel="ai"><div class="page-head"><div><h1 data-i18n="clientAi">OpenCode</h1><p class="lead" data-i18n="clientAiLead">Runtime, provider and tool status for your workspaces.</p></div></div><div id="clientAiPanel"></div></section>
+  <section class="client-view" data-client-panel="github"><div class="page-head"><div><h1 data-i18n="adminGithub">GitHub</h1><p class="lead" data-i18n="clientGithubLead">Connection status. The real authorization flow is a later phase.</p></div></div><div id="clientGithubPanel"></div></section>
+  <section class="client-view" data-client-panel="billing"><div class="page-head"><div><h1 data-i18n="ui61">Plan &amp; Billing</h1><p class="lead" data-i18n="clientBillingLead">Your own subscription only. Other customers' billing is never shown here.</p></div></div><div id="billingMessage" class="api-message"></div><div class="card-grid" id="billingSummary"></div><div class="section-title" data-i18n="clientPlansTitle">Plans &amp; offers</div><div class="pricing-cards" id="billingPlans"></div><div class="admin-actions"><button class="button ghost" id="billingCancel" type="button" data-i18n="clientCancel">Cancel subscription</button><button class="button ghost" id="billingRenew" type="button" data-i18n="clientRenew">Renew subscription</button></div><p id="billingPaymentNote" class="lead"></p><p class="refund-policy" data-i18n="subscriptionNoRefund">Subscription payments are non-refundable.</p></section>
+  <section class="client-view" data-client-panel="account"><div class="page-head"><div><h1 data-i18n="clientAccount">Account &amp; Profile</h1><p class="lead" data-i18n="clientAccountLead">Personal details and preferences.</p></div></div><div class="card-grid" id="accountSummary"></div><section class="settings-list"><h2 data-i18n="clientPersonalInfo">Personal information</h2><div><span id="profileUsername">—<small data-i18n="clientUsername">Username</small></span></div><div><span id="profileEmail">—<small data-i18n="clientEmail">Email</small></span></div><div><span id="profilePhone">—<small data-i18n="clientPhone">Phone</small></span></div><div><span id="profileLocation">—<small data-i18n="clientLocation">Location / postal code</small></span></div><div><span id="profilePreferences">—<small data-i18n="clientPreferences">Language / theme</small></span></div></section></section>
+  <section class="client-view" data-client-panel="security"><div class="page-head"><div><h1 data-i18n="ui64">Security</h1><p class="lead" data-i18n="clientSecurityLead">Session and account security.</p></div></div><div id="clientSecurityPanel"></div></section>
+  </div></section></main>
+  <main class="page portal-page" id="adminPage"><header class="portal-header"><button class="brand" data-go="landing"><span class="logo"><svg><use href="#icon-opencode"/></svg></span><span>Gateway <b>Admin</b></span></button><span class="preview-badge" data-i18n="adminConsoleBadge">ADMIN CONSOLE</span><button class="text-link" data-admin-view="account" title="Personal account"><svg class="ui-icon" aria-hidden="true"><use href="#icon-user"/></svg><span data-i18n="adminPersonal">Personal account</span></button><button class="text-link" id="adminLogoutButton" title="Logout"><svg class="ui-icon" aria-hidden="true"><use href="#icon-logout"/></svg><span data-i18n="ui57">Logout</span></button><button class="icon lang-mirror">EN</button><button class="icon theme-mirror" aria-label="Theme"><svg class="ui-icon" aria-hidden="true"><use href="#icon-moon"/></svg></button></header><section class="admin-shell"><aside class="portal-nav" id="adminNav"><b data-i18n="adminNavTitle">Administration</b><button type="button" data-admin-view="overview" class="active" data-i18n="adminOverview">Overview</button><button type="button" data-admin-view="users" data-i18n="adminUsers">Users</button><button type="button" data-admin-view="plans" data-i18n="adminPlans">Plans &amp; Offers</button><button type="button" data-admin-view="billing" data-i18n="adminBilling">Billing / Subscriptions</button><button type="button" data-admin-view="reports" data-i18n="adminReports">Reports</button><button type="button" data-admin-view="audit" data-i18n="adminAudit">Audit Logs</button><button type="button" data-admin-view="health" data-i18n="adminHealth">Platform Logs / Health</button><button type="button" data-admin-view="policy" data-i18n="adminPolicy">AI / OpenCode Policy</button><button type="button" data-admin-view="github" data-i18n="adminGithubSettings">GitHub Integration Settings</button><button type="button" data-admin-view="trial" data-i18n="adminTrial">Trial / Entitlement Settings</button><button type="button" data-admin-view="settings" data-i18n="adminSettings">Platform Settings</button><button type="button" data-admin-view="security" data-i18n="adminSecurity">Security</button><button type="button" data-admin-view="account" data-i18n="adminPersonal">Personal account</button></aside><div class="portal-content admin-content">
+  <section class="admin-view" data-admin-panel="projects"><span class="eyebrow">ADMIN CONSOLE</span><h1 data-i18n="adminProjects">Projects</h1><p class="lead" data-i18n="adminProjectsLead">Metadata only. Customer source code is never shown here.</p><div class="table-wrap"><table><thead><tr><th>Owner</th><th>Project</th><th>Source</th><th>Repository</th><th>Workspaces</th><th>Sessions</th><th>Created</th></tr></thead><tbody id="adminProjectsBody"></tbody></table></div></section><section class="admin-view" data-admin-panel="workspaces"><span class="eyebrow">ADMIN CONSOLE</span><h1 data-i18n="adminWorkspaces">Workspaces</h1><p class="lead" data-i18n="adminWorkspacesLead">Real workspace metadata. The physical path is never exposed.</p><div class="table-wrap"><table><thead><tr><th>Owner</th><th>Project</th><th>Status</th><th>Base commit</th><th>Sessions</th><th>Created</th><th>Last activity</th></tr></thead><tbody id="adminWorkspacesBody"></tbody></table></div></section><section class="admin-view" data-admin-panel="sessions"><span class="eyebrow">ADMIN CONSOLE</span><h1 data-i18n="adminSessions">Sessions</h1><p class="lead" data-i18n="adminSessionsLead">Real OpenCode conversation metadata.</p><div class="table-wrap"><table><thead><tr><th>Owner</th><th>Workspace</th><th>Title</th><th>Status</th><th>Created</th></tr></thead><tbody id="adminSessionsBody"></tbody></table></div></section><section class="admin-view active" data-admin-panel="overview"><div class="page-head"><div><h1 data-i18n="adminOverview">Overview</h1><p class="lead" data-i18n="adminOverviewLead">Real backend metrics only. Metrics without a real query show "Not available yet".</p></div></div><div class="stat-grid" id="adminOverviewStats"></div><section class="admin-section"><header><div><small data-i18n="adminPlatformStatus">PLATFORM STATUS</small><h2 data-i18n="adminIntegrations">Integrations</h2></div></header><div class="table-wrap"><table><tbody id="adminIntegrationsBody"></tbody></table></div></section></section>
+  <section class="admin-view" data-admin-panel="users"><div class="page-head"><div><h1 data-i18n="adminUsers">Users</h1><p class="lead" data-i18n="adminUsersLead">Real account records. Role, status and trial changes call the admin API.</p></div></div><div class="table-wrap wide-table"><table><thead><tr><th data-i18n="aUsername">Username</th><th data-i18n="aEmail">Email</th><th data-i18n="aRole">Role</th><th data-i18n="aStatus">Status</th><th data-i18n="aTrialRemaining">Trial remaining</th><th data-i18n="aTrialEnd">Trial end</th><th data-i18n="aPlan">Plan</th><th data-i18n="aLastLogin">Last login</th><th data-i18n="aCreated">Created</th><th data-i18n="aProjectsWorkspaces">Projects / Workspaces</th><th data-i18n="adminActions">Actions</th></tr></thead><tbody id="adminUsersBody"></tbody></table></div><div id="adminUserMessage" class="api-message"></div></section>
+  <section class="admin-view" data-admin-panel="plans"><div class="page-head"><div><h1 data-i18n="adminPlans">Plans &amp; Offers</h1><p class="lead" data-i18n="adminPlansLead">Published offers are read by the public landing page through the plans API.</p></div></div><div class="table-wrap"><table><thead><tr><th data-i18n="aCode">Code</th><th data-i18n="aName">Name</th><th data-i18n="aPrice">Price (USD cents)</th><th data-i18n="aDays">Days</th><th data-i18n="aActive">Active</th><th data-i18n="adminActions">Actions</th></tr></thead><tbody id="adminPlansBody"></tbody></table></div><form id="adminPlanForm" class="inline-form"><input id="planCode" placeholder="code" pattern="[a-z0-9_]+" required><input id="planName" placeholder="name" required><input id="planPrice" type="number" min="0" step="1" placeholder="price cents" required><input id="planDays" type="number" min="1" step="1" placeholder="duration days" required><button class="button" type="submit" data-i18n="aAddPlan">Add plan</button></form><div id="adminPlanMessage" class="api-message"></div></section>
+  <section class="admin-view" data-admin-panel="billing"><div class="page-head"><div><h1 data-i18n="adminBilling">Billing / Subscriptions</h1><p class="lead" data-i18n="adminBillingLead">Business finance view, separate from the client billing page.</p></div></div><div class="stat-grid" id="adminBillingSummary"></div><section class="admin-section"><header><div><small data-i18n="aSubscriptionsSmall">SUBSCRIPTIONS</small><h2 data-i18n="aSubsTitle">Subscriptions across users</h2></div></header><div class="table-wrap"><table><thead><tr><th data-i18n="aOwner">Owner</th><th data-i18n="aEmail">Email</th><th data-i18n="aPlan">Plan</th><th data-i18n="aStatus">Status</th><th data-i18n="aStarted">Started</th><th data-i18n="aPeriodEnd">Period end</th><th data-i18n="aCancelled">Cancelled</th></tr></thead><tbody id="adminSubscriptionsBody"></tbody></table></div></section><section class="admin-section"><header><div><small data-i18n="aTransactionsSmall">TRANSACTIONS</small><h2 data-i18n="aTransactions">Payment transactions</h2></div></header><div id="adminTransactions"><p data-i18n="aNay">Not available yet.</p></div></section><section class="admin-section"><header><div><small data-i18n="aRevenueSmall">REVENUE</small><h2 data-i18n="aRevenue">Revenue reports</h2></div></header><div id="adminRevenue"><p data-i18n="aNay">Not available yet.</p></div></section></section>
+  <section class="admin-view" data-admin-panel="reports"><div class="page-head"><div><h1 data-i18n="adminReports">Reports</h1><p class="lead" data-i18n="adminReportsLead">Real platform counts. Revenue appears only when backed by real payment data.</p></div></div><div class="stat-grid" id="adminReportsCounts"></div><section class="admin-section"><header><div><small data-i18n="aRevenueSmall">REVENUE</small><h2 data-i18n="aRevenue">Revenue</h2></div></header><div id="adminReportsRevenue"><p data-i18n="aNay">Not available yet.</p></div></section></section>
+  <section class="admin-view" data-admin-panel="audit"><div class="page-head"><div><h1 data-i18n="adminAudit">Audit Logs</h1><p class="lead" data-i18n="aNay">Not available yet.</p></div></div><div class="admin-section"><p data-i18n="aAuditLogging">Audit logging is not available yet.</p></div></section>
+  <section class="admin-view" data-admin-panel="health"><div class="page-head"><div><h1 data-i18n="adminHealth">Platform Logs / Health</h1><p class="lead" data-i18n="aHealthLead">Runtime health from the real backend.</p></div></div><div id="adminHealthPanel" class="admin-section"><p data-i18n="aLoading">Loading…</p></div></section>
+  <section class="admin-view" data-admin-panel="policy"><div class="page-head"><div><h1 data-i18n="adminPolicy">AI / OpenCode Policy</h1><p class="lead" data-i18n="adminPolicyLead">These settings persist and limit what clients can select. User API keys and OAuth credentials are never shown here.</p></div></div><form id="adminPolicyForm" class="policy-form"><label><span data-i18n="aEnabledProviders">Enabled providers (comma separated)</span><input id="policyProviders" placeholder="openai, anthropic"></label><label><span data-i18n="aAllowedModels">Allowed models (comma separated)</span><input id="policyModels" placeholder="gpt-4o, claude-3-5-sonnet"></label><label><span data-i18n="aEnabledTools">Enabled tools / capabilities (comma separated)</span><input id="policyTools" placeholder="read, edit, bash"></label><label class="checkbox-row"><input id="policyApproval" type="checkbox"><span data-i18n="aRequireApproval">Require approval before running tools</span></label><button class="button" type="submit" data-i18n="aSavePolicy">Save policy</button></form><div id="adminPolicyMessage" class="api-message"></div></section>
+  <section class="admin-view" data-admin-panel="github"><div class="page-head"><div><h1 data-i18n="adminGithubSettings">GitHub Integration Settings</h1><p class="lead" data-i18n="aGithubLead">Connection status. The real GitHub integration is a later phase.</p></div></div><div id="adminGithubPanel" class="admin-section"><p data-i18n="aLoadingStatus">Loading status…</p></div></section>
+  <section class="admin-view" data-admin-panel="trial"><div class="page-head"><div><h1 data-i18n="adminTrial">Trial / Entitlement Settings</h1><p class="lead" data-i18n="aTrialLead">Trial entitlement overview. Editing trial defaults is not available yet.</p></div></div><div id="adminTrialPanel" class="admin-section"><p data-i18n="aLoading">Loading…</p></div></section>
+  <section class="admin-view" data-admin-panel="settings"><div class="page-head"><div><h1 data-i18n="adminSettings">Platform Settings</h1><p class="lead" data-i18n="aNay">Not available yet.</p></div></div><div class="admin-section"><p data-i18n="aPlatformSettings">Platform settings are not available yet.</p></div></section>
+  <section class="admin-view" data-admin-panel="security"><div class="page-head"><div><h1 data-i18n="adminSecurity">Security</h1><p class="lead" data-i18n="aNay">Not available yet.</p></div></div><div class="admin-section"><p data-i18n="aAdminSecurityNotAvail">Admin security settings are not available yet.</p></div></section>
+  <section class="admin-view" data-admin-panel="account"><div class="page-head"><div><h1 data-i18n="adminPersonal">Personal account</h1><p class="lead" data-i18n="aPersonalLead">Your own account. Administrative controls are on the other pages.</p></div></div><div id="adminAccountPanel"></div></section>
   </div></section></main>
   <div class="toast" id="toast"></div><div class="backdrop" id="backdrop"></div>
-  <script src="app.js"></script>
-  <script src="enhancements.js"></script><script src="management.js"></script>
+  <script>
+  // Unified App Shell (DOM structure only). Loaded before app.js so the existing
+  // element bindings attach to one shared header and one shared sidebar.
+  (function () {
+    function el(tag, cls) {
+      var node = document.createElement(tag);
+      if (cls) node.className = cls;
+      return node;
+    }
+    var body = document.body;
+    var shell = el('div', 'app-shell'); shell.id = 'app-shell';
+    var header = el('header', 'app-header'); header.id = 'app-header';
+    var frame = el('div', 'app-frame'); frame.id = 'app-frame';
+    var sidebar = el('aside', 'app-sidebar'); sidebar.id = 'app-sidebar';
+    var main = el('div', 'app-main'); main.id = 'app-main';
+
+    var topbar = document.querySelector('.welcome-topbar');
+
+    var backBtn = el('button', 'icon app-back');
+    backBtn.id = 'appBack';
+    backBtn.type = 'button';
+    backBtn.setAttribute('aria-label', 'Back');
+    backBtn.title = 'Back';
+    backBtn.hidden = true;
+    backBtn.innerHTML = '<svg class="ui-icon" aria-hidden="true"><use href="#icon-back"/></svg>';
+    header.appendChild(backBtn);
+
+    var welcomeMenu = document.getElementById('welcomeMenu');
+    if (welcomeMenu) header.appendChild(welcomeMenu);
+
+    var actionsHost = null;
+    if (topbar) {
+      var brand = topbar.querySelector('.header-brand');
+      var integrations = topbar.querySelector('.header-integrations');
+      var actions = topbar.querySelector('.topbar-actions');
+      if (brand) header.appendChild(brand);
+      if (integrations) header.appendChild(integrations);
+      if (actions) { header.appendChild(actions); actionsHost = actions; }
+    } else {
+      var fallback = el('span', 'app-brand-text');
+      fallback.textContent = 'OpenCode Gateway';
+      header.appendChild(fallback);
+    }
+    if (!actionsHost) { actionsHost = el('div', 'topbar-actions'); header.appendChild(actionsHost); }
+
+    if (!actionsHost.querySelector('[data-go="authPage"][data-header-guest]')) {
+      var login = el('button', 'button ghost small');
+      login.setAttribute('data-go', 'authPage');
+      login.setAttribute('data-header-guest', '');
+      login.setAttribute('data-i18n', 'ui28');
+      login.textContent = 'Login';
+      actionsHost.appendChild(login);
+    }
+    var user = el('span', 'app-user'); user.id = 'appUser'; user.setAttribute('data-header-auth', '');
+    actionsHost.appendChild(user);
+
+    var profile = el('button', 'icon app-profile');
+    profile.id = 'appProfile';
+    profile.type = 'button';
+    profile.setAttribute('data-header-auth', '');
+    profile.setAttribute('aria-label', 'Profile');
+    profile.title = 'Profile';
+    profile.innerHTML = '<svg class="ui-icon" aria-hidden="true"><use href="#icon-user"/></svg>';
+    actionsHost.appendChild(profile);
+
+    var logout = document.getElementById('logoutButton');
+    if (logout) {
+      logout.setAttribute('data-header-auth', '');
+      actionsHost.appendChild(logout);
+    } else {
+      logout = el('button', 'text-link');
+      logout.id = 'logoutButton';
+      logout.setAttribute('data-header-auth', '');
+      logout.innerHTML = '<svg class="ui-icon" aria-hidden="true"><use href="#icon-logout"/></svg><span data-i18n="ui57">Logout</span>';
+      actionsHost.appendChild(logout);
+    }
+    var getStarted = actionsHost.querySelector('[data-start]');
+    if (getStarted) getStarted.setAttribute('data-header-guest', '');
+
+    var welcomeSidebar = document.getElementById('welcomeSidebar');
+    if (welcomeSidebar) { welcomeSidebar.classList.add('shell-nav'); sidebar.appendChild(welcomeSidebar); }
+    var clientNav = document.getElementById('clientNav');
+    if (clientNav) { clientNav.classList.add('shell-nav'); sidebar.appendChild(clientNav); }
+    var adminNav = document.getElementById('adminNav');
+    if (adminNav) { adminNav.classList.add('shell-nav'); sidebar.appendChild(adminNav); }
+
+    var pricing = document.querySelector('#landing .pricing');
+    if (pricing && !pricing.id) pricing.id = 'pricingSection';
+    if (welcomeSidebar && pricing) {
+      var links = welcomeSidebar.querySelector('.sidebar-links');
+      if (links && !links.querySelector('[data-scroll="pricingSection"]')) {
+        var priceLink = el('button');
+        priceLink.setAttribute('data-scroll', 'pricingSection');
+        priceLink.innerHTML = '<span><svg class="ui-icon" aria-hidden="true"><use href="#icon-file"/></svg></span><span data-i18n="pricingTitle">Pricing</span>';
+        links.appendChild(priceLink);
+      }
+    }
+
+    ['.welcome-topbar', '#authPage .onboard-top', '#onboarding .onboard-top', '#clientPage .portal-header', '#adminPage .portal-header']
+      .forEach(function (selector) {
+        var node = document.querySelector(selector);
+        if (node) node.remove();
+      });
+
+    Array.prototype.forEach.call(document.querySelectorAll('main.page'), function (page) {
+      main.appendChild(page);
+    });
+
+    frame.appendChild(sidebar);
+    frame.appendChild(main);
+    shell.appendChild(header);
+    shell.appendChild(frame);
+    body.appendChild(shell);
+  })();
+  </script>
+  <script src="app.js?v=20261006-checkout"></script>
+  <script src="enhancements.js?v=20261006-checkout"></script>
+  <script src="management.js?v=20261006-checkout"></script>
+  <script src="dashboards.js?v=20261006-checkout"></script>
+  <script>
+  // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
+  (function () {
+    function byId(id) { return document.getElementById(id); }
+    function all(selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); }
+    function currentRole() {
+      if (!currentUser) return 'guest';
+      return (currentUser.role === 'admin' || currentUser.role === 'owner') ? 'admin' : 'client';
+    }
+    function setDrawer(open) {
+      var side = byId('app-sidebar');
+      if (!side) return;
+      side.classList.toggle('open', !!open);
+      var backdrop = byId('backdrop');
+      if (backdrop) backdrop.classList.toggle('open', !!open);
+      var menu = byId('welcomeMenu');
+      if (menu) menu.setAttribute('aria-expanded', String(!!open));
+    }
+    function syncShellState() {
+      var role = currentRole();
+      var authed = role !== 'guest';
+      var guestNav = byId('welcomeSidebar');
+      if (guestNav) guestNav.hidden = authed;
+      var clientNav = byId('clientNav');
+      if (clientNav) clientNav.hidden = !(authed && role === 'client');
+      var adminNav = byId('adminNav');
+      if (adminNav) adminNav.hidden = !(authed && role === 'admin');
+      all('[data-header-guest]').forEach(function (node) { node.hidden = authed; });
+      all('[data-header-auth]').forEach(function (node) { node.hidden = !authed; });
+      var who = byId('appUser');
+      if (who) who.textContent = authed ? (currentUser.username + ' · ' + currentUser.role) : '';
+    }
+    var baseUpdateNavigation = updateNavigation;
+    updateNavigation = function () { baseUpdateNavigation(); syncShellState(); };
+    var baseShowPage = showPage;
+    showPage = function (id) {
+      baseShowPage(id);
+      var main = byId('app-main');
+      if (main) main.scrollTop = 0;
+      setDrawer(false);
+      syncShellState();
+    };
+    var menu = byId('welcomeMenu');
+    if (menu) {
+      menu.onclick = function () {
+        var side = byId('app-sidebar');
+        setDrawer(!(side && side.classList.contains('open')));
+      };
+    }
+    var backdrop = byId('backdrop');
+    if (backdrop) backdrop.addEventListener('click', function () { setDrawer(false); });
+    document.addEventListener('keydown', function (event) { if (event.key === 'Escape') setDrawer(false); });
+    document.addEventListener('click', function (event) {
+      if (event.target.closest('#app-sidebar [data-go], #app-sidebar [data-client-view], #app-sidebar [data-admin-view], #app-sidebar [data-start], #app-sidebar [data-scroll]')) setDrawer(false);
+    });
+
+    // Back navigation in the fixed header: tracks pages and client/admin sections.
+    var history = [];
+    var suppressHistory = false;
+    function currentSnapshot() {
+      var active = document.querySelector('.page.active');
+      var viewBtn = document.querySelector('#clientNav button.active, #adminNav button.active');
+      return {
+        page: active ? active.id : 'landing',
+        view: viewBtn ? (viewBtn.dataset.clientView || viewBtn.dataset.adminView) : null
+      };
+    }
+    function updateBack() { var b = byId('appBack'); if (b) b.hidden = history.length < 2; }
+    function recordSnapshot() {
+      if (suppressHistory) return;
+      var snap = currentSnapshot();
+      var last = history[history.length - 1];
+      if (!last || last.page !== snap.page || last.view !== snap.view) history.push(snap);
+      if (history.length > 30) history.shift();
+      updateBack();
+    }
+    var basePage = page;
+    page = async function (id) {
+      await basePage(id);
+      recordSnapshot();
+    };
+    document.addEventListener('click', function (event) {
+      if (event.target.closest('#clientNav [data-client-view], #adminNav [data-admin-view]')) setTimeout(recordSnapshot, 0);
+    });
+    function goToSnapshot(snap) {
+      suppressHistory = true;
+      Promise.resolve(basePage(snap.page)).then(function () {
+        if (snap.view) {
+          var selector = snap.page === 'adminPage' ? '#adminNav [data-admin-view="' + snap.view + '"]' : '#clientNav [data-client-view="' + snap.view + '"]';
+          var node = document.querySelector(selector);
+          if (node) node.click();
+        }
+      }).then(function () { suppressHistory = false; recordSnapshot(); });
+    }
+    var backBtn = byId('appBack');
+    if (backBtn) backBtn.onclick = function () {
+      if (history.length < 2) return;
+      history.pop();
+      goToSnapshot(history[history.length - 1]);
+    };
+    recordSnapshot();
+
+    // Profile shortcut for signed-in users.
+    var profileBtn = byId('appProfile');
+    if (profileBtn) profileBtn.onclick = function () {
+      if (!currentUser) return;
+      var isAdmin = currentUser.role === 'admin' || currentUser.role === 'owner';
+      var selector = isAdmin ? '#adminNav [data-admin-view="account"]' : '#clientNav [data-client-view="account"]';
+      page(isAdmin ? 'adminPage' : 'clientPage').then(function () {
+        var node = document.querySelector(selector);
+        if (node) node.click();
+      });
+    };
+
+    syncShellState();
+    setDrawer(false);
+  })();
+  </script>
 </body>
 </html>

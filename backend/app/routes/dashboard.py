@@ -23,9 +23,9 @@ def _runtime_summary():
 
 @router.get("")
 def dashboard(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    projects = list(db.scalars(select(Project).where(Project.user_id == user.id).order_by(Project.created_at.desc())))
-    workspaces = list(db.scalars(select(Workspace).where(Workspace.user_id == user.id).order_by(Workspace.created_at.desc())))
-    sessions = list(db.scalars(select(WorkspaceSession).where(WorkspaceSession.user_id == user.id).order_by(WorkspaceSession.created_at.desc())))
+    projects = list(db.scalars(select(Project).where(Project.user_id == user.id, Project.archived_at.is_(None)).order_by(Project.created_at.desc())))
+    workspaces = list(db.scalars(select(Workspace).join(Project, Project.id == Workspace.project_id).where(Workspace.user_id == user.id, Project.archived_at.is_(None)).order_by(Workspace.created_at.desc())))
+    sessions = list(db.scalars(select(WorkspaceSession).join(Workspace, Workspace.id == WorkspaceSession.workspace_id).join(Project, Project.id == Workspace.project_id).where(WorkspaceSession.user_id == user.id, Project.archived_at.is_(None)).order_by(WorkspaceSession.created_at.desc())))
     credentials_count = db.scalar(select(func.count()).select_from(ProviderCredential).where(ProviderCredential.user_id == user.id)) or 0
     by_project = {}
     for workspace in workspaces:
@@ -42,8 +42,11 @@ def dashboard(user: User = Depends(require_user), db: Session = Depends(get_db))
             items.append(data)
         payload_projects.append({**project_payload(project), "workspaces": items})
     return {
-        "profile": user_payload(user),
+        "profile": {**user_payload(user), "plan": user.plan.name if user.plan else None},
+        "plan": {"name": user.plan.name, "active": user.plan.active} if user.plan else None,
         "projects": payload_projects,
+        "recent_sessions": [{"id":str(s.id),"workspace_id":str(s.workspace_id),"title":s.title,"status":s.status,"created_at":s.created_at} for s in sessions[:10]],
+        "recent_workspaces": [{**workspace_payload(w),"session_count":session_counts.get(str(w.id),0)} for w in sorted(workspaces,key=lambda w:w.last_activity_at,reverse=True)[:10]],
         "counts": {"projects": len(projects), "workspaces": len(workspaces), "sessions": len(sessions), "credentials": credentials_count},
         "github": github.connection_status(db, user),
         "runtime": _runtime_summary(),

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 import re
 from pathlib import Path
@@ -55,6 +55,11 @@ class Settings:
     github_api_base: str
     github_web_base: str
     credentials_encryption_key: str | None
+    paypal_environment: str = 'sandbox'
+    paypal_client_id: str | None = field(default=None,repr=False)
+    paypal_client_secret: str | None = field(default=None,repr=False)
+    paypal_merchant_id: str | None = None
+    paypal_sandbox_decline: bool = False
 
     @property
     def github_configured(self) -> bool:
@@ -82,10 +87,14 @@ class Settings:
         base = Path(__file__).resolve().parents[2]
         workspace_root = Path(os.getenv("WORKSPACE_ROOT", str(base / "workspaces"))).resolve()
         runtime_root = Path(os.getenv("RUNTIME_ROOT", str(base / "runtime"))).resolve()
-        url = os.getenv("OPENCODE_URL", "http://127.0.0.1:4196").rstrip("/")
+        url = os.getenv("OPENCODE_BASE_URL", "http://127.0.0.1:4096").strip().rstrip("/")
         parsed = urlparse(url)
-        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or parsed.username or parsed.password:
-            raise RuntimeError("OPENCODE_URL must be an internal loopback HTTP URL without credentials")
+        try:
+            valid_port = parsed.port is None or 1 <= parsed.port <= 65535
+        except ValueError:
+            valid_port = False
+        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or parsed.username is not None or parsed.password is not None or parsed.path or parsed.query or parsed.fragment or not valid_port:
+            raise RuntimeError("OPENCODE_BASE_URL must be an internal loopback HTTP origin without credentials")
         public_base = os.getenv("PUBLIC_BASE_URL", f"http://{host}:{app_port}").rstrip("/")
         callback = os.getenv("GITHUB_CALLBACK_URL", f"{public_base}/api/github/callback").strip()
         private_key = optional("GITHUB_APP_PRIVATE_KEY")
@@ -104,6 +113,10 @@ class Settings:
             except ValueError as exc:
                 raise RuntimeError("GITHUB_APP_ID must be an integer") from exc
         callback_host = urlparse(callback).hostname
+        paypal_environment=os.getenv('PAYPAL_ENVIRONMENT','sandbox').strip()
+        if paypal_environment not in {'sandbox','live'}:raise RuntimeError('PAYPAL_ENVIRONMENT must be sandbox or live')
+        paypal_decline=parse_bool('PAYPAL_SANDBOX_DECLINE','false')
+        if paypal_environment=='live' and paypal_decline:raise RuntimeError('PayPal negative testing is only allowed in sandbox')
         if callback_host not in {"127.0.0.1", "localhost", "::1"} and not callback.startswith("https://"):
             raise RuntimeError("GITHUB_CALLBACK_URL must be HTTPS or a loopback HTTP URL")
         return cls(
@@ -115,6 +128,7 @@ class Settings:
             callback, os.getenv("GITHUB_API_BASE", "https://api.github.com").rstrip("/"),
             os.getenv("GITHUB_WEB_BASE", "https://github.com").rstrip("/"),
             optional("CREDENTIALS_ENCRYPTION_KEY"),
+            paypal_environment,optional('PAYPAL_CLIENT_ID'),optional('PAYPAL_CLIENT_SECRET'),optional('PAYPAL_MERCHANT_ID'),paypal_decline,
         )
 
 settings = Settings.from_environment()

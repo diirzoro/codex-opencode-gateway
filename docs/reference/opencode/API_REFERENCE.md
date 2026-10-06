@@ -1,21 +1,3 @@
-# Verified local phase update — 2026-10-06
-
-See [REAL_AGENT_ACCEPTANCE.md](REAL_AGENT_ACCEPTANCE.md) for real isolated OpenCode/DeepSeek prompt, Stop and secret-boundary evidence, and [PAYMENT_CHECKOUT_REPORT.md](PAYMENT_CHECKOUT_REPORT.md) for admin-owned receiving methods, customer checkout, hosted links, PayPal backend create/capture verification, migration 0008 and remaining merchant-configuration/production gaps. These reports supersede overlapping historical payment/runtime claims below. No push or deployment.
-
-# Internal OpenCode API boundary — 2026-10-05
-
-Frontend requests remain `/api/...` only. Authenticated `GET /api/opencode/health` and `/api/opencode/status` return health/version and safe runtime status, not internal URLs or credentials. These inspect the unauthenticated internal reference configured by backend-only `OPENCODE_BASE_URL`. Customer coding calls retain owned `/api/workspaces/...` and `/api/sessions/...` orchestration through separate local runtime contexts, never the shared reference. No new API or authentication flow. See [INTERNAL_OPENCODE_INFRASTRUCTURE.md](INTERNAL_OPENCODE_INFRASTRUCTURE.md).
-
-# Current local update — 2026-10-04
-
-Management additions: PUT /api/account/password; POST /api/auth/forgot-password and /reset-password; POST /api/account/lifecycle; GET /api/account/sessions; DELETE /api/account/sessions/{id}; GET /api/account/logs; GET/POST /api/billing/methods; PUT/DELETE /api/billing/methods/{id}; GET /api/billing/available-methods; GET /api/admin/logs and /connections; DELETE /api/admin/connections/{user_id}; PUT /api/admin/users/{user_id}/role; GET/POST /api/admin/locations/{kind}; PUT/DELETE /api/admin/locations/{kind}/{id}. platform=true selects admin payment scope; DELETE location disables it. Password inputs are current_password/new_password; recovery uses email then token/password; lifecycle uses action/password/confirmation. All account APIs require authentication except generic recovery request and token-authorized reset. See OpenAPI /docs for field schemas. GitHub callbacks now require code and verified membership.
-
-See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
-
----
-
-## Earlier audit (historical)
-
 # API reference
 
 Updated 2026-10-03. Current local implementation; no deployment claim. Same-origin browser requests use an opaque HttpOnly SameSite=Strict cookie. Session tokens are never returned in JSON. `Secure=true` is the default; only local HTTP testing sets false. Mutating cross-site Origin / Fetch Metadata requests are rejected.
@@ -605,18 +587,6 @@ GitHub App installation/callback/repos/branches/webhooks; provider credential co
 New usernames require 6–50 ASCII letters/digits/underscore/dot/hyphen. New passwords require 8–128 characters with at least one ASCII number and one punctuation symbol (e.g. ! or @). No uppercase or letter requirement; spaces do not count as symbols. Existing login remains valid and is not revalidated against registration constraints. Frontend hints/errors use Arabic/English and match backend validation. No migration is needed.
 
 
-## OpenCode synchronization (2026-10-05)
+## Codex merge, 2026-10-05
 
-The current Codex workspace now includes the newer OpenCode subscriptions, project archiving, client/admin dashboards, reports, shell and grid UI, together with the merged account-management features. See MERGE_REPORT.md for current verification. The preserved OpenCode document is in reference/opencode/. This workspace uses migration head `0006_subscriptions_archive` after the existing `0005_account_management`. No VPS access or push was performed.
-
-
-### Current synchronized implementation
-
-Subscription and archive APIs imported from OpenCode are listed in MERGE_REPORT.md. Subscription selection persists pending_payment; renew/invoices/payments return unavailable rather than pretending a charge.
-
-
-## Workspace/payment update — 2026-10-05
-
-GET /api/workspaces/{id}/agents returns safe primary runtime agent choices. Session message POST accepts optional validated agent_id. Billing adds POST /api/billing/checkout, GET /api/billing/orders, PUT /api/billing/orders/{id}/reference, GET /api/billing/admin/orders and POST /api/billing/admin/orders/{id}/confirm. Customer references never activate subscriptions; admin receipt confirmation does. Expired work APIs return 402; account/security/billing remain accessible.
-
-See [WORKSPACE_FIRST_REPORT.md](WORKSPACE_FIRST_REPORT.md) for scope, evidence and limits. This update supersedes conflicting historical statements.
+Account management, recovery, audit, locations, encrypted payment methods and user-authorized GitHub integration were merged while preserving subscriptions and project archiving. See [MERGE_REPORT.md](MERGE_REPORT.md) and [Codex reference](reference/codex/API_REFERENCE.md). New migration: `0006_account_management`. External integrations still require configuration; no production connection or deployment was tested.

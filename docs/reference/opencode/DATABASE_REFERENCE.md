@@ -1,17 +1,3 @@
-# Verified local phase update — 2026-10-06
-
-See [REAL_AGENT_ACCEPTANCE.md](REAL_AGENT_ACCEPTANCE.md) for real isolated OpenCode/DeepSeek prompt, Stop and secret-boundary evidence, and [PAYMENT_CHECKOUT_REPORT.md](PAYMENT_CHECKOUT_REPORT.md) for admin-owned receiving methods, customer checkout, hosted links, PayPal backend create/capture verification, migration 0008 and remaining merchant-configuration/production gaps. These reports supersede overlapping historical payment/runtime claims below. No push or deployment.
-
-# Current local update — 2026-10-04
-
-Migration 0005_account_management adds billing_methods (UUID, nullable owner for platform methods, encrypted details, type/label/enabled), account_audit (actor, subject, action, timestamp), password_resets (owner, unique token hash, expiry, consumed flag), and github_connections.user_token/token_expires_at. Prior imported migrations add plans/platform_policy/GitHub states/provider credentials. Encryption key is outside the DB. Deletion requests preserve user and workspace rows.
-
-See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
-
----
-
-## Earlier audit (historical)
-
 # Database reference
 
 Updated 2026-10-03. SQLAlchemy models are runtime authority. PostgreSQL is the application target; SQLite is explicitly test-only. No customer repository source content or raw authentication token is stored in Gateway PostgreSQL.
@@ -143,18 +129,6 @@ Execution events store ordered IDs and sanitized lifecycle metadata; they do not
 Missing target tables: GitHub installations/connections, encrypted credentials, upload metadata, task leases/idempotency, billing profiles/plans/versions/subscriptions/payments/ledger and audit trails. Add schema with the corresponding implementation, not empty tables suggesting completion.
 
 
-## OpenCode synchronization (2026-10-05)
+## Codex merge, 2026-10-05
 
-The current Codex workspace now includes the newer OpenCode subscriptions, project archiving, client/admin dashboards, reports, shell and grid UI, together with the merged account-management features. See MERGE_REPORT.md for current verification. The preserved OpenCode document is in reference/opencode/. This workspace uses migration head `0006_subscriptions_archive` after the existing `0005_account_management`. No VPS access or push was performed.
-
-
-### Current synchronized implementation
-
-New Subscription table and projects.archived_at are introduced by 0006_subscriptions_archive, downstream of the unchanged Codex 0005_account_management. Single head; SQLite upgrade and PostgreSQL offline SQL validated.
-
-
-## Workspace/payment update — 2026-10-05
-
-Migration 0007_payment_orders adds owned payment orders with server price/currency/duration and plan/method snapshots, awaiting_payment/pending_review/paid state, submitted reference, reviewer, verified receipt reference and paid time. Administrative confirmation updates the subscription in the same transaction. No raw card number or CVV fields are introduced.
-
-See [WORKSPACE_FIRST_REPORT.md](WORKSPACE_FIRST_REPORT.md) for scope, evidence and limits. This update supersedes conflicting historical statements.
+Account management, recovery, audit, locations, encrypted payment methods and user-authorized GitHub integration were merged while preserving subscriptions and project archiving. See [MERGE_REPORT.md](MERGE_REPORT.md) and [Codex reference](reference/codex/DATABASE_REFERENCE.md). New migration: `0006_account_management`. External integrations still require configuration; no production connection or deployment was tested.

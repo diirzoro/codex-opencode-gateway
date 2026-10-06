@@ -45,3 +45,10 @@ See `deployment/README.md` for exact future commands (backup, source copy withou
 Configure `CREDENTIALS_ENCRYPTION_KEY` as a high-entropy secret outside Git, preserve it with a separately protected backup, configure HTTPS `PUBLIC_BASE_URL`, SMTP, GitHub App signing key/client ID/client secret/webhook secret and OAuth-during-installation. Users must authorize their own GitHub account. Never use the repository-publishing credential for client operations.
 
 Security basis for verifying installation membership: [GitHub setup URL guidance](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url). User access is checked before linking an installation; all customer GitHub calls use that user's token.
+
+
+## OpenCode synchronization (2026-10-05)
+
+The current Codex workspace now includes the newer OpenCode subscriptions, project archiving, client/admin dashboards, reports, shell and grid UI, together with the merged account-management features. See MERGE_REPORT.md for current verification. The preserved OpenCode document is in reference/opencode/. This workspace uses migration head `0006_subscriptions_archive` after the existing `0005_account_management`. No VPS access or push was performed.
+
+Final synchronized-workspace verification: 59 backend tests passed, one Windows symlink privilege test skipped; 15 headed Chromium browser tests passed. Fresh SQLite migrations and PostgreSQL offline SQL generation passed. Deployment remains pending operator configuration and production verification.

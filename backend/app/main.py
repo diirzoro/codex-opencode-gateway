@@ -3,8 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
-from .routes import workspaces, agent, github, dashboard, plans
-from .routes import management
+from .routes import workspaces, agent, github, dashboard, plans, billing, management
 app = FastAPI(title="OpenCode Gateway API", version="0.1.0")
 app.include_router(auth.router); app.include_router(profile.router); app.include_router(locations.router); app.include_router(admin.router)
 app.include_router(workspaces.router)
@@ -12,6 +11,7 @@ app.include_router(agent.router)
 app.include_router(github.router)
 app.include_router(dashboard.router)
 app.include_router(plans.router)
+app.include_router(billing.router)
 app.include_router(management.router)
 @app.get("/api/health")
 def health(): return {"status": "ok"}
@@ -42,5 +42,5 @@ def public_file(name):
         return FileResponse(frontend / name)
     return serve
 
-for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/styles.css": "styles.css", "/config.js": "config.js", "/assets/yemen-hero.svg": "assets/yemen-hero.svg"}.items():
+for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/dashboards.js": "dashboards.js", "/styles.css": "styles.css", "/config.js": "config.js", "/assets/yemen-hero.svg": "assets/yemen-hero.svg"}.items():
     app.add_api_route(url, public_file(name), methods=["GET"], include_in_schema=False)
