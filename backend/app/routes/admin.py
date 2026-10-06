@@ -7,9 +7,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
-from ..models import GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, ProviderCredential, Subscription, User, Workspace, WorkspaceSession
+from ..models import BillingMethod, GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, ProviderCredential, Subscription, User, Workspace, WorkspaceSession
 from ..models.platform import get_policy
-from ..services import opencode
+from ..services import opencode, paypal
 from ..services.accounts import user_payload
 from .dependencies import require_admin
 
@@ -110,6 +110,12 @@ def update_user(user_id: str, data: UserAdminPatch, actor: User = Depends(requir
 def overview(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
     github_connected = _count(db, GithubConnection, GithubConnection.suspended.is_(False))
+    payment_methods = _count(db, BillingMethod, BillingMethod.user_id.is_(None))
+    enabled_payment_methods = _count(db, BillingMethod, BillingMethod.user_id.is_(None), BillingMethod.enabled.is_(True))
+    payment_orders = _count(db, PaymentOrder)
+    paid_orders = _count(db, PaymentOrder, PaymentOrder.status == "paid")
+    paypal_configured = paypal.configured()
+    payment_status = "settings_present" if paypal_configured or enabled_payment_methods else ("methods_disabled" if payment_methods else "not_configured")
     return {
         "users": {
             "total": _count(db, User),
@@ -134,9 +140,17 @@ def overview(_: User = Depends(require_admin), db: Session = Depends(get_db)):
         "integrations": {
             "github": {"configured": settings.github_configured, "connected_users": github_connected},
             "opencode": settings.runtime_mode,
-            "payments": "not_available",
+            "payments": payment_status,
         },
-        "payments": {"status": "not_available", "label": "Not available yet"},
+        "payments": {
+            "status": payment_status,
+            "label": payment_status,
+            "paypal_configured": paypal_configured,
+            "methods": payment_methods,
+            "enabled_methods": enabled_payment_methods,
+            "orders": payment_orders,
+            "paid_orders": paid_orders,
+        },
         "visitors": {"status": "not_available", "label": "Not available yet"},
     }
 

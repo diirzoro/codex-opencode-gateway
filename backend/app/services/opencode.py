@@ -41,6 +41,24 @@ class OpenCodeService:
         except (httpx.HTTPError,ValueError):
             raise HTTPException(503,"OpenCode request failed; no operation success was assumed")
 
+    async def events(self):
+        """Yield decoded OpenCode SSE messages without forwarding runtime data to clients."""
+        async with httpx.AsyncClient(base_url=self.url, auth=self.auth, timeout=None, trust_env=False) as client:
+            async with client.stream("GET", "/event", params=self.params, headers={"Accept": "text/event-stream"}) as response:
+                response.raise_for_status()
+                data=[]
+                async for line in response.aiter_lines():
+                    if line.startswith("data:"):
+                        data.append(line[5:].lstrip())
+                    elif not line and data:
+                        try:
+                            payload=json.loads("\n".join(data))
+                        except ValueError:
+                            payload=None
+                        data=[]
+                        if isinstance(payload,dict):
+                            yield payload
+
     def health(self):
         result=self.request("GET","/global/health")
         if not isinstance(result,dict) or result.get("healthy") is not True:
