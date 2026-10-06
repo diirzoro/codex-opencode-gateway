@@ -10,7 +10,7 @@ def configured():
     return bool(settings.paypal_client_id and settings.paypal_client_secret and settings.paypal_merchant_id)
 
 def request(method,path,body=None,request_id=None,negative=False):
-    if not configured():raise HTTPException(503,'PayPal checkout is not configured. Ask administration to configure the merchant account.')
+    if not configured():raise HTTPException(503,'PayPal provider is not connected. Ask administration to configure the merchant account.')
     base='https://api-m.sandbox.paypal.com' if settings.paypal_environment=='sandbox' else 'https://api-m.paypal.com'
     try:
         with httpx.Client(timeout=25,follow_redirects=False,trust_env=False) as client:

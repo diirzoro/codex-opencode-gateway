@@ -44,3 +44,9 @@ playwright.config.cjs
 !deployment/.env.production.example
 
 reference/theme-backup-*/
+
+# Private customer payment receipts (never commit)
+receipts/
+
+# Local audit artifacts (never commit)
+.audit/

@@ -135,3 +135,5 @@ html,body{height:100%}
 .agent-create-dialog::backdrop{background:#10213e70;backdrop-filter:blur(4px)}.agent-create-dialog>h2{margin:0 0 16px}.agent-create-dialog form{display:grid;gap:14px}.agent-create-dialog label{display:grid;gap:6px;font-size:13px;font-weight:600}.agent-create-dialog input,.agent-create-dialog textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text)}.agent-create-dialog textarea{resize:vertical}
 .composer-add-agent{min-height:34px;padding:5px 9px!important;font-size:12px!important}
 @media(max-width:700px){.manage-provider-row{grid-template-columns:1fr;gap:8px}.manage-provider-row .manage-actions{justify-content:flex-start}.manage-grid{min-width:470px}.manage-grid th,.manage-grid td{padding:9px 10px}}
+.pw-toggle{margin-top:6px;padding:2px 0;background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer;align-self:flex-start}.pw-toggle:hover{color:var(--text)}
+.pay-icon{width:20px;height:20px;display:inline-flex;margin-inline-end:8px;vertical-align:middle;flex-shrink:0}.pay-icon svg{width:100%;height:100%;display:block}

@@ -76,6 +76,7 @@
   // --- Admin Console: a separate multi-page section for admin/owner only ---
   var ADMIN_ROLES = ['customer', 'support', 'finance', 'admin', 'owner'];
   var adminView = 'overview';
+  var admin = function () { return ['admin', 'owner'].includes(currentUser && currentUser.role); };
 
   function adminMetric(overview, path) {
     var value = overview;
@@ -277,7 +278,7 @@
     return lang === 'ar' ? planDurationLabel(plan.duration_days) : plan.name;
   }
   function planDisplayTerm(plan) {
-    return lang === 'ar' ? plan.duration_days + ' ' + tr('days', 'ÙŠÙˆÙ…Ù‹Ø§') : planDurationLabel(plan.duration_days);
+    return lang === 'ar' ? plan.duration_days + ' ' + tr('days', 'يومًا') : planDurationLabel(plan.duration_days);
   }
   window.planDisplayName = planDisplayName;
   window.planDisplayTerm = planDisplayTerm;

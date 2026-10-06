@@ -76,6 +76,12 @@ function brandMark(){const box=document.createElement("div");box.className="work
 const passwordSymbols="!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 Object.assign(copy.en,{usernameHint:"At least 6 characters",passwordHint:"8+ characters, including a number and a symbol (such as ! or @)"});
 Object.assign(copy.ar,{usernameHint:"6 أحرف على الأقل",passwordHint:"8 أحرف على الأقل، تتضمن رقمًا ورمزًا مثل ! أو @"});
+Object.assign(copy.en,{showPassword:"Show password",hidePassword:"Hide password"});
+Object.assign(copy.ar,{showPassword:"إظهار كلمة المرور",hidePassword:"إخفاء كلمة المرور"});
+function refreshPasswordToggles(){$$('.pw-toggle').forEach(btn=>{const input=document.getElementById(btn.dataset.pw);if(!input)return;const hidden=input.type==='password';btn.textContent=hidden?t('showPassword'):t('hidePassword');btn.setAttribute('aria-label',btn.textContent);btn.setAttribute('aria-pressed',String(!hidden))})}
+for(const id of ['loginPassword','registerPassword']){const input=document.getElementById(id);if(!input||input.parentElement.querySelector('.pw-toggle'))continue;const btn=document.createElement('button');btn.type='button';btn.className='pw-toggle';btn.dataset.pw=id;btn.onclick=()=>{input.type=input.type==='password'?'text':'password';refreshPasswordToggles();input.focus()};input.after(btn)}
+const prevPrefsPw=applyPrefs;applyPrefs=function(){prevPrefsPw();refreshPasswordToggles()};
+refreshPasswordToggles();
 applyPrefs();
 
 
