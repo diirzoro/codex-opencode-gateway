@@ -21,7 +21,15 @@ def set_api_key(service, provider_id, key):
     return True
 
 def remove(service, provider_id):
-    return service.request("DELETE", "/auth/" + quote(provider_id, safe=""))
+    service.request("DELETE", "/auth/" + quote(provider_id, safe=""))
+    # Verify the runtime really dropped it; a silent no-op must not desync the DB.
+    try:
+        data = service.request("GET", "/provider")
+    except Exception:
+        return True
+    if isinstance(data, dict) and provider_id in set(data.get("connected", [])):
+        raise RuntimeError("runtime still reports the provider as connected")
+    return True
 
 def oauth_authorize(service, provider_id, method, inputs=None):
     path = f"/provider/{quote(provider_id, safe='')}/oauth/authorize"

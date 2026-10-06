@@ -258,17 +258,6 @@ def available_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db
     opencode.configure_policy(policy.load(db))
     return agent_choices(opencode.for_workspace(row))
 
-@router.get("/workspaces/{workspace_id}/capabilities")
-def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    _,service=_workspace_service(db,user,workspace_id)
-    current=policy.load(db)
-    available=policy.filter_providers(providers.discover(service),current)
-    return {
-        "providers":[{"id":p["id"],"name":p["name"],"connected":p["connected"],"models":p["models"],"auth_methods":p["auth_methods"]} for p in available],
-        "agents":agent_choices(service),
-        "permissions":{"allowed_tools":current.as_payload()["allowed_tools"],"require_tool_approval":bool(current.require_tool_approval)},
-    }
-
 def agent_choices(service):
     rows=service.request("GET","/agent")
     if not isinstance(rows,list): raise HTTPException(502,"Runtime returned an invalid agent list")
@@ -286,6 +275,27 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
         providers.set_api_key(service,provider_id,data.api_key)
     except Exception:
         raise HTTPException(502,"The runtime did not accept this credential")
+    # Real validation against the workspace runtime: the credential must be
+    # accepted AND the provider must report connected with retrievable models.
+    # Anything less rolls the runtime credential back and persists nothing.
+    try:
+        state=service.request("GET","/provider")
+        if not isinstance(state,dict) or provider_id not in set(state.get("connected",[])):
+            raise ValueError("provider is not reported as connected")
+        live_models=[]
+        for entry in state.get("all",[]) or []:
+            if isinstance(entry,dict) and entry.get("id")==provider_id:
+                live_models=list((entry.get("models") or {}).keys()); break
+        if not live_models:
+            raise ValueError("no retrievable models for this provider")
+    except HTTPException as exc:
+        try: providers.remove(service,provider_id)
+        except Exception: pass
+        raise exc
+    except Exception:
+        try: providers.remove(service,provider_id)
+        except Exception: pass
+        raise HTTPException(502,"Provider validation failed: the workspace runtime does not report this provider as connected with retrievable models. The credential was removed and nothing was stored.")
     persisted=False
     if credentials.available():
         row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
@@ -300,7 +310,10 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
 @router.delete("/workspaces/{workspace_id}/providers/{provider_id}",status_code=204)
 def remove_provider_credential(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
     workspace,service=_workspace_service(db,user,workspace_id)
-    providers.remove(service,provider_id)
+    try:
+        providers.remove(service,provider_id)
+    except Exception:
+        raise HTTPException(502,"The workspace runtime did not confirm removal; the stored credential was kept")
     row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
     if row is not None:
         db.delete(row); db.commit()

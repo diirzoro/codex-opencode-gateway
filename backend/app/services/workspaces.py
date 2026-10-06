@@ -15,16 +15,6 @@ TEMPLATES = {
 
 _FULL_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
-_SENSITIVE_NAMES = {".git", ".ssh", ".aws", ".azure", ".config", ".netrc", ".npmrc", ".pypirc", "credentials", "credentials.json", "secrets", "secrets.json", "secrets.yaml", "secrets.yml", "id_rsa", "id_ed25519"}
-
-def _protected_component(name):
-    lowered=name.casefold()
-    return (
-        lowered in _SENSITIVE_NAMES
-        or (lowered.startswith(".env") and lowered != ".env.example")
-        or lowered.startswith(("credentials.", "secrets."))
-        or lowered.endswith((".pem", ".key", ".p12", ".pfx"))
-    )
 
 def owned(db, model, identifier, user_id):
     row = db.scalar(select(model).where(model.id == identifier, model.user_id == user_id))
@@ -48,7 +38,7 @@ def safe_path(workspace, relative=""):
     if "\x00" in relative or "\\" in relative or PureWindowsPath(relative).drive or Path(relative).is_absolute():
         raise HTTPException(422, "A relative workspace path is required")
     parts = Path(relative).parts
-    if any(p == ".." or _protected_component(p) for p in parts):
+    if any(p in {"..", ".git", ".ssh", ".env"} for p in parts):
         raise HTTPException(403, "Path is not accessible")
     root = root_for(workspace)
     candidate = root
@@ -162,7 +152,7 @@ def files(workspace, relative=""):
     if not path.is_dir(): raise HTTPException(404,"Directory not found")
     result=[]
     for item in sorted(path.iterdir(),key=lambda p:p.name.lower()):
-        if _protected_component(item.name) or item.is_symlink() or (hasattr(item,"is_junction") and item.is_junction()): continue
+        if item.name in {".git",".env",".ssh"} or item.is_symlink() or (hasattr(item,"is_junction") and item.is_junction()): continue
         result.append({"name":item.name,"path":item.relative_to(root_for(workspace)).as_posix(),"type":"directory" if item.is_dir() else "file"})
         if len(result)>=1000: break
     return result

@@ -57,60 +57,20 @@ def event(db,session_id,kind,data=None):
     db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
     db.commit()
 
-def finish_execution(db,session_id,kind,data=None):
+def finish_execution(db,session_id,kind,states=(),data=None):
     # Abort and the background HTTP response can finish concurrently. Evaluate
     # cancellation in the database, not on a previously loaded ORM snapshot.
     changed=db.execute(update(WorkspaceSession).where(
         WorkspaceSession.id==session_id,WorkspaceSession.status!='cancelled'
     ).values(status=kind).execution_options(synchronize_session=False)).rowcount
     if changed:
+        for state in states:
+            db.add(ExecutionEvent(session_id=session_id,kind=state,data='{}'))
         db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
     db.commit()
 
-async def monitor_runtime(session_id,service,runtime_id,ready):
-    """Translate live OpenCode tool events into safe, session-scoped progress labels."""
-    last_state=None
-    try:
-        async for envelope in service.events():
-            ready.set()
-            message=envelope.get("payload",envelope)
-            if not isinstance(message,dict): continue
-            properties=message.get("properties") or {}
-            part=properties.get("part") or {}
-            info=properties.get("info") or {}
-            event_session=properties.get("sessionID") or part.get("sessionID") or info.get("sessionID")
-            if event_session!=runtime_id: continue
-            kind=message.get("type")
-            state=None
-            if kind=="session.status":
-                status=properties.get("status")
-                status=status.get("type") if isinstance(status,dict) else status
-                if status in {"busy","active"}: state="analyzing"
-            elif kind=="message.part.updated":
-                state_obj=part.get("state") if isinstance(part,dict) else None
-                if not isinstance(state_obj,dict) or state_obj.get("status")!="running": continue
-                states=normalize_states([part])
-                if states: state=states[0]
-            elif kind in {"permission.updated","permission.asked"}:
-                state="waiting_approval"
-            if state and state!=last_state:
-                last_state=state
-                with SessionLocal() as db:
-                    current=db.get(WorkspaceSession,session_id)
-                    if current and current.status not in {"cancelled","completed","failed"}:
-                        event(db,session_id,state)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        # A broken runtime event stream must not fail an otherwise valid prompt.
-        ready.set()
-
 async def execute(session_id,service,runtime_id,data):
-    ready=asyncio.Event()
-    monitor=asyncio.create_task(monitor_runtime(session_id,service,runtime_id,ready))
     try:
-        try: await asyncio.wait_for(ready.wait(),timeout=2)
-        except asyncio.TimeoutError: pass
         with SessionLocal() as db:
             session=db.get(WorkspaceSession,session_id)
             if session and session.status!="cancelled": event(db,session.id,"analyzing")
@@ -122,14 +82,11 @@ async def execute(session_id,service,runtime_id,data):
             if failure:
                 finish_execution(db,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'})
             else:
-                finish_execution(db,session_id,'completed')
+                finish_execution(db,session_id,'completed',normalize_states(response.get('parts',[])))
     except Exception:
         with SessionLocal() as db:
             finish_execution(db,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'})
     finally:
-        monitor.cancel()
-        try: await monitor
-        except asyncio.CancelledError: pass
         tasks.pop(str(session_id),None)
 
 @router.post("/{session_id}/messages",status_code=202)

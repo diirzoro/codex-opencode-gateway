@@ -109,10 +109,13 @@ class MethodInput(BaseModel):
     label: str=Field(min_length=1,max_length=100)
     account_name: str=Field(default='',max_length=150)
     account_reference: str=Field(default='',max_length=200)
+    iban: str=Field(default='',max_length=64)
+    branch: str=Field(default='',max_length=150)
     bank_name: str=Field(default='',max_length=150)
     currency: str=Field(default='USD',pattern='^[A-Z]{3}$')
     network: str=Field(default='',max_length=100)
     instructions: str=Field(default='',max_length=1000)
+    available_country_codes: list[str]=Field(default_factory=list,max_length=100)
     checkout_mode: str=Field(default='manual',pattern='^(manual|link|paypal)$')
     payment_url: str=Field(default='',max_length=2000)
     plan_id: int|None=Field(default=None,ge=1)
@@ -137,7 +140,7 @@ def scope(user,platform):
     return None if platform else user.id
 def method_payload(row): return {'id':str(row.id),'kind':row.kind,'label':row.label,'enabled':row.enabled,'details':json.loads(credentials.decrypt(row.details))}
 def method_values(data):
-    values=data.model_dump(); detail={key:values.pop(key) for key in ['account_name','account_reference','bank_name','currency','network','instructions','checkout_mode','payment_url','plan_id']}
+    values=data.model_dump(); detail={key:values.pop(key) for key in ['account_name','account_reference','iban','branch','bank_name','currency','network','instructions','checkout_mode','payment_url','plan_id','available_country_codes']}
     return {**values,'details':credentials.encrypt(json.dumps(detail))}
 def validate_receiving_method(db,data,platform):
     from ..models import Plan
@@ -151,8 +154,6 @@ def validate_receiving_method(db,data,platform):
         raise HTTPException(422,'Google Pay requires a configured hosted checkout link from a supported payment processor')
     if data.kind=='googlepay' and data.enabled and not data.plan_id:
         raise HTTPException(422,'Google Pay requires a hosted payment link bound to one active plan')
-    if data.checkout_mode=='paypal' and data.enabled and not paypal.configured():
-        raise HTTPException(422,'Configure PayPal merchant credentials before enabling PayPal checkout')
     if data.enabled and data.checkout_mode=='manual':
         missing=[name for name,value in [('account holder',data.account_name),('receiving account or address',data.account_reference),('payment instructions',data.instructions)] if not value.strip()]
         if data.kind=='bank' and not data.bank_name.strip(): missing.append('bank name')
@@ -165,26 +166,47 @@ def validate_receiving_method(db,data,platform):
     if data.plan_id:
         plan=db.get(Plan,data.plan_id)
         if not plan or not plan.active or plan.currency!=data.currency:raise HTTPException(422,'Choose an active plan with matching currency')
+    codes=[c.strip().upper() for c in (data.available_country_codes or []) if c.strip()]
+    if codes:
+        from ..models import Country
+        valid={r.code.upper() for r in db.scalars(select(Country).where(Country.enabled.is_(True)))}
+        unknown=[c for c in codes if c not in valid]
+        if unknown: raise HTTPException(422,'Unknown country codes: '+', '.join(unknown))
+        data.available_country_codes=sorted(set(codes))
+    else:
+        data.available_country_codes=[]
 @router.get('/billing/methods')
 def methods(platform:bool=False,user:User=Depends(require_user),db:Session=Depends(get_db)):
     owner=scope(user,platform)
     return [method_payload(row) for row in db.scalars(select(BillingMethod).where(BillingMethod.user_id==owner))]
 @router.get('/billing/available-methods')
-def receiving(plan_id:int|None=Query(default=None,ge=1),user:User=Depends(require_user),db:Session=Depends(get_db)):
+def receiving(plan_id:int|None=Query(default=None,ge=1),include_unavailable:bool=False,user:User=Depends(require_user),db:Session=Depends(get_db)):
     from ..models import Plan
     plan=db.get(Plan,plan_id) if plan_id is not None else None
     if plan_id is not None and (plan is None or not plan.active): raise HTTPException(422,'Unknown or inactive plan')
-    ready=[]
+    user_code=(user.country.code.upper() if getattr(user,'country',None) and user.country.code else None)
+    ranked=[]
     for row in db.scalars(select(BillingMethod).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True))):
         payload=method_payload(row); details=payload['details']; mode=details.get('checkout_mode','manual')
-        if mode=='paypal' and not paypal.configured(): continue
-        if mode=='link' and (not details.get('payment_url') or not details.get('plan_id')): continue
-        if mode=='manual' and (not details.get('account_name') or not details.get('account_reference') or not details.get('instructions')): continue
-        if row.kind=='bank' and mode=='manual' and not details.get('bank_name'): continue
-        if row.kind=='binance' and mode=='manual' and not details.get('network'): continue
+        allowed_countries=[c.upper() for c in (details.get('available_country_codes') or [])]
+        if allowed_countries and (not user_code or user_code not in allowed_countries): continue
         if plan is not None and (details.get('currency')!=plan.currency or details.get('plan_id') not in (None,plan.id)): continue
-        ready.append(payload)
-    return ready
+        reason=None
+        if mode=='paypal' and not paypal.configured(): reason='provider_not_connected'
+        elif mode=='link':
+            host=(urlsplit(details.get('payment_url') or '').hostname or '').lower()
+            if not details.get('payment_url') or not details.get('plan_id') or host=='example.com' or host.endswith(('.invalid','.test','.example','.local','.localhost')): reason='processor_not_connected'
+        elif mode=='manual' and (not details.get('account_name') or not details.get('account_reference') or not details.get('instructions')): reason='details_not_configured'
+        elif row.kind=='bank' and mode=='manual' and not details.get('bank_name'): reason='details_not_configured'
+        elif row.kind=='binance' and mode=='manual' and not details.get('network'): reason='details_not_configured'
+        if reason:
+            if not include_unavailable: continue
+            payload['available']=False; payload['available_reason']=reason
+        else:
+            payload['available']=True
+        ranked.append((0 if (allowed_countries and user_code in allowed_countries) else 1,payload))
+    ranked.sort(key=lambda item:item[0])
+    return [payload for _,payload in ranked]
 @router.post('/billing/methods',status_code=201)
 def create_method(data:MethodInput,platform:bool=False,user:User=Depends(require_user),db:Session=Depends(get_db)):
     scope(user,platform);validate_receiving_method(db,data,platform)

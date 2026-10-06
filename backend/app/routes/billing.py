@@ -6,7 +6,7 @@ transfers activate after administrative receipt review. Selection never pays.
 from datetime import datetime, timezone,timedelta
 import uuid
 from math import ceil
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -122,14 +122,37 @@ def payments(user: User = Depends(require_user), db: Session = Depends(get_db)):
     return {"available": True, "items": [order_payload(row) for row in rows]}
 
 class Checkout(BaseModel):
-    model_config=ConfigDict(extra='forbid')
+    model_config=ConfigDict(extra='forbid',str_strip_whitespace=True)
     plan_id:int=Field(ge=1)
     method_id:uuid.UUID
+    billing_note:str=Field(default='',max_length=500)
+    payer_name:str=Field(default='',max_length=150)
+    payer_email:str=Field(default='',max_length=254)
+    payer_country:str=Field(default='',max_length=80)
 class PaymentReference(BaseModel):
     model_config=ConfigDict(extra='forbid',str_strip_whitespace=True)
     reference:str=Field(min_length=3,max_length=200)
+    sender_name:str=Field(min_length=2,max_length=150)
+    sender_email:str=Field(min_length=5,max_length=254)
+    sender_bank:str=Field(min_length=2,max_length=150)
+    sender_account:str=Field(min_length=4,max_length=200)
+    transfer_date:str=Field(min_length=10,max_length=10,pattern=r'^\d{4}-\d{2}-\d{2}$')
+    amount_sent_cents:int=Field(ge=1,le=1000000000)
+class RejectRequest(BaseModel):
+    model_config=ConfigDict(extra='forbid',str_strip_whitespace=True)
+    reason:str=Field(min_length=3,max_length=500)
+RECEIPT_EXTENSIONS={'.png':{'image/png'},'.jpg':{'image/jpeg'},'.jpeg':{'image/jpeg'},'.webp':{'image/webp'},'.pdf':{'application/pdf'}}
+RECEIPT_MAX_BYTES=5*1024*1024
+def receipts_root():
+    from pathlib import Path
+    from ..config import settings
+    root=Path(settings.workspace_root).resolve().parent/'receipts'
+    root.mkdir(parents=True,exist_ok=True)
+    return root
 def order_payload(row):
-    return {key:(str(getattr(row,key)) if key in {'id','user_id','method_id'} and getattr(row,key) is not None else getattr(row,key)) for key in ['id','user_id','plan_id','method_id','plan_name','method_label','amount_cents','currency','duration_days','status','payment_reference','provider_environment','created_at','paid_at']}
+    data={key:(str(getattr(row,key)) if key in {'id','user_id','method_id'} and getattr(row,key) is not None else getattr(row,key)) for key in ['id','user_id','plan_id','method_id','plan_name','method_label','amount_cents','currency','duration_days','status','payment_reference','provider_order_id','provider_capture_id','provider_environment','billing_note','sender_name','sender_email','sender_bank','sender_account','payer_name','payer_email','payer_country','transfer_date','amount_sent_cents','reject_reason','created_at','paid_at']}
+    data['has_receipt']=bool(row.receipt_path)
+    return data
 @router.post('/checkout',status_code=201)
 def checkout(data:Checkout,user:User=Depends(require_user),db:Session=Depends(get_db)):
     plan=db.get(Plan,data.plan_id);method=db.get(BillingMethod,data.method_id)
@@ -141,10 +164,19 @@ def checkout(data:Checkout,user:User=Depends(require_user),db:Session=Depends(ge
         raise HTTPException(503,'This payment method needs its hosted checkout link and matching plan configured by administration. No payment was made.')
     if details['details'].get('currency')!=plan.currency: raise HTTPException(422,'Payment method currency does not match this plan')
     if details['details'].get('plan_id') not in (None,plan.id):raise HTTPException(422,'Payment link belongs to another plan')
+    allowed_countries=[c.upper() for c in (details['details'].get('available_country_codes') or [])]
+    user_code=(user.country.code.upper() if getattr(user,'country',None) and user.country.code else None)
+    if allowed_countries and (not user_code or user_code not in allowed_countries): raise HTTPException(422,'This payment method is not available for your country')
+    if details['details'].get('checkout_mode')=='link':
+        host=(__import__('urllib.parse',fromlist=['urlsplit']).urlsplit(details['details'].get('payment_url') or '').hostname or '').lower()
+        if not details['details'].get('payment_url') or host=='example.com' or host.endswith(('.invalid','.test','.example','.local','.localhost')):
+            raise HTTPException(503,'The payment provider for this method is not connected. Administration must configure a real processor checkout link. No payment was made.')
+    if details['details'].get('checkout_mode')=='paypal' and not paypal.configured():
+        raise HTTPException(503,'PayPal provider is not connected. Ask administration to configure the merchant account.')
     if plan.price_cents<=0 or plan.duration_days<=0: raise HTTPException(422,'Plan requires valid paid price and duration')
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.user_id==user.id,PaymentOrder.plan_id==plan.id,PaymentOrder.method_id==method.id,PaymentOrder.status.in_(['awaiting_payment','pending_review'])))
     if row is None:
-        row=PaymentOrder(user_id=user.id,plan_id=plan.id,method_id=method.id,plan_name=plan.name,method_label=method.label,amount_cents=plan.price_cents,currency=plan.currency,duration_days=plan.duration_days,provider_environment=paypal.settings.paypal_environment if details['details'].get('checkout_mode')=='paypal' else None)
+        row=PaymentOrder(user_id=user.id,plan_id=plan.id,method_id=method.id,plan_name=plan.name,method_label=method.label,amount_cents=plan.price_cents,currency=plan.currency,duration_days=plan.duration_days,provider_environment=paypal.settings.paypal_environment if details['details'].get('checkout_mode')=='paypal' else None,billing_note=data.billing_note or None,payer_name=data.payer_name or None,payer_email=data.payer_email or None,payer_country=data.payer_country or None)
         db.add(row);db.commit();db.refresh(row)
     if details['details'].get('checkout_mode')=='paypal':
         row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==row.id).with_for_update())
@@ -163,26 +195,104 @@ def checkout(data:Checkout,user:User=Depends(require_user),db:Session=Depends(ge
 @router.get('/orders')
 def orders(user:User=Depends(require_user),db:Session=Depends(get_db)):
     return [order_payload(row) for row in db.scalars(select(PaymentOrder).where(PaymentOrder.user_id==user.id).order_by(PaymentOrder.created_at.desc()))]
+@router.post('/orders/{order_id}/cancel')
+def cancel_order(order_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
+    if not row:raise HTTPException(404,'Payment order not found')
+    if row.provider_environment:raise HTTPException(409,'PayPal payments cannot be cancelled from here; use Confirm PayPal payment or contact support')
+    if row.status in {'paid','sandbox_paid'}:raise HTTPException(409,'Completed payments cannot be cancelled')
+    if row.status in {'rejected','cancelled'}:return order_payload(row)
+    row.status='cancelled'
+    db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='billing.payment_cancelled'))
+    db.commit();return order_payload(row)
+
+@router.delete('/orders/{order_id}',status_code=204)
+def delete_order(order_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from pathlib import Path
+    row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
+    if not row:raise HTTPException(404,'Payment order not found')
+    if row.status not in {'failed','cancelled','rejected'}:
+        raise HTTPException(409,'Only failed, cancelled or rejected payments can be removed; successful payments are kept as records')
+    if row.receipt_path:
+        try:Path(row.receipt_path).unlink(missing_ok=True)
+        except OSError:pass
+        receipt_root=receipts_root()/str(row.id)
+        try:
+            if receipt_root.exists() and not any(receipt_root.iterdir()): receipt_root.rmdir()
+        except OSError:pass
+    db.delete(row)
+    db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='billing.payment_removed'))
+    db.commit()
+
 @router.put('/orders/{order_id}/reference')
 def submit_reference(order_id:uuid.UUID,data:PaymentReference,user:User=Depends(require_user),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
     if row.provider_environment:raise HTTPException(409,'PayPal payments require server capture verification, not a manual reference')
     if row.status!='awaiting_payment':raise HTTPException(409,'This payment order is already under review or completed')
-    row.payment_reference=data.reference;row.status='pending_review';db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='billing.reference_submitted'));db.commit();return order_payload(row)
+    if not row.receipt_path:raise HTTPException(409,'Upload the transfer receipt before submitting for review')
+    row.payment_reference=data.reference;row.sender_name=data.sender_name;row.sender_email=data.sender_email;row.sender_bank=data.sender_bank;row.sender_account=data.sender_account;row.transfer_date=data.transfer_date;row.amount_sent_cents=data.amount_sent_cents
+    row.status='pending_review';db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='billing.reference_submitted'));db.commit();return order_payload(row)
+@router.post('/orders/{order_id}/receipt')
+def upload_receipt(order_id:uuid.UUID,file:UploadFile=File(...),user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from pathlib import Path
+    row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
+    if not row:raise HTTPException(404,'Payment order not found')
+    if row.provider_environment:raise HTTPException(409,'PayPal payments do not use receipt upload')
+    if row.status not in {'awaiting_payment','pending_review'}:raise HTTPException(409,'Receipts cannot be changed after review')
+    suffix=Path(file.filename or '').suffix.lower()
+    if suffix not in RECEIPT_EXTENSIONS:raise HTTPException(422,'Receipt must be a PNG, JPEG, WebP or PDF file')
+    if file.content_type not in RECEIPT_EXTENSIONS[suffix]:raise HTTPException(422,'Receipt file type does not match its extension')
+    content=file.file.read(RECEIPT_MAX_BYTES+1)
+    if len(content)>RECEIPT_MAX_BYTES:raise HTTPException(422,'Receipt must be 5 MB or smaller')
+    if not content:raise HTTPException(422,'Receipt file is empty')
+    folder=receipts_root()/str(row.id)
+    folder.mkdir(parents=True,exist_ok=True)
+    for old in folder.iterdir():
+        if old.is_file():old.unlink()
+    import secrets
+    target=folder/(secrets.token_hex(8)+suffix)
+    target.write_bytes(content)
+    if row.receipt_path and row.receipt_path!=str(target):
+        try:Path(row.receipt_path).unlink(missing_ok=True)
+        except OSError:pass
+    row.receipt_path=str(target)
+    db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='billing.receipt_uploaded'));db.commit();return order_payload(row)
+@router.get('/orders/{order_id}/receipt')
+def download_receipt(order_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id))
+    if not row:raise HTTPException(404,'Payment order not found')
+    if row.user_id!=user.id and user.role not in {'admin','owner'}:raise HTTPException(404,'Payment order not found')
+    if not row.receipt_path or not Path(row.receipt_path).is_file():raise HTTPException(404,'Receipt not found')
+    return FileResponse(row.receipt_path)
 
 # Administrative review is a manual receipt check, never a simulated provider webhook.
 @router.get('/admin/orders')
 def admin_orders(user:User=Depends(require_admin),db:Session=Depends(get_db)):
     return [{**order_payload(row),'email':db.get(User,row.user_id).email} for row in db.scalars(select(PaymentOrder).order_by(PaymentOrder.created_at.desc()).limit(200))]
+class AdminConfirm(BaseModel):
+    model_config=ConfigDict(extra='forbid',str_strip_whitespace=True)
+    reference:str=Field(min_length=3,max_length=200)
 @router.post('/admin/orders/{order_id}/confirm')
-def confirm_payment(order_id:uuid.UUID,data:PaymentReference,user:User=Depends(require_admin),db:Session=Depends(get_db)):
+def confirm_payment(order_id:uuid.UUID,data:AdminConfirm,user:User=Depends(require_admin),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
     if row.provider_environment:raise HTTPException(409,'PayPal payments cannot be manually confirmed')
     if row.status=='paid':return order_payload(row)
     if row.status!='pending_review':raise HTTPException(409,'A submitted payment reference is required before review')
     activate_order(db,row,user.id,data.reference)
+    db.commit();return order_payload(row)
+@router.post('/admin/orders/{order_id}/reject')
+def reject_payment(order_id:uuid.UUID,data:RejectRequest,user:User=Depends(require_admin),db:Session=Depends(get_db)):
+    row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id).with_for_update())
+    if not row:raise HTTPException(404,'Payment order not found')
+    if row.provider_environment:raise HTTPException(409,'PayPal payments cannot be manually rejected')
+    if row.status in {'paid','rejected'}:return order_payload(row)
+    if row.status!='pending_review':raise HTTPException(409,'Only payments under review can be rejected')
+    row.status='rejected';row.reject_reason=data.reason;row.reviewed_by=user.id
+    db.add(AccountAudit(actor_id=user.id,subject_id=row.user_id,action='billing.payment_rejected'))
     db.commit();return order_payload(row)
 
 def activate_order(db,row,actor_id,reference):
@@ -211,4 +321,4 @@ def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_user),db:Session
 
 @router.get('/paypal/status')
 def paypal_status(user:User=Depends(require_user)):
-    return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability'}
+    return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','client_id':paypal.settings.paypal_client_id if paypal.configured() else None}
