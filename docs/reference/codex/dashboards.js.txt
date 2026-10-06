@@ -1,0 +1,55 @@
+/* Operational home is distinct from personal profile. Auth role decides the home. */
+let clientDashboardData=null;
+const dashboardText=(en,ar)=>lang==='ar'?ar:en;
+const dashboardNode=(tag,text='',className='')=>textElement(tag,text,className);
+function dashboardAction(text,handler){const button=dashboardNode('button',text,'button ghost small');button.type='button';button.onclick=async()=>{button.disabled=true;try{await handler()}catch(error){toast(error.message)}finally{button.disabled=false}};return button}
+function dashboardEmpty(root,en,ar){root.append(dashboardNode('p',dashboardText(en,ar),'dashboard-empty'))}
+function dashboardStat(root,label,value,note=''){const card=dashboardNode('article');card.append(dashboardNode('small',label),dashboardNode('h3',String(value)));if(note)card.append(dashboardNode('p',note));root.append(card)}
+function dashboardRow(root,title,detail,actions=[]){const row=dashboardNode('article','','dashboard-project-row'),copy=dashboardNode('div');copy.append(dashboardNode('strong',title),dashboardNode('small',detail));const controls=dashboardNode('div','','manage-actions');controls.append(...actions);row.append(copy,controls);root.append(row)}
+async function openDashboardWorkspace(workspace,session=null){const project=clientDashboardData.projects.find(p=>p.id===workspace.project_id);if(!project)throw new Error('Project no longer available');await openWorkspace(project,workspace);if(session)await selectSession(session)}
+function renderDashboardProjects(root,projects){root.replaceChildren();if(!projects.length)return dashboardEmpty(root,'No projects yet. Create your first project.','لا توجد مشاريع بعد. أنشئ مشروعك الأول.');for(const project of projects){const actions=project.workspaces.map(workspace=>dashboardAction(dashboardText('Open workspace','فتح مساحة العمل'),()=>openDashboardWorkspace(workspace)));dashboardRow(root,project.name,[project.source_type,project.repository,project.remote_branch||project.branch].filter(Boolean).join(' · '),actions)}}
+function renderDashboardSessions(root,data){root.replaceChildren();if(!data.recent_sessions.length)dashboardEmpty(root,'No conversations yet. Open a workspace to start a session.','لا توجد محادثات بعد. افتح مساحة عمل لبدء جلسة.');for(const session of data.recent_sessions){const workspace=data.projects.flatMap(p=>p.workspaces).find(w=>w.id===session.workspace_id);dashboardRow(root,session.title,session.status+' · '+new Date(session.created_at).toLocaleString(),workspace?[dashboardAction(dashboardText('Open session','فتح الجلسة'),()=>openDashboardWorkspace(workspace,session))]:[])}}
+async function loadClientDashboard(){
+  $('#clientSummary').replaceChildren(dashboardNode('p',dashboardText('Loading your dashboard…','جارٍ تحميل لوحتك…')));
+  const data=await api('/api/dashboard');clientDashboardData=data;
+  if(!currentUser||!$('#clientPage').classList.contains('active'))return;
+  const summary=$('#clientSummary');summary.replaceChildren();
+  dashboardStat(summary,dashboardText('Trial days remaining','أيام التجربة المتبقية'),data.profile.trial_remaining_days,dashboardText('Ends ','تنتهي ')+new Date(data.profile.trial_ends_at).toLocaleDateString());
+  dashboardStat(summary,dashboardText('Account & plan','الحساب والخطة'),data.profile.status,data.plan?.name||dashboardText('No paid plan assigned','لا توجد خطة مدفوعة معيّنة'));
+  dashboardStat(summary,'GitHub',data.github.connected?dashboardText('Connected','متصل'):dashboardText('Not connected','غير متصل'),data.github.account_login||dashboardText('Connect your own GitHub account','اربط حساب GitHub الخاص بك'));
+  dashboardStat(summary,'OpenCode',data.runtime.healthy?dashboardText('Available','متاح'):dashboardText('Not connected','غير متصل'),data.runtime.mode);
+  dashboardStat(summary,dashboardText('Saved provider credentials','بيانات اتصال المزود المحفوظة'),data.counts.credentials,dashboardText('Per workspace · not a provider health check','لكل مساحة عمل · ليست اختبارًا لصحة الاتصال'));
+  dashboardStat(summary,dashboardText('Projects / workspaces / sessions','المشاريع / المساحات / الجلسات'),`${data.counts.projects} / ${data.counts.workspaces} / ${data.counts.sessions}`);
+  renderDashboardProjects($('#clientRecentProjects'),data.projects.slice(0,5));renderDashboardProjects($('#clientProjectsList'),data.projects);
+  renderDashboardSessions($('#clientRecentSessions'),data);renderDashboardSessions($('#clientSessionsList'),data);
+  const workspaces=$('#clientRecentWorkspaces');workspaces.replaceChildren();
+  for(const workspace of data.recent_workspaces){const project=data.projects.find(p=>p.id===workspace.project_id);dashboardRow(workspaces,project?.name||dashboardText('Workspace','مساحة عمل'),workspace.status+' · '+workspace.session_count+' '+dashboardText('sessions','جلسات'),[dashboardAction(dashboardText('Open workspace','فتح مساحة العمل'),()=>openDashboardWorkspace(workspace))])}
+  if(!data.recent_workspaces.length)dashboardEmpty(workspaces,'No workspaces yet.','لا توجد مساحات عمل بعد.');
+  setClientPanel('dashboard');
+}
+function setClientPanel(name){$$('#clientNav [data-client-view]').forEach(b=>{b.classList.toggle('active',b.dataset.clientView===name);b.setAttribute('aria-current',b.dataset.clientView===name?'page':'false')});$$('#clientPage [data-client-panel]').forEach(p=>p.classList.toggle('active',p.dataset.clientPanel===name))}
+async function openClientView(name){await page('clientPage');if(!currentUser)return;if(['github','ai','security'].includes(name))return window.openManagement({github:'connections',ai:'providers',security:'security'}[name]);setClientPanel(name)}
+
+Object.assign(copy.en,{clientNavTitle:'Client',clientDashboard:'Dashboard',clientProjects:'Projects',clientSessions:'Sessions',clientAi:'AI / OpenCode',clientAccount:'Account / Profile',clientDashboardLead:'Your trial, connections, projects and recent activity in one place.',clientRecentLabel:'RECENT',clientRecentProjects:'Recent projects',adminConsole:'Admin Console',adminOverview:'Overview',adminUsers:'Users',adminProjects:'Projects',adminWorkspaces:'Workspaces',adminSessions:'Sessions',adminPlans:'Plans & Offers',adminPolicy:'AI / OpenCode Policy',adminGithub:'GitHub',adminAudit:'Audit / Activity',adminSettings:'Platform Settings',adminPersonal:'Personal Account',adminNavTitle:'Administration'});
+Object.assign(copy.ar,{clientNavTitle:'العميل',clientDashboard:'لوحة العميل',clientProjects:'المشاريع',clientSessions:'الجلسات',clientAi:'الذكاء / OpenCode',clientAccount:'الحساب / الملف الشخصي',clientDashboardLead:'تجربتك واتصالاتك ومشاريعك ونشاطك الأخير في مكان واحد.',clientRecentLabel:'الأحدث',clientRecentProjects:'المشاريع الأخيرة',adminConsole:'لوحة الإدارة',adminOverview:'نظرة عامة',adminUsers:'المستخدمون',adminProjects:'المشاريع',adminWorkspaces:'مساحات العمل',adminSessions:'الجلسات',adminPlans:'الخطط والعروض',adminPolicy:'سياسة الذكاء / OpenCode',adminGithub:'GitHub',adminAudit:'سجل الإجراءات',adminSettings:'إعدادات المنصة',adminPersonal:'الحساب الشخصي',adminNavTitle:'الإدارة'});
+
+// Account stays focused on personal information; operational summaries live in Client.
+$('#accountPage .account-grid').hidden=true;
+const profileList=$('#accountPage .settings-list');
+for(const child of [...profileList.children]){if(child.tagName==='H2'&&child.querySelector('[data-i18n="ui59"]'))break;child.hidden=true}
+$('#accountPage h1').textContent=dashboardText('Account / Profile','الحساب / الملف الشخصي');
+$('#accountPage .lead').textContent=dashboardText('Your personal details and preferences.','بياناتك الشخصية وتفضيلاتك.');
+const recentWorkspaces=dashboardNode('div');recentWorkspaces.id='clientRecentWorkspaces';$('#clientRecentSessions').before(dashboardNode('h2',dashboardText('Recent workspaces','مساحات العمل الأخيرة')),recentWorkspaces,dashboardNode('h2',dashboardText('Recent sessions','الجلسات الأخيرة')));
+$('#clientLogout').onclick=()=>$('#logoutButton').click();
+$$('#clientNav [data-client-view]').forEach(b=>b.onclick=()=>openClientView(b.dataset.clientView).catch(e=>toast(e.message)));
+for(const pageId of ['accountPage','onboarding','workspacePage','managementPage']){const root=$('#'+pageId);const header=$('header,.onboard-top,.project-bar',root);if(header)header.append(dashboardAction(dashboardText('Dashboard','لوحة التحكم'),()=>page(authenticatedHome())))}
+$$('[data-i18n="yourProjects"],[data-i18n="ui48"]').forEach(label=>{const b=label.closest('button');if(b)b.onclick=()=>openClientView('projects')});
+// Use the implemented management pages instead of imported placeholder panels.
+$('#adminNav [data-admin-view="audit"]').onclick=()=>window.openManagement('logs',true);
+$('#adminNav [data-admin-view="github"]').onclick=()=>window.openManagement('connections',true);
+$('#adminNav [data-admin-view="settings"]').onclick=()=>window.openManagement('locations',true);
+const clientActions=dashboardNode('div','','manage-actions');clientActions.append(dashboardAction(dashboardText('Create Project','إنشاء مشروع'),()=>page('onboarding')),dashboardAction(dashboardText('Open Project','فتح مشروع'),()=>openClientView('projects')));$('#clientSummary').before(clientActions);
+// Restoration runs only after all scripts and the /me response are ready. Recovery
+// links remain on their dedicated form instead of being overwritten by home routing.
+Promise.all([authReady,interfaceReady]).then(async()=>{if(currentUser&&!window.passwordRecoveryActive)await page(authenticatedHome())}).catch(e=>toast(e.message));
+applyPrefs();updateNavigation();

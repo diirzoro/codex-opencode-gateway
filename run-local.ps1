@@ -23,11 +23,11 @@ if ($env:APP_HOST -ne '127.0.0.1') {
   throw 'The local runner only binds to 127.0.0.1.'
 }
 
-$python = Join-Path $projectRoot '.venv\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $python)) {
+$uvicorn = Join-Path $projectRoot '.venv\Scripts\uvicorn.exe'
+if (-not (Test-Path -LiteralPath $uvicorn)) {
   throw 'Backend dependencies are missing. Install backend/requirements.txt in .venv first.'
 }
 
 Set-Location (Join-Path $projectRoot 'backend')
-& $python '-m' 'uvicorn' 'app.main:app' '--host' '127.0.0.1' '--port' $env:APP_PORT
+& $uvicorn 'app.main:app' '--host' '127.0.0.1' '--port' $env:APP_PORT
 exit $LASTEXITCODE

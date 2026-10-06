@@ -258,17 +258,6 @@ def available_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db
     opencode.configure_policy(policy.load(db))
     return agent_choices(opencode.for_workspace(row))
 
-@router.get("/workspaces/{workspace_id}/capabilities")
-def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    _,service=_workspace_service(db,user,workspace_id)
-    current=policy.load(db)
-    available=policy.filter_providers(providers.discover(service),current)
-    return {
-        "providers":[{"id":p["id"],"name":p["name"],"connected":p["connected"],"models":p["models"],"auth_methods":p["auth_methods"]} for p in available],
-        "agents":agent_choices(service),
-        "permissions":{"allowed_tools":current.as_payload()["allowed_tools"],"require_tool_approval":bool(current.require_tool_approval)},
-    }
-
 def agent_choices(service):
     rows=service.request("GET","/agent")
     if not isinstance(rows,list): raise HTTPException(502,"Runtime returned an invalid agent list")
