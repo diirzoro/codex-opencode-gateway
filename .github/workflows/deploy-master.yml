@@ -155,7 +155,57 @@ jobs:
             -d "$DB_NAME" \
             -Fc > "$backup_dir/database.dump"
 
-          unset DB_PASSWORD PGPASSWORD db_url db_creds db_location db_user_encoded db_password_encoded db_hostport db_name_encoded
+          # pg_dump proved these credentials work. Rebuild a standards-compliant
+          # SQLAlchemy URL and persist it so Alembic and the systemd service do not
+          # misread special characters such as @ or ! in the password.
+          NORMALIZED_DATABASE_URL="$(
+            python3 - "$DB_USER" "$DB_PASSWORD" "$DB_HOST" "$DB_PORT" "$DB_NAME" <<'PY'
+import sys
+from urllib.parse import quote
+user, password, host, port, database = sys.argv[1:]
+print(
+    "postgresql+psycopg://"
+    + quote(user, safe="")
+    + ":"
+    + quote(password, safe="")
+    + "@"
+    + host
+    + ":"
+    + port
+    + "/"
+    + quote(database, safe="")
+)
+PY
+          )"
+          export DATABASE_URL="$NORMALIZED_DATABASE_URL"
+
+          cp "$APP_DIR/.env" "$backup_dir/production.env.before-normalize"
+          NORMALIZED_DATABASE_URL="$NORMALIZED_DATABASE_URL" python3 - "$APP_DIR/.env" <<'PY'
+import os, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+value = os.environ["NORMALIZED_DATABASE_URL"]
+lines = path.read_text(encoding="utf-8").splitlines()
+out = []
+replaced = False
+for line in lines:
+    if line.startswith("DATABASE_URL="):
+        out.append("DATABASE_URL=" + value)
+        replaced = True
+    else:
+        out.append(line)
+if not replaced:
+    out.append("DATABASE_URL=" + value)
+tmp = path.with_suffix(".env.tmp")
+tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+tmp.chmod(0o600)
+tmp.replace(path)
+PY
+          chmod 600 "$APP_DIR/.env"
+          echo "Production DATABASE_URL normalized after successful database backup."
+
+          unset DB_PASSWORD PGPASSWORD NORMALIZED_DATABASE_URL db_url db_creds db_location db_user_encoded db_password_encoded db_hostport db_name_encoded
 
           echo "Stopping Gateway..."
           sudo -n systemctl stop "$SERVICE"
