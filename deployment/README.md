@@ -28,7 +28,7 @@ sudo systemctl stop opencode-gateway
 sudo -u postgres pg_dump -Fc opencode_gateway > "$backup_dir/database.dump"
 tar --exclude=.git --exclude=.venv --exclude=.venv-local --exclude=node_modules --exclude=workspaces --exclude=runtime -czf "$backup_dir/application.tar.gz" .
 # Preserve .env and live workspace/runtime contents. No --delete.
-rsync -av --exclude=.env --exclude=.git --exclude='.venv*' --exclude=node_modules --exclude=workspaces --exclude=runtime --exclude=test-results --exclude=playwright-report /home/tahir/opencode-gateway-release/ /home/tahir/opencode-gateway/
+rsync -av --exclude=.env --exclude='.env.*' --exclude=.git --exclude='.venv*' --exclude=node_modules --exclude=workspaces --exclude=runtime --exclude=test-results --exclude=playwright-report /home/tahir/opencode-gateway-release/ /home/tahir/opencode-gateway/
 test -x .venv/bin/python || python3 -m venv .venv
 .venv/bin/python -m pip install -r backend/requirements.txt
 # Review these values in existing .env: COOKIE_SECURE=true, APP_HOST=127.0.0.1,
@@ -52,4 +52,4 @@ Existing service template is illustrative and has not been installed or validate
 
 ## Merged account management
 
-Expected migration head: `0006_subscriptions_archive`, after the existing `0005_account_management`. Back up the database before running `python -m alembic upgrade head`. Keep CREDENTIALS_ENCRYPTION_KEY outside Git and preserve it across releases. Configure SMTP and HTTPS PUBLIC_BASE_URL for recovery. Existing GitHub connections must reconnect to grant user authorization; tokens expire within 8 hours. Payment methods store configuration only; no charge processing is implemented. No server connection or deployment was performed during this merge.
+Expected migration head: `0008_paypal_checkout`, including `0006_subscriptions_archive` and `0007_payment_orders` after the existing `0005_account_management`. Back up the database before running `python -m alembic upgrade head`. Keep CREDENTIALS_ENCRYPTION_KEY outside Git and preserve it across releases. Configure SMTP and HTTPS PUBLIC_BASE_URL for recovery. Existing GitHub connections must reconnect to grant user authorization; tokens expire within 8 hours. Payment methods support manual receipt review, hosted links and backend PayPal order/capture verification. Actual PayPal acceptance is pending merchant credentials; Google Pay needs a processor-hosted link and Binance transfers remain manual. See `docs/PAYMENT_CHECKOUT_REPORT.md`. Preserve existing live environment values: merge new variable names individually, never replace the live `.env` with an example. Production APP_PORT remains 8000. The local private `backend/.env.paypal.local` is for sandbox testing only and must not be uploaded. No server connection or deployment was performed during this review.
