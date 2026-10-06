@@ -103,11 +103,6 @@ jobs:
             exit 21
           }
 
-          sudo -n true >/dev/null 2>&1 || {
-            echo "ERROR: deployment user needs passwordless sudo for opencode-gateway systemctl commands"
-            exit 22
-          }
-
           systemctl list-unit-files | grep -q '^opencode-gateway\.service' || {
             echo "ERROR: opencode-gateway.service is not installed"
             exit 23
