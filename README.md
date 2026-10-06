@@ -62,3 +62,8 @@ At the owner's request, automated test files/configuration and results remain lo
 ## Latest local acceptance
 
 Real isolated OpenCode/DeepSeek chat and Stop were verified; see docs/REAL_AGENT_ACCEPTANCE.md. Payment checkout supports admin-owned transfer methods, plan-bound hosted links and server-only PayPal Orders/capture verification. Configure merchant credentials locally before provider testing; see docs/PAYMENT_CHECKOUT_REPORT.md. No successful PayPal transaction is claimed without merchant acceptance. Backend migration head: 0008_paypal_checkout. Test/evidence files remain outside the committed deliverable according to the user's publication preference.
+
+
+## Release workflow
+
+Development changes go to `updates`. After review, merge `updates` into `master`. Production deployment is manual only: run the **Promote master to production** workflow and type `promote` to confirm.
