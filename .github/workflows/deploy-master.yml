@@ -1,12 +1,10 @@
 name: Promote master to production
 
 on:
+  push:
+    branches:
+      - master
   workflow_dispatch:
-    inputs:
-      confirmation:
-        description: 'Type promote to deploy the current master to production'
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -23,17 +21,6 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Require explicit promotion confirmation
-        shell: bash
-        env:
-          CONFIRMATION: ${{ inputs.confirmation }}
-        run: |
-          set -euo pipefail
-          if [ "$CONFIRMATION" != "promote" ]; then
-            echo "Deployment cancelled. Type exactly: promote"
-            exit 1
-          fi
-
       - name: Checkout reviewed master
         uses: actions/checkout@v4
         with:
@@ -103,10 +90,14 @@ jobs:
             exit 21
           }
 
-          systemctl list-unit-files | grep -q '^opencode-gateway\.service' || {
+          if ! systemctl list-unit-files | grep -q '^opencode-gateway\.service'; then
             echo "ERROR: opencode-gateway.service is not installed"
+            echo "Available OpenCode/Gateway services:"
+            systemctl list-unit-files | grep -Ei 'opencode|gateway' || true
+            echo "Unit files in /etc/systemd/system:"
+            ls -1 /etc/systemd/system | grep -Ei 'opencode|gateway' || true
             exit 23
-          }
+          fi
 
           timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
           backup_dir="$BACKUP_ROOT/$timestamp"
