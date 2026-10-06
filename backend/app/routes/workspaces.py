@@ -247,6 +247,25 @@ def _install_stored_credentials(db,workspace,service):
             # A stale or undecryptable credential must not break provider discovery.
             continue
 
+@router.post("/workspaces/{workspace_id}/runtime/connect")
+def connect_workspace_runtime(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Start/attach the user's private loopback OpenCode runtime and return safe properties only."""
+    workspace,service=_workspace_service(db,user,workspace_id)
+    health=service.health()
+    provider_rows=policy.filter_providers(providers.discover(service),policy.load(db))
+    agents=agent_choices(service)
+    return {
+        "connected":True,
+        "workspace_id":str(workspace.id),
+        "runtime_scope":"workspace",
+        "transport":"loopback",
+        "healthy":bool(health.get("healthy")),
+        "version":health.get("version"),
+        "providers":len(provider_rows),
+        "connected_providers":sum(1 for row in provider_rows if row.get("connected")),
+        "agents":agents,
+    }
+
 @router.get("/workspaces/{workspace_id}/providers")
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     _,service=_workspace_service(db,user,workspace_id)
