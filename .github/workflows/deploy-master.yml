@@ -124,51 +124,38 @@ jobs:
 
           : "${DATABASE_URL:?DATABASE_URL is missing from production .env}"
 
-          # Back up PostgreSQL without passing the SQLAlchemy URL directly to pg_dump.
-          # This safely handles passwords containing characters such as ! and @.
+          # Back up PostgreSQL without handing the SQLAlchemy URL directly to pg_dump.
+          # Split on the final @ so even a legacy unescaped @ in the password cannot become the host.
           echo "Backing up PostgreSQL..."
-          DB_PARTS="$(
-            DATABASE_URL="$DATABASE_URL" python3 - <<'PY'
-import os
-from urllib.parse import unquote
+          db_url="${DATABASE_URL#*://}"
+          db_creds="${db_url%@*}"
+          db_location="${db_url##*@}"
+          db_user_encoded="${db_creds%%:*}"
+          db_password_encoded="${db_creds#*:}"
+          db_hostport="${db_location%%/*}"
+          db_name_encoded="${db_location#*/}"
+          db_name_encoded="${db_name_encoded%%\?*}"
 
-url = os.environ["DATABASE_URL"]
-for prefix in ("postgresql+psycopg://", "postgresql+psycopg2://", "postgresql://"):
-    if url.startswith(prefix):
-        body = url[len(prefix):]
-        break
-else:
-    raise SystemExit("Unsupported DATABASE_URL scheme")
+          if [[ "$db_hostport" == *:* ]]; then
+            DB_HOST="${db_hostport%:*}"
+            DB_PORT="${db_hostport##*:}"
+          else
+            DB_HOST="$db_hostport"
+            DB_PORT="5432"
+          fi
 
-# Split on the final @ so an unescaped @ inside the password does not become the host.
-creds, location = body.rsplit("@", 1)
-user, password = creds.split(":", 1)
+          DB_USER="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.argv[1]))' "$db_user_encoded")"
+          DB_PASSWORD="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.argv[1]))' "$db_password_encoded")"
+          DB_NAME="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.argv[1]))' "$db_name_encoded")"
 
-hostport, dbname = location.split("/", 1)
-if ":" in hostport:
-    host, port = hostport.rsplit(":", 1)
-else:
-    host, port = hostport, "5432"
+          PGPASSWORD="$DB_PASSWORD" pg_dump \
+            -h "$DB_HOST" \
+            -p "$DB_PORT" \
+            -U "$DB_USER" \
+            -d "$DB_NAME" \
+            -Fc > "$backup_dir/database.dump"
 
-dbname = dbname.split("?", 1)[0]
-print(unquote(user))
-print(unquote(password))
-print(host)
-print(port)
-print(unquote(dbname))
-PY
-          )"
-
-          mapfile -t DB_FIELDS <<< "$DB_PARTS"
-          DB_USER="${DB_FIELDS[0]}"
-          DB_PASSWORD="${DB_FIELDS[1]}"
-          DB_HOST="${DB_FIELDS[2]}"
-          DB_PORT="${DB_FIELDS[3]}"
-          DB_NAME="${DB_FIELDS[4]}"
-
-          PGPASSWORD="$DB_PASSWORD" pg_dump             -h "$DB_HOST"             -p "$DB_PORT"             -U "$DB_USER"             -d "$DB_NAME"             -Fc > "$backup_dir/database.dump"
-
-          unset DB_PASSWORD PGPASSWORD DB_PARTS DB_FIELDS
+          unset DB_PASSWORD PGPASSWORD db_url db_creds db_location db_user_encoded db_password_encoded db_hostport db_name_encoded
 
           echo "Stopping Gateway..."
           sudo -n systemctl stop "$SERVICE"
@@ -197,7 +184,7 @@ PY
 
           echo "Starting Gateway..."
           sudo -n systemctl start "$SERVICE"
-          sudo -n systemctl is-active --quiet "$SERVICE"
+          sudo -n systemctl is-active "$SERVICE"
 
           echo "Checking Gateway health..."
           curl --fail --silent --show-error             --retry 15             --retry-delay 2             --retry-connrefused             http://127.0.0.1:8000/api/health
