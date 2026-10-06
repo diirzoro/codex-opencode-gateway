@@ -1,10 +1,12 @@
-name: Deploy master to production VPS
+name: Promote master to production
 
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type promote to deploy the current master to production'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -21,9 +23,21 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      - name: Require explicit promotion confirmation
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRMATION" != "promote" ]; then
+            echo "Deployment cancelled. Type exactly: promote"
+            exit 1
+          fi
+
       - name: Checkout reviewed master
         uses: actions/checkout@v4
         with:
+          ref: master
           fetch-depth: 1
 
       - name: Prepare SSH
