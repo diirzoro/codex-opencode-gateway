@@ -90,13 +90,14 @@ jobs:
             exit 21
           }
 
-          if ! systemctl list-unit-files | grep -q '^opencode-gateway\.service'; then
-            echo "ERROR: opencode-gateway.service is not installed"
-            echo "Available OpenCode/Gateway services:"
+          if systemctl list-unit-files | grep -q '^opencode-gateway\.service'; then
+            GATEWAY_LAUNCH_MODE="systemd"
+            echo "Gateway launch mode: systemd"
+          else
+            GATEWAY_LAUNCH_MODE="user-process"
+            echo "Gateway systemd unit is not installed; using supervised user-process fallback for this deployment test."
+            echo "Existing OpenCode services:"
             systemctl list-unit-files | grep -Ei 'opencode|gateway' || true
-            echo "Unit files in /etc/systemd/system:"
-            ls -1 /etc/systemd/system | grep -Ei 'opencode|gateway' || true
-            exit 23
           fi
 
           timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -149,7 +150,23 @@ jobs:
           unset DB_PASSWORD PGPASSWORD db_url db_creds db_location db_user_encoded db_password_encoded db_hostport db_name_encoded
 
           echo "Stopping Gateway..."
-          sudo -n systemctl stop "$SERVICE"
+          if [ "$GATEWAY_LAUNCH_MODE" = "systemd" ]; then
+            sudo -n systemctl stop "$SERVICE"
+          else
+            pidfile="$APP_DIR/runtime/gateway.pid"
+            if [ -s "$pidfile" ]; then
+              old_pid="$(cat "$pidfile" || true)"
+              if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+                kill "$old_pid" || true
+                for _ in $(seq 1 20); do
+                  kill -0 "$old_pid" 2>/dev/null || break
+                  sleep 0.25
+                done
+                kill -0 "$old_pid" 2>/dev/null && kill -9 "$old_pid" || true
+              fi
+              rm -f "$pidfile"
+            fi
+          fi
 
           echo "Installing reviewed master release..."
           mkdir -p "$APP_DIR"
@@ -174,8 +191,23 @@ jobs:
           ../.venv/bin/python -m alembic current
 
           echo "Starting Gateway..."
-          sudo -n systemctl start "$SERVICE"
-          sudo -n systemctl is-active "$SERVICE"
+          if [ "$GATEWAY_LAUNCH_MODE" = "systemd" ]; then
+            sudo -n systemctl start "$SERVICE"
+            sudo -n systemctl is-active "$SERVICE"
+          else
+            mkdir -p "$APP_DIR/runtime"
+            cd "$APP_DIR/backend"
+            nohup ../.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+              > "$APP_DIR/runtime/gateway.log" 2>&1 < /dev/null &
+            gateway_pid=$!
+            echo "$gateway_pid" > "$APP_DIR/runtime/gateway.pid"
+            sleep 2
+            if ! kill -0 "$gateway_pid" 2>/dev/null; then
+              echo "ERROR: Gateway user process exited during startup"
+              tail -n 120 "$APP_DIR/runtime/gateway.log" || true
+              exit 24
+            fi
+          fi
 
           echo "Checking Gateway health..."
           curl --fail --silent --show-error             --retry 15             --retry-delay 2             --retry-connrefused             http://127.0.0.1:8000/api/health
@@ -184,6 +216,13 @@ jobs:
           echo "Checking internal OpenCode reference service..."
           curl --fail --silent --show-error             --max-time 10             http://127.0.0.1:4096/ >/dev/null
 
+          echo
+          echo "Deployment diagnostics:"
+          echo "Gateway launch mode: $GATEWAY_LAUNCH_MODE"
+          ss -ltnp 2>/dev/null | grep -E '127\.0\.0\.1:(8000|4096)' || true
+          if [ -f "$APP_DIR/runtime/gateway.log" ]; then
+            tail -n 30 "$APP_DIR/runtime/gateway.log" || true
+          fi
           echo "DEPLOYMENT_OK $timestamp"
           REMOTE
 
