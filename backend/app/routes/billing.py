@@ -99,12 +99,27 @@ def renew_subscription(user: User = Depends(require_user), db: Session = Depends
     raise HTTPException(503, PAYMENT_MESSAGE)
 
 @router.get("/invoices")
-def invoices(user: User = Depends(require_user)):
-    return {"available": False, "message": PAYMENT_MESSAGE, "items": []}
+def invoices(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    # These are verified payment records, not fabricated tax invoices.
+    rows = db.scalars(
+        select(PaymentOrder)
+        .where(PaymentOrder.user_id == user.id, PaymentOrder.status == "paid")
+        .order_by(PaymentOrder.paid_at.desc())
+    )
+    return {
+        "available": True,
+        "items": [order_payload(row) for row in rows],
+        "message": "Verified payment records. Formal tax invoices are not issued by this service.",
+    }
 
 @router.get("/payments")
-def payments(user: User = Depends(require_user)):
-    return {"available": False, "message": PAYMENT_MESSAGE, "items": []}
+def payments(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    rows = db.scalars(
+        select(PaymentOrder)
+        .where(PaymentOrder.user_id == user.id)
+        .order_by(PaymentOrder.created_at.desc())
+    )
+    return {"available": True, "items": [order_payload(row) for row in rows]}
 
 class Checkout(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -187,7 +202,7 @@ def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_user),db:Session
     payload=paypal.capture_order(row)
     capture_id=paypal.verified_capture(row,payload)
     row.provider_capture_id=capture_id
-    if row.provider_environment=='sandbox' and not paypal.settings.testing:
+    if row.provider_environment=='sandbox':
         row.status='sandbox_paid';row.payment_reference=capture_id
         db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='billing.sandbox_payment_verified'))
         db.commit();return order_payload(row)

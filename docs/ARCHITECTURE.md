@@ -14,6 +14,8 @@ See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](A
 
 # Architecture
 
+Current product boundary and source of truth: [PRODUCT_BOUNDARIES.md](PRODUCT_BOUNDARIES.md). The customer sees Gateway's own UI; OpenCode remains the backend coding engine and source for operational project/workspace/provider/session data. Do not create test environments.
+
 Updated 2026-10-03. Independent local development project, not affiliated with OpenCode or GitHub. No deployment performed.
 
 ## Request path
@@ -34,7 +36,7 @@ Auth is initialized through `/api/auth/me`; protected navigation waits for it. L
 
 ## Local runtime boundary
 
-Default OPENCODE_RUNTIME_MODE=disabled. Local opt-in requires a loopback APP_HOST and installed OpenCode 1.18.31. The launcher uses separate per-workspace HOME/XDG directories, random Basic credentials, loopback port, --pure, no inherited provider secrets, ask-by-default permissions and deny external_directory. It creates the repo first. Tests prove two real sessions retain existing files.
+Default OPENCODE_RUNTIME_MODE=disabled. Local opt-in requires a loopback APP_HOST and OpenCode 1.18.31 or 1.18.32. The launcher uses separate per-workspace HOME/XDG directories, random Basic credentials, loopback port, --pure, no inherited provider secrets, ask-by-default permissions and deny external_directory. These are trusted local contexts, not OS/network sandboxes. Production execution remains disabled pending reviewed tenant isolation.
 
 Separate directories/processes are NOT OS or network sandboxes. All processes run under the local account. Use only trusted local development, single worker. Public use needs independent identities/containers, filesystem/network/resource limits, task leases and recovery. No model credentials were copied from production; no provider-backed model execution was claimed.
 

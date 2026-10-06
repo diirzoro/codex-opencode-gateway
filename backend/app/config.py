@@ -38,7 +38,6 @@ class Settings:
     cookie_secure: bool
     app_host: str
     app_port: int
-    testing: bool
     workspace_root: Path
     runtime_root: Path
     runtime_mode: str
@@ -67,11 +66,10 @@ class Settings:
 
     @classmethod
     def from_environment(cls):
-        testing = parse_bool("TESTING", "false")
         database_url = required("DATABASE_URL")
         allowed = ("postgresql://", "postgresql+psycopg://")
-        if not database_url.startswith(allowed) and not (testing and database_url.startswith("sqlite")):
-            raise RuntimeError("DATABASE_URL must use PostgreSQL with psycopg")
+        if not database_url.startswith(allowed):
+            raise RuntimeError("DATABASE_URL must use PostgreSQL with psycopg; SQLite/test databases are not supported")
         cookie = os.getenv("SESSION_COOKIE_NAME", "gateway_session").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", cookie):
             raise RuntimeError("SESSION_COOKIE_NAME contains invalid characters")
@@ -121,7 +119,7 @@ class Settings:
             raise RuntimeError("GITHUB_CALLBACK_URL must be HTTPS or a loopback HTTP URL")
         return cls(
             database_url, cookie, parse_int("SESSION_DAYS", "14", 1, 90),
-            parse_bool("COOKIE_SECURE", "true"), host, app_port, testing,
+            parse_bool("COOKIE_SECURE", "true"), host, app_port,
             workspace_root, runtime_root, mode, os.getenv("OPENCODE_BINARY", "opencode"), url,
             public_base, github_app_id, optional("GITHUB_APP_SLUG"), optional("GITHUB_CLIENT_ID"),
             optional("GITHUB_CLIENT_SECRET"), private_key, optional("GITHUB_WEBHOOK_SECRET"),

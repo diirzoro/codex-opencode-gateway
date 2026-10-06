@@ -18,13 +18,13 @@ No server access, deployment, commit or push. Existing merged changes were prese
 ## Files
 
 `app.js`, `enhancements.js`, `management.js`, `dashboards.js`, `index.html`.
-Browser acceptance coverage: `tests/browser/layout-correction.spec.cjs`; updated administration expectations in `tests/browser/merged-routing.spec.cjs`.
+These navigation/layout behaviors were covered by browser acceptance files before the user requested their removal. No test files are retained in this project.
 
 Backend/API contracts/database rules: unchanged in this phase. Migrations: none.
 
 ## Verification
 
-Headed Chromium covers Arabic dark login for admin/owner/customer, English light login, Arabic dark registration, refresh, correct dashboards, admin workspace rejection, wide readable tables, single normal-page navigation, section separation, real template files/diff/local commit, desktop collapse/expand, RTL panel placement and mobile drawers.
+Historical headed-Chromium acceptance covered Arabic dark login for admin/owner/customer, English light login, Arabic dark registration, refresh, correct dashboards, admin workspace rejection, wide readable tables, single normal-page navigation, section separation, real template files/diff/local commit, desktop collapse/expand, RTL panel placement and mobile drawers. The acceptance files were removed on 2026-10-06 by user request.
 
 Full validation: **22 passed** in headed Chromium on a fresh isolated local test database (port 8770). JavaScript syntax checks and `git diff --check` passed. No backend changes required a new migration or altered API.
 
@@ -34,4 +34,4 @@ They use isolated loopback test data, not production accounts.
 
 ## Availability
 
-Preview execution is not configured and says so. Local test runtime is disabled; chat submission stays disabled without a connected runtime/provider/model. 2FA, device fingerprinting and dedicated login-event collection remain unavailable. Payment processing remains unavailable; methods/subscription configuration is unchanged. No feature is marked live merely because its layout is present.
+In the active PostgreSQL application, local OpenCode runtime mode is enabled, but no provider credential is configured in the current database; chat must show an unavailable/configure-provider state until one is entered. 2FA, device fingerprinting and dedicated login-event collection remain unavailable. Payment processing remains unavailable until the owner configures a receiving method or PayPal merchant credentials. No feature is marked live merely because its layout is present.

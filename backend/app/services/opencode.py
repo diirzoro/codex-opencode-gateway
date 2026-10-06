@@ -1,4 +1,4 @@
-"""OpenCode 1.18.31 adapter. Local runtimes are isolated contexts, NOT OS sandboxes."""
+"""OpenCode HTTP adapter. Workspace processes are not OS sandboxes."""
 import atexit, base64, json, os, secrets, shutil, socket, subprocess, threading, time
 from dataclasses import dataclass
 from urllib.parse import quote
@@ -24,6 +24,7 @@ class Runtime:
 
 _runtimes = {}
 _lock = threading.RLock()
+SUPPORTED_RUNTIME_VERSIONS = {"1.18.31", "1.18.32"}
 
 class OpenCodeService:
     def __init__(self, url, password=None, directory=None):
@@ -95,9 +96,9 @@ def for_workspace(workspace, *, start=True):
             if process.poll() is not None: break
             try:
                 health=service.health()
-                if health["version"]!="1.18.31":
+                if health["version"] not in SUPPORTED_RUNTIME_VERSIONS:
                     stop_workspace(workspace)
-                    raise HTTPException(503,"Installed OpenCode version has not been verified for this adapter")
+                    raise HTTPException(503,"Installed OpenCode version is outside the adapter's supported versions")
                 return service
             except HTTPException:
                 time.sleep(.5)

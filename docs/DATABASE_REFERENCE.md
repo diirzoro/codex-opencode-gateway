@@ -16,6 +16,10 @@ See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](A
 
 Updated 2026-10-03. SQLAlchemy models are runtime authority. PostgreSQL is the application target; SQLite is explicitly test-only. No customer repository source content or raw authentication token is stored in Gateway PostgreSQL.
 
+## Actual local PostgreSQL database — 2026-10-06
+
+The running application uses PostgreSQL database `opencode_gateway` on loopback and is migrated to `0008_paypal_checkout`. Current operational rows: one active owner account (`admin1`), one existing project, one existing ready workspace, three plans, seeded country/region/city lookup data, and one platform policy. There are no configured billing methods, payment orders, subscriptions, or provider credentials. Authentication sessions are revoked after password recovery. The backend suite used in-memory SQLite and left no persistent test database or rows. The historical SQLite-only audit below predates this live local database and is not current migration status.
+
 ## Migrations
 
 - `0001_accounts`: users/auth_sessions/countries/regions/cities, initial location seed.

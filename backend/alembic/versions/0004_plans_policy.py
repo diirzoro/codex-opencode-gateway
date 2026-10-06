@@ -48,7 +48,7 @@ def upgrade():
     )
     op.execute(
         "INSERT INTO platform_policy (id, allowed_providers, allowed_models, allowed_tools, require_tool_approval) "
-        "VALUES (1, '[]', '[]', '[]', 1)"
+        "VALUES (1, '[]', '[]', '[]', TRUE)"
     )
     op.add_column("users", sa.Column("plan_id", sa.Integer(), nullable=True))
     # SQLite cannot add a foreign-key constraint through ALTER; enforce via the ORM there.

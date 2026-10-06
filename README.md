@@ -2,34 +2,23 @@
 
 Independent browser workspace; not built by or affiliated with OpenCode or GitHub. Arabic/English, light/dark, conversation-focused responsive UI. Local development only; no deployment performed.
 
-Real locally: accounts, profiles, owner/admin listing and user counts, Blank/HTML/Python/Node project files, owned file previews, Git diffs/commits and opt-in OpenCode 1.18.31 sessions that retain project files. Partial: provider discovery, messages/stop/approvals/Gateway event replay. Missing: provider authentication, GitHub clone/push/PR, strong sandbox/quotas, previews/uploads/retention and billing. No simulated operational success is shown.
+Implemented in source: Gateway accounts/roles, admin and client pages, plan and billing management, project/workspace APIs, local Git operations, and an OpenCode adapter. External PayPal/GitHub functions need real server-side configuration. The adapter accepts OpenCode 1.18.31 and 1.18.32, but public isolation and live Gateway-to-OpenCode execution remain unverified; production prompt execution is disabled by default. See [deployment/OPENCODE_INTEGRATION.md](deployment/OPENCODE_INTEGRATION.md) and [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md) before upload. The project does not present simulated provider or payment success as real.
 
-## Local browser preview and tests (Windows)
+## Run the local application (Windows)
 
-Use Python 3.13 (tested) or validate the deployment target Python 3.12 separately. Commands below create a new `.venv-local`; do not overwrite an existing environment. The preview uses its own SQLite test data and loopback port 8765; it never reads production credentials. Accounts are test accounts, and model execution is disabled.
-
-```powershell
-Set-Location 'D:\opencodde agent\opencode project'
-py -3.13 -m venv .venv-local
-.\.venv-local\Scripts\python.exe -m pip install -r backend/requirements.txt
-npm ci
-npx playwright install chromium
-.\.venv-local\Scripts\python.exe backend/tests/browser_server.py
-# Open http://127.0.0.1:8765
-```
-
-For a new independent E2E server (close the preview above first):
+The local runner uses the actual Gateway backend and the configured local PostgreSQL database. It binds to loopback only; it does not start a separate demo server or test database.
 
 ```powershell
-$env:E2E_SERVER_COMMAND = '.\.venv-local\Scripts\python.exe backend/tests/browser_server.py'
-npm run test:e2e
-# Backend and optional installed-runtime integration:
-$env:RUN_OPENCODE_TESTS = '1'
+Set-Location 'D:\opencodde agent\codex project\project'
+# Create the ignored .env from .env.example and configure local-only values once.
 Set-Location backend
-..\.venv-local\Scripts\python.exe -m pytest -q
+..\.venv\Scripts\alembic.exe upgrade head
+Set-Location ..
+.\run-local.ps1
+# Open http://127.0.0.1:8766
 ```
 
-OpenCode smoke test requires installed version 1.18.31. Without RUN_OPENCODE_TESTS=1, it is skipped. No provider credentials are needed for the session-preservation test. On managed Windows, browser/runtime subprocesses may require approval outside the tool sandbox.
+Keep `.env`, `runtime/`, and `workspaces/` local. Do not copy production credentials into the project. The app and database currently run locally; no deployment is performed.
 
 ## Local PostgreSQL application
 
@@ -41,10 +30,13 @@ python -m alembic upgrade head
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Default runtime is disabled. Setting OPENCODE_RUNTIME_MODE=local starts per-workspace OpenCode processes with separate runtime data, but **does not sandbox the host OS/network**. Use trusted local projects and one Gateway worker. Never make local mode publicly reachable. Backend-only `OPENCODE_BASE_URL=http://127.0.0.1:4096` refers to the internal reference service and is used only for health diagnostics, without shared login credentials. Frontend requests use `/api/...`; customers never access OpenCode directly. Existing environments must replace the old `OPENCODE_URL` variable with `OPENCODE_BASE_URL` (the old name is no longer read). No shared-runtime execution fallback is enabled.
+The production example enables `OPENCODE_RUNTIME_MODE=local`, which starts per-workspace OpenCode processes with separate runtime data but **does not sandbox the host OS/network**; do not expose this mode to untrusted public customer workloads before adding production isolation. Backend-only `OPENCODE_BASE_URL=http://127.0.0.1:4096` refers to the separately running internal reference service and is used only for health diagnostics, without shared login credentials. Client prompts use Gateway-managed workspace processes, not the shared reference process. Frontend requests use `/api/...`; customers never access OpenCode directly. Existing environments must replace the old `OPENCODE_URL` variable with `OPENCODE_BASE_URL` (the old name is no longer read).
 
 ## References
 
+- [Product boundaries and development rules](docs/PRODUCT_BOUNDARIES.md) — branded Gateway client UI, OpenCode-owned coding capabilities, SaaS control plane, and no test environments.
+- [OpenCode deployment integration](deployment/OPENCODE_INTEGRATION.md) — packaged adapter versus separately installed runtime, and production execution gates.
+- [GitHub App deployment integration](deployment/GITHUB_INTEGRATION.md) — client-owned authorization and the server-side GitHub App setup.
 - [Implementation status and all 224 source requirements](docs/IMPLEMENTATION_STATUS.md)
 - [API reference](docs/API_REFERENCE.md)
 - [Architecture](docs/ARCHITECTURE.md)
@@ -57,13 +49,8 @@ Default runtime is disabled. Setting OPENCODE_RUNTIME_MODE=local starts per-work
 
 ## GitHub source publication
 
-At the owner's request, automated test files/configuration and results remain local and are excluded from this repository. The test commands above apply to the complete local development copy, not a fresh source-only clone. Validation results and limitations are recorded in docs/PHASE_REPORT.md. Production secrets, runtime data and dependencies are never included.
+The checked-in application source is the deliverable. Local environment settings, runtime data, workspaces, and dependencies are excluded. No automated test harness or test fixtures are part of this project copy.
 
 ## Latest local acceptance
 
-Real isolated OpenCode/DeepSeek chat and Stop were verified; see docs/REAL_AGENT_ACCEPTANCE.md. Payment checkout supports admin-owned transfer methods, plan-bound hosted links and server-only PayPal Orders/capture verification. Configure merchant credentials locally before provider testing; see docs/PAYMENT_CHECKOUT_REPORT.md. No successful PayPal transaction is claimed without merchant acceptance. Backend migration head: 0008_paypal_checkout. Test/evidence files remain outside the committed deliverable according to the user's publication preference.
-
-
-## Release workflow
-
-Development changes go to `updates`. After review, merge `updates` into `master`. Production deployment is manual only: run the **Promote master to production** workflow and type `promote` to confirm.
+Payment checkout supports admin-owned transfer methods, plan-bound hosted links and server-only PayPal Orders/capture verification. Configure merchant credentials locally before payment processing; see docs/PAYMENT_CHECKOUT_REPORT.md. No successful PayPal transaction is claimed without merchant acceptance. Backend migration head: 0008_paypal_checkout. OpenCode/provider integration and GitHub publishing still have documented configuration and production-isolation limits in the implementation status and phase report.

@@ -165,8 +165,24 @@
       body.replaceChildren();
       subs.forEach(function (s) { var tr3 = document.createElement('tr'); adminCells(tr3, [s.owner, s.owner_email, s.plan || tr('Not assigned', 'غير محدد'), statusText(s.status), s.started_at ? fmtDate(s.started_at) : '—', s.current_period_end ? fmtDate(s.current_period_end) : '—', s.cancelled_at ? fmtDate(s.cancelled_at) : '—']); body.append(tr3); });
     }
-    var tx = await api('/api/admin/billing/transactions'); var txBox = document.getElementById('adminTransactions'); if (txBox) txBox.replaceChildren(textElement('p', tx.label || 'Not available yet.'));
-    var rev = document.getElementById('adminRevenue'); if (rev) rev.replaceChildren(textElement('p', (summary.revenue && summary.revenue.label) || 'Not available yet.'));
+    var tx = await api('/api/admin/billing/transactions'); var txBox = document.getElementById('adminTransactions');
+    if (txBox) {
+      txBox.replaceChildren();
+      if (!tx.items || !tx.items.length) txBox.append(textElement('p', tr('No payment orders yet.', 'لا توجد طلبات دفع بعد.')));
+      else tx.items.forEach(function (item) {
+        var row = textElement('article', '', 'manage-row');
+        row.append(textElement('strong', item.plan_name + ' · ' + item.currency + ' ' + (item.amount_cents / 100).toFixed(2)));
+        row.append(textElement('span', item.email + ' · ' + item.method_label + ' · ' + statusText(item.status)));
+        if (item.payment_reference) row.append(textElement('small', tr('Receipt reference: ', 'مرجع الإيصال: ') + item.payment_reference));
+        txBox.append(row);
+      });
+    }
+    var rev = document.getElementById('adminRevenue'); if (rev) {
+      rev.replaceChildren();
+      var totals = summary.revenue && summary.revenue.items || [];
+      if (!totals.length) rev.append(textElement('p', tr('No verified payments yet.', 'لا توجد مدفوعات مؤكدة بعد.')));
+      else totals.forEach(function (item) { rev.append(textElement('p', item.currency + ' ' + (item.amount_cents / 100).toFixed(2))); });
+    }
   }
   async function loadAdminReports() {
     var data = await api('/api/admin/reports');
@@ -174,7 +190,12 @@
       box.replaceChildren();
       [['Users', data.counts.users], ['Projects', data.counts.projects], ['Workspaces', data.counts.workspaces], ['Sessions', data.counts.sessions], ['Subscriptions', data.counts.subscriptions]].forEach(function (m) { m[0] = tr(m[0], ({'Users': 'المستخدمون', 'Projects': 'المشاريع', 'Workspaces': 'مساحات العمل', 'Sessions': 'الجلسات', 'Subscriptions': 'الاشتراكات'})[m[0]]); var c = textElement('article', ''); c.append(textElement('small', m[0])); var b = document.createElement('b'); b.textContent = m[1]; c.append(b); box.append(c); });
     }
-    var revenue = document.getElementById('adminReportsRevenue'); if (revenue) revenue.replaceChildren(textElement('p', (data.revenue && data.revenue.label) || 'Not available yet.'));
+    var revenue = document.getElementById('adminReportsRevenue'); if (revenue) {
+      revenue.replaceChildren();
+      var totals = data.revenue && data.revenue.items || [];
+      if (!totals.length) revenue.append(textElement('p', tr('No verified payments yet.', 'لا توجد مدفوعات مؤكدة بعد.')));
+      else totals.forEach(function (item) { revenue.append(textElement('p', item.currency + ' ' + (item.amount_cents / 100).toFixed(2))); });
+    }
   }
   async function loadAdminHealth() {
     var panel = document.getElementById('adminHealthPanel'); if (!panel) return;
@@ -252,17 +273,27 @@
     return 'for ' + days + ' days';
   }
 
+  function planDisplayName(plan) {
+    return lang === 'ar' ? planDurationLabel(plan.duration_days) : plan.name;
+  }
+  function planDisplayTerm(plan) {
+    return lang === 'ar' ? plan.duration_days + ' ' + tr('days', 'ÙŠÙˆÙ…Ù‹Ø§') : planDurationLabel(plan.duration_days);
+  }
+  window.planDisplayName = planDisplayName;
+  window.planDisplayTerm = planDisplayTerm;
+  window.planDisplayPrice = function (plan) { return money(plan.price_cents); };
+
   async function renderPricing() {
     var cards = document.getElementById('pricingCards');
     if (!cards) return;
     try {
-      var plans = await api('/api/plans');
+      var plans = await api('/api/plans', { cache: 'no-store' });
       cards.replaceChildren();
       var parts = [];
       plans.forEach(function (plan) {
         var duration = plan.durationLabel || planDurationLabel(plan.duration_days);
-        var main = lang === 'ar' ? duration : plan.name;
-        var sub = lang === 'ar' ? plan.duration_days + ' ' + tr('days', 'يومًا') : duration;
+        var main = planDisplayName(plan);
+        var sub = planDisplayTerm(plan);
         var card = textElement('div', '', 'price-card');
         card.append(textElement('b', money(plan.price_cents)));
         card.append(textElement('span', main));
@@ -273,7 +304,12 @@
       });
       var summary = document.getElementById('pricingSummary');
       if (summary && parts.length) summary.textContent = parts.join(' · ');
-    } catch (error) { /* keep the static fallback when the catalog is unavailable */ }
+      if (summary && !parts.length) summary.textContent = tr('No active offers are available right now.', 'لا توجد عروض نشطة حاليًا.');
+    } catch (error) {
+      cards.replaceChildren();
+      var summary = document.getElementById('pricingSummary');
+      if (summary) summary.textContent = tr('Offers are temporarily unavailable. Please refresh shortly.', 'العروض غير متاحة مؤقتًا. حدّث الصفحة بعد قليل.');
+    }
   }
 
   renderProfile = function (user) {
@@ -295,11 +331,11 @@
     var body = document.getElementById('adminPlansBody');
     if (!body) return;
     try {
-      var plans = await api('/api/admin/plans');
+      var plans = await api('/api/admin/plans', { cache: 'no-store' });
       body.replaceChildren();
       plans.forEach(function (plan) {
         var row = document.createElement('tr');
-        [plan.code, plan.name, String(plan.price_cents), String(plan.duration_days), plan.active ? 'yes' : 'no'].forEach(function (text) { row.append(textElement('td', text)); });
+        [plan.code, plan.name, money(plan.price_cents), planDisplayTerm(plan), plan.active ? 'yes' : 'no'].forEach(function (text) { row.append(textElement('td', text)); });
         var action = document.createElement('td');
         var toggle = textElement('button', plan.active ? 'Deactivate' : 'Activate', 'button ghost small');
         toggle.onclick = async function () { try { await api('/api/admin/plans/' + plan.id, { method: 'PATCH', body: JSON.stringify({ active: !plan.active }) }); await loadAdminPlans(); } catch (error) { toast(error.message); } };
@@ -313,7 +349,7 @@
     event.preventDefault();
     try {
       await api('/api/admin/plans', { method: 'POST', body: JSON.stringify({ code: value('planCode'), name: value('planName'), price_cents: Number(value('planPrice')), currency: 'USD', duration_days: Number(value('planDays')), active: true, sort_order: 90 }) });
-      apiMessage('adminPlanMessage', 'Plan created'); planForm.reset(); await loadAdminPlans();
+      apiMessage('adminPlanMessage', 'Plan created'); planForm.reset(); await loadAdminPlans(); await renderPricing();
     } catch (error) { apiMessage('adminPlanMessage', error.message, true); }
   };
 
@@ -399,7 +435,7 @@
     eventStream.onerror = function () { document.getElementById('runtimeStatus').textContent = 'Reconnecting to event stream'; };
   };
 
-  Object.assign(copy.en, { clientNavTitle: 'Client', clientDashboard: 'Dashboard', clientProjects: 'Projects', clientSessions: 'Sessions', clientAi: 'OpenCode', clientAccount: 'Account / Profile', clientDashboardLead: 'Your trial, connections, projects and recent activity in one place.', clientRecentLabel: 'RECENT', clientRecentProjects: 'Projects and workspaces', adminNavTitle: 'Administration', adminConsole: 'Admin Console', adminOverview: 'Overview', adminUsers: 'Users', adminProjects: 'Projects', adminWorkspaces: 'Workspaces', adminSessions: 'Sessions', adminPlans: 'Plans & Offers', adminPolicy: 'AI / OpenCode Policy', adminGithub: 'GitHub', adminAudit: 'Audit / Activity', adminSettings: 'Platform Settings', adminPersonal: 'Personal account', adminOverviewLead: 'Real backend metrics only. Metrics without a real query show "Not available yet".', adminPlatformStatus: 'PLATFORM STATUS', adminIntegrations: 'Integrations', adminUsersLead: 'Real account records. Role, status and trial changes call the admin API.', adminActions: 'Actions', adminProjectsLead: 'Metadata only. Customer source code is never shown here.', adminWorkspacesLead: 'Real workspace metadata. The physical path is never exposed.', adminSessionsLead: 'Real OpenCode conversation metadata.', adminPlansLead: 'Published offers are read by the public landing page through the plans API.', adminPolicyLead: 'These settings persist and limit what clients can select. User API keys and OAuth credentials are never shown here.', adminBilling: 'Billing / Subscriptions', adminReports: 'Reports', adminHealth: 'Platform Logs / Health', adminGithubSettings: 'GitHub Integration Settings', adminTrial: 'Trial / Entitlement Settings', adminSecurity: 'Security', clientRecentSessionsTitle: 'Recent sessions', clientProjectsLead: 'Your projects and workspaces.', clientSessionsLead: 'Workspaces and their OpenCode sessions.', clientAiLead: 'Runtime, provider and tool status for your workspaces.', clientGithubLead: 'Connect your GitHub account, then choose a repository and branch.', clientBillingLead: "Your own subscription only. Other customers' billing is never shown here.", clientPlansTitle: 'Plans & offers', clientCancel: 'Cancel subscription', clientReactivate: 'Reactivate', clientRenew: 'Renew subscription', clientInvoicesTitle: 'Invoices & payments', clientAccountLead: 'Personal details and preferences.', clientPersonalInfo: 'Personal information', clientUsername: 'Username', clientEmail: 'Email', clientPhone: 'Phone', clientLocation: 'Location / postal code', clientPreferences: 'Language / theme', clientSecurityNote: 'Use Password & security to change your password, revoke sign-ins, or suspend your account.', clientSecurityLead: 'Session and account security.', clientSecurity: 'Password & Security', clientDashboardBadge: 'CLIENT DASHBOARD', adminConsoleBadge: 'ADMIN CONSOLE', adminBillingLead: 'Business finance view, separate from the client billing page.', adminReportsLead: 'Real platform counts. Revenue appears only when backed by real payment data.', aUsername: 'Username', aEmail: 'Email', aRole: 'Role', aStatus: 'Status', aTrialRemaining: 'Trial remaining', aTrialEnd: 'Trial end', aPlan: 'Plan', aLastLogin: 'Last login', aCreated: 'Created', aProjectsWorkspaces: 'Projects / Workspaces', aCode: 'Code', aName: 'Name', aPrice: 'Price (USD cents)', aDays: 'Days', aActive: 'Active', aAddPlan: 'Add plan', aSubscriptionsSmall: 'SUBSCRIPTIONS', aSubsTitle: 'Subscriptions across users', aOwner: 'Owner', aStarted: 'Started', aPeriodEnd: 'Period end', aCancelled: 'Cancelled', aTransactionsSmall: 'TRANSACTIONS', aTransactions: 'Payment transactions', aRevenueSmall: 'REVENUE', aRevenue: 'Revenue', aNay: 'Not available yet.', aAuditLogging: 'Audit logging is not available yet.', aHealthLead: 'Runtime health from the real backend.', aLoading: 'Loading…', aEnabledProviders: 'Enabled providers (comma separated)', aAllowedModels: 'Allowed models (comma separated)', aEnabledTools: 'Enabled tools / capabilities (comma separated)', aRequireApproval: 'Require approval before running tools', aSavePolicy: 'Save policy', aGithubLead: 'Connection status. The real GitHub integration is a later phase.', aLoadingStatus: 'Loading status…', aTrialLead: 'Trial entitlement overview. Editing trial defaults is not available yet.', aPlatformSettings: 'Platform settings are not available yet.', aAdminSecurityNotAvail: 'Admin security settings are not available yet.', aPersonalLead: 'Your own account. Administrative controls are on the other pages.' });
+  Object.assign(copy.en, { clientNavTitle: 'Client', clientDashboard: 'Dashboard', clientProjects: 'Projects', clientSessions: 'Sessions', clientAi: 'OpenCode', clientAccount: 'Account / Profile', clientDashboardLead: 'Your trial, connections, projects and recent activity in one place.', clientRecentLabel: 'RECENT', clientRecentProjects: 'Projects and workspaces', adminNavTitle: 'Administration', adminConsole: 'Admin Console', adminOverview: 'Overview', adminUsers: 'Users', adminProjects: 'Projects', adminWorkspaces: 'Workspaces', adminSessions: 'Sessions', adminPlans: 'Plans & Offers', adminPolicy: 'AI / OpenCode Policy', adminGithub: 'GitHub', adminAudit: 'Audit / Activity', adminSettings: 'Platform Settings', adminPersonal: 'Personal account', adminOverviewLead: 'Real backend metrics only. Metrics without a real query show "Not available yet".', adminPlatformStatus: 'PLATFORM STATUS', adminIntegrations: 'Integrations', adminUsersLead: 'Real account records. Role, status and trial changes call the admin API.', adminActions: 'Actions', adminProjectsLead: 'Metadata only. Customer source code is never shown here.', adminWorkspacesLead: 'Real workspace metadata. The physical path is never exposed.', adminSessionsLead: 'Real OpenCode conversation metadata.', adminPlansLead: 'Published offers are read by the public landing page through the plans API.', adminPolicyLead: 'These settings persist and limit what clients can select. User API keys and OAuth credentials are never shown here.', adminBilling: 'Billing / Subscriptions', adminReports: 'Reports', adminHealth: 'Platform Logs / Health', adminGithubSettings: 'GitHub Integration Settings', adminTrial: 'Trial / Entitlement Settings', adminSecurity: 'Security', clientRecentSessionsTitle: 'Recent sessions', clientProjectsLead: 'Your projects and workspaces.', clientSessionsLead: 'Workspaces and their OpenCode sessions.', clientAiLead: 'Runtime, provider and tool status for your workspaces.', clientGithubLead: 'Connect your GitHub account, then choose a repository and branch.', clientBillingLead: "Your own subscription only. Other customers' billing is never shown here.", clientPlansTitle: 'Plans & offers', clientCancel: 'Cancel subscription', clientReactivate: 'Reactivate', clientRenew: 'Renew subscription', clientInvoicesTitle: 'Invoices & payments', clientAccountLead: 'Personal details and preferences.', clientPersonalInfo: 'Personal information', clientUsername: 'Username', clientEmail: 'Email', clientPhone: 'Phone', clientLocation: 'Location / postal code', clientPreferences: 'Language / theme', clientSecurityNote: 'Use Password & security to change your password, revoke sign-ins, or suspend your account.', clientSecurityLead: 'Session and account security.', clientSecurity: 'Password & Security', clientDashboardBadge: 'CLIENT DASHBOARD', adminConsoleBadge: 'ADMIN CONSOLE', adminBillingLead: 'Business finance view, separate from the client billing page.', adminReportsLead: 'Real platform counts. Revenue appears only when backed by real payment data.', aUsername: 'Username', aEmail: 'Email', aRole: 'Role', aStatus: 'Status', aTrialRemaining: 'Trial remaining', aTrialEnd: 'Trial end', aPlan: 'Plan', aLastLogin: 'Last login', aCreated: 'Created', aProjectsWorkspaces: 'Projects / Workspaces', aCode: 'Code', aName: 'Name', aPrice: 'Price (USD)', aDays: 'Duration', aActive: 'Active', aAddPlan: 'Add plan', aSubscriptionsSmall: 'SUBSCRIPTIONS', aSubsTitle: 'Subscriptions across users', aOwner: 'Owner', aStarted: 'Started', aPeriodEnd: 'Period end', aCancelled: 'Cancelled', aTransactionsSmall: 'TRANSACTIONS', aTransactions: 'Payment transactions', aRevenueSmall: 'REVENUE', aRevenue: 'Revenue', aNay: 'Not available yet.', aAuditLogging: 'Audit logging is not available yet.', aHealthLead: 'Runtime health from the real backend.', aLoading: 'Loading…', aEnabledProviders: 'Enabled providers (comma separated)', aAllowedModels: 'Allowed models (comma separated)', aEnabledTools: 'Enabled tools / capabilities (comma separated)', aRequireApproval: 'Require approval before running tools', aSavePolicy: 'Save policy', aGithubLead: 'Connection status. The real GitHub integration is a later phase.', aLoadingStatus: 'Loading status…', aTrialLead: 'Trial entitlement overview. Editing trial defaults is not available yet.', aPlatformSettings: 'Platform settings are not available yet.', aAdminSecurityNotAvail: 'Admin security settings are not available yet.', aPersonalLead: 'Your own account. Administrative controls are on the other pages.' });
   Object.assign(copy.ar, { clientNavTitle: 'العميل', clientDashboard: 'لوحة المعلومات', clientProjects: 'المشاريع', clientSessions: 'الجلسات', clientAi: 'OpenCode', clientAccount: 'الحساب / الملف', clientDashboardLead: 'تجربتك واتصالاتك ومشاريعك ونشاطك الأخير في مكان واحد.', clientRecentLabel: 'الأحدث', clientRecentProjects: 'المشاريع ومساحات العمل', adminNavTitle: 'الإدارة', adminConsole: 'لوحة الإدارة', adminOverview: 'نظرة عامة', adminUsers: 'المستخدمون', adminProjects: 'المشاريع', adminWorkspaces: 'مساحات العمل', adminSessions: 'الجلسات', adminPlans: 'الخطط والعروض', adminPolicy: 'سياسة الذكاء / OpenCode', adminGithub: 'GitHub', adminAudit: 'التدقيق / النشاط', adminSettings: 'إعدادات المنصة', adminPersonal: 'الحساب الشخصي', adminOverviewLead: 'مؤشرات حقيقية فقط. ما لا يوجد له استعلام حقيقي يظهر "غير متاح بعد".', adminPlatformStatus: 'حالة المنصة', adminIntegrations: 'التكاملات', adminUsersLead: 'سجلات حقيقية. تغيير الدور والحالة والتجربة يستدعي واجهة الإدارة.', adminActions: 'إجراءات', adminProjectsLead: 'بيانات وصفية فقط. لا يظهر كود العميل هنا.', adminWorkspacesLead: 'بيانات مساحة العمل الحقيقية. لا يُكشف المسار الفيزيائي.', adminSessionsLead: 'بيانات محادثات OpenCode الحقيقية.', adminPlansLead: 'تُقرأ العروض المنشورة في صفحة الهبوط عبر واجهة الخطط.', adminPolicyLead: 'تُحفظ هذه الإعدادات وتحدّ من اختيارات العملاء. لا تظهر مفاتيح المستخدمين أو رموز OAuth هنا.', adminBilling: 'الفوترة / الاشتراكات', adminReports: 'التقارير', adminHealth: 'سجلات المنصة / الحالة', adminGithubSettings: 'إعدادات تكامل GitHub', adminTrial: 'إعدادات التجربة / الاستحقاق', adminSecurity: 'الأمان', clientRecentSessionsTitle: 'الجلسات الأخيرة', clientProjectsLead: 'مشاريعك ومساحات العمل.', clientSessionsLead: 'مساحات العمل وجلسات OpenCode الخاصة بها.', clientAiLead: 'حالة وقت التشغيل والمزوّد والأدوات لمساحات عملك.', clientGithubLead: 'حالة الاتصال. التدفق الحقيقي للترخيص مرحلة لاحقة.', clientBillingLead: 'اشتراكك فقط. لا تظهر فوترة العملاء الآخرين هنا.', clientPlansTitle: 'الخطط والعروض', clientCancel: 'إلغاء الاشتراك', clientReactivate: 'إعادة التفعيل', clientRenew: 'تجديد الاشتراك', clientInvoicesTitle: 'الفواتير والمدفوعات', clientAccountLead: 'بياناتك وتفضيلاتك. لوحة المعلومات صفحة منفصلة.', clientPersonalInfo: 'المعلومات الشخصية', clientUsername: 'اسم المستخدم', clientEmail: 'البريد الإلكتروني', clientPhone: 'الهاتف', clientLocation: 'الموقع / الرمز البريدي', clientPreferences: 'اللغة / المظهر', clientSecurityNote: 'تغيير كلمة المرور وإدارة الأجهزة غير متاحين بعد. جلستك تستخدم ملف تعريف ارتباط HttpOnly وSameSite=Strict.', clientSecurityLead: 'أمان الجلسة والحساب.', clientSecurity: 'كلمة المرور والأمان', clientDashboardBadge: 'لوحة العميل', adminConsoleBadge: 'لوحة الإدارة', adminBillingLead: 'عرض مالي للعمل، منفصل عن صفحة فوترة العميل.', adminReportsLead: 'مؤشرات المنصة الحقيقية. تظهر الإيرادات فقط عند توفر بيانات دفع حقيقية.', aUsername: 'اسم المستخدم', aEmail: 'البريد الإلكتروني', aRole: 'الدور', aStatus: 'الحالة', aTrialRemaining: 'المتبقي من التجربة', aTrialEnd: 'نهاية التجربة', aPlan: 'الخطة', aLastLogin: 'آخر دخول', aCreated: 'تاريخ الإنشاء', aProjectsWorkspaces: 'المشاريع / مساحات العمل', aCode: 'الرمز', aName: 'الاسم', aPrice: 'السعر (سنتات)', aDays: 'الأيام', aActive: 'نشط', aAddPlan: 'إضافة خطة', aSubscriptionsSmall: 'الاشتراكات', aSubsTitle: 'الاشتراكات عبر المستخدمين', aOwner: 'المالك', aStarted: 'البدء', aPeriodEnd: 'نهاية الفترة', aCancelled: 'ملغى', aTransactionsSmall: 'المعاملات', aTransactions: 'معاملات الدفع', aRevenueSmall: 'الإيرادات', aRevenue: 'الإيرادات', aNay: 'غير متاح بعد.', aAuditLogging: 'سجل التدقيق غير متاح بعد.', aHealthLead: 'حالة وقت التشغيل من الخلفية الحقيقية.', aLoading: 'جارٍ التحميل…', aEnabledProviders: 'المزوّدون المفعّلون (مفصولة بفواصل)', aAllowedModels: 'النماذج المسموحة (مفصولة بفواصل)', aEnabledTools: 'الأدوات المفعّلة (مفصولة بفواصل)', aRequireApproval: 'تتطلب الموافقة قبل تشغيل الأدوات', aSavePolicy: 'حفظ السياسة', aGithubLead: 'حالة الاتصال. تكامل GitHub الحقيقي مرحلة لاحقة.', aLoadingStatus: 'جارٍ تحميل الحالة…', aTrialLead: 'نظرة عامة على استحقاق التجربة. تعديل مدة التجربة الافتراضية غير متاح بعد.', aPlatformSettings: 'إعدادات المنصة غير متاحة بعد.', aAdminSecurityNotAvail: 'إعدادات أمان الإدارة غير متاحة بعد.', aPersonalLead: 'حسابك الخاص. عناصر التحكم الإدارية في الصفحات الأخرى.' });
   applyPrefs();
 
@@ -537,7 +573,7 @@
   // --- Client Billing (own subscription only) ---
   function billingCard(label, value, hint) { var c = textElement('article', ''); c.append(textElement('small', label)); c.append(textElement('h3', value)); if (hint) c.append(textElement('p', hint)); return c; }
   async function loadClientBilling() {
-    var data = await api('/api/billing/subscription');
+    var data = await api('/api/billing/subscription', { cache: 'no-store' });
     var summary = document.getElementById('billingSummary'); if (summary) {
       summary.replaceChildren();
       var planName = data.plan ? data.plan.name : tr('No plan assigned', 'لا توجد خطة');
@@ -558,8 +594,9 @@
         if (idx === (data.plans || []).length - 1) { var tag = textElement('span', tr('Best value', 'الأفضل قيمة'), 'plan-tag'); card.append(tag); }
         if (isCurrent || isSelected) { var chk = textElement('span', '✓', 'plan-check'); chk.title = isCurrent ? tr('Current plan', 'الخطة الحالية') : tr('Selected plan', 'الخطة المحددة'); card.append(chk); }
         card.append(textElement('b', money(plan.price_cents)));
-        card.append(textElement('span', plan.name));
-        card.append(textElement('small', plan.duration_days + ' ' + tr('days', 'يوم')));
+        var duration = plan.durationLabel || planDurationLabel(plan.duration_days);
+        card.append(textElement('span', planDisplayName(plan)));
+        card.append(textElement('small', planDisplayTerm(plan)));
         var select = textElement('button', isCurrent ? tr('Current plan', 'الخطة الحالية') : (isSelected ? tr('Selected', 'محددة') : tr('Select', 'اختيار')), 'button small');
         if (isCurrent || isSelected) select.className = 'button small';
         select.onclick = async function () {
@@ -879,6 +916,7 @@
     }
     goingBack = false;
     await innerPage(id);
+    if (id === 'landing') await renderPricing();
     syncHeaderState();
   };
   syncHeaderState();
@@ -1147,12 +1185,12 @@
   }
 
   async function gridPlans() {
-    var plans = await api('/api/admin/plans');
+    var plans = await api('/api/admin/plans', { cache: 'no-store' });
     var body = document.getElementById('adminPlansBody');
     body.replaceChildren();
     plans.forEach(function (plan) {
       var row = document.createElement('tr');
-      row.append(el('td', '', plan.code), el('td', '', plan.name), el('td', '', plan.price_cents),
+      row.append(el('td', '', plan.code), el('td', '', plan.name), el('td', '', money(plan.price_cents)),
         el('td', '', plan.duration_days), el('td', '', plan.active ? tr('Yes', 'نعم') : tr('No', 'لا')));
       body.append(row);
     });
@@ -1209,7 +1247,8 @@
         });
         toast(tr('Plan updated', 'تم تحديث الخطة'));
         modal.close();
-        gridPlans();
+        await gridPlans();
+        await renderPricing();
       } catch (e) { toast(e.message); }
       save.disabled = false;
     };
@@ -1279,6 +1318,16 @@
   function managementHost(root,id){var host=document.getElementById(id);if(!host){host=textElement('div');host.id=id;root.append(host)}return host;}
   const billingLoader=CLIENT_LOADERS.billing;
   CLIENT_LOADERS.billing=async function(){await billingLoader();await window.renderManagement(managementHost(document.querySelector('[data-client-panel="billing"]'),'clientBillingMethods'),'billing');};
+  function refreshPlanSurfaces() {
+    if (document.hidden) return;
+    if (document.getElementById('landing')?.classList.contains('active')) renderPricing();
+    if (currentUser && !admin() && document.getElementById('clientPage')?.classList.contains('active') && clientView === 'billing') {
+      loadClientBilling().catch(function () {});
+    }
+  }
+  document.addEventListener('visibilitychange', refreshPlanSurfaces);
+  window.addEventListener('focus', refreshPlanSurfaces);
+  window.setInterval(refreshPlanSurfaces, 30000);
   CLIENT_LOADERS.github=function(){return window.renderManagement(document.getElementById('clientGithubPanel'),'connections');};
   const aiLoader=CLIENT_LOADERS.ai;
   CLIENT_LOADERS.ai=async function(){await aiLoader();await window.renderManagement(managementHost(document.getElementById('clientAiPanel'),'clientProviderSettings'),'providers');};

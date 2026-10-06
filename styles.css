@@ -97,6 +97,7 @@ html,body{height:100%}
 }
 
 .manage-layout{max-width:1200px;margin:24px auto;padding:20px;display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px}.manage-nav{display:flex;flex-direction:column;gap:8px;align-self:start}.manage-nav .active{border-color:var(--primary);background:var(--soft)}.manage-body{min-width:0}.manage-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:20px}.manage-card h2{font-size:18px;margin:0 0 18px}.manage-card p{color:var(--muted);font-size:13px}.manage-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.manage-form label{display:flex;flex-direction:column;gap:8px;font-size:13px}.manage-form input,.manage-form select,.manage-card>label select{background:var(--bg);color:var(--text);padding:11px;border:1px solid var(--line);border-radius:8px;min-width:0}.manage-form>.button{align-self:end}.manage-row{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding:14px 0}.manage-row strong,.manage-row small{display:block;overflow-wrap:anywhere}.manage-row small{color:var(--muted)}.manage-actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.workspace-links{margin:8px 18px}.workspace-links .button{font-size:12px;padding:8px 12px}.recovery-box{max-width:650px;margin:24px auto}.portal-header{flex-wrap:wrap}
+.provider-connection-status{border-radius:10px;background:var(--soft);padding:12px 14px;margin:14px 0}.provider-connection-status.is-connected{border-inline-start:3px solid #22a06b}.provider-key-form{max-width:620px}.prompt-box #agentSelect{max-width:18%;min-width:92px}.prompt-box #providerSelect,.prompt-box #modelSelect{max-width:27%}
 @media(max-width:700px){.manage-layout{grid-template-columns:1fr;padding:12px}.manage-nav{flex-direction:row;overflow:auto}.manage-form{grid-template-columns:1fr}.manage-row{flex-direction:column;align-items:stretch}.manage-card{padding:16px}}
 .landing-connect{width:min(100%,720px);min-height:86px;margin:18px auto;font-size:16px!important;gap:18px!important}.landing-connect svg{width:40px;height:40px;flex-shrink:0}
 .review-panel.open,.session-sidebar.open{z-index:90}
@@ -117,3 +118,20 @@ html,body{height:100%}
 .checkout-dialog #createPaymentOrder,.checkout-dialog form button,.checkout-hosted-link{width:100%;min-height:46px;border-radius:12px;justify-content:center;margin:12px 0}
 .checkout-receipt form{display:grid;gap:8px;margin-top:16px}.checkout-receipt input{width:100%;min-height:44px}
 .checkout-details dd{overflow-wrap:anywhere}.checkout-dialog>small{display:block;text-align:center;margin-top:18px}
+.manage-grid-wrap{width:100%;overflow:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.manage-grid{width:100%;border-collapse:collapse;min-width:520px;text-align:start}
+.manage-grid th,.manage-grid td{padding:12px 14px;border-bottom:1px solid var(--line);text-align:start;vertical-align:middle}
+.manage-grid thead th{background:var(--panel2);color:var(--muted);font-size:12px;font-weight:700;white-space:nowrap}
+.manage-grid tbody tr:last-child>*{border-bottom:0}.manage-grid tbody tr:hover{background:var(--panel2)}
+.manage-grid tbody th{font-size:13px;font-weight:700;white-space:nowrap}.manage-grid tbody td{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.manage-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap;margin:0}
+.grid-crud-button{width:34px;height:34px;min-width:34px;padding:0!important;display:inline-grid;place-items:center;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--text)}
+.grid-crud-button:hover{border-color:var(--primary);background:var(--panel2)}.grid-crud-button .ui-icon{width:16px;height:16px}
+.grid-row-action{min-height:32px!important;padding:5px 10px!important;font-size:12px!important}
+.manage-provider-grid{display:grid;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:14px}
+.manage-provider-row{display:grid;grid-template-columns:minmax(140px,1fr) minmax(120px,.7fr) auto;align-items:center;gap:14px;padding:11px 14px;border-bottom:1px solid var(--line)}
+.manage-provider-row:last-child{border-bottom:0}.manage-provider-row>span{font-size:13px;color:var(--muted)}
+.agent-create-dialog{width:min(560px,calc(100vw - 32px));max-height:86dvh;overflow:auto;padding:22px;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text);box-shadow:0 24px 80px #15294938}
+.agent-create-dialog::backdrop{background:#10213e70;backdrop-filter:blur(4px)}.agent-create-dialog>h2{margin:0 0 16px}.agent-create-dialog form{display:grid;gap:14px}.agent-create-dialog label{display:grid;gap:6px;font-size:13px;font-weight:600}.agent-create-dialog input,.agent-create-dialog textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text)}.agent-create-dialog textarea{resize:vertical}
+.composer-add-agent{min-height:34px;padding:5px 9px!important;font-size:12px!important}
+@media(max-width:700px){.manage-provider-row{grid-template-columns:1fr;gap:8px}.manage-provider-row .manage-actions{justify-content:flex-start}.manage-grid{min-width:470px}.manage-grid th,.manage-grid td{padding:9px 10px}}

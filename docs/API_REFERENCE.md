@@ -84,11 +84,11 @@ Errors: 401 unauthenticated/expired, 403 authorization or unsafe path, 404 unkno
 
 ## Installed OpenCode contract
 
-Verified against local OpenCode **1.18.31**, `/global/health` and `/doc` captured from an isolated process on 2026-10-03. Server calls use Basic auth and `directory=<owned repo>` query. The adapter refuses unverified versions. Browser never receives runtime URL, password or session ID.
+Originally verified against local OpenCode **1.18.31**; the adapter now accepts **1.18.31 and 1.18.32**. The official 1.18.32 release lists core bug fixes, but this workspace did not run an execution acceptance on 1.18.32. Server calls use Basic auth and `directory=<owned repo>` query. Browser never receives runtime URL, password or session ID.
 
 | OpenCode request | Shape / use |
 |---|---|
-| GET /global/health | `{healthy:true,version:"1.18.31"}` |
+| GET /global/health | `{healthy:true,version:"1.18.31"}` (captured runtime; adapter also accepts 1.18.32) |
 | POST /session | `{title,permission:[{permission:"*",pattern:"*",action:"ask"},{permission:"external_directory",pattern:"*",action:"deny"}]}` → session object with `id` |
 | GET /session/{id}/message | Message list with `info` and `parts`; Gateway renders text parts |
 | POST /session/{id}/message | `{parts:[{type:"text",text}],model:{providerID,modelID}}` → completed message; background Gateway task |
@@ -620,3 +620,12 @@ Subscription and archive APIs imported from OpenCode are listed in MERGE_REPORT.
 GET /api/workspaces/{id}/agents returns safe primary runtime agent choices. Session message POST accepts optional validated agent_id. Billing adds POST /api/billing/checkout, GET /api/billing/orders, PUT /api/billing/orders/{id}/reference, GET /api/billing/admin/orders and POST /api/billing/admin/orders/{id}/confirm. Customer references never activate subscriptions; admin receipt confirmation does. Expired work APIs return 402; account/security/billing remain accessible.
 
 See [WORKSPACE_FIRST_REPORT.md](WORKSPACE_FIRST_REPORT.md) for scope, evidence and limits. This update supersedes conflicting historical statements.
+
+## Payment history and verified revenue update — 2026-10-06
+
+- `GET /api/billing/payments` returns the authenticated customer's own persisted payment orders.
+- `GET /api/billing/invoices` returns that customer's verified paid records and explicitly states that formal tax invoices are not issued.
+- `GET /api/admin/billing/transactions` returns persisted payment records for administrator review.
+- `GET /api/admin/billing/summary` and `GET /api/admin/reports` aggregate revenue only from orders with `status=paid`; sandbox-only, pending and unverified orders are excluded.
+
+These endpoints report real database records. They do not create a payment or replace PayPal merchant setup, bank receipt verification, or formal invoice requirements.

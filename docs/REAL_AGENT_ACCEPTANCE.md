@@ -1,5 +1,9 @@
 # Real agent acceptance — 2026-10-05
 
+## Scope clarification for the active application — 2026-10-06
+
+The live OpenCode/DeepSeek exchange described below was verified in the separate isolated acceptance workspace on port 8772, using a locally entered provider credential. It does not prove that the current PostgreSQL application database has a provider connection: that database currently contains zero provider credentials. The active app at port 8766 has local OpenCode runtime mode enabled and requires the owner to add a credential through Settings → Connections for a real DeepSeek response. Until then, the client must see an honest provider-not-configured/unavailable state. Do not reuse or export secrets from the isolated acceptance runtime.
+
 ## Required path
 
 Client UI → Gateway API → isolated OpenCode runtime → OpenCode-configured DeepSeek provider → real assistant response → Gateway → Client UI.

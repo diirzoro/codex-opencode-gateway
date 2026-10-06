@@ -1,5 +1,11 @@
 # Local delivery — 2026-10-04
 
+## Current local app and cleanup correction — 2026-10-06
+
+This section supersedes older statements below about the active app and test fixture. The real working copy is `D:/opencodde agent/codex project/project`; the running application is `http://127.0.0.1:8766/`, connected to local PostgreSQL `opencode_gateway`, migration head `0008_paypal_checkout`. Health, landing page, and plans each returned HTTP 200. Login was verified with the sole account, now `admin1` / `dahirobaid@gmail.com`, role `owner`; `/api/auth/me` restored the role and `/api/admin/overview` returned HTTP 200. The existing project and workspace were retained.
+
+The browser/backend test source folders, Playwright config, generated reports, `node_modules`, package manifests, and one-time account-bootstrap helper were deleted after the user asked to move implementation into the real app and never create test files again. Prior backend suite execution before deletion used in-memory SQLite only: 92 passed, 3 skipped, and 2 older billing assertions failed because they expected the prior unavailable response rather than the current verified-record response. Browser tests were not run against the actual PostgreSQL app. No persistent test database or test data exists. The current database has zero billing methods, payment orders, subscriptions, and provider credentials; PayPal merchant credentials are unset. Payment processing and provider responses are therefore not claimed to be active until real configuration is entered.
+
 ## Workspace and source reconciliation
 
 Development is isolated in `D:/opencodde agent/codex project/project`. A source-only snapshot of the other agent's `D:/opencodde agent/opencode project/project` was imported with user authorization. The other project is not a write target. Existing local files were backed up outside this deliverable. Dependencies, environment secrets, databases, runtime data and workspaces were not imported. No VPS connection or deployment was performed.
@@ -16,7 +22,7 @@ Development is isolated in `D:/opencodde agent/codex project/project`. A source-
 | Suspend own account / request deletion | REAL | Password and exact username confirmation; sessions revoked and local workspace runtimes stopped; files retained. Admin reactivation required. |
 | Permanently delete account and files | MISSING | UI explicitly requests deletion; no automatic purge or false deletion claim. |
 | PayPal, bank, wallet and custom method CRUD | REAL | Encrypted database records, owner isolation, platform/client scopes. Platform receiving details deliberately visible to signed-in customers. |
-| Actual checkout, invoices, refunds, subscription ledger | MISSING | No money charged; trial duration is real, not represented as paid subscription. |
+| Checkout, payment records and subscription ledger | PARTIAL | Real payment orders, customer history and administrator receipt review; PayPal processing requires configured merchant credentials. Formal tax invoices and refunds are not implemented. No unverified order activates access. |
 | Admin plans, user status, policy, roles, locations and audit | PARTIAL | Stored CRUD and protected routes; owner controls roles. Audit covers added management operations, not all historical actions. No full arbitrary permission editor. |
 | GitHub icon → authorization → repositories/branches | PARTIAL | GitHub App and user-token verification implemented; foreign installation rejected. Requires real App credentials and OAuth during installation. No live OAuth/clone/push acceptance run. |
 | GitHub persistent per-client settings | PARTIAL | User token encrypted in DB, expires within 8 hours, reconnect required; refresh-token rotation missing. Existing legacy connections require reconnect. One installation per account. |
@@ -36,7 +42,7 @@ Migration chain: `0001_accounts` → `0002_workspaces` → `0003_github_provider
 
 Backend: 52 passed, 1 skipped (real paid-provider prompt needs explicitly supplied local test credentials). Browser: 7 passed, including template/file/diff/commit, prices, administrator plans/policy, mobile/RTL, billing CRUD, security navigation and locations. Fresh SQLite migration through head passed; PostgreSQL offline SQL generation passed. A live PostgreSQL upgrade and real GitHub/SMTP/provider acceptance remain unverified. Python 3.13 was used locally; deployment target must be validated separately.
 
-Preview: `http://127.0.0.1:8766/`. This is an isolated test preview; seeded users and test data belong only to its excluded test database. It uses disabled OpenCode runtime mode and a locally generated encryption key outside the source tree. Production startup never runs the browser-test seed script.
+The old `8766` URL was an isolated browser-test fixture, not the application. That test process has been stopped and must not be used as the product environment. Start the application only with the local PostgreSQL configuration documented in `README.md`; do not seed demo users into the application database.
 
 ## Manual deployment
 

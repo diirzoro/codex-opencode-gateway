@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from ..config import settings
 from ..database import get_db
 from ..models import ExecutionEvent, Project, ProviderCredential, User, Workspace, WorkspaceSession
 from ..services import credentials, github, opencode, policy, providers
@@ -64,7 +65,6 @@ def health(user: User=Depends(require_user)):
 
 @router.get("/opencode/status")
 def runtime_status(user: User=Depends(require_user)):
-    from ..config import settings
     try: health=opencode.shared_health()
     except HTTPException: health={"healthy":False,"version":None}
     return {**health,"runtime_mode":settings.runtime_mode,"public_multi_user_ready":False}
@@ -246,25 +246,6 @@ def _install_stored_credentials(db,workspace,service):
         except Exception:
             # A stale or undecryptable credential must not break provider discovery.
             continue
-
-@router.post("/workspaces/{workspace_id}/runtime/connect")
-def connect_workspace_runtime(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    """Start/attach the user's private loopback OpenCode runtime and return safe properties only."""
-    workspace,service=_workspace_service(db,user,workspace_id)
-    health=service.health()
-    provider_rows=policy.filter_providers(providers.discover(service),policy.load(db))
-    agents=agent_choices(service)
-    return {
-        "connected":True,
-        "workspace_id":str(workspace.id),
-        "runtime_scope":"workspace",
-        "transport":"loopback",
-        "healthy":bool(health.get("healthy")),
-        "version":health.get("version"),
-        "providers":len(provider_rows),
-        "connected_providers":sum(1 for row in provider_rows if row.get("connected")),
-        "agents":agents,
-    }
 
 @router.get("/workspaces/{workspace_id}/providers")
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):

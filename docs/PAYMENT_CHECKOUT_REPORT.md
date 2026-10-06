@@ -2,6 +2,10 @@
 
 The checkout is a compact centered popup: real plan choices, stored plan price/duration, selectable configured methods, next step, account identity and non-refundable subscription notice. No invented taxes, logos for unavailable methods, local card/CVV form, or fake successful payment.
 
+## Active app configuration status — 2026-10-06
+
+The working PostgreSQL database currently has no billing-method rows or payment orders, and the local environment has no PayPal client ID/secret. Checkout backend paths exist, but no customer can make a real payment until the owner configures a real receiving method or eligible PayPal Sandbox/Live credentials. The supplied PayPal email is the owner account email; it is not sufficient to create a merchant API charge flow or invent a PayPal.Me/hosted checkout URL. The UI must keep methods unavailable until valid details are saved. The earlier acceptance results below describe implementation/contract verification and isolated preview state, not an active merchant connection.
+
 ## Administration and client separation
 
 Admin can add/edit/delete/disable platform receiving methods. Client only selects and pays; platform mutation endpoints reject client access. Receiver details are encrypted in the database. Bank shortcuts include Al-Qutaibi and Al-Kuraimi without inventing account numbers or banking APIs. The supplied PayPal email was saved only in the isolated local preview database; it is not a merchant API credential.

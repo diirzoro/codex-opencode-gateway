@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
-from ..models import GithubConnection, Plan, PlatformPolicy, Project, ProviderCredential, Subscription, User, Workspace, WorkspaceSession
+from ..models import GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, ProviderCredential, Subscription, User, Workspace, WorkspaceSession
 from ..models.platform import get_policy
 from ..services import opencode
 from ..services.accounts import user_payload
@@ -202,17 +202,63 @@ def admin_subscriptions(_: User = Depends(require_admin), db: Session = Depends(
 def admin_billing_summary(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     counts = {status: _count(db, Subscription, Subscription.status == status) for status in ("trial", "pending_payment", "active", "cancelled", "expired")}
     counts["total"] = _count(db, Subscription)
-    return {"subscriptions": counts, "revenue": {"available": False, "label": "Not available yet"}, "payments": {"available": False, "label": "Not available yet"}}
+    totals = db.execute(
+        select(PaymentOrder.currency, func.sum(PaymentOrder.amount_cents))
+        .where(PaymentOrder.status == "paid")
+        .group_by(PaymentOrder.currency)
+        .order_by(PaymentOrder.currency)
+    ).all()
+    revenue = [{"currency": currency, "amount_cents": int(amount_cents or 0)} for currency, amount_cents in totals]
+    return {
+        "subscriptions": counts,
+        "revenue": {"available": True, "items": revenue},
+        "payments": {
+            "available": True,
+            "total": _count(db, PaymentOrder),
+            "awaiting_payment": _count(db, PaymentOrder, PaymentOrder.status == "awaiting_payment"),
+            "pending_review": _count(db, PaymentOrder, PaymentOrder.status == "pending_review"),
+            "paid": _count(db, PaymentOrder, PaymentOrder.status == "paid"),
+            "sandbox_paid": _count(db, PaymentOrder, PaymentOrder.status == "sandbox_paid"),
+        },
+    }
 
 @router.get("/billing/transactions")
 def admin_billing_transactions(_: User = Depends(require_admin), db: Session = Depends(get_db)):
-    return {"available": False, "label": "Not available yet", "items": []}
+    rows = db.execute(
+        select(PaymentOrder, User.email)
+        .join(User, User.id == PaymentOrder.user_id)
+        .order_by(PaymentOrder.created_at.desc())
+        .limit(500)
+    ).all()
+    items = [
+        {
+            "id": str(order.id),
+            "user_id": str(order.user_id),
+            "email": email,
+            "plan_name": order.plan_name,
+            "method_label": order.method_label,
+            "amount_cents": order.amount_cents,
+            "currency": order.currency,
+            "status": order.status,
+            "payment_reference": order.payment_reference,
+            "created_at": order.created_at,
+            "paid_at": order.paid_at,
+        }
+        for order, email in rows
+    ]
+    return {"available": True, "items": items}
 
 @router.get("/reports")
 def admin_reports(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    totals = db.execute(
+        select(PaymentOrder.currency, func.sum(PaymentOrder.amount_cents))
+        .where(PaymentOrder.status == "paid")
+        .group_by(PaymentOrder.currency)
+        .order_by(PaymentOrder.currency)
+    ).all()
     return {
         "counts": {"users": _count(db, User), "projects": _count(db, Project), "workspaces": _count(db, Workspace), "sessions": _count(db, WorkspaceSession), "subscriptions": _count(db, Subscription)},
-        "revenue": {"available": False, "label": "Not available yet"},
+        "revenue": {"available": True, "items": [{"currency": currency, "amount_cents": int(amount_cents or 0)} for currency, amount_cents in totals]},
         "visitors": {"available": False, "label": "Not available yet"},
     }
 

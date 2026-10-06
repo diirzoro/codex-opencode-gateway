@@ -22,6 +22,12 @@ Updated 2026-10-03. Local development only; no VPS connection, upload or deploym
 
 Source: `OpenCode_Platform_Requirements_AR_v2_1.md`, SHA256 `4282c6e8d960f6d0f0f80a509c32cc7affaa3e1d3f05fd75e75c123d8c55b551`. Its 224 textual requirement/policy/acceptance/decision entries are retained below. Blank sections are not silently filled with assumptions. The pasted user request supplements route/table expectations; subsequent user directions authorize local development and the ChatGPT/Kimi-inspired design with recognizable SVG icons.
 
+## Current executable application state — 2026-10-06
+
+The active working copy is `D:/opencodde agent/codex project/project`. It runs the actual Gateway at `http://127.0.0.1:8766/` against local PostgreSQL database `opencode_gateway`, migrated through `0008_paypal_checkout`. It is not the former SQLite browser fixture. The only account is `admin1` (`dahirobaid@gmail.com`, owner, active); its sample email was replaced. The existing project/workspace and three plan rows were preserved. No billing methods, payment orders, subscriptions, or provider credentials are configured in this database. PayPal merchant credentials are unset, so real provider chat and payment processing require the owner to configure them; the app must report unavailable until then.
+
+The browser/backend test source, Playwright configuration, generated reports, and test-only Node dependencies were removed on 2026-10-06 at the user's request after inspecting and running the isolated backend suite. That suite used only in-memory SQLite: 92 passed, 3 skipped, and 2 billing assertions expected the prior unavailable response rather than the current verified-record response. No test database was present or migrated. The application has no runtime dependency on those files. Do not recreate test files or a test harness unless the user changes this instruction.
+
 ## Definitions
 
 - REAL: connected backend/runtime behavior with scoped local evidence.
@@ -34,7 +40,7 @@ Source: `OpenCode_Platform_Requirements_AR_v2_1.md`, SHA256 `4282c6e8d960f6d0f0f
 
 Accounts, opaque hashed cookie sessions, required fields/location lookup, startup guards and admin/owner authorization are connected. Blank and three starter templates create actual owned directories and Git repositories. Files/diff/commit use the filesystem and Git. New Session creates a real OpenCode session on existing files in opt-in local mode. User metrics come from DB. Public assets are explicitly allowlisted.
 
-The frontend has a neutral conversation-focused layout, official OpenCode SVG paths, GitHub mark, line icons, Arabic/English and dark/light modes. Disabled integrations have honest empty states. No fake chat response, test success, remote push, billing date, price or payment history is generated.
+The frontend has a neutral conversation-focused layout, official OpenCode SVG paths, GitHub mark, line icons, Arabic/English and dark/light modes. Disabled integrations have honest empty states. Payment history and revenue are read from verified database payment orders; no fake chat response, test success, remote push, billing date, or price is generated.
 
 ## Baseline audit and fixes
 
@@ -2079,7 +2085,7 @@ The current Codex workspace now includes the newer OpenCode subscriptions, proje
 
 ### Current synchronized implementation
 
-Current merged feature classifications and verified test counts are in MERGE_REPORT.md. Persisted subscriptions and archiving are REAL; payment charges/invoices/revenue remain MISSING. No fake paid status was added.
+Current merged feature classifications and verified test counts are in MERGE_REPORT.md. Persisted subscriptions, archive actions, payment orders, customer payment history, administrator receipt review and verified-payment revenue are REAL. Automatic PayPal charges still require merchant credentials; formal tax invoices and refunds remain MISSING. No fake paid status was added.
 
 
 ## Workspace/payment update — 2026-10-05

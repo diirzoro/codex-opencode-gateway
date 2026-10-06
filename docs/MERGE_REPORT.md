@@ -51,6 +51,10 @@ PARTIAL/configuration-dependent: provider/GitHub OAuth, encrypted provider stora
 
 MISSING: automatic charge processing, real invoices/payment transactions/revenue, paid renewal processing and the remaining production isolation/deployment verification. No simulated data was added.
 
+## Local cleanup — 2026-10-06
+
+At the user's direction, the previously listed test/diagnostic sources, Playwright configuration and reports, test-only Node dependencies, package manifests, and account-bootstrap helper were removed from this working copy after their role was reviewed. The application runtime does not import them. This report's file lists above are historical merge records. Do not recreate test files unless the user changes that instruction.
+
 ## Preservation
 
 Full pre-sync Codex maintained-file backup: `D:\opencodde agent\codex project\.audit\codex-before-opencode-sync-2026-10-05`.

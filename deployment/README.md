@@ -1,6 +1,20 @@
 # Future manual deployment — NOT executed
 
-Current authorization is local-only. Do not run these commands until explicitly authorized and after SECURITY_MODEL.md launch gates are resolved. This version is not ready for public multi-user agent execution. OPENCODE_RUNTIME_MODE must remain disabled on a public Gateway until an OS/network sandbox replaces trusted local mode.
+This guide prepares a source package only. Packaging is local and never contacts a server. Do not deploy or run the server commands below until the owner explicitly asks. The production example enables the existing per-workspace OpenCode process mode as requested, but that mode is not an OS/network sandbox and is not safe for public customer execution until production isolation is implemented and reviewed.
+
+## Build the manual-upload package
+
+From the project root on Windows, run:
+
+```powershell
+python deployment/package_release.py
+```
+
+This writes `../project-release.zip` outside the repository and refuses to overwrite an existing archive. The package includes the current tracked and untracked source changes, but excludes `.git`, `.audit`, every real `.env`, keys/certificates, databases, runtime/workspace data, dependencies, and test files. It also includes a manifest for review. Inspect the ZIP contents and compare them with the intended release before manually uploading it. This command does not install dependencies, migrate a database, or contact the VPS.
+
+OpenCode integration details and the exact division between packaged adapter code and separately installed host runtime are documented in [OPENCODE_INTEGRATION.md](OPENCODE_INTEGRATION.md).
+
+GitHub App setup, callback URL, repository permissions, webhook configuration, and backend-only environment values are documented in [GITHUB_INTEGRATION.md](GITHUB_INTEGRATION.md).
 
 ## Preconditions
 
@@ -8,11 +22,13 @@ Current authorization is local-only. Do not run these commands until explicitly 
 
 The operator reports that the existing `opencode-web.service` binds only `127.0.0.1:4096`, without the retired shared login. Keep that service and port private. Configure `OPENCODE_BASE_URL=http://127.0.0.1:4096` only in the Gateway backend environment. Replace the obsolete `OPENCODE_URL` name manually in the existing environment when deployment is later authorized; remove retired shared OpenCode credential entries. Do not add OpenCode URLs/credentials to frontend config or reverse-proxy its raw UI/port for customers. The current adapter uses this reference for health only; public customer execution stays disabled pending per-workspace production isolation. See `docs/INTERNAL_OPENCODE_INFRASTRUCTURE.md`. No commands below change the OpenCode service or firewall.
 
-Validate the finished release on target Python 3.12/PostgreSQL 16, resolve dependencies/security/recovery/quotas, review HTTPS reverse proxy and service account permissions. Existing server state, service file and DB credentials have not been inspected. Preserve `.env`, runtime/workspaces and backups. Do not replace secrets with example values.
+Before deployment, validate the release on the target Python/PostgreSQL versions; configure HTTPS, recovery email, GitHub and payment credentials; and resolve per-customer OpenCode process/filesystem/provider-state isolation, resource limits, supervision, and secret backup/rotation. Existing server state, service file, installed OpenCode version, and DB credentials have not been inspected. Preserve `.env`, runtime/workspaces and backups. Do not replace secrets with example values.
+
+The project contains the Gateway-side OpenCode adapter in `backend/app/services/opencode.py`; it starts one OpenCode process per owned workspace when `OPENCODE_RUNTIME_MODE=local`. The binary itself is not copied into the Gateway source archive: install OpenCode 1.18.31 or 1.18.32 on the host and set `OPENCODE_BINARY` to its executable path. The internal service configured by `OPENCODE_BASE_URL` currently provides health diagnostics only; customer prompts use the Gateway-managed workspace process. The production example enables this mode at the owner's request, but it is not a complete sandbox and must not serve untrusted public customer workloads until filesystem/network/process isolation and quotas are implemented. The source archive includes the existing Gateway systemd unit; it will not replace or install a second OpenCode unit over the service already reported on the VPS.
 
 ## Package locally later
 
-Review the source tree and tests; include only source, approved assets, backend requirements/migrations and deployment/docs. Exclude `.env`, .git, .venv*, node_modules, test-results, playwright-report, workspaces, runtime, logs, test DBs, receipts and secrets. Manually upload the reviewed source package to `/home/tahir/opencode-gateway-release` using your chosen method. These instructions do not initiate a network connection.
+Review the source tree and the generated release manifest. Do not create a test environment. The package script includes application source, migrations, deployment configuration, and references; it excludes `.env`, `.git`, `.venv*`, `node_modules`, test files, test reports, `.audit`, workspaces, runtime, logs, databases, receipts, and key files. Manually upload the reviewed ZIP to `/home/tahir/opencode-gateway-release`, then extract it there so the source is at `/home/tahir/opencode-gateway-release/project/`. These instructions do not initiate a network connection.
 
 ## Commands on the VPS after approval
 

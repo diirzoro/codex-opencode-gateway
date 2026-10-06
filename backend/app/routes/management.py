@@ -12,7 +12,7 @@ from ..models.management import BillingMethod, AccountAudit, PasswordReset
 from ..schemas.account import RegisterRequest
 from ..security.passwords import hash_password, verify_password
 from ..security.sessions import hash_session_token
-from ..services import credentials, recovery, opencode
+from ..services import credentials, recovery, opencode, paypal
 from ..services.accounts import user_payload
 from .dependencies import require_user, require_admin
 
@@ -141,7 +141,7 @@ def method_values(data):
     return {**values,'details':credentials.encrypt(json.dumps(detail))}
 def validate_receiving_method(db,data,platform):
     from ..models import Plan
-    if data.checkout_mode=='link' and (not platform or (data.enabled and data.payment_url and not data.plan_id)):
+    if data.checkout_mode=='link' and (not platform or (data.enabled and (not data.payment_url or not data.plan_id))):
         raise HTTPException(422,'Hosted payment links require a platform method, payment URL and matching plan')
     if data.checkout_mode=='manual' and data.payment_url:
         raise HTTPException(422,'Select hosted payment link mode to use a payment URL')
@@ -149,6 +149,15 @@ def validate_receiving_method(db,data,platform):
         raise HTTPException(422,'PayPal API checkout requires a platform PayPal method without a static link')
     if data.kind=='googlepay' and data.enabled and data.checkout_mode!='link':
         raise HTTPException(422,'Google Pay requires a configured hosted checkout link from a supported payment processor')
+    if data.kind=='googlepay' and data.enabled and not data.plan_id:
+        raise HTTPException(422,'Google Pay requires a hosted payment link bound to one active plan')
+    if data.checkout_mode=='paypal' and data.enabled and not paypal.configured():
+        raise HTTPException(422,'Configure PayPal merchant credentials before enabling PayPal checkout')
+    if data.enabled and data.checkout_mode=='manual':
+        missing=[name for name,value in [('account holder',data.account_name),('receiving account or address',data.account_reference),('payment instructions',data.instructions)] if not value.strip()]
+        if data.kind=='bank' and not data.bank_name.strip(): missing.append('bank name')
+        if data.kind=='binance' and not data.network.strip(): missing.append('asset and network')
+        if missing: raise HTTPException(422,'Complete the real receiving details before enabling: '+', '.join(missing))
     if data.enabled:
         host=(urlsplit(data.payment_url).hostname or '').lower()
         if host=='example.com' or host.endswith(('.example','.example.com','.example.org','.example.net')) or any('EXAMPLE_REPLACE' in value.upper() for value in [data.account_name,data.account_reference,data.network]):
@@ -161,8 +170,21 @@ def methods(platform:bool=False,user:User=Depends(require_user),db:Session=Depen
     owner=scope(user,platform)
     return [method_payload(row) for row in db.scalars(select(BillingMethod).where(BillingMethod.user_id==owner))]
 @router.get('/billing/available-methods')
-def receiving(user:User=Depends(require_user),db:Session=Depends(get_db)):
-    return [method_payload(row) for row in db.scalars(select(BillingMethod).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)))]
+def receiving(plan_id:int|None=Query(default=None,ge=1),user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from ..models import Plan
+    plan=db.get(Plan,plan_id) if plan_id is not None else None
+    if plan_id is not None and (plan is None or not plan.active): raise HTTPException(422,'Unknown or inactive plan')
+    ready=[]
+    for row in db.scalars(select(BillingMethod).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True))):
+        payload=method_payload(row); details=payload['details']; mode=details.get('checkout_mode','manual')
+        if mode=='paypal' and not paypal.configured(): continue
+        if mode=='link' and (not details.get('payment_url') or not details.get('plan_id')): continue
+        if mode=='manual' and (not details.get('account_name') or not details.get('account_reference') or not details.get('instructions')): continue
+        if row.kind=='bank' and mode=='manual' and not details.get('bank_name'): continue
+        if row.kind=='binance' and mode=='manual' and not details.get('network'): continue
+        if plan is not None and (details.get('currency')!=plan.currency or details.get('plan_id') not in (None,plan.id)): continue
+        ready.append(payload)
+    return ready
 @router.post('/billing/methods',status_code=201)
 def create_method(data:MethodInput,platform:bool=False,user:User=Depends(require_user),db:Session=Depends(get_db)):
     scope(user,platform);validate_receiving_method(db,data,platform)
