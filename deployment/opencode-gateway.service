@@ -1,0 +1,24 @@
+[Unit]
+Description=OpenCode Gateway FastAPI service
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tahir
+Group=tahir
+WorkingDirectory=/home/tahir/opencode-gateway/backend
+EnvironmentFile=/home/tahir/opencode-gateway/.env
+ExecStart=/usr/bin/bash /home/tahir/opencode-gateway/backend/start-production.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/opencode-runtime /var/lib/opencode-workspaces
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

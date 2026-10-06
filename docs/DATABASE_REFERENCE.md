@@ -1,0 +1,164 @@
+# Verified local phase update — 2026-10-06
+
+See [REAL_AGENT_ACCEPTANCE.md](REAL_AGENT_ACCEPTANCE.md) for real isolated OpenCode/DeepSeek prompt, Stop and secret-boundary evidence, and [PAYMENT_CHECKOUT_REPORT.md](PAYMENT_CHECKOUT_REPORT.md) for admin-owned receiving methods, customer checkout, hosted links, PayPal backend create/capture verification, migration 0008 and remaining merchant-configuration/production gaps. These reports supersede overlapping historical payment/runtime claims below. No push or deployment.
+
+# Current local update — 2026-10-04
+
+Migration 0005_account_management adds billing_methods (UUID, nullable owner for platform methods, encrypted details, type/label/enabled), account_audit (actor, subject, action, timestamp), password_resets (owner, unique token hash, expiry, consumed flag), and github_connections.user_token/token_expires_at. Prior imported migrations add plans/platform_policy/GitHub states/provider credentials. Encryption key is outside the DB. Deletion requests preserve user and workspace rows.
+
+See [PHASE_REPORT.md](PHASE_REPORT.md) and [ACCOUNT_WORKSPACE_REQUIREMENTS.md](ACCOUNT_WORKSPACE_REQUIREMENTS.md).
+
+---
+
+## Earlier audit (historical)
+
+# Database reference
+
+Updated 2026-10-03. SQLAlchemy models are runtime authority. PostgreSQL is the application target; SQLite is explicitly test-only. No customer repository source content or raw authentication token is stored in Gateway PostgreSQL.
+
+## Actual local PostgreSQL database — 2026-10-06
+
+The running application uses PostgreSQL database `opencode_gateway` on loopback and is migrated to `0008_paypal_checkout`. Current operational rows: one active owner account (`admin1`), one existing project, one existing ready workspace, three plans, seeded country/region/city lookup data, and one platform policy. There are no configured billing methods, payment orders, subscriptions, or provider credentials. Authentication sessions are revoked after password recovery. The backend suite used in-memory SQLite and left no persistent test database or rows. The historical SQLite-only audit below predates this live local database and is not current migration status.
+
+## Migrations
+
+- `0001_accounts`: users/auth_sessions/countries/regions/cities, initial location seed.
+- `0002_workspaces`: projects/workspaces/workspace_sessions/execution_events. No destructive alteration of account tables. Downgrade drops new tables and would lose their metadata; do not use on valuable work.
+
+Fresh SQLite migration `alembic upgrade head` and `alembic current` verified at 0002_workspaces. PostgreSQL offline SQL generated successfully, but not executed on PostgreSQL 16. No production database was inspected or migrated.
+
+## Current tables
+
+### countries
+
+| Column | Type | Nullable | Key / reference |
+|---|---|---|---|
+| id | INTEGER | False | PK  |
+| name | VARCHAR(120) | False |  |
+| code | VARCHAR(2) | False |  |
+| enabled | BOOLEAN | False |  |
+
+### regions
+
+| Column | Type | Nullable | Key / reference |
+|---|---|---|---|
+| id | INTEGER | False | PK  |
+| country_id | INTEGER | False | countries.id |
+| name | VARCHAR(120) | False |  |
+| enabled | BOOLEAN | False |  |
+
+### cities
+
+| Column | Type | Nullable | Key / reference |
+|---|---|---|---|
+| id | INTEGER | False | PK  |
+| region_id | INTEGER | False | regions.id |
+| name | VARCHAR(120) | False |  |
+| enabled | BOOLEAN | False |  |
+
+### users
+
+| Column | Type | Nullable | Key / reference |
+|---|---|---|---|
+| id | CHAR(32) | False | PK  |
+| username | VARCHAR(50) | False |  |
+| email | VARCHAR(254) | False |  |
+| password_hash | VARCHAR(255) | False |  |
+| phone | VARCHAR(30) | False |  |
+| postal_code | VARCHAR(24) | False |  |
+| country_id | INTEGER | False | countries.id |
+| region_id | INTEGER | True | regions.id |
+| city_id | INTEGER | True | cities.id |
+| role | VARCHAR(20) | False |  |
+| status | VARCHAR(20) | False |  |
+| preferred_language | VARCHAR(5) | False |  |
+| preferred_theme | VARCHAR(10) | False |  |
+| trial_started_at | DATETIME | False |  |
+| trial_ends_at | DATETIME | False |  |
+| last_login_at | DATETIME | True |  |
+| created_at | DATETIME | False |  |
+| updated_at | DATETIME | False |  |
+
+### auth_sessions
+
+| Column | Type | Nullable | Key / reference |
+|---|---|---|---|
+| id | CHAR(32) | False | PK  |
+| user_id | CHAR(32) | False | users.id |
+| token_hash | VARCHAR(64) | False |  |
+| expires_at | DATETIME | False |  |
+| last_seen_at | DATETIME | True |  |
+| revoked_at | DATETIME | True |  |
+| created_at | DATETIME | False |  |
+
+### projects
+
+| Column | Type | Nullable | Key / reference |
+|---|---|---|---|
+| id | CHAR(32) | False | PK  |
+| user_id | CHAR(32) | False | users.id |
+| name | VARCHAR(120) | False |  |
+| source_type | VARCHAR(20) | False |  |
+| repository | VARCHAR(255) | True |  |
+| default_branch | VARCHAR(120) | False |  |
+| template | VARCHAR(40) | True |  |
+| created_at | DATETIME | False |  |
+
+### workspaces
+
+| Column | Type | Nullable | Key / reference |
+|---|---|---|---|
+| id | CHAR(32) | False | PK  |
+| project_id | CHAR(32) | False | projects.id |
+| user_id | CHAR(32) | False | users.id |
+| status | VARCHAR(30) | False |  |
+| base_commit_sha | VARCHAR(64) | True |  |
+| created_at | DATETIME | False |  |
+| last_activity_at | DATETIME | False |  |
+
+### workspace_sessions
+
+| Column | Type | Nullable | Key / reference |
+|---|---|---|---|
+| id | CHAR(32) | False | PK  |
+| workspace_id | CHAR(32) | False | workspaces.id |
+| user_id | CHAR(32) | False | users.id |
+| opencode_session_id | VARCHAR(120) | False |  |
+| title | VARCHAR(120) | False |  |
+| status | VARCHAR(30) | False |  |
+| created_at | DATETIME | False |  |
+
+### execution_events
+
+| Column | Type | Nullable | Key / reference |
+|---|---|---|---|
+| id | INTEGER | False | PK  |
+| session_id | CHAR(32) | False | workspace_sessions.id |
+| kind | VARCHAR(50) | False |  |
+| data | TEXT | False |  |
+| created_at | DATETIME | False |  |
+
+## Ownership and storage
+
+Project is the logical record; Workspace owns one filesystem checkout; WorkspaceSession binds a conversation to that same checkout. Each has user_id and server-owned UUID. Runtime path is derived as `{WORKSPACE_ROOT}/{user_id}/{workspace_id}/repo`; it is neither client input nor an API field. Base SHA remains null for blank/template origins. A default `work` branch is created locally.
+
+Execution events store ordered IDs and sanitized lifecycle metadata; they do not copy source files or complete model responses. Runtime conversation files remain under the per-workspace runtime directory. PostgreSQL transaction success does not make filesystem creation transactional: failed setup preserves a failed workspace record/files for recovery. No automatic delete cascade/cleanup policy is implemented.
+
+Missing target tables: GitHub installations/connections, encrypted credentials, upload metadata, task leases/idempotency, billing profiles/plans/versions/subscriptions/payments/ledger and audit trails. Add schema with the corresponding implementation, not empty tables suggesting completion.
+
+
+## OpenCode synchronization (2026-10-05)
+
+The current Codex workspace now includes the newer OpenCode subscriptions, project archiving, client/admin dashboards, reports, shell and grid UI, together with the merged account-management features. See MERGE_REPORT.md for current verification. The preserved OpenCode document is in reference/opencode/. This workspace uses migration head `0006_subscriptions_archive` after the existing `0005_account_management`. No VPS access or push was performed.
+
+
+### Current synchronized implementation
+
+New Subscription table and projects.archived_at are introduced by 0006_subscriptions_archive, downstream of the unchanged Codex 0005_account_management. Single head; SQLite upgrade and PostgreSQL offline SQL validated.
+
+
+## Workspace/payment update — 2026-10-05
+
+Migration 0007_payment_orders adds owned payment orders with server price/currency/duration and plan/method snapshots, awaiting_payment/pending_review/paid state, submitted reference, reviewer, verified receipt reference and paid time. Administrative confirmation updates the subscription in the same transaction. No raw card number or CVV fields are introduced.
+
+See [WORKSPACE_FIRST_REPORT.md](WORKSPACE_FIRST_REPORT.md) for scope, evidence and limits. This update supersedes conflicting historical statements.

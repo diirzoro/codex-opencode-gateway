@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0d625c" />
+  <title>OpenCode Gateway</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="announcement">✨ <span data-i18n="announce">تجربة مجانية لمدة 10 أيام — ابدأ رحلتك مع OpenCode Gateway اليوم</span></div>
+
+  <header class="site-header" id="siteHeader">
+    <a class="brand" href="#" id="brandHome">
+      <span class="brand-icon">&lt;/&gt;</span>
+      <span class="brand-copy"><strong>OpenCode Gateway</strong><small data-i18n="tagline">من مشروعك إلى OpenCode مباشرة</small></span>
+    </a>
+
+    <nav class="main-nav">
+      <button data-scroll="landing" data-i18n="homeNav">الرئيسية</button>
+      <button data-scroll="features" data-i18n="featuresNav">المزايا</button>
+      <button data-scroll="offers" data-i18n="offersNav">العروض</button>
+      <button data-scroll="pricing" data-i18n="pricingNav">الاشتراك</button>
+      <button id="loginNav" data-i18n="login">تسجيل الدخول</button>
+    </nav>
+
+    <div class="header-actions">
+      <button class="icon-btn" id="langBtn" aria-label="Switch language">EN</button>
+      <button class="icon-btn" id="themeBtn" aria-label="Toggle theme">☾</button>
+      <button class="primary compact" id="createNav" data-i18n="createAccount">إنشاء حساب</button>
+    </div>
+  </header>
+
+  <main id="landing" class="page active">
+    <section class="hero">
+      <div class="hero-copy">
+        <div class="hero-badge"><span class="platform-chip github-chip">GitHub</span><span class="platform-arrow">→</span><span class="platform-chip opencode-chip">OpenCode</span></div>
+        <h1 data-i18n="heroTitle">اربط GitHub وافتح OpenCode على مشروعك مباشرة</h1>
+        <p data-i18n="heroText">اختر المستودع والفرع، افتح OpenCode من المتصفح، واكتب طلبك للـAgent ليعمل على مشروع GitHub الخاص بك.</p>
+
+        <div class="hero-actions">
+          <button class="primary large" id="startFree" data-i18n="tryFree">ابدأ 10 أيام مجانًا</button>
+          <button class="secondary large" id="connectGithub"><span data-icon="github"></span> GitHub</button>
+        </div>
+
+        <div class="hero-points">
+          <span>✓ <b data-i18n="noInstall">لا حاجة للتثبيت</b></span>
+          <span>✓ <b data-i18n="secureFast">آمن وسريع</b></span>
+          <span>✓ <b data-i18n="ownProjects">مشاريعك تبقى في GitHub</b></span>
+        </div>
+      </div>
+
+      <div class="hero-photo">
+        <img src="./assets/yemen-hero.svg" alt="Old Yemeni architecture" />
+        <div class="photo-note">
+          <strong data-i18n="sanaaTitle">صنعاء القديمة</strong>
+          <small data-i18n="sanaaText">حيث يلهم التاريخ المستقبل · Photo: CC BY 2.0</small>
+        </div>
+      </div>
+    </section>
+
+    <p class="demo-note" data-i18n="demoNotice"></p><section class="stats-row">
+      <article><span class="stat-icon people" data-icon="github"></span><div><small data-i18n="connectedRepos">مستودعات GitHub المرتبطة</small><strong>—</strong></div></article>
+      <article><span class="stat-icon folder">&lt;/&gt;</span><div><small data-i18n="openCodeSessions">جلسات OpenCode</small><strong>—</strong></div></article>
+      <article><span class="stat-icon stack" data-icon="terminal"></span><div><small data-i18n="agentRuns">طلبات الـAgent</small><strong>—</strong></div></article>
+      <article><span class="stat-icon users" data-icon="code"></span><div><small data-i18n="activeDevelopers">المطورون النشطون</small><strong>—</strong></div></article>
+    </section>
+
+    <section class="how-it-works">
+      <div class="how-title">
+        <span class="eyebrow">GitHub + OpenCode</span>
+        <h2 data-i18n="howTitle">ثلاث خطوات وتبدأ البرمجة</h2>
+      </div>
+      <div class="steps">
+        <article><span data-icon="github"></span><div><b data-i18n="howOne"></b><small>01 · GitHub</small></div></article>
+        <article><span data-icon="branch"></span><div><b data-i18n="howTwo"></b><small>02 · Repository / Branch</small></div></article>
+        <article><span data-icon="terminal"></span><div><b>OpenCode</b><small data-i18n="ownProvider"></small></div></article>
+        <article><span data-icon="code"></span><div><b data-i18n="reviewChanges"></b><small>04 · Files / Diff / Logs</small></div></article>
+        <article><span data-icon="branch"></span><div><b>Commit / Push</b><small>05 · GitHub</small></div></article>
+      </div>
+    </section>
+
+    <section id="features" class="content-grid">
+      <article class="workspace-preview card">
+        <div class="preview-head">
+          <div class="preview-brand"><span class="mini-code">&lt;/&gt;</span><div><strong>OpenCode Workspace</strong><small data-i18n="browserIDE">مرتبط مباشرة بمستودع GitHub والفرع المختار</small></div></div>
+          <button class="link-btn" id="openWorkspaceDemo" data-i18n="openWorkspace">فتح مساحة العمل ↗</button>
+        </div>
+        <div class="code-window">
+          <div class="code-sidebar"><span></span><span></span><span></span><span></span></div>
+          <div class="code-tree">
+            <b>MY-PROJECT</b>
+            <small>▾ src</small>
+            <small>&nbsp;&nbsp;▾ app</small>
+            <small>&nbsp;&nbsp;&nbsp;&nbsp;index.ts</small>
+            <small>&nbsp;&nbsp;&nbsp;&nbsp;routes.ts</small>
+            <small>package.json</small>
+            <small>README.md</small>
+          </div>
+          <div class="code-editor">
+            <div class="tabs">index.ts &nbsp;&nbsp; package.json</div>
+            <pre><span class="purple">import</span> { Hono } <span class="purple">from</span> 'hono'
+
+<span class="blue">const</span> app = new Hono()
+
+app.get('/', (c) =&gt; {
+  <span class="purple">return</span> c.json({
+    message: 'Hello from OpenCode Gateway',
+    project: 'Your GitHub repository'
+  })
+})
+
+<span class="purple">export default</span> app</pre>
+            <div class="terminal">● Ready &nbsp; Local workspace</div>
+          </div>
+        </div>
+      </article>
+
+      <aside class="right-column">
+        <article class="trial-card card" id="offers">
+          <span class="trial-kicker" data-i18n="trialOffer">عرض خاص</span>
+          <h2 data-i18n="tenDaysFree">تجربة مجانية 10 أيام</h2>
+          <p data-i18n="trialCopy">اكتشف OpenCode Gateway واربط GitHub ومزود الذكاء الاصطناعي الخاص بك بدون أي التزام.</p>
+          <button class="primary wide" data-auth data-i18n="startTrial">ابدأ تجربتك المجانية</button>
+          <small data-i18n="noCard">لا نطلب بطاقة ائتمان في النسخة التجريبية</small>
+        </article>
+
+        <article class="why-card card">
+          <h3 data-i18n="whyTitle">لماذا OpenCode Gateway؟</h3>
+          <div class="why-grid">
+            <div><span>🔒</span><b data-i18n="safe">آمن وموثوق</b><small data-i18n="safeText">مشروعك في حسابك</small></div>
+            <div><span>☁</span><b data-i18n="anywhere">من أي مكان</b><small data-i18n="anywhereText">كل ما تحتاجه في المتصفح</small></div>
+            <div><span>◷</span><b data-i18n="saveTime">يوفر وقتك</b><small data-i18n="saveTimeText">ابدأ مباشرة</small></div>
+            <div><span>◎</span><b data-i18n="mobileFirst">للهاتف أولًا</b><small data-i18n="mobileFirstText">تجربة خفيفة وسريعة</small></div>
+          </div>
+        </article>
+      </aside>
+    </section>
+
+    <section class="feature-strip">
+      <article><span>GitHub</span><b data-i18n="githubKeep">احفظ مشروعك في حسابك</b></article>
+      <article><span>OpenCode</span><b data-i18n="powerfulCoding">بيئة البرمجة التي تحتاجها</b></article>
+      <article><span>AI</span><b data-i18n="ownProvider">استخدم مزودك الخاص</b></article>
+      <article><span>Mobile</span><b data-i18n="phoneReady">جاهز للهاتف والمتصفح</b></article>
+    </section>
+
+    <section id="pricing" class="offer-banner">
+      <div><span data-i18n="simplePlan">ابدأ بدون تعقيد</span><h2 data-i18n="trialThenPlan">10 أيام مجانًا، ثم اختر خطتك</h2></div>
+      <button class="primary" data-auth data-i18n="createAccount">إنشاء حساب</button>
+    </section>
+
+    <footer><b>OpenCode Gateway</b><span data-i18n="footerText">Hosted OpenCode. Your GitHub. Your AI.</span></footer>
+  </main>
+
+  <main id="authPage" class="page auth-page">
+    <section class="auth-shell">
+      <div class="auth-visual">
+        <div class="auth-terminal" dir="ltr"><div><span data-icon="github"></span> GitHub &nbsp; → &nbsp; &lt;/&gt; OpenCode</div><pre>$ git switch ui-redesign
+✓ repository selected
+✓ branch selected
+
+$ opencode
+&gt; Describe your next change
+
+Review diff → Commit → Push</pre></div>
+        <div class="auth-overlay">
+          <div class="auth-code-mark">&lt;/&gt;</div>
+          <h2 data-i18n="authSideTitle">من GitHub إلى OpenCode في خطوات بسيطة</h2>
+          <ol>
+            <li data-i18n="step1">أنشئ حسابك أو سجل الدخول</li>
+            <li data-i18n="step2">اربط حساب GitHub</li>
+            <li data-i18n="step3">اختر المشروع والفرع</li>
+            <li data-i18n="step4">اكتب طلبك واترك OpenCode يعمل</li>
+          </ol>
+          <div class="auth-tech"><span>GitHub</span><span>OpenCode</span><span>AI</span></div>
+        </div>
+      </div>
+
+      <div class="auth-form-wrap">
+        <button class="back-btn" id="backFromAuth">← <span data-i18n="back">رجوع</span></button>
+        <div class="auth-brand"><span class="brand-icon">&lt;/&gt;</span><div><strong>OpenCode Gateway</strong><small data-i18n="tagline">من مشروعك إلى OpenCode مباشرة</small></div></div>
+
+        <p class="demo-note" data-i18n="authDemo"></p><div class="auth-tabs">
+          <button class="active" id="registerTab" data-i18n="createAccount">إنشاء حساب</button>
+          <button id="loginTab" data-i18n="login">تسجيل الدخول</button>
+        </div>
+
+        <form id="registerForm" class="auth-form active">
+          <h2 data-i18n="welcomeNew">ابدأ تجربتك المجانية</h2>
+          <p data-i18n="registerIntro">10 أيام مجانية لتجربة المنصة قبل الاشتراك.</p>
+          <div class="two-fields">
+            <div><label data-i18n="username">اسم المستخدم *</label><input required /></div>
+            <div><label data-i18n="country">البلد *</label><select required><option value="">اختر البلد</option><option>Yemen</option><option>Saudi Arabia</option><option>Egypt</option><option>Turkey</option><option>India</option><option>Other</option></select></div>
+          </div>
+          <label data-i18n="email">البريد الإلكتروني *</label><input type="email" required />
+          <label data-i18n="phone">رقم الهاتف *</label><input type="tel" required />
+          <label data-i18n="password">كلمة المرور *</label><input type="password" required />
+          <button class="primary wide" type="submit" data-i18n="createAndContinue">إنشاء الحساب والمتابعة</button>
+          <button class="secondary wide" type="button" id="githubRegister"><span data-icon="github"></span> GitHub</button>
+        </form>
+
+        <form id="loginForm" class="auth-form">
+          <h2 data-i18n="welcomeBack">مرحبًا بعودتك</h2>
+          <p data-i18n="loginIntro">سجل الدخول للعودة إلى مشاريعك.</p>
+          <label data-i18n="emailOrUser">البريد الإلكتروني أو اسم المستخدم</label><input required />
+          <label data-i18n="password">كلمة المرور</label><input type="password" required />
+          <div class="login-options"><label><input type="checkbox" /> <span data-i18n="remember">تذكرني</span></label><button type="button" data-i18n="forgot">نسيت كلمة المرور؟</button></div>
+          <button class="primary wide" type="submit" data-i18n="login">تسجيل الدخول</button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <section id="workspace" class="page">
+    <div class="workspace-shell">
+      <aside class="workspace-sidebar">
+        <div class="side-logo"><span class="brand-icon">&lt;/&gt;</span><b>OpenCode Gateway</b></div>
+        <button class="new-session">＋ <span data-i18n="newSession">جلسة جديدة</span></button>
+        <small class="side-label" data-i18n="sessions">الجلسات</small>
+        <button class="session active"><span>M</span><div><b id="sessionRepo">OpenCode Gateway</b><small id="sessionBranch">ui-redesign</small></div></button>
+        <div class="side-spacer"></div>
+        <button class="side-link" id="workspaceGithub">GitHub · Demo</button>
+        <button class="side-link" id="backLanding" data-i18n="homeNav">الرئيسية</button>
+      </aside>
+      <div class="workspace-main">
+        <div class="project-bar"><div class="repo-controls"><label for="repoSelect">Repository</label><select id="repoSelect"><option>diirzoro/opencode-gateway</option><option>diirzoro/madrasati</option></select><label for="branchSelect">Branch</label><select id="branchSelect"><option>ui-redesign</option><option>qoder-test</option></select></div><div><span class="connection">● GitHub</span><span class="trial-pill">10 <span data-i18n="days">أيام</span></span></div></div>
+        <div class="agent-layout">
+          <section class="agent-panel">
+            <div class="agent-feed">
+              <div class="agent-message"><span>Agent</span><h3 data-i18n="agentWelcome">ماذا تريد أن تعدل في مشروعك؟</h3><p data-i18n="agentHint">ستظهر هنا ردود OpenCode، الملفات المعدلة، ونتائج الأوامر.</p></div>
+              <div class="result-card">✓ <span data-i18n="readyToStart">جاهز لبدء جلسة جديدة</span></div>
+            </div>
+            <div class="prompt-box"><textarea id="promptInput" aria-label="Agent prompt" data-i18n-placeholder="promptPlaceholder" placeholder="اكتب طلبك هنا..."></textarea><div><button class="tiny-btn">＋</button><span class="agent-mode">Agent</span><button class="primary compact" id="sendPrompt" data-i18n="send">إرسال</button></div></div>
+          </section>
+          <aside class="changes-panel"><div class="changes-head"><b data-i18n="changes">التغييرات</b><span>0 files</span></div><div class="change-tabs" role="tablist" aria-label="Changes"><button data-change-tab="files" role="tab" aria-selected="true">Files</button><button data-change-tab="diff" role="tab" aria-selected="false">Diff</button><button data-change-tab="logs" role="tab" aria-selected="false">Logs</button></div><div id="changeContent" class="changes-empty" role="tabpanel"></div><div class="review-actions"><button class="secondary" id="viewDiff">View Diff</button><button class="secondary" id="commitChanges" disabled>Commit</button><button class="primary" id="pushChanges" disabled>Push</button><small data-i18n="backendNeeded"></small></div></aside>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="toast" id="toast"></div>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
