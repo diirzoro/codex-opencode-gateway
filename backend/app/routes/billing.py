@@ -122,6 +122,8 @@ def checkout(data:Checkout,user:User=Depends(require_user),db:Session=Depends(ge
     if not method or method.user_id is not None or not method.enabled: raise HTTPException(422,'Payment method is unavailable')
     from .management import method_payload
     details=method_payload(method)
+    if details['details'].get('checkout_mode')=='link' and (not details['details'].get('payment_url') or not details['details'].get('plan_id')):
+        raise HTTPException(503,'This payment method needs its hosted checkout link and matching plan configured by administration. No payment was made.')
     if details['details'].get('currency')!=plan.currency: raise HTTPException(422,'Payment method currency does not match this plan')
     if details['details'].get('plan_id') not in (None,plan.id):raise HTTPException(422,'Payment link belongs to another plan')
     if plan.price_cents<=0 or plan.duration_days<=0: raise HTTPException(422,'Plan requires valid paid price and duration')

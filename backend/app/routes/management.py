@@ -141,7 +141,7 @@ def method_values(data):
     return {**values,'details':credentials.encrypt(json.dumps(detail))}
 def validate_receiving_method(db,data,platform):
     from ..models import Plan
-    if data.checkout_mode=='link' and (not platform or (data.enabled and (not data.payment_url or not data.plan_id))):
+    if data.checkout_mode=='link' and (not platform or (data.enabled and data.payment_url and not data.plan_id)):
         raise HTTPException(422,'Hosted payment links require a platform method, payment URL and matching plan')
     if data.checkout_mode=='manual' and data.payment_url:
         raise HTTPException(422,'Select hosted payment link mode to use a payment URL')

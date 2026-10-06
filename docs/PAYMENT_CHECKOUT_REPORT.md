@@ -49,6 +49,8 @@ Admin has ready-to-edit disabled presets for PayPal, Google Pay, Binance, Al-Qut
 
 ## Final local verification
 
+Follow-up: user requested enabled methods before supplying provider settings. A platform hosted-link method may be enabled with an empty link so it appears as a selectable payment option. Checkout returns an honest 503 configuration error before creating an order or charging when link/plan are missing. Example receiver values and example URLs still cannot be enabled. Enabled means listed, not a verified processor connection. The local preview Google Pay method is now enabled in hosted-link mode with no fabricated URL.
+
 95 backend tests passed; one paid-provider test was skipped. Four payment browser scenarios passed across sequential runs (receiving-method permissions/manual activation, hosted link checkout, honest missing PayPal configuration, and editable disabled presets). The broader headed Chromium run passed 14 cases with one real-provider automation case skipped; real provider chat/Stop was verified separately as recorded in REAL_AGENT_ACCEPTANCE.md. Fresh local Alembic migration chain through 0008 applied successfully on SQLite; production PostgreSQL upgrade remains unverified. JavaScript syntax and Git whitespace checks passed.
 
 Success/decline/mismatched amount/mismatched merchant/cross-user/idempotence/non-test sandbox entitlement checks use explicit PayPal HTTP contract doubles, not actual financial transactions. No empty or invented card number was charged. Actual merchant Sandbox acceptance remains blocked on the settings the user will supply later.
