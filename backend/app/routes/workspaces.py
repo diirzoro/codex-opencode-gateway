@@ -3,7 +3,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -226,10 +226,33 @@ def push(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=De
 @router.post("/workspaces/{workspace_id}/sessions",status_code=201)
 def new_session(workspace_id: uuid.UUID,data: NewSession,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Workspace,workspace_id,user.id)
+    manager.require_quota_headroom(row)
     runtime_id=opencode.for_workspace(row).create_session(data.title)
     session=WorkspaceSession(workspace_id=row.id,user_id=user.id,opencode_session_id=runtime_id,title=data.title)
     db.add(session); db.commit(); db.refresh(session)
     return session_payload(session)
+
+@router.post("/workspaces/{workspace_id}/files/upload",status_code=201)
+def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),path: str=Form(default=""),user: User=Depends(require_user),db: Session=Depends(get_db)):
+    import re
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    name=(file.filename or "").replace("\\","/").split("/")[-1].strip()
+    if not name or name in {".",".."} or "\x00" in name or len(name)>200: raise HTTPException(422,"A valid file name is required")
+    if name==".env" or name.endswith((".pem",".key")) or name.startswith("."): raise HTTPException(403,"This file type is not allowed in the workspace")
+    folder=(path or "").strip().strip("/")
+    if folder and not re.fullmatch(r"[A-Za-z0-9._/-]{1,500}",folder): raise HTTPException(422,"Invalid folder path")
+    storage=manager.storage_payload(row)
+    content=file.file.read(manager.WORKSPACE_QUOTA_BYTES+1)
+    if len(content)>manager.WORKSPACE_QUOTA_BYTES: raise HTTPException(413,"File exceeds the 50 MB workspace limit")
+    if len(content)>storage["remaining_bytes"]: raise HTTPException(413,"Workspace storage limit reached (50 MB). Remove files before uploading.")
+    target=manager.safe_path(row,(folder+"/" if folder else "")+name)
+    target.parent.mkdir(parents=True,exist_ok=True)
+    target.write_bytes(content)
+    return {"path":(folder+"/" if folder else "")+name,"size":len(content),"storage":manager.storage_payload(row)}
+
+@router.get("/workspaces/{workspace_id}/storage")
+def storage(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    return manager.storage_payload(manager.owned(db,Workspace,workspace_id,user.id))
 
 @router.get("/workspaces/{workspace_id}/sessions")
 def sessions(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):

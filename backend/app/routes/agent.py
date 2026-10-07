@@ -81,7 +81,12 @@ async def execute(session_id,service,runtime_id,data):
         failure=info.get("role")!="assistant" or bool(info.get("error")) or not info.get("time",{}).get("completed")
         with SessionLocal() as db:
             if failure:
-                finish_execution(db,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'})
+                error=info.get("error") if isinstance(info.get("error"),dict) else {}
+                error_name=str(error.get("name") or "")
+                error_data=error.get("data") if isinstance(error.get("data"),dict) else {}
+                error_msg=str(error_data.get("message") or error.get("message") or "")
+                detail=(": "+error_name+(" - "+error_msg if error_msg else "")).strip(" :") if (error_name or error_msg) else ""
+                finish_execution(db,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'+detail[:400]})
             else:
                 finish_execution(db,session_id,'completed',normalize_states(response.get('parts',[])))
     except Exception:
@@ -93,6 +98,8 @@ async def execute(session_id,service,runtime_id,data):
 @router.post("/{session_id}/messages",status_code=202)
 async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
+    from ..services import workspaces as manager
+    manager.require_quota_headroom(workspace)
     if str(session_id) in tasks or session.status in {"submitted","waiting_approval"}:
         raise HTTPException(409,"Session already has an active or interrupted request; stop or review it first")
     # One mutating agent at a time per workspace to protect shared files.
@@ -104,6 +111,15 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
     if not policy.model_allowed(policy_row,data.model_id):
         raise HTTPException(403,"Model is disabled by platform policy")
     service=await asyncio.to_thread(opencode.for_workspace,workspace)
+    # Self-heal orphaned runtime sessions (for example after a runtime restart):
+    # when the stored runtime session no longer exists, create a fresh one for the same files.
+    try:
+        probe=await asyncio.to_thread(service.request,"GET",service.session_path(session.opencode_session_id))
+    except HTTPException:
+        probe=None
+    if not isinstance(probe,dict) or probe.get("id")!=session.opencode_session_id:
+        new_runtime_id=await asyncio.to_thread(service.create_session,session.title)
+        session.opencode_session_id=new_runtime_id; db.commit()
     if data.agent_id:
         from .workspaces import agent_choices
         agents=await asyncio.to_thread(agent_choices,service)
