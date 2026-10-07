@@ -32,7 +32,7 @@ async def browser_boundary(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-Frame-Options"] = "DENY"
-    if request.url.path.startswith("/api/") or request.url.path in {"/", "/index.html", "/app.js", "/enhancements.js", "/management.js", "/dashboards.js", "/styles.css", "/config.js"}:
+    if request.url.path.startswith("/api/") or request.url.path in {"/", "/index.html", "/app.js", "/enhancements.js", "/management.js", "/dashboards.js", "/runtime-client.js", "/styles.css", "/config.js"}:
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -42,5 +42,5 @@ def public_file(name):
         return FileResponse(frontend / name)
     return serve
 
-for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/dashboards.js": "dashboards.js", "/styles.css": "styles.css", "/config.js": "config.js", "/assets/yemen-hero.svg": "assets/yemen-hero.svg"}.items():
+for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/dashboards.js": "dashboards.js", "/runtime-client.js": "runtime-client.js", "/styles.css": "styles.css", "/config.js": "config.js", "/assets/yemen-hero.svg": "assets/yemen-hero.svg"}.items():
     app.add_api_route(url, public_file(name), methods=["GET"], include_in_schema=False)

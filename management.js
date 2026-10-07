@@ -13,7 +13,7 @@
   const gridIcon=(id,label)=>{const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),use=document.createElementNS('http://www.w3.org/2000/svg','use');svg.classList.add('ui-icon');svg.setAttribute('aria-hidden','true');use.setAttribute('href','#'+id);svg.append(use);return svg};
   const row=(root,title,detail,actions=[])=>{let grid=gridMap.get(root);if(!grid){const wrap=node('div','','manage-grid-wrap'),table=node('table','','manage-grid'),head=node('thead'),tr=node('tr');for(const label of [trLabel('Record','السجل'),trLabel('Details','التفاصيل'),trLabel('Actions','الإجراءات')])tr.append(node('th',label));head.append(tr);const tbody=node('tbody');table.append(head,tbody);wrap.append(table);root.append(wrap);grid={tbody};gridMap.set(root,grid)}const tr=node('tr','','manage-grid-row'),titleCell=node('th',title),detailCell=node('td',detail),actionCell=node('td'),actionsBox=node('div','','manage-actions');titleCell.scope='row';for(const action of actions){const label=action.textContent.trim();if(!label)continue;const iconId=/delete|disable|disconnect|remove|archive|suspend/i.test(label)?'icon-trash':/edit|change|rename/i.test(label)?'icon-edit':/view|open|details/i.test(label)?'icon-eye':/connect|authorize/i.test(label)?'icon-link':null;if(iconId){action.classList.add('grid-crud-button');action.title=label;action.setAttribute('aria-label',label);const icon=gridIcon(iconId,label);action.replaceChildren(icon)}else action.classList.add('grid-row-action');actionsBox.append(action)}actionCell.append(actionsBox);tr.append(titleCell,detailCell,actionCell);grid.tbody.append(tr)};
   const trLabel=(en,ar)=>lang==='ar'?ar:en;
-  function signOut(){currentUser=null;activeWorkspace=null;activeSession=null;activeProject=null;stopEvents();updateNavigation();showPage('authPage')}
+  function signOut(){window.workspaceRuntime?.clear();currentUser=null;activeWorkspace=null;activeSession=null;activeProject=null;stopEvents();updateNavigation();showPage('authPage')}
   const admin=()=>['admin','owner'].includes(currentUser?.role);
 
   const main=node('main','','page portal-page');main.id='managementPage';protectedPages.add(main.id);
@@ -96,24 +96,82 @@
     }
   }
   async function providers(body,platform=false){
-    const workspaceSettings=section(body,tr('Runtime / workspace settings','\u0625\u0639\u062f\u0627\u062f\u0627\u062a \u0648\u0642\u062a \u0627\u0644\u062a\u0634\u063a\u064a\u0644 \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644'));
+    body.replaceChildren();
+    const workspaceSettings=section(body,tr('Runtime / workspace settings','إعدادات وقت تشغيل مساحة العمل'));
     const [workspaces,projects]=await Promise.all([api('/api/workspaces'),api('/api/projects')]);
-    const picker=select(workspaceSettings,tr('Workspace','\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644'),'workspace',[['',tr('Select workspace','\u0627\u062e\u062a\u0631 \u0645\u0633\u0627\u062d\u0629 \u0639\u0645\u0644')],...workspaces.map(w=>[w.id,(projects.find(p=>p.id===w.project_id)?.name||tr('Workspace','\u0645\u0633\u0627\u062d\u0629 \u0639\u0645\u0644'))+' ? '+w.status])]);picker.value=activeWorkspace?.id||'';
-    picker.onchange=async()=>{const w=workspaces.find(w=>w.id===picker.value);if(!w)return;try{await openWorkspace(await api('/api/projects/'+w.project_id),w);await open('providers')}catch(e){toast(e.message)}};
-    const box=section(body,tr('Connect an AI provider','\u0631\u0628\u0637 \u0645\u0632\u0648\u062f \u0630\u0643\u0627\u0621 \u0627\u0635\u0637\u0646\u0627\u0639\u064a'));box.append(node('p',tr('Choose a provider and add its API key. After connection, its models and workspace agents become available in the prompt area. Your key is encrypted on the server.','\u0627\u062e\u062a\u0631 \u0627\u0644\u0645\u0632\u0648\u0651\u062f \u0648\u0623\u0636\u0641 \u0645\u0641\u062a\u0627\u062d API. \u0628\u0639\u062f \u0627\u0644\u0631\u0628\u0637 \u0633\u062a\u0638\u0647\u0631 \u0646\u0645\u0627\u0630\u062c\u0647 \u0648\u0648\u0643\u0644\u0627\u0621 \u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644 \u0641\u064a \u0645\u0646\u0637\u0642\u0629 \u0627\u0644\u0645\u062d\u0627\u062f\u062b\u0629. \u064a\u064f\u0634\u0641\u0651\u0631 \u0627\u0644\u0645\u0641\u062a\u0627\u062d \u0639\u0644\u0649 \u0627\u0644\u062e\u0627\u062f\u0645.')));
-    body.insertBefore(box,body.firstChild);
-    box.append(button(tr('Open workspace','\u0641\u062a\u062d \u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644'),()=>activeWorkspace?page('workspacePage'):window.openClientView('projects')));
-    if(!activeWorkspace){box.append(node('p',tr('Select a workspace before connecting a provider.','\u0627\u062e\u062a\u0631 \u0645\u0633\u0627\u062d\u0629 \u0639\u0645\u0644 \u0642\u0628\u0644 \u0631\u0628\u0637 \u0627\u0644\u0645\u0632\u0648\u062f.')));return;}
-    const workspaceId=activeWorkspace.id,base='/api/workspaces/'+workspaceId+'/providers/',available=await api('/api/workspaces/'+workspaceId+'/providers');
-    const choices=available.filter(p=>!p.auth_methods?.length||p.auth_methods.some(method=>method.type==='api'));
-    const providerSelect=select(box,tr('Provider','\u0627\u0644\u0645\u0632\u0648\u062f'),'provider',[['',tr('Choose a provider','\u0627\u062e\u062a\u0631 \u0645\u0632\u0648\u0651\u062f\u064b\u0627')],...choices.map(p=>[p.id,p.name+(p.connected?'  \u2713':'')])]);
-    const credentialArea=node('div','','provider-credential-area');box.append(credentialArea);
-    function renderCredential(){
-      credentialArea.replaceChildren();const provider=choices.find(p=>p.id===providerSelect.value);if(!provider)return;
-      if(provider.connected){const status=node('p',tr('Provider connected. Its models and available agents are ready in the workspace.','\u0627\u0644\u0645\u0632\u0648\u0651\u062f \u0645\u062a\u0635\u0644. \u0623\u0635\u0628\u062d\u062a \u0646\u0645\u0627\u0630\u062c\u0647 \u0648\u0627\u0644\u0648\u0643\u0644\u0627\u0621 \u0627\u0644\u0645\u062a\u0627\u062d\u0648\u0646 \u062c\u0627\u0647\u0632\u064a\u0646 \u0641\u064a \u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644.'));status.className='provider-connection-status is-connected';credentialArea.append(status,button(tr('Disconnect provider','\u0641\u0635\u0644 \u0627\u0644\u0645\u0632\u0648\u0651\u062f'),async()=>{await api(base+encodeURIComponent(provider.id),{method:'DELETE'});await window.refreshWorkspaceChoices?.('');await open('providers')}));return;}
-      const credentialForm=form(credentialArea,f=>{const key=input(f,tr('Provider API key','\u0645\u0641\u062a\u0627\u062d API \u0627\u0644\u0645\u0632\u0648\u0651\u062f'),'api_key','password');key.required=true;key.autocomplete='new-password';key.placeholder=tr('Paste your API key','\u0623\u0644\u0635\u0642 \u0645\u0641\u062a\u0627\u062d API \u0627\u0644\u062e\u0627\u0635 \u0628\u0643')},tr('Connect provider','\u0631\u0628\u0637 \u0627\u0644\u0645\u0632\u0648\u0651\u062f'),async(values,f)=>{await api(base+encodeURIComponent(provider.id)+'/credentials',{method:'POST',body:JSON.stringify(values)});f.reset();if(window.refreshWorkspaceChoices)await window.refreshWorkspaceChoices(provider.id);toast(tr('Provider connected. Choose a model and agent in the workspace.','\u062a\u0645 \u0631\u0628\u0637 \u0627\u0644\u0645\u0632\u0648\u0651\u062f. \u0627\u062e\u062a\u0631 \u0627\u0644\u0646\u0645\u0648\u0630\u062c \u0648\u0627\u0644\u0648\u0643\u064a\u0644 \u0641\u064a \u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644.'));page('workspacePage')});credentialForm.classList.add('provider-key-form');credentialForm.dialogTrigger.hidden=true;credentialForm.openDialog();
+    const picker=select(workspaceSettings,tr('Workspace','مساحة العمل'),'workspace',[['',tr('Select workspace','اختر مساحة عمل')],...workspaces.map(w=>[w.id,(projects.find(p=>p.id===w.project_id)?.name||tr('Workspace','مساحة العمل'))+' · '+w.status])]);
+    picker.value=activeWorkspace?.id||'';
+    picker.onchange=async()=>{const w=workspaces.find(w=>w.id===picker.value);if(!w)return;try{activeWorkspace=w;activeProject=projects.find(p=>p.id===w.project_id);activeSession=null;stopEvents();await providers(body,platform);}catch(error){toast(error.message);}};
+    if(!activeWorkspace){workspaceSettings.append(node('p',tr('Select a workspace to inspect OpenCode.','اختر مساحة عمل لفحص OpenCode.')));return;}
+    const workspaceId=activeWorkspace.id,base='/api/workspaces/'+workspaceId+'/providers/';
+    let snapshot=await window.workspaceRuntime.load(workspaceId);
+    if(activeWorkspace?.id!==workspaceId)return;
+    const box=section(body,tr('OpenCode providers','مزوّدو OpenCode'));body.insertBefore(box,body.firstChild);
+    const list=select(box,tr('Provider','المزوّد'),'provider',[]),credentialArea=node('div','','provider-credential-area');box.append(credentialArea);
+    const capabilities=section(body,tr('OpenCode workspace capabilities','خصائص مساحة OpenCode'));
+    const summary=node('p'),details=node('details'),detailTitle=node('summary',tr('Providers, agents, models, sessions, permissions and tools','المزوّدون والوكلاء والنماذج والجلسات والصلاحيات والأدوات')),metadata=node('pre');details.append(detailTitle,metadata);capabilities.append(summary,details);
+    async function refresh(preferred=list.value){
+      window.workspaceRuntime.invalidate(workspaceId);snapshot=await window.workspaceRuntime.load(workspaceId,{force:true});
+      if(activeWorkspace?.id!==workspaceId)return;
+      populate(preferred);
+      if(window.refreshWorkspaceChoices)await window.refreshWorkspaceChoices(preferred,false);
     }
-    providerSelect.onchange=renderCredential;renderCredential();
+    function populate(preferred=''){
+      list.replaceChildren(new Option(tr('Choose a provider','اختر مزوّدًا'),''));
+      for(const p of snapshot.providers||[])list.add(new Option(p.name+' · '+(p.connected?tr('Connected','متصل'):tr('Not connected','غير متصل'))+(p.allowed===false?tr(' · Restricted by platform',' · مقيّد من المنصة'):''),p.id));
+      list.value=preferred;summary.textContent='OpenCode '+snapshot.version+' · '+snapshot.status+' · '+snapshot.workspace_id;
+      // Safe metadata only; the backend never returns auth credentials or private paths.
+      metadata.textContent='';details.ontoggle=()=>{if(details.open)metadata.textContent=JSON.stringify({identity:snapshot.identity,generation:snapshot.generation,health:snapshot.health,config:snapshot.config,providers:snapshot.providers,auth_methods:snapshot.auth_methods,agents:snapshot.agents,default_agent:snapshot.default_agent,sessions:snapshot.sessions,permissions:snapshot.permissions,questions:snapshot.questions,session_status:snapshot.session_status,tools:snapshot.tools,tool_policy:snapshot.tool_policy,vcs:snapshot.vcs,mcp:snapshot.mcp,lsp:snapshot.lsp,formatters:snapshot.formatters,errors:snapshot.errors},null,2);};if(details.open)details.ontoggle();
+      renderCredential();
+    }
+    function renderCredential(){
+      credentialArea.replaceChildren();const provider=snapshot.providers?.find(p=>p.id===list.value);if(!provider)return;
+      credentialArea.append(node('p',provider.connected?tr('Connected in this OpenCode workspace','متصل في مساحة OpenCode هذه'):tr('Not connected in this OpenCode workspace','غير متصل في مساحة OpenCode هذه')));
+      const models=node('details'),modelTitle=node('summary',tr('Models and provider metadata','النماذج وبيانات المزوّد')),modelData=node('pre',JSON.stringify(provider,null,2));models.append(modelTitle,modelData);credentialArea.append(models);
+      if(provider.allowed===false){credentialArea.append(node('p',tr('Available in OpenCode; restricted by platform policy.','متاح في OpenCode؛ مقيّد بسياسة المنصة.')));return;}
+      if(provider.connected){credentialArea.append(button(tr('Disconnect provider','فصل المزوّد'),async()=>{await api(base+encodeURIComponent(provider.id),{method:'DELETE'});await refresh(provider.id);}));return;}
+      if(snapshot.auth_methods===null){credentialArea.append(node('p',tr('OpenCode authentication discovery failed. Refresh the workspace before connecting.','تعذر اكتشاف طرق مصادقة OpenCode. حدّث مساحة العمل قبل الربط.')));return;}
+      const methods=snapshot.auth_methods?.[provider.id]||[];
+      // OpenCode's supported /auth endpoint accepts native API keys when no plugin
+      // contributes custom methods. Keep the returned auth_methods catalog intact.
+      const choices=methods.length?methods:[{type:'api',label:tr('OpenCode API key endpoint','نقطة مصادقة API key في OpenCode')}];
+      const methodPicker=select(credentialArea,tr('OpenCode authentication method','طريقة مصادقة OpenCode'),'auth_method',choices.map((m,i)=>[String(i),m.label||m.type]));
+      const methodArea=node('div');credentialArea.append(methodArea);
+      function renderMethod(){
+        methodArea.replaceChildren();const index=Number(methodPicker.value),method=choices[index];
+        if(!['api','oauth'].includes(method.type)){methodArea.append(node('p',tr('This authentication type is not supported by the installed OpenCode HTTP API: ','نوع المصادقة غير مدعوم في واجهة OpenCode المثبتة: ')+method.type));return;}
+        const f=node('form','','manage-form');methodArea.append(f);const promptInputs=[];
+        for(const prompt of method.prompts||[]){
+          let field;if(prompt.type==='select')field=select(f,prompt.message,prompt.key,prompt.options.map(o=>[o.value,o.label]));
+          else if(prompt.type==='text'){field=input(f,prompt.message,prompt.key);field.placeholder=prompt.placeholder||'';}
+          else {f.append(node('p',tr('Unsupported auth prompt: ','حقل مصادقة غير مدعوم: ')+prompt.type));continue;}
+          promptInputs.push({prompt,field});
+        }
+        const updatePrompts=()=>{const values=Object.fromEntries(new FormData(f));for(const {prompt,field} of promptInputs){const condition=prompt.when;field.parentElement.hidden=Boolean(condition)&&(condition.op==='eq'?values[condition.key]!==condition.value:values[condition.key]===condition.value);field.disabled=field.parentElement.hidden;}};
+        f.addEventListener('change',updatePrompts);updatePrompts();
+        if(method.type==='api'){
+          const key=input(f,tr('API key (server-side only)','مفتاح API (على الخادم فقط)'),'api_key','password');key.required=true;key.autocomplete='new-password';
+          const model=select(f,tr('Model for real credential validation (may incur usage)','نموذج للتحقق الحقيقي من المفتاح (قد يحتسب استخدامًا)'),'model_id',(provider.models||[]).filter(m=>m.allowed!==false&&(!m.modalities?.output||m.modalities.output.includes('text'))).map(m=>[m.id,m.name||m.id]));
+          model.required=true;if(provider.default_model)model.value=provider.default_model;
+        }
+        const submit=node('button',method.type==='api'?tr('Validate and connect','تحقق واربط'):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
+        f.onsubmit=async event=>{event.preventDefault();submit.disabled=true;try{
+          const values=Object.fromEntries(new FormData(f));
+          if(method.type==='api'){
+            await api(base+encodeURIComponent(provider.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id,...(methods.length?{method:index}:{}),inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});f.reset();await refresh(provider.id);
+          }else{
+            const authorization=await api(base+encodeURIComponent(provider.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values})});
+            f.remove();const area=node('div');methodArea.append(area);area.append(node('p',authorization.instructions||''));
+            if(authorization.url){const url=new URL(authorization.url);if(url.protocol!=='https:'||['localhost','127.0.0.1','::1'].includes(url.hostname))throw new Error('OpenCode returned an unsupported authorization URL');const link=node('a',tr('Open provider authorization','افتح تفويض المزوّد'));link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';area.append(link);}
+            let code;if(authorization.method==='code'){const label=node('label',tr('Authorization code','رمز التفويض'));code=node('input');code.autocomplete='off';label.append(code);area.append(label);}
+            area.append(button(tr('Complete authorization','أكمل التفويض'),async()=>{await api(base+encodeURIComponent(provider.id)+'/oauth/callback',{method:'POST',body:JSON.stringify({method:index,...(code?{code:code.value}:{})})});if(code)code.value='';await refresh(provider.id);}));
+          }
+        }catch(error){toast(error.message);}finally{submit.disabled=false;}};
+      }
+      methodPicker.onchange=renderMethod;renderMethod();
+    }
+    list.onchange=renderCredential;populate();
+    capabilities.append(button(tr('Refresh OpenCode state','حدّث حالة OpenCode'),()=>refresh()));
   }
   async function roles(body,platform=false){const box=section(body,tr('User roles','أدوار المستخدمين'));for(const u of await api('/api/admin/users'))row(box,u.username,u.role,[...(currentUser.role==='owner'&&u.id!==currentUser.id&&u.role!=='owner'?[button(tr('Change role','تغيير الدور'),async()=>{const picked=await window.requestForm(tr('Change role','تغيير الدور'),[{name:'role',label:tr('Role','الدور'),value:u.role,options:['admin','support','finance','customer']}]);const role=picked?.role;if(!role)return;await api('/api/admin/users/'+u.id+'/role',{method:'PUT',body:JSON.stringify({role})});await open('roles',true)})]:[])]);box.append(node('p',tr('Only an owner can assign roles. Finance can manage platform payment methods through its authorized API. Support currently has account-only access.','المالك وحده يعيّن الأدوار. دور المالية يتيح إدارة وسائل المنصة عبر واجهته المصرح بها. الدعم يمتلك حاليًا صلاحيات الحساب الشخصي فقط.')))}
   async function logs(body,platform=false,securityOnly=false){const box=section(body,tr(platform?'Audit log':securityOnly?'Login / security activity':'Account activity',platform?'سجل الإجراءات':securityOnly?'نشاط الدخول والأمان':'نشاط الحساب'));if(securityOnly)box.append(node('p',tr('Recorded password and session security actions. Login event tracking is not available yet.','إجراءات كلمة المرور والجلسات المسجلة. تتبع أحداث تسجيل الدخول غير متاح بعد.')));let before;async function load(){const items=await api((platform?'/api/admin/logs':'/api/account/logs')+(before?'?before='+before:''));for(const r of items.filter(r=>platform||(/^(password|session|auth|security|role)\./.test(r.action)===securityOnly)))row(box,r.action,new Date(r.created_at).toLocaleString());before=items.at(-1)?.id;more.hidden=items.length<100}const more=button(tr('Older records','سجلات أقدم'),load);body.append(more);await load()}

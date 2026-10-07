@@ -279,8 +279,7 @@
 .connection-sidebar select{width:100%;min-width:0;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text)}
 .connection-sidebar .workspace-links{margin:0;display:flex;flex-direction:column;gap:10px}
 .connection-sidebar #toolsPanel{margin:0;padding:12px;font-size:14px}
-.workbench-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
-.workbench-toolbar button{font-size:13px;padding:8px 12px}
+
 #workspacePage .project-bar{min-height:58px;padding:10px 16px;flex-wrap:wrap}
 #workspacePage #openSessions,#workspacePage #closeSessions{display:inline-grid}
 #workspacePage .agent-feed{flex:1;min-height:80px;overflow:auto;padding:20px}
@@ -701,10 +700,31 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
     body.appendChild(shell);
   })();
   </script>
-  <script src="app.js?v=20261006-fix2"></script>
+  <style>
+  #workspacePage .workspace-panel-modes{display:flex;align-items:center;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  #workspacePage .workspace-panel-modes button{padding:6px 10px;font-size:12px;background:transparent;border:0}
+  #workspacePage .workspace-panel-modes button[aria-pressed=true]{background:var(--control-fill);color:var(--text)}
+  #workspacePage .workspace-panel-modes .mobile-close{display:inline-flex;margin-inline-start:auto}
+  #workspacePage .workspace-changes,#workspacePage .workspace-preview{min-width:0;display:flex;flex-direction:column;gap:10px}
+  #workspacePage .workspace-changes[hidden],#workspacePage .workspace-preview[hidden]{display:none}
+  #workspacePage .changed-file-list{display:flex;flex-direction:column;gap:4px;max-height:28vh;overflow:auto}
+  #workspacePage .changed-file-list button{white-space:normal;overflow-wrap:anywhere;text-align:start;justify-content:flex-start;padding:6px;font-size:12px}
+  #workspacePage .workspace-diff{font-size:11px;overflow:auto;max-height:45vh;white-space:pre;direction:ltr;text-align:left}
+  #workspacePage .workspace-preview iframe{width:100%;height:55vh;border:1px solid var(--line);background:white}
+  #workspacePage .workspace-preview input{width:100%;padding:6px;background:var(--control-fill);color:var(--text);border:1px solid var(--line)}
+  #workspacePage .workspace-session-picker{position:relative;font-size:12px}
+  #workspacePage .workspace-session-picker summary{cursor:pointer}
+  #workspacePage #toggleWorkspacePanel{background:transparent;color:var(--text);border:1px solid var(--line);padding:6px 8px;font-size:12px;border-radius:6px}
+  #workspacePage .workspace-session-picker[open]{position:absolute;inset-inline-end:24px;bottom:130px;z-index:20;background:var(--panel);padding:12px;border:1px solid var(--line);border-radius:10px;width:260px;max-height:45vh;overflow:auto}
+  #workspacePage .workspace-session-picker .session{display:block;width:100%;text-align:start}
+  #workspacePage .workspace-session-picker .new-session{padding:6px;margin:6px 0;font-size:12px}
+  #workspacePage .agent-column{position:relative;min-width:0}
+  </style>
+  <script src="app.js?v=20261007-runtime1"></script>
   <script src="enhancements.js?v=20261006-fix3"></script>
-  <script src="management.js?v=20261006-fix2"></script>
-  <script src="dashboards.js?v=20261006-fix11"></script>
+  <script src="management.js?v=20261007-runtime1"></script>
+  <script src="runtime-client.js?v=20261007-runtime1"></script>
+  <script src="dashboards.js?v=20261007-runtime1"></script>
   <script>
   // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
   (function () {
