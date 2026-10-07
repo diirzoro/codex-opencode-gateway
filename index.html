@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#ffffff"><meta name="description" content="Your projects, conversations, and reviewed code changes in one OpenCode workspace."><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 20'%3E%3Cpath fill='%2324272d' d='M12 4H4V16H12V4ZM16 20H0V0H16V20Z'/%3E%3C/svg%3E"><title>OpenCode Gateway — Hosted OpenCode</title>
-  <link rel="stylesheet" href="styles.css?v=20261006-fix2">
+  <link rel="stylesheet" href="styles.css?v=20261007-review-cleanup">
   <style>
     .pricing{padding:2.5rem 0;border-top:1px solid var(--border,#e6e6e6)}
     .pricing-head{text-align:center;margin-bottom:1.25rem}
@@ -266,7 +266,7 @@
 .connection-sidebar header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .connection-sidebar p,.workspace-activity p{font-size:14px;color:var(--muted);overflow-wrap:anywhere}
 .workspace-activity h3,#workspacePage .session-sidebar h3{font-size:15px}
-#workspacePage .review-content .file-item,#workspacePage #gitSummary{font-size:14px}
+
 .app-main .portal-content td code,.app-main .portal-content td time{direction:ltr;unicode-bidi:isolate}
 #billingPlans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;max-width:none;gap:20px;margin:20px 0}
 #billingPlans .price-card{min-width:0}
@@ -284,19 +284,19 @@
 #workspacePage #openSessions,#workspacePage #closeSessions{display:inline-grid}
 #workspacePage .agent-feed{flex:1;min-height:80px;overflow:auto;padding:20px}
 #workspacePage .workspace-empty{margin:30px auto;max-width:460px}
-#workspacePage .review-panel{position:static;inset:auto;width:100%;max-width:none;display:flex;flex:0 1 40%;min-height:160px;overflow:hidden;border-inline-start:0;border-top:1px solid var(--line)}
-#workspacePage .review-panel header{display:none}
-#workspacePage .review-panel .review-content{min-height:60px;overflow:auto}
-#workspacePage .review-panel .git-actions{padding:8px 14px}
-#workspacePage #reviewButton{display:none}
+
+
+
+
+
 #workspacePage .workspace-shell.sessions-collapsed{grid-template-columns:0 minmax(0,1fr) 250px}
 #workspacePage .workspace-shell.connections-collapsed{grid-template-columns:220px minmax(0,1fr) 0}
 #workspacePage .workspace-shell.sessions-collapsed.connections-collapsed{grid-template-columns:0 minmax(0,1fr) 0}
 #workspacePage .sessions-collapsed .session-sidebar,#workspacePage .connections-collapsed .connection-sidebar{display:none}
-#workspacePage .chat-only .review-panel{display:none}
-#workspacePage .review-only .agent-feed,#workspacePage .review-only #promptForm,#workspacePage .review-only #approvalBox{display:none}
-#workspacePage .review-only .review-panel{flex:1;min-height:0}
-#workspacePage .review-only .review-content{flex:1}
+
+
+
+
 .workspace-preview{padding:24px;font-size:15px}
 @media(max-width:1100px){
  #workspacePage .workspace-shell{grid-template-columns:minmax(0,1fr)!important}
@@ -305,10 +305,10 @@
  #workspacePage .session-sidebar{inset-inline-start:0;inset-inline-end:auto}
  #workspacePage .connection-sidebar{inset-inline-end:0;inset-inline-start:auto}
  #workspacePage .session-sidebar.open,#workspacePage .connection-sidebar.open{display:flex}
- #workspacePage .review-panel{display:none}
- #workspacePage .review-panel.open{display:flex;flex:1}
- #workspacePage .review-panel.open header{display:flex}
- #workspacePage #reviewButton{display:block}
+
+
+
+
  #workspacePage .agent-column{height:100%}
  #workspacePage .prompt-box{margin:10px;max-width:calc(100% - 20px)}
  .app-main .portal-content{padding:24px 18px}
@@ -316,7 +316,7 @@
 @media(max-width:600px){#billingPlans{grid-template-columns:1fr}}
 </style>
 <style>
-/* Workspace first: one review pane, focused bottom composer, Gateway theme retained. */
+/* Workspace first: compact Changes/Preview pane and focused bottom composer. */
 #workspacePage .workspace-shell.workspace-first{grid-template-columns:minmax(0,1fr) 250px}
 #workspacePage .workspace-first.sessions-collapsed{grid-template-columns:minmax(0,1fr) 0}
 #workspacePage .workspace-first .agent-column{grid-column:1}
@@ -333,9 +333,9 @@
 #workspacePage .workspace-first .workspace-activity h2{font-size:15px;margin:18px 0 12px}
 #workspacePage .workspace-first .prompt-box{width:min(920px,calc(100% - 48px));margin-inline:auto}
 #workspacePage .workspace-first #approvalBox{order:9}
-#workspacePage .workspace-first .review-panel{order:5;flex:1;min-height:0}
-#workspacePage .workspace-first .review-only #promptForm{display:block}
-#workspacePage .workspace-first .review-only .review-panel header{display:flex}
+
+
+
 #workspacePage .workspace-first .side-brand{padding-bottom:10px}
 #workspacePage .workspace-first .pane-review-actions{display:flex;flex-direction:column;gap:8px;margin-block:18px}
 #workspaceSessionSearch{width:100%;padding:10px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:13px;margin-bottom:12px}
@@ -553,10 +553,10 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
 <form class="onboard-panel" id="createProjectForm"><h2><span data-i18n="ui3">New project</span></h2><div id="createProjectMessage" class="api-message"></div><label><span data-i18n="ui49">Project name</span><input id="projectName" required maxlength="120" autocomplete="off"></label><label><span data-i18n="ui50">Source</span><select id="sourceType"><option value="blank" data-i18n="ui51">Blank project</option><option value="template" data-i18n="ui52">Template</option><option value="github" disabled data-i18n="ui53">GitHub — Not connected</option></select></label><label id="templateChoice" hidden><span data-i18n="ui52">Template</span><select id="templateId"><option value="html">HTML / CSS / JavaScript</option><option value="python">Python</option><option value="node">Node.js</option></select></label><p><span data-i18n="ui54">Templates contain starter files only. No dependencies are installed or executed.</span></p><button class="button wide" id="createProjectButton" type="submit"><span data-i18n="ui55">Create project</span></button></form></section></main>
 
   <main class="page workspace-page" id="workspacePage"><div class="workspace-shell">
-<aside class="session-sidebar" id="sessionSidebar"><div class="side-brand"><span class="workspace-brand"><svg class="brand-logo" aria-hidden="true"><use href="#icon-opencode"/></svg>OpenCode</span><button class="mobile-close" id="closeSessions"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div><button class="new-session"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg><span data-i18n="newSession">New session</span></button><div id="sessionList"></div><div class="side-spacer"></div><button class="side-link icon-nav" data-go="accountPage" title="Account & projects" aria-label="Account & projects"><svg class="ui-icon" aria-hidden="true"><use href="#icon-user"/></svg></button><button class="side-link icon-nav" data-go="onboarding" title="New project" aria-label="New project"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg></button><button class="side-link icon-nav" data-go="landing" title="Home" aria-label="Home"><svg class="ui-icon" aria-hidden="true"><use href="#icon-home"/></svg></button></aside>
+<aside class="session-sidebar" id="sessionSidebar"><div class="side-brand"><span class="workspace-brand"><svg class="brand-logo" aria-hidden="true"><use href="#icon-opencode"/></svg>OpenCode</span><button class="mobile-close" id="closeSessions"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div><button class="new-session"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg><span data-i18n="newSession">New session</span></button><div id="sessionList"></div><p id="gitSummary">—</p><div class="git-actions"><button class="button ghost" id="commitButton"><span data-i18n="ui11">Commit</span></button><button class="button" id="pushButton" disabled title="GitHub App is not connected"><span data-i18n="ui12">Push — unavailable</span></button></div><div class="side-spacer"></div><button class="side-link icon-nav" data-go="accountPage" title="Account & projects" aria-label="Account & projects"><svg class="ui-icon" aria-hidden="true"><use href="#icon-user"/></svg></button><button class="side-link icon-nav" data-go="onboarding" title="New project" aria-label="New project"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg></button><button class="side-link icon-nav" data-go="landing" title="Home" aria-label="Home"><svg class="ui-icon" aria-hidden="true"><use href="#icon-home"/></svg></button></aside>
 <section class="agent-column"><header class="project-bar"><button class="mobile-menu" id="openSessions"><svg class="ui-icon" aria-hidden="true"><use href="#icon-menu"/></svg></button><div class="repo-title"><span><b id="workspaceRepo">No project selected</b><small><code id="workspaceBranch">—</code></small></span></div><div class="statuses"><span><span data-i18n="ui14">GitHub: Not connected</span></span><span id="runtimeStatus">Session not connected</span><button class="icon workspace-theme" aria-label="Toggle theme" title="Toggle theme"><svg class="ui-icon" aria-hidden="true"><use href="#icon-moon"/></svg></button></div></header>
-<div class="agent-feed" id="agentFeed"></div><div id="approvalBox"></div><form class="prompt-box" id="promptForm"><textarea id="promptInput" required rows="2" data-i18n-placeholder="taskPlaceholder" placeholder="Describe your task"></textarea><div><select id="providerSelect" aria-label="Provider"><option value="" data-i18n="ui15">Select provider</option></select><select id="modelSelect" aria-label="Model"><option value="" data-i18n="ui16">Select model</option></select><button id="chatGithub" type="button" class="icon" title="GitHub is not connected" aria-label="GitHub"><svg class="ui-icon" aria-hidden="true"><use href="#icon-github"/></svg></button><button id="openTools" type="button" class="icon" title="OpenCode tools and settings" aria-label="OpenCode tools and settings"><svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"/></svg></button><button id="sendMessage" type="submit" disabled aria-label="Send message" title="Send message"><svg class="ui-icon" aria-hidden="true"><use href="#icon-arrow"/></svg></button><button id="stopAgent" type="button" disabled aria-label="Stop generation" title="Stop generation"><svg class="ui-icon" aria-hidden="true"><use href="#icon-stop"/></svg></button></div></form><button class="button ghost" id="reviewButton"><span data-i18n="ui13">Files / Diff / Logs</span></button></section>
-<aside class="review-panel" id="reviewPanel"><header><b><span data-i18n="ui5">Review</span></b><button class="review-close" id="closeReview"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></header><nav class="review-tabs"><button data-tab="files" class="active"><svg class="ui-icon" aria-hidden="true"><use href="#icon-folder"/></svg><span data-i18n="ui6">Files</span></button><button data-tab="diff"><svg class="ui-icon" aria-hidden="true"><use href="#icon-diff"/></svg><span data-i18n="ui7">Diff</span></button><button data-tab="logs"><svg class="ui-icon" aria-hidden="true"><use href="#icon-terminal"/></svg><span data-i18n="ui8">Logs</span></button></nav><p id="gitSummary">—</p><div id="reviewContent" class="review-content"></div><div class="git-actions"><button class="button ghost" id="commitButton"><span data-i18n="ui11">Commit</span></button><button class="button" id="pushButton" disabled title="GitHub App is not connected"><span data-i18n="ui12">Push — unavailable</span></button></div></aside></div></main>
+<div class="agent-feed" id="agentFeed"></div><div id="approvalBox"></div><form class="prompt-box" id="promptForm"><textarea id="promptInput" required rows="2" data-i18n-placeholder="taskPlaceholder" placeholder="Describe your task"></textarea><div><select id="providerSelect" aria-label="Provider"><option value="" data-i18n="ui15">Select provider</option></select><select id="modelSelect" aria-label="Model"><option value="" data-i18n="ui16">Select model</option></select><button id="chatGithub" type="button" class="icon" title="GitHub is not connected" aria-label="GitHub"><svg class="ui-icon" aria-hidden="true"><use href="#icon-github"/></svg></button><button id="openTools" type="button" class="icon" title="OpenCode tools and settings" aria-label="OpenCode tools and settings"><svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"/></svg></button><button id="sendMessage" type="submit" disabled aria-label="Send message" title="Send message"><svg class="ui-icon" aria-hidden="true"><use href="#icon-arrow"/></svg></button><button id="stopAgent" type="button" disabled aria-label="Stop generation" title="Stop generation"><svg class="ui-icon" aria-hidden="true"><use href="#icon-stop"/></svg></button></div></form></section>
+</div></main>
 
 
   <main class="page portal-page" id="clientPage"><header class="portal-header"><button class="brand" data-go="landing"><span class="logo"><svg><use href="#icon-opencode"/></svg></span><span>OpenCode <b>Gateway</b></span></button><span class="preview-badge" data-i18n="clientDashboardBadge">CLIENT DASHBOARD</span><button class="text-link" id="logoutButton" title="Logout"><svg class="ui-icon" aria-hidden="true"><use href="#icon-logout"/></svg><span data-i18n="ui57">Logout</span></button><button class="icon lang-mirror">EN</button><button class="icon theme-mirror" aria-label="Theme"><svg class="ui-icon" aria-hidden="true"><use href="#icon-moon"/></svg></button><button class="button ghost" data-go="onboarding"><span data-i18n="ui3">New project</span></button><button class="button ghost" data-go="adminPage" hidden data-i18n="adminConsole">Admin Console</button></header><section class="admin-shell"><aside class="portal-nav" id="clientNav"><b data-i18n="clientNavTitle">Client</b><button type="button" data-client-view="dashboard" class="active" data-i18n="clientDashboard">Dashboard</button><button type="button" data-client-view="projects" data-i18n="clientProjects">Projects</button><button type="button" data-client-view="sessions" data-i18n="clientSessions">Sessions</button><button type="button" data-client-view="ai" data-i18n="clientAi">OpenCode</button><button type="button" data-client-view="github" data-i18n="adminGithub">GitHub</button><button type="button" data-client-view="billing" data-i18n="ui61">Plan &amp; Billing</button><button type="button" data-client-view="account" data-i18n="clientAccount">Account / Profile</button><button type="button" data-client-view="security" data-i18n="ui64">Security</button></aside><div class="portal-content client-content">
@@ -720,11 +720,11 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   #workspacePage .workspace-session-picker .new-session{padding:6px;margin:6px 0;font-size:12px}
   #workspacePage .agent-column{position:relative;min-width:0}
   </style>
-  <script src="app.js?v=20261007-runtime1"></script>
-  <script src="enhancements.js?v=20261006-fix3"></script>
+  <script src="app.js?v=20261007-review-cleanup"></script>
+  <script src="enhancements.js?v=20261007-review-cleanup"></script>
   <script src="management.js?v=20261007-runtime1"></script>
   <script src="runtime-client.js?v=20261007-runtime1"></script>
-  <script src="dashboards.js?v=20261007-runtime1"></script>
+  <script src="dashboards.js?v=20261007-review-cleanup"></script>
   <script>
   // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
   (function () {

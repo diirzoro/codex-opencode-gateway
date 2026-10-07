@@ -563,7 +563,7 @@
     try { await api('/api/auth/logout', { method: 'POST' }); } catch (error) { /* clear local state anyway */ }
     currentUser = null; activeWorkspace = null; activeSession = null; activeProject = null;
     stopEvents();
-    ['agentFeed', 'reviewContent', 'projectList', 'adminUsersBody'].forEach(function (id) { var el = document.getElementById(id); if (el) el.replaceChildren(); });
+    ['agentFeed', 'projectList', 'adminUsersBody'].forEach(function (id) { var el = document.getElementById(id); if (el) el.replaceChildren(); });
     var tst = document.getElementById('toast'); if (tst) tst.classList.remove('show');
     updateNavigation(); showPage('authPage');
   }
