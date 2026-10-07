@@ -549,7 +549,7 @@
   }
   var CLIENT_LOADERS = { dashboard: loadClientDashboard, projects: loadClientDashboard, sessions: loadClientDashboard, github: loadClientGithub, ai: loadClientAi, security: async function () {} };
   function setClientView(name) {
-    clientView = name;
+    clientView = name;try{localStorage.setItem('og-clientview',name);}catch(error){}
     document.querySelectorAll('#clientNav [data-client-view]').forEach(function (b) { b.classList.toggle('active', b.dataset.clientView === name); });
     document.querySelectorAll('#clientPage [data-client-panel]').forEach(function (p) { p.classList.toggle('active', p.dataset.clientPanel === name); });
     var loader = CLIENT_LOADERS[name];

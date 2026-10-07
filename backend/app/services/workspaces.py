@@ -34,6 +34,32 @@ def root_for(workspace):
         raise HTTPException(403, "Unsafe workspace path")
     return candidate
 
+# Temporary workspace storage allowance for client projects (files, not database storage).
+WORKSPACE_QUOTA_BYTES = 50 * 1024 * 1024
+
+def usage_bytes(workspace):
+    root = root_for(workspace)
+    if not root.is_dir():
+        return 0
+    total = 0
+    for item in root.rglob("*"):
+        try:
+            if item.is_file() and not item.is_symlink():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+def storage_payload(workspace):
+    used = usage_bytes(workspace)
+    remaining = max(0, WORKSPACE_QUOTA_BYTES - used)
+    return {"used_bytes": used, "limit_bytes": WORKSPACE_QUOTA_BYTES, "remaining_bytes": remaining,
+            "used_mb": round(used / (1024 * 1024), 2), "limit_mb": WORKSPACE_QUOTA_BYTES // (1024 * 1024), "over_limit": used >= WORKSPACE_QUOTA_BYTES}
+
+def require_quota_headroom(workspace):
+    if usage_bytes(workspace) >= WORKSPACE_QUOTA_BYTES:
+        raise HTTPException(413, "Workspace storage limit reached (50 MB). Remove files before continuing.")
+
 def safe_path(workspace, relative=""):
     if "\x00" in relative or "\\" in relative or PureWindowsPath(relative).drive or Path(relative).is_absolute():
         raise HTTPException(422, "A relative workspace path is required")
