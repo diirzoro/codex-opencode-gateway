@@ -16,7 +16,7 @@
   q('homeSessionSearch').setAttribute('aria-label','Search sessions');
   const settings=document.createElement('main');settings.id='connectionsPage';settings.className='page portal-page';
   settings.innerHTML='<div class="portal-content connections-content"><div class="connections-heading"></div><div id="connectionsProviders"></div><div id="connectionsGithub"></div><div id="connectionsRuntime"></div></div>';
-  q('app-main').append(settings);settings.querySelector('.connections-heading').append(text('h1','Settings · Connections','الإعدادات · الاتصالات'),text('p','Choose a provider and add its API key. After connection, its available models and agents appear in your workspace.','\u0627\u062e\u062a\u0631 \u0645\u0632\u0648\u0651\u062f\u064b\u0627 \u0648\u0623\u0636\u0641 \u0645\u0641\u062a\u0627\u062d API. \u0628\u0639\u062f \u0627\u0644\u0631\u0628\u0637\u060c \u0633\u062a\u0638\u0647\u0631 \u0646\u0645\u0627\u0630\u062c\u0647 \u0648\u0648\u0643\u0644\u0627\u0624\u0647 \u0641\u064a \u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644.','lead'),btn('connectionsReturn','Return to workspace','العودة لمساحة العمل',()=>activeWorkspace?page('workspacePage'):page('workspaceHomePage')));
+  q('app-main').append(settings);settings.querySelector('.connections-heading').append(text('h1','Settings · Connections','الإعدادات · الاتصالات'),text('p','Choose a workspace provider and use its OpenCode authentication method.','اختر مزوّد مساحة العمل واستخدم طريقة المصادقة المتاحة في OpenCode.','lead'),btn('connectionsReturn','Return to workspace','العودة لمساحة العمل',()=>activeWorkspace?page('workspacePage'):page('workspaceHomePage')));
   protectedPages.add('workspaceHomePage');protectedPages.add('connectionsPage');
   Object.assign(copy.en,{workspaceHome:'Workspace / Home',connectionsSettings:'Settings / Connections'});
   Object.assign(copy.ar,{workspaceHome:'مساحة العمل / الرئيسية',connectionsSettings:'الإعدادات / الاتصالات'});
@@ -50,16 +50,19 @@
     const authorize=btn('settingsAuthorizeGithub','Authorize GitHub','تفويض GitHub',()=>window.location.assign('/api/github/install'));authorize.disabled=!status.configured;github.append(authorize);
     if(status.connected)github.append(btn('settingsDisconnectGithub','Disconnect','إلغاء الربط',async()=>{await api('/api/github/disconnect',{method:'POST'});await loadConnections();}));
     github.append(text('p','Repository permissions and installation access are managed in GitHub authorization. Choose your working repository beside the prompt.','تُدار صلاحيات المستودعات والتثبيت عبر تفويض GitHub. اختر مستودع العمل بجوار محرر الطلب.'));
-    const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Runtime / Server','وقت التشغيل / الخادم'));const state=await api('/api/opencode/status');runtime.append(textElement('p',state.runtime_mode+' · '+(state.healthy?tr('Healthy','جاهز'):tr('Unavailable','غير متاح'))));
+    const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Selected workspace runtime','وقت تشغيل مساحة العمل المختارة'));
+    if(activeWorkspace){const state=await window.workspaceRuntime.load(activeWorkspace.id);runtime.append(textElement('p',state.version+' · '+state.status));}
+    else runtime.append(text('p','Select a workspace to inspect its runtime.','اختر مساحة عمل لفحص وقت تشغيلها.'));
+
   }
   let workAccess=false,entitlement=null;
   const homeAccess=textElement('div','','access-notice');homeAccess.id='homeAccessState';home.querySelector('.work-home-heading').append(homeAccess);
   const workspaceAccess=textElement('div','','access-notice');workspaceAccess.id='workspaceAccessState';q('promptForm').before(workspaceAccess);
-  function renderEntitlement(){if(!entitlement)return;const end=entitlement.access.ends_at,days=end?Math.max(0,Math.ceil((new Date(end)-Date.now())/86400000)):0;homeAccess.replaceChildren(textElement('span',workAccess?(entitlement.access.reason==='trial'?tr('Free trial · ','التجربة المجانية · '):tr('Subscription · ','الاشتراك · '))+days+' '+tr('days remaining','يوم متبقٍ'):tr('Your access has expired. Subscribe to continue.','انتهت مدة الوصول. اشترك للمتابعة.')));workspaceAccess.replaceChildren();workspaceAccess.hidden=workAccess;if(!workAccess){const subscribe=()=>window.openClientView('billing');homeAccess.append(btn('homeSubscribe','Subscribe / Renew','اشترك / جدّد',subscribe));workspaceAccess.append(textElement('span',tr('Read-only workspace. Subscribe to continue coding.','مساحة العمل للقراءة فقط. اشترك لمتابعة البرمجة.')),btn('workspaceSubscribe','Subscribe / Renew','اشترك / جدّد',subscribe));}q('homeNewProject').disabled=!workAccess;q('promptInput').disabled=!workAccess;document.querySelectorAll('#sessionSidebar .new-session,#homeProjects [id^=home-session-],#sessionList .session,#homeSessions [id^=home-recent-]').forEach(n=>n.disabled=!workAccess);if(!workAccess){q('sendMessage').disabled=true;q('commitButton').disabled=true;q('pushButton').disabled=true;}}
+  function renderEntitlement(){if(!entitlement)return;const end=entitlement.access.ends_at,days=end?Math.max(0,Math.ceil((new Date(end)-Date.now())/86400000)):0;homeAccess.replaceChildren(textElement('span',workAccess?(entitlement.access.reason==='trial'?tr('Free trial · ','التجربة المجانية · '):tr('Subscription · ','الاشتراك · '))+days+' '+tr('days remaining','يوم متبقٍ'):tr('Your access has expired. Subscribe to continue.','انتهت مدة الوصول. اشترك للمتابعة.')));workspaceAccess.replaceChildren();workspaceAccess.hidden=workAccess;if(!workAccess){const subscribe=()=>window.openClientView('billing');homeAccess.append(btn('homeSubscribe','Subscribe / Renew','اشترك / جدّد',subscribe));workspaceAccess.append(textElement('span',tr('Read-only workspace. Subscribe to continue coding.','مساحة العمل للقراءة فقط. اشترك لمتابعة البرمجة.')),btn('workspaceSubscribe','Subscribe / Renew','اشترك / جدّد',subscribe));}q('homeNewProject').disabled=!workAccess;q('promptInput').disabled=!workAccess;document.querySelectorAll('#workspacePage .new-session,#homeProjects [id^=home-session-],#sessionList .session,#homeSessions [id^=home-recent-]').forEach(n=>n.disabled=!workAccess);if(!workAccess){q('sendMessage').disabled=true;q('commitButton').disabled=true;q('pushButton').disabled=true;}}
   async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/billing/subscription');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();}
-  const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(currentUser&&!admin()&&['onboarding'].includes(id)){const state=await api('/api/billing/subscription');if(!state.access.allowed){stopEvents();await oldClientView('billing');toast(tr('Your 10-day trial has ended. Subscribe to continue.','انتهت تجربتك لمدة عشرة أيام. اشترك للمتابعة.'));return;}}await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage'].includes(id))await refreshEntitlement();if(!admin()&&id==='workspacePage'&&activeWorkspace)await refreshChoices();if(admin()){if(q('adminPage').classList.contains('active')&&document.querySelector('[data-admin-panel=billing].active'))await loadPaymentOrders(true);return;}if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')await loadHome();if(id==='connectionsPage')await loadConnections();}};
-  const shell=document.querySelector('#workspacePage .workspace-shell'),center=shell.querySelector('.agent-column'),pane=q('sessionSidebar'),review=q('reviewPanel');
-  shell.classList.add('workspace-first','chat-only');
+  const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(currentUser&&!admin()&&['onboarding'].includes(id)){const state=await api('/api/billing/subscription');if(!state.access.allowed){stopEvents();await oldClientView('billing');toast(tr('Your 10-day trial has ended. Subscribe to continue.','انتهت تجربتك لمدة عشرة أيام. اشترك للمتابعة.'));return;}}await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage'].includes(id))await refreshEntitlement();if(!admin()&&id==='workspacePage'&&activeWorkspace)refreshChoices().catch(error=>toast(error.message));if(admin()){if(q('adminPage').classList.contains('active')&&document.querySelector('[data-admin-panel=billing].active'))await loadPaymentOrders(true);return;}if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')await loadHome();if(id==='connectionsPage')await loadConnections();}};
+  const shell=document.querySelector('#workspacePage .workspace-shell'),center=shell.querySelector('.agent-column'),pane=q('sessionSidebar');
+  shell.classList.add('workspace-first');
   q('manageProviders')?.remove();
   const previousShow=showPage;showPage=function(id){if(id==='adminPage'&&!admin()){toast('Administrator access required');id=currentUser?'workspaceHomePage':'authPage';}if(admin()&&['workspaceHomePage','connectionsPage','workspacePage'].includes(id))id='adminPage';pane.classList.remove('open');overlay(false);previousShow(id);q('clientWorkspaceHome').classList.toggle('active',['workspaceHomePage','workspacePage'].includes(id));q('clientConnections').classList.toggle('active',id==='connectionsPage');if(['workspaceHomePage','workspacePage','connectionsPage'].includes(id))q('clientNav').querySelectorAll('[data-client-view]').forEach(n=>n.classList.remove('active'));};
   const projectbar=center.querySelector('.project-bar');projectbar.querySelector('.statuses').hidden=true;
@@ -70,43 +73,107 @@
   q('providerSelect').setAttribute('aria-label','Provider');q('modelSelect').setAttribute('aria-label','Model');
   const attach=btn('attachFiles','＋','＋',()=>{},'icon');attach.disabled=true;attach.title=tr('Attachments are not available yet','المرفقات غير متاحة بعد');controls.prepend(attach);
   q('openTools').onclick=()=>window.openConnections('providers');q('openTools').title=tr('Open OpenCode provider and workspace setup','\u0641\u062a\u062d \u0625\u0639\u062f\u0627\u062f \u0645\u0632\u0648\u062f OpenCode \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644');q('chatGithub').onclick=()=>openRepositoryPicker();
-  const links=center.querySelector('.workspace-links');links?.remove();
-  const toolbar=textElement('nav','','workbench-toolbar');toolbar.append(btn('toggleSessions','Sessions / Review','الجلسات / المراجعة',()=>togglePane()),btn('workspaceChat','Conversation','المحادثة',()=>{shell.classList.add('chat-only');shell.classList.remove('review-only');review.classList.remove('open');}));
-  for(const [name,en,ar] of [['files','Files','الملفات'],['diff','Changes / Diff','التغييرات / الفروقات'],['logs','Activity','النشاط']])toolbar.append(btn('workspace'+name,en,ar,async()=>{shell.classList.remove('chat-only');shell.classList.add('review-only');review.classList.add('open');await tab(name);}));
-  center.insertBefore(toolbar,projectbar.nextSibling);center.append(review);
-  const heading=text('h3','Sessions / history','الجلسات / السجل');pane.insertBefore(heading,q('sessionList'));
-  const search=document.createElement('input');search.id='workspaceSessionSearch';search.type='search';search.placeholder=tr('Search sessions','ابحث في الجلسات');search.setAttribute('aria-label','Search workspace sessions');pane.insertBefore(search,q('sessionList'));search.oninput=()=>q('sessionList').querySelectorAll('.session').forEach(row=>row.hidden=!row.textContent.toLowerCase().includes(search.value.toLowerCase()));
-  const workflow=textElement('section','','workspace-activity');workflow.append(title('Workflow / Activity','سير العمل / النشاط'));const events=textElement('div');events.id='workspaceActivity';workflow.append(events);pane.insertBefore(workflow,pane.querySelector('.side-spacer'));
-  const reviewActions=textElement('div','','pane-review-actions');for(const name of ['files','diff','logs'])reviewActions.append(btn('pane-'+name,...({files:['Files','الملفات'],diff:['Review / Changes','المراجعة / التغييرات'],logs:['Activity','النشاط']}[name]),()=>q('workspace'+name).click()));pane.insertBefore(reviewActions,workflow);
-  const eventObserver=new MutationObserver(records=>{for(const record of records)for(const item of record.addedNodes)if(item.nodeType===1&&item.classList.contains('event-line')){events.append(item.cloneNode(true));while(events.children.length>30)events.firstChild.remove();}});eventObserver.observe(q('agentFeed'),{childList:true});
+  // Keep conversation in the center. The internal side panel has exactly two modes.
+  const history=document.createElement('details');history.className='workspace-session-picker';
+  history.append(text('summary','Sessions','الجلسات'));
+  const newSessionButton=pane.querySelector('.new-session');history.append(newSessionButton,q('sessionList'));context.append(history);
+  const search=document.createElement('input');search.type='search';search.placeholder=tr('Search sessions','ابحث في الجلسات');search.setAttribute('aria-label','Search sessions');history.insertBefore(search,q('sessionList'));search.oninput=()=>q('sessionList').querySelectorAll('.session').forEach(row=>row.hidden=!row.textContent.toLowerCase().includes(search.value.toLowerCase()));
+  const modes=textElement('nav','','workspace-panel-modes');modes.setAttribute('aria-label',tr('Workspace panel','لوحة مساحة العمل'));
+  const changesMode=btn('workspaceChanges','Changes','التغييرات',()=>setPanel('changes'));
+  const previewMode=btn('workspacePreview','Preview','المعاينة',()=>setPanel('preview'));
+  modes.append(changesMode,previewMode);
+  const close=q('closeSessions');modes.append(close);
+  const changesPanel=textElement('section','','workspace-changes'),previewPanel=textElement('section','','workspace-preview');
+  changesPanel.id='workspaceChangesPanel';previewPanel.id='workspacePreviewPanel';
+  const gitSummary=q('gitSummary'),gitActions=pane.querySelector('.git-actions'),changedFiles=textElement('div','','changed-file-list'),diffView=textElement('pre','','workspace-diff');
+  diffView.id='workspaceFileDiff';changesPanel.append(gitSummary,btn('refreshWorkspaceChanges','Refresh changes','حدّث التغييرات',()=>loadChanges()),changedFiles,diffView,gitActions);
+  const previewPath=document.createElement('input');previewPath.value='index.html';previewPath.setAttribute('aria-label',tr('Preview HTML entry','ملف HTML للمعاينة'));
+  const previewStatus=text('p','Start a sandboxed HTML preview. Backend/browser automation preview is not configured.','ابدأ معاينة HTML معزولة. معاينة الخادم وأتمتة المتصفح غير مهيأة.');
+  const frame=document.createElement('iframe');frame.title=tr('Project preview','معاينة المشروع');frame.setAttribute('sandbox','allow-scripts');frame.setAttribute('referrerpolicy','no-referrer');frame.hidden=true;
+  async function startPreview(){if(!activeWorkspace)return;const id=activeWorkspace.id;previewStatus.textContent=tr('Loading preview…','جارٍ تحميل المعاينة…');try{const result=await api('/api/workspaces/'+id+'/preview?path='+encodeURIComponent(previewPath.value));if(activeWorkspace?.id!==id)return;frame.srcdoc=result.html;frame.hidden=false;previewStatus.textContent=tr('Static preview · ','معاينة ثابتة · ')+result.path+' · '+tr('Network, backend servers and browser automation are unavailable here.','الشبكة والخوادم وأتمتة المتصفح غير متاحة هنا.');}catch(error){frame.hidden=true;previewStatus.textContent=error.message;}}
+  previewPanel.append(text('h3','Static Preview','معاينة ثابتة'),previewPath,btn('startWorkspacePreview','Start preview','ابدأ المعاينة',startPreview),btn('refreshWorkspacePreview','Refresh preview','حدّث المعاينة',startPreview),previewStatus,frame);
+  pane.replaceChildren(modes,changesPanel,previewPanel);
+  let panelMode='changes',changesStamp=0;
+  async function loadChanges(){
+    if(!activeWorkspace)return;const id=activeWorkspace.id,stamp=++changesStamp;diffView.textContent=tr('Loading changes…','جارٍ تحميل التغييرات…');
+    try{const [state,sessionDiff]=await Promise.all([api('/api/workspaces/'+id+'/git/status'),activeSession?api('/api/sessions/'+activeSession.id+'/diff'):Promise.resolve([])]);if(stamp!==changesStamp||activeWorkspace?.id!==id)return;
+      gitSummary.textContent=state.changes.length+' '+tr('changed files','ملفات متغيرة')+' · '+(state.branch||'—');changedFiles.replaceChildren();
+      q('commitButton').disabled=state.clean;q('pushButton').disabled=!state.push_available||!state.clean;
+      const runtimeFiles=new Map((sessionDiff||[]).map(row=>[row.file,row]));const names=new Set([...state.changes.map(row=>row.path),...runtimeFiles.keys()]);
+      for(const name of names){const b=btn('changed-'+changedFiles.children.length,name,name,async()=>{const patch=runtimeFiles.get(name)?.patch;if(patch){diffView.textContent=patch;return;}const result=await api('/api/workspaces/'+id+'/diff?path='+encodeURIComponent(name));if(stamp===changesStamp&&activeWorkspace?.id===id)diffView.textContent=result.diff||tr('No textual diff','لا يوجد فرق نصّي');});changedFiles.append(b);}
+      diffView.textContent=names.size?tr('Select a changed file to review its diff.','اختر ملفًا متغيرًا لمراجعة الفرق.'):tr('No changes in this workspace.','لا توجد تغييرات في مساحة العمل.');
+    }catch(error){if(stamp===changesStamp)diffView.textContent=error.message;}
+  }
+  async function setPanel(mode){panelMode=mode;changesPanel.hidden=mode!=='changes';previewPanel.hidden=mode!=='preview';changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));if(mode==='changes')await loadChanges();}
   function drawer(){return matchMedia('(max-width:1100px)').matches;}
   function closePane(){pane.classList.remove('open');if(!drawer())shell.classList.add('sessions-collapsed');overlay(false);}
-  function togglePane(){if(drawer()){pane.classList.toggle('open');overlay(pane.classList.contains('open'));}else shell.classList.toggle('sessions-collapsed');}
-  q('openSessions').onclick=togglePane;q('closeSessions').onclick=closePane;q('backdrop').addEventListener('click',()=>{pane.classList.remove('open');});
-  q('reviewButton').onclick=()=>q('workspacefiles').click();q('closeReview').onclick=()=>q('workspaceChat').click();
-  const oldRefreshGit=refreshGit;refreshGit=async()=>{await oldRefreshGit();q('manageProviders')?.remove();};
-  let providers=[],chosenAgent='',chosenProvider='',chosenModel='',discovery=0;
-  function updateSend(){q('sendMessage').disabled=!workAccess||!activeSession||!agent.value||!q('providerSelect').value||!q('modelSelect').value||!q('stopAgent').disabled;}
-  async function refreshChoices(preferredProvider=''){
-    if(!activeWorkspace||admin())return;if(!workAccess){agent.disabled=q('providerSelect').disabled=q('modelSelect').disabled=true;updateSend();return;}const workspaceId=activeWorkspace.id,stamp=++discovery;
-    const result=await Promise.allSettled([api('/api/workspaces/'+workspaceId+'/providers'),api('/api/workspaces/'+workspaceId+'/agents')]);if(stamp!==discovery||activeWorkspace?.id!==workspaceId)return;
-    providers=result[0].status==='fulfilled'?result[0].value:[];const connected=providers.filter(p=>p.connected),agents=result[1].status==='fulfilled'?result[1].value:[];
-    q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));for(const p of connected)q('providerSelect').add(new Option(p.name,p.id));q('providerSelect').disabled=!connected.length;
-    if(connected.some(p=>p.id===chosenProvider))q('providerSelect').value=chosenProvider;else if(connected.length===1)q('providerSelect').value=connected[0].id;
-    agent.replaceChildren(new Option(tr('Agent','الوكيل'),''));for(const a of agents)agent.add(new Option(a.name,a.id));agent.disabled=!agents.length;agent.value=agents.some(a=>a.id===chosenAgent)?chosenAgent:(agents.find(a=>a.id==='build')?.id||agents[0]?.id||'');
-    agent.hidden=!connected.length;chosenAgent=agent.value;
-    connect.hidden=connected.length>0;
-    if(connected.some(p=>p.id===preferredProvider)){chosenProvider=preferredProvider;q('providerSelect').value=preferredProvider;}
-    q('providerSelect').onchange=()=>{chosenProvider=q('providerSelect').value;chosenModel='';models();};agent.onchange=()=>{chosenAgent=agent.value;updateSend();};q('modelSelect').onchange=()=>{chosenModel=q('modelSelect').value;updateSend();};models();
-    if(!connected.length){q('runtimeStatus').textContent=result[0].status==='rejected'?tr('Runtime unavailable','وقت التشغيل غير متاح'):tr('Connect a provider to begin','اربط مزوّدًا للبدء');}
+  function togglePane(){if(drawer()){pane.classList.toggle('open');overlay(pane.classList.contains('open'));}else shell.classList.toggle('sessions-collapsed');if((drawer()?pane.classList.contains('open'):!shell.classList.contains('sessions-collapsed'))&&panelMode==='changes')loadChanges();}
+  const panelToggle=btn('toggleWorkspacePanel','Changes / Preview','التغييرات / المعاينة',togglePane,'text-link');context.append(panelToggle);
+  copy.en.spaceReadyBody='Start a session to work with OpenCode. Review changes or preview your project in the side panel.';
+  copy.ar.spaceReadyBody='ابدأ جلسة للعمل مع OpenCode. راجع التغييرات أو عاين مشروعك في اللوحة الجانبية.';
+  q('openSessions').onclick=togglePane;close.onclick=closePane;q('backdrop').addEventListener('click',()=>{pane.classList.remove('open');});
+  const events=textElement('div');previewPanel.hidden=true;changesMode.setAttribute('aria-pressed','true');previewMode.setAttribute('aria-pressed','false');
+  refreshGit=async()=>{await loadChanges();q('manageProviders')?.remove();};
+  q('commitButton').onclick=async()=>{if(!activeWorkspace)return;const message=await window.requestInput(tr('Commit message','رسالة الالتزام'));if(!message?.trim())return;try{await api('/api/workspaces/'+activeWorkspace.id+'/git/commit',{method:'POST',body:JSON.stringify({message:message.trim()})});await loadChanges();}catch(error){toast(error.message);}};
+  let providers=[],chosenAgent='',chosenProvider='',chosenModel='',discovery=0,runtimeReady=false;
+  function updateSend(){const selected=providers.find(p=>p.id===q('providerSelect').value);q('sendMessage').disabled=!workAccess||!runtimeReady||!activeSession||!selected?.connected||selected.allowed===false||!q('modelSelect').value||!q('stopAgent').disabled;}
+  function renderRuntimeSessions(rows){
+    if(!rows)return;const list=q('sessionList');list.replaceChildren();
+    for(const row of rows){const button=textElement('button',row.title,'session');button.onclick=()=>selectSession(row);list.append(button);}
   }
-  function models(){q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));const selected=providers.find(p=>p.id===q('providerSelect').value);for(const model of selected?.models||[])q('modelSelect').add(new Option(model.name,model.id));q('modelSelect').disabled=!selected;q('modelSelect').value=selected?.models.some(m=>m.id===chosenModel)?chosenModel:(selected?.models[0]?.id||'');chosenModel=q('modelSelect').value;updateSend();}
-  window.refreshWorkspaceChoices=refreshChoices;
-  const originalWorkspace=openWorkspace;openWorkspace=async function(project,workspace){if(admin()){await page('adminPage');return;}chosenAgent=chosenProvider=chosenModel='';shell.classList.add('chat-only');shell.classList.remove('review-only');events.replaceChildren();await originalWorkspace(project,workspace);await refreshChoices();const state=await api('/api/github/status');gitState.textContent=state.connected?'GitHub · '+(state.account_login||tr('Connected','متصل')):tr('GitHub · Not connected','GitHub · غير متصل');q('chatGithub').title=gitState.textContent;renderEntitlement();};
-  const originalSession=selectSession;selectSession=async function(session){if(!workAccess){toast(tr('Subscribe to resume this conversation.','اشترك لاستئناف هذه المحادثة.'));return;}await originalSession(session);await refreshChoices();};
-  async function createSession(){if(!activeWorkspace)return;await refreshEntitlement();if(!workAccess)return;const b=pane.querySelector('.new-session');b.disabled=true;try{const row=await api('/api/workspaces/'+activeWorkspace.id+'/sessions',{method:'POST',body:JSON.stringify({title:tr('New session','جلسة جديدة')})});await refreshSessions();q('workspaceChat').click();await selectSession(row);}catch(error){toast(error.message);q('runtimeStatus').textContent=tr('OpenCode unavailable','OpenCode غير متاح');}finally{b.disabled=!workAccess;}}
-  pane.querySelector('.new-session').onclick=createSession;
-  q('promptForm').onsubmit=async event=>{event.preventDefault();await refreshEntitlement();if(!workAccess)return;const prompt=q('promptInput').value.trim();if(!prompt)return;if(!activeSession){await createSession();}if(!activeSession){toast(tr('Could not start an OpenCode session. Check the workspace runtime.','\u062a\u0639\u0630\u0631 \u0628\u062f\u0621 \u062c\u0644\u0633\u0629 OpenCode. \u062a\u062d\u0642\u0642 \u0645\u0646 \u062a\u0634\u063a\u064a\u0644 \u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644.'));return;}if(!agent.value||!q('providerSelect').value||!q('modelSelect').value){toast(tr('Connect a provider and select a model before sending.','\u0627\u0631\u0628\u0637 \u0645\u0632\u0648\u062f\u064b\u0627 \u0648\u0627\u062e\u062a\u0631 \u0646\u0645\u0648\u0630\u062c\u064b\u0627 \u0642\u0628\u0644 \u0627\u0644\u0625\u0631\u0633\u0627\u0644.'));updateSend();return;}q('sendMessage').disabled=true;try{await api('/api/sessions/'+activeSession.id+'/messages',{method:'POST',body:JSON.stringify({text:prompt,provider_id:q('providerSelect').value,model_id:q('modelSelect').value,agent_id:agent.value})});q('promptInput').value='';q('stopAgent').disabled=false;}catch(error){toast(error.message);updateSend();}};
+  async function refreshChoices(preferredProvider='',force=false){
+    if(!activeWorkspace||admin())return;
+    if(!workAccess){agent.disabled=q('providerSelect').disabled=q('modelSelect').disabled=true;updateSend();return;}
+    const workspaceId=activeWorkspace.id,stamp=++discovery,started=performance.now();
+    runtimeReady=false;updateSend();
+    if(!window.workspaceRuntime.peek(workspaceId))q('runtimeStatus').textContent=tr('Starting OpenCode…','جارٍ بدء OpenCode…');
+    try{
+      const snapshot=await window.workspaceRuntime.load(workspaceId,{force});
+      if(stamp!==discovery||activeWorkspace?.id!==workspaceId)return;
+      runtimeReady=snapshot.health?.healthy===true;
+      providers=snapshot.providers||[];const agents=snapshot.agents||[];
+      q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
+      for(const p of providers){const option=new Option(p.name+' · '+(p.allowed===false?tr('Restricted','مقيّد'):p.connected?tr('Connected','متصل'):tr('Not connected','غير متصل')),p.id);option.disabled=p.allowed===false;q('providerSelect').add(option);}
+      q('providerSelect').disabled=!providers.length;
+      if(preferredProvider)chosenProvider=preferredProvider;
+      if(!chosenProvider){const configured=snapshot.config?.model;const configuredProvider=providers.find(p=>typeof configured==='string'&&configured.startsWith(p.id+'/'));const connected=providers.filter(p=>p.connected&&p.allowed!==false);chosenProvider=configuredProvider?.id||(connected.length===1?connected[0].id:'');if(configuredProvider)chosenModel=configured.slice(configuredProvider.id.length+1);}
+      if(providers.some(p=>p.id===chosenProvider))q('providerSelect').value=chosenProvider;
+      agent.replaceChildren(new Option(tr('Default','الافتراضي')+(snapshot.default_agent?' · '+snapshot.default_agent:''),''));
+      for(const a of agents){const option=new Option(a.name+(a.mode==='subagent'?tr(' · Subagent',' · وكيل فرعي'):''),a.name);option.disabled=Boolean(a.hidden)||!['primary','all'].includes(a.mode);agent.add(option);}
+      agent.hidden=false;agent.disabled=snapshot.agents===null;
+      agent.value=agents.some(a=>a.name===chosenAgent&&!a.hidden&&['primary','all'].includes(a.mode))?chosenAgent:'';
+      chosenAgent=agent.value;connect.hidden=providers.some(p=>p.connected&&p.allowed!==false);
+      q('providerSelect').onchange=()=>{chosenProvider=q('providerSelect').value;chosenModel='';models();};
+      agent.onchange=()=>{chosenAgent=agent.value;updateSend();};q('modelSelect').onchange=()=>{chosenModel=q('modelSelect').value;updateSend();};
+      models();renderRuntimeSessions(snapshot.sessions);
+      q('runtimeStatus').textContent='OpenCode '+snapshot.version+' · '+snapshot.status;
+      for(const [name,error] of Object.entries(snapshot.errors||{}))toast(name+': '+error.detail);
+      performance.measure('OpenCode first visible providers '+workspaceId,{start:started,end:performance.now()});
+      performance.measure('OpenCode first visible agents '+workspaceId,{start:started,end:performance.now()});
+    }catch(error){if(stamp!==discovery||activeWorkspace?.id!==workspaceId)return;runtimeReady=false;agent.hidden=false;agent.disabled=true;q('providerSelect').disabled=q('modelSelect').disabled=true;q('runtimeStatus').textContent=error.message;updateSend();throw error;}
+  }
+  function models(){
+    q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));const selected=providers.find(p=>p.id===q('providerSelect').value);
+    for(const model of selected?.models||[]){const option=new Option(model.name||model.id,model.id);option.disabled=model.allowed===false;q('modelSelect').add(option);}
+    q('modelSelect').disabled=!selected||!selected.connected||selected.allowed===false;
+    const preferred=chosenModel||selected?.default_model||'';
+    q('modelSelect').value=selected?.models.some(m=>m.id===preferred&&m.allowed!==false)?preferred:'';
+    chosenModel=q('modelSelect').value;updateSend();
+  }
+  window.refreshWorkspaceChoices=async(preferredProvider='',force=true)=>{if(activeWorkspace&&force)window.workspaceRuntime.invalidate(activeWorkspace.id);return refreshChoices(preferredProvider,force);};
+  openWorkspace=async function(project,workspace){
+    if(admin()){await page('adminPage');return;}
+    stopEvents();activeProject=project;activeWorkspace=workspace;activeSession=null;
+    chosenAgent=chosenProvider=chosenModel='';runtimeReady=false;events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;
+    q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
+    renderWorkspaceEmpty();q('promptInput').value=pendingIdea;pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('Default','الافتراضي'),''));updateSend();
+    await page('workspacePage');
+    Promise.all([refreshGit(),api('/api/github/status').then(state=>{if(activeWorkspace?.id!==workspace.id)return;gitState.textContent=state.connected?'GitHub · '+(state.account_login||tr('Connected','متصل')):tr('GitHub · Not connected','GitHub · غير متصل');})]).catch(error=>toast(error.message));
+  };
+  const originalSession=selectSession;selectSession=async function(session){if(!workAccess){toast(tr('Subscribe to resume this conversation.','اشترك لاستئناف هذه المحادثة.'));return;}await originalSession(session);updateSend();if(panelMode==='changes'&&!shell.classList.contains('sessions-collapsed'))loadChanges();};
+  async function createSession(){if(!activeWorkspace)return;await refreshEntitlement();if(!workAccess)return;const b=newSessionButton;b.disabled=true;try{const row=await api('/api/workspaces/'+activeWorkspace.id+'/sessions',{method:'POST',body:JSON.stringify({title:tr('New session','جلسة جديدة')})});window.workspaceRuntime.invalidate(activeWorkspace.id);await refreshChoices('',true);history.open=false;await selectSession(row);}catch(error){toast(error.message);q('runtimeStatus').textContent=tr('OpenCode unavailable','OpenCode غير متاح');}finally{b.disabled=!workAccess;}}
+  newSessionButton.onclick=createSession;
+  q('promptForm').onsubmit=async event=>{event.preventDefault();await refreshEntitlement();if(!workAccess)return;const prompt=q('promptInput').value.trim();if(!prompt)return;if(!activeSession){await createSession();}if(!activeSession){toast(tr('Could not start an OpenCode session. Check the workspace runtime.','\u062a\u0639\u0630\u0631 \u0628\u062f\u0621 \u062c\u0644\u0633\u0629 OpenCode. \u062a\u062d\u0642\u0642 \u0645\u0646 \u062a\u0634\u063a\u064a\u0644 \u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644.'));return;}if(!q('providerSelect').value||!q('modelSelect').value){toast(tr('Connect a provider and select a model before sending.','\u0627\u0631\u0628\u0637 \u0645\u0632\u0648\u062f\u064b\u0627 \u0648\u0627\u062e\u062a\u0631 \u0646\u0645\u0648\u0630\u062c\u064b\u0627 \u0642\u0628\u0644 \u0627\u0644\u0625\u0631\u0633\u0627\u0644.'));updateSend();return;}q('sendMessage').disabled=true;try{await api('/api/sessions/'+activeSession.id+'/messages',{method:'POST',body:JSON.stringify({text:prompt,provider_id:q('providerSelect').value,model_id:q('modelSelect').value,...(agent.value?{agent_id:agent.value}:{})})});q('promptInput').value='';q('stopAgent').disabled=false;}catch(error){toast(error.message);updateSend();}};
   q('promptInput').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();q('promptForm').requestSubmit();}});
   async function openRepositoryPicker(){
     const dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog';const close=btn('repositoryClose','Close','إغلاق',()=>dialog.close());dialog.append(title('Working repository / branch','مستودع العمل / الفرع'),close);
@@ -246,8 +313,6 @@
   authReady.then(async()=>{const params=new URLSearchParams(location.search);const ret=params.get('payment_return'),cancel=params.get('payment_cancel');if(!ret&&!cancel)return;history.replaceState(null,'',location.pathname+location.hash);if(!currentUser){page('authPage');return;}await window.openClientView('billing');try{await loadPaymentOrders()}catch(error){toast(error.message)}if(cancel){toast(tr('Payment cancelled. No subscription was activated.','تم إلغاء الدفع دون تفعيل أي اشتراك.'));return}try{const orders=await api('/api/billing/orders');const order=orders.find(o=>o.id===ret);const status=order&&order.status;if(status==='paid')toast(tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));else if(status==='sandbox_paid')toast(tr('Sandbox payment recorded. Real subscription unchanged.','سُجل الدفع التجريبي دون تفعيل اشتراك حقيقي.'));else if(status)toast(tr('Payment is pending verification. Press Confirm PayPal payment in Payment orders.','الدفع بانتظار التحقق. اضغط تأكيد دفع PayPal في طلبات الدفع.'));else toast(tr('Returned from PayPal. Confirm your payment in Payment orders.','عدت من PayPal. أكد الدفع من طلبات الدفع.'))}catch(error){toast(error.message)}}).catch(error=>toast(error.message));
   setInterval(async()=>{if(!currentUser||admin()||!document.querySelector('#workspacePage.active,#workspaceHomePage.active'))return;try{await refreshEntitlement();}catch(error){toast(error.message);}},30000);
   document.addEventListener('click',event=>{if(event.target.closest('#clientNav [data-client-view=billing]'))loadPaymentOrders().catch(e=>toast(e.message));if(event.target.closest('#adminNav [data-admin-view=billing]'))loadPaymentOrders(true).catch(e=>toast(e.message));});
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&q('workspacePage').classList.contains('active'))refreshChoices();});
-  const choicesObserver=new MutationObserver(()=>{if(q('workspacePage').classList.contains('active')&&activeWorkspace)refreshChoices();});choicesObserver.observe(q('workspacePage'),{attributes:true,attributeFilter:['class']});
   matchMedia('(max-width:1100px)').addEventListener('change',()=>{pane.classList.remove('open');overlay(false);});
   applyPrefs();
 })();

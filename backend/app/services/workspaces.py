@@ -177,10 +177,13 @@ def status(workspace):
     branch=git(workspace,"symbolic-ref","--short","HEAD",check=False)
     return {"branch":branch.stdout.strip() or None,"head":head.stdout.strip() if head.returncode==0 else None,"changes":entries,"clean":not entries,"push_available":False}
 
-def diff(workspace):
-    result=git(workspace,"diff","--no-ext-diff","--no-textconv").stdout
-    result+=git(workspace,"diff","--cached","--no-ext-diff","--no-textconv").stdout
+def diff(workspace, relative=None):
+    if relative is not None: safe_path(workspace,relative)
+    selected=["--",relative] if relative is not None else []
+    result=git(workspace,"diff","--no-ext-diff","--no-textconv",*selected).stdout
+    result+=git(workspace,"diff","--cached","--no-ext-diff","--no-textconv",*selected).stdout
     for item in status(workspace)["changes"][:30]:
+        if relative is not None and item["path"]!=relative: continue
         if item['status']=="??":
             try:
                 text=content(workspace,item['path'])

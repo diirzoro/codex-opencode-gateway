@@ -45,7 +45,7 @@ def require_workspace_entitlement(request:Request,user:User=Depends(require_user
     # Existing owned project data remains readable after expiry; runtime discovery
     # and execution still require entitlement. Ownership is checked by each route.
     import re
-    if request.method in {'GET','HEAD'} and (path=='/api/workspaces' or re.fullmatch(r'/api/workspaces/[^/]+(?:/(?:files(?:/content)?|diff|changes|logs|git/status|sessions))?',path)):
+    if request.method in {'GET','HEAD'} and (path=='/api/workspaces' or re.fullmatch(r'/api/workspaces/[^/]+(?:/(?:files(?:/content)?|diff|changes|logs|git/status|sessions|preview))?',path)):
         return
     if request.method=='POST' and re.fullmatch(r'/api/sessions/[^/]+/stop',path):
         return

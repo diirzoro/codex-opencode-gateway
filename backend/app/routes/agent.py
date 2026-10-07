@@ -77,7 +77,8 @@ async def execute(session_id,service,runtime_id,data):
         payload={"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
         if data.agent_id: payload["agent"]=data.agent_id
         response=await asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),payload,600)
-        failure=bool(response.get("info",{}).get("error")) if isinstance(response,dict) else True
+        info=response.get("info",{}) if isinstance(response,dict) else {}
+        failure=info.get("role")!="assistant" or bool(info.get("error")) or not info.get("time",{}).get("completed")
         with SessionLocal() as db:
             if failure:
                 finish_execution(db,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'})
@@ -102,7 +103,6 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         raise HTTPException(403,"Provider is disabled by platform policy")
     if not policy.model_allowed(policy_row,data.model_id):
         raise HTTPException(403,"Model is disabled by platform policy")
-    opencode.configure_policy(policy_row)
     service=await asyncio.to_thread(opencode.for_workspace,workspace)
     if data.agent_id:
         from .workspaces import agent_choices
@@ -113,6 +113,10 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         raise HTTPException(503,"Provider authentication is not configured in this workspace runtime")
     provider=next((p for p in provider_data.get("all",[]) if p["id"]==data.provider_id),{})
     if data.model_id not in provider.get("models",{}): raise HTTPException(422,"Model is unavailable")
+    # Refresh session-level rules too: legacy session overrides and later admin
+    # policy changes must not broaden the runtime's current tool restrictions.
+    await asyncio.to_thread(service.apply_session_policy,session.opencode_session_id,
+                            policy.session_permissions(policy_row))
     session.status="submitted"; event(db,session.id,"submitted")
     tasks[str(session_id)]=asyncio.create_task(execute(session.id,service,session.opencode_session_id,data))
     return {"status":"submitted","session_id":str(session.id)}
@@ -172,6 +176,11 @@ def approve(session_id: uuid.UUID,permission_id: str,data: Approval,user: User=D
     if permission_id not in {p["id"] for p in pending}: raise HTTPException(404,"Permission request not found")
     if data.reply=="once" and not next(p["reviewable"] for p in pending if p["id"]==permission_id):
         raise HTTPException(409,"Permission details cannot be fully reviewed; deny this request")
+    requested=next(p for p in pending if p["id"]==permission_id)
+    _,_,allowed_tools=policy.provider_sets(policy.load(db))
+    if data.reply=="once" and (requested["permission"]=="external_directory" or
+                               (allowed_tools and requested["permission"] not in allowed_tools)):
+        raise HTTPException(403,"This permission is disabled by platform policy")
     from urllib.parse import quote
     result=opencode.for_workspace(workspace).request("POST","/permission/"+quote(permission_id,safe="")+"/reply",{"reply":data.reply})
     if result is not True: raise HTTPException(502,"Runtime did not confirm the decision")

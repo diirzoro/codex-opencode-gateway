@@ -43,12 +43,17 @@ def filter_providers(rows, policy):
 
 def permission_config(policy) -> dict:
     _, _, tools = provider_sets(policy)
-    config = {"external_directory": "deny"}
+    config = {}
     if tools:
         config["*"] = "deny"
         action = "ask" if policy.require_tool_approval else "allow"
-        for tool in tools:
+        for tool in sorted(tools - {"external_directory"}):
             config[tool] = action
     else:
         config["*"] = "ask" if policy.require_tool_approval else "allow"
+    config["external_directory"] = "deny"
     return config
+
+def session_permissions(policy):
+    return [{"permission": name, "pattern": "*", "action": action}
+            for name, action in permission_config(policy).items()]
