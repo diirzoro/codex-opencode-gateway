@@ -1,6 +1,7 @@
 """OpenCode provider/auth catalog and real, tool-free credential validation."""
 import json
 import hashlib
+import time
 from urllib.parse import quote
 from fastapi import HTTPException
 
@@ -171,6 +172,44 @@ def model_details(data, provider_id, policy=None):
 
 def auth_methods(service):
     return service.request("GET", "/provider/auth")
+
+
+def connection_methods(service, provider_id):
+    """Discover one provider's real methods without expanding the startup payload.
+
+    /provider/auth lists plugin hooks, not the generic key methods. OpenCode's
+    integration registry reports those separately. Keep legacy plugin indices
+    (including OAuth/prompts) intact and use only runtime-reported key methods.
+    """
+    methods = auth_methods(service)
+    if not isinstance(methods, dict):
+        raise HTTPException(502, "OpenCode returned invalid authentication methods")
+    reported = methods.get(provider_id, [])
+    if not isinstance(reported, list) or any(not isinstance(method, dict) for method in reported):
+        raise HTTPException(502, "OpenCode returned invalid authentication methods")
+    if reported:
+        return reported
+    params = {"location[directory]": service.params["directory"]} if "directory" in service.params else {}
+    deadline = time.monotonic() + 5
+    while True:
+        result = service.request("GET", "/api/integration/" + quote(provider_id, safe=""), params=params)
+        if not isinstance(result, dict) or "data" not in result:
+            raise HTTPException(502, "OpenCode returned invalid integration authentication data")
+        integration = result["data"]
+        if integration is not None:
+            if not isinstance(integration, dict) or integration.get("id") != provider_id:
+                raise HTTPException(502, "OpenCode returned invalid integration authentication data")
+            native_methods = integration.get("methods")
+            if not isinstance(native_methods, list) or any(not isinstance(method, dict) for method in native_methods):
+                raise HTTPException(502, "OpenCode returned invalid integration authentication data")
+            # Do not fabricate an API method from provider names/env/models. Key
+            # schemas come from OpenCode; OAuth still uses its provider hooks.
+            return [method for method in native_methods if method.get("type") == "key"]
+        if time.monotonic() >= deadline:
+            raise HTTPException(503, "OpenCode authentication discovery is not ready for this provider; retry connecting")
+        # The native registry boots asynchronously and initially returns null.
+        # Wait only on Connect, never during runtime/agent/catalog discovery.
+        time.sleep(0.2)
 
 
 def set_api_key(service, provider_id, key, metadata=None):

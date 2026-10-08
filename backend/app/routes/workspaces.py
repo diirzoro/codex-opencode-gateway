@@ -348,15 +348,15 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
     with opencode.workspace_lock(workspace),service.state_lock:
         session_lifecycle.lock_workspace(db,workspace)
         live=service.snapshot()
-        if live["provider_data"] is None or live["auth_methods"] is None:
-            raise HTTPException(502,"OpenCode provider/auth discovery must succeed before connecting")
+        if live["provider_data"] is None:
+            raise HTTPException(502,"OpenCode provider discovery must succeed before connecting")
         entry=providers.resolve_provider(live["provider_data"],provider_id)
         if entry["id"] != provider_id:
             raise HTTPException(422,"Use the provider ID reported by OpenCode")
-        methods=live["auth_methods"].get(provider_id,[])
-        api_methods=[i for i,method in enumerate(methods) if method.get("type")=="api"]
+        methods=providers.connection_methods(service,provider_id)
+        api_methods=[i for i,method in enumerate(methods) if method.get("type") in {"api","key"}]
         method=data.method if data.method is not None else (api_methods[0] if len(api_methods)==1 else None)
-        if method is None or method >= len(methods) or methods[method].get("type")!="api":
+        if method is None or method >= len(methods) or methods[method].get("type") not in {"api","key"}:
             raise HTTPException(422,"Select an API key authentication method reported by OpenCode; OAuth-only providers require their OAuth flow")
         row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
         if row is None and providers.is_connected(service,provider_id) and not providers.is_locally_disconnected(db,workspace,provider_id):
