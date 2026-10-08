@@ -1,9 +1,0 @@
-# Interface assets
-
-OpenCode mark and wordmark paths: official MIT-licensed OpenCode project, https://github.com/anomalyco/opencode/blob/dev/packages/ui/src/components/logo.tsx (retrieved 2026-10-03). Paths preserved; colors inherit the local theme. License: https://github.com/anomalyco/opencode/blob/dev/LICENSE .
-
-GitHub mark: retained existing project SVG. GitHub brand belongs to GitHub; its presence identifies the integration, not endorsement or an active connection.
-
-Other interface icons are original inline SVG line drawings on a 24px grid, without emoji, external font or CDN dependencies. Controls retain accessible labels/tooltips. This independent Gateway is not built by or affiliated with the OpenCode team or GitHub.
-
-OpenCode SVG source MIT notice: Copyright (c) 2025 opencode. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
