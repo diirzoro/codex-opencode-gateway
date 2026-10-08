@@ -224,13 +224,21 @@
   const events=textElement('div');previewPanel.hidden=true;changesMode.setAttribute('aria-pressed','true');previewMode.setAttribute('aria-pressed','false');
   refreshGit=async()=>{await loadChanges();q('manageProviders')?.remove();};
   q('commitButton').onclick=async()=>{if(!activeWorkspace)return;const message=await window.requestInput(tr('Commit message','رسالة الالتزام'));if(!message?.trim())return;try{await api('/api/workspaces/'+activeWorkspace.id+'/git/commit',{method:'POST',body:JSON.stringify({message:message.trim()})});await loadChanges();}catch(error){toast(error.message);}};
-  let providers=[],chosenAgent='',chosenProvider='',chosenModel='',discovery=0,runtimeReady=false,agentsReady=false;
+  let providers=[],chosenAgent='',chosenProvider='',chosenModel='',discovery=0,modelRequest=0,runtimeReady=false,agentsReady=false,modelsReady=false;
+  const retryModels=btn('retryWorkspaceModels','Retry models','أعد تحميل النماذج',()=>models());retryModels.hidden=true;controls.append(retryModels);
+  window.addEventListener('workspace-provider-disconnected',event=>{
+    if(activeWorkspace?.id!==event.detail.workspaceId)return;
+    const id=event.detail.providerId;providers=providers.filter(p=>p.id!==id);runtimeReady=false;
+    for(const option of [...q('providerSelect').options])if(option.value===id)option.remove();
+    if(chosenProvider===id){chosenProvider=chosenModel='';modelRequest++;modelsReady=false;retryModels.hidden=true;q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));}
+    updateSend();
+  });
   updateSend=function(){
     const selected=providers.find(p=>p.id===q('providerSelect').value);
     agent.disabled=!workAccess||!agentsReady;
     q('providerSelect').disabled=!workAccess||!providers.some(p=>(p.connected||p.id==='opencode')&&p.allowed!==false);
-    q('modelSelect').disabled=!workAccess||!selected||selected.allowed===false||q('modelSelect').options.length<2;
-    q('sendMessage').disabled=!workAccess||!runtimeReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value||!q('stopAgent').disabled;
+    q('modelSelect').disabled=!workAccess||!modelsReady||!selected?.connected||selected.allowed===false||q('modelSelect').options.length<2;
+    q('sendMessage').disabled=!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value||!q('stopAgent').disabled;
   }
   function renderRuntimeSessions(rows){
     if(!rows)return;const list=q('sessionList');list.replaceChildren();
@@ -249,9 +257,10 @@
     chosenAgent=agent.value;agent.onchange=()=>{chosenAgent=agent.value;updateSend();};updateSend();
   }
   function renderProviders(snapshot,preferredProvider=''){
-    providers=snapshot.providers||[];q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
+    providers=(snapshot.providers||[]).filter(p=>p.allowed!==false&&(p.connected||p.id==='opencode'));q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
     for(const p of providers.filter(p=>p.connected||p.id==='opencode')){const option=new Option(p.name+' · '+(p.allowed===false?tr('Restricted','مقيّد'):p.connected?tr('Connected','متصل'):tr('Default provider','المزوّد الافتراضي')),p.id);option.disabled=p.allowed===false;q('providerSelect').add(option);}
     if(preferredProvider)chosenProvider=preferredProvider;
+    if(!providers.some(p=>p.id===chosenProvider)){chosenProvider='';chosenModel='';}
     if(!chosenProvider){const configured=snapshot.config?.model;const configuredProvider=providers.find(p=>typeof configured==='string'&&configured.startsWith(p.id+'/'));const connected=providers.filter(p=>p.connected&&p.allowed!==false);chosenProvider=configuredProvider?.id||(connected.length===1?connected[0].id:'');if(configuredProvider)chosenModel=configured.slice(configuredProvider.id.length+1);}
     if(providers.some(p=>p.id===chosenProvider))q('providerSelect').value=chosenProvider;
     q('providerSelect').onchange=()=>{chosenProvider=q('providerSelect').value;chosenModel='';models();};q('modelSelect').onchange=()=>{chosenModel=q('modelSelect').value;updateSend();};models();
@@ -278,19 +287,30 @@
     }).catch(error=>{if(current()){runtimeReady=false;q('runtimeStatus').textContent=error.message;updateSend();toast(error.message);}});
     await Promise.allSettled([agentsJob,providersJob]);
   }
-  function models(){
-    q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));const selected=providers.find(p=>p.id===q('providerSelect').value);
-    for(const model of selected?.models||[]){const option=new Option(model.name||model.id,model.id);option.disabled=model.allowed===false;q('modelSelect').add(option);}
-    q('modelSelect').disabled=!selected||!selected.connected||selected.allowed===false;
-    const preferred=chosenModel||selected?.default_model||'';
-    q('modelSelect').value=selected?.models.some(m=>m.id===preferred&&m.allowed!==false)?preferred:'';
-    chosenModel=q('modelSelect').value;updateSend();
+  async function models(){
+    const stamp=++modelRequest,workspaceId=activeWorkspace?.id,selected=providers.find(p=>p.id===q('providerSelect').value);
+    const current=()=>stamp===modelRequest&&activeWorkspace?.id===workspaceId&&q('providerSelect').value===selected?.id;
+    modelsReady=false;retryModels.hidden=true;
+    const render=rows=>{
+      q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));
+      for(const model of rows){const option=new Option(model.name||model.id,model.id);option.disabled=model.allowed===false;q('modelSelect').add(option);}
+      const preferred=chosenModel||selected?.default_model||'';
+      q('modelSelect').value=rows.some(m=>m.id===preferred&&m.allowed!==false)?preferred:'';
+    };
+    render(selected&&workspaceId?window.workspaceRuntime.peekModels(workspaceId,selected.id)?.models||[]:[]);updateSend();
+    if(!runtimeReady||!selected?.connected||selected.allowed===false)return;
+    if(q('modelSelect').options.length===1)q('modelSelect').options[0].textContent=tr('Loading models…','جارٍ تحميل النماذج…');
+    try{
+      const data=await window.workspaceRuntime.loadModels(workspaceId,selected.id);
+      if(!current())return;render(data.models);modelsReady=data.allowed!==false&&data.connected===true;
+      chosenModel=q('modelSelect').value;q('modelSelect').title=tr('Model','النموذج');updateSend();
+    }catch(error){if(current()){q('modelSelect').title=error.message;q('modelSelect').options[0].textContent=tr('Could not load models','تعذر تحميل النماذج');retryModels.hidden=false;updateSend();toast(error.message);}}
   }
   window.refreshWorkspaceChoices=async(preferredProvider='',force=true)=>{if(activeWorkspace&&force)window.workspaceRuntime.invalidate(activeWorkspace.id);return refreshChoices(preferredProvider,force);};
   openWorkspace=async function(project,workspace,{navigate=true}={}){
     if(admin()){await page('adminPage');return;}
     stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
-    discovery++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=false;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
+    discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
     renderWorkspaceEmpty();q('promptInput').value=pendingIdea;pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode'),''));updateSend();
     if(!navigate){syncWorkspacePolling();return;}
@@ -453,7 +473,7 @@
   authReady.then(async()=>{const params=new URLSearchParams(location.search);const ret=params.get('payment_return'),cancel=params.get('payment_cancel');if(!ret&&!cancel)return;history.replaceState(null,'',location.pathname+location.hash);if(!currentUser){page('authPage');return;}await window.openClientView('billing');try{await loadPaymentOrders()}catch(error){toast(error.message)}if(cancel){toast(tr('Payment cancelled. No subscription was activated.','تم إلغاء الدفع دون تفعيل أي اشتراك.'));return}try{const orders=await api('/api/billing/orders');const order=orders.find(o=>o.id===ret);const status=order&&order.status;if(status==='paid')toast(tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));else if(status==='sandbox_paid')toast(tr('Sandbox payment recorded. Real subscription unchanged.','سُجل الدفع التجريبي دون تفعيل اشتراك حقيقي.'));else if(status)toast(tr('Payment is pending verification. Press Confirm PayPal payment in Payment orders.','الدفع بانتظار التحقق. اضغط تأكيد دفع PayPal في طلبات الدفع.'));else toast(tr('Returned from PayPal. Confirm your payment in Payment orders.','عدت من PayPal. أكد الدفع من طلبات الدفع.'))}catch(error){toast(error.message)}}).catch(error=>toast(error.message));
   setInterval(async()=>{if(!currentUser||admin()||!document.querySelector('#workspacePage.active,#workspaceHomePage.active'))return;try{await refreshEntitlement();}catch(error){toast(error.message);}},30000);
   document.addEventListener('click',event=>{if(event.target.closest('#clientNav [data-client-view=billing]'))loadPaymentOrders().catch(e=>toast(e.message));if(event.target.closest('#adminNav [data-admin-view=billing]'))loadPaymentOrders(true).catch(e=>toast(e.message));});
-  matchMedia('(max-width:1100px)').addEventListener('change',()=>{pane.classList.remove('open');overlay(false);});
+  matchMedia('(max-width:1100px)').addEventListener('change',()=>{q('sessionSidebar').classList.remove('open');overlay(false);});
   applyPrefs();
   if(document.documentElement.dataset.restorePage==='workspacePage')initializeWorkspace();
   q('promptInput').disabled=true;q('homeNewProject').disabled=true;

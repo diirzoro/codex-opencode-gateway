@@ -16,6 +16,47 @@ OpenCode integration details and the exact division between packaged adapter cod
 
 GitHub App setup, callback URL, repository permissions, webhook configuration, and backend-only environment values are documented in [GITHUB_INTEGRATION.md](GITHUB_INTEGRATION.md).
 
+## Preserve operator-managed Nginx gzip
+
+On 2026-10-08, the operator reported manually enabling the following gzip
+settings in the existing production Nginx configuration. Preserve these settings
+alongside the existing listeners, TLS, proxy and streaming configuration. This is
+reference documentation, not an automatically installed configuration or a
+replacement for `/etc/nginx/nginx.conf`.
+
+```nginx
+gzip on;
+gzip_vary on;
+gzip_proxied any;
+gzip_comp_level 5;
+gzip_min_length 1024;
+gzip_http_version 1.1;
+
+gzip_types
+    text/plain
+    text/css
+    application/json
+    application/javascript
+    text/xml
+    application/xml
+    application/xml+rss
+    text/javascript
+    image/svg+xml;
+```
+
+The operator reported successful `nginx -t` validation and
+`Content-Encoding: gzip` on production `/runtime` responses after reload. These
+are supplied production observations, not verification performed by this change.
+Keep host-level configuration under operator control; application packaging and
+deployment must not overwrite it. Any later host change requires separate review
+and validation against the actual installed configuration.
+
+Phase 3 keeps the full OpenCode provider response cached on the Gateway and sends
+a lightweight index to the browser. Models are requested only for a selected
+provider via `/api/workspaces/<id>/providers/<provider>/models`. Compression still
+matters for JSON and static assets; it does not eliminate network latency or
+OpenCode startup time. No proxy settings or deployment automation are changed.
+
 ## Preconditions
 
 ### Internal OpenCode configuration (2026-10-05)
