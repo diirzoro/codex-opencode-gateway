@@ -417,24 +417,8 @@
     feed.scrollTop = feed.scrollHeight;
   }
 
-  startEvents = function () {
-    if (!activeSession) return;
-    eventStream = new EventSource('/api/sessions/' + activeSession.id + '/events');
-    var kinds = ['submitted', 'analyzing', 'reading_files', 'editing', 'running_command', 'running_tests', 'waiting_approval', 'approval_decision', 'failed', 'completed', 'cancelled'];
-    kinds.forEach(function (kind) {
-      eventStream.addEventListener(kind, function () {
-        document.getElementById('runtimeStatus').textContent = kind;
-        if (['failed', 'completed', 'cancelled'].indexOf(kind) >= 0) {
-          document.getElementById('stopAgent').disabled = true;
-          refreshMessages();
-          refreshGit().catch(function (e) { toast(e.message); });
-          document.getElementById('sendMessage').disabled = !value('modelSelect');
-        }
-        renderEventLine(kind);
-      });
-    });
-    eventStream.onerror = function () { document.getElementById('runtimeStatus').textContent = 'Reconnecting to event stream'; };
-  };
+  // The base client owns the sole SSE connection and durable replay cursor.
+  window.renderWorkspaceEventLine = renderEventLine;
 
   Object.assign(copy.en, { clientNavTitle: 'Client', clientDashboard: 'Dashboard', clientProjects: 'Projects', clientSessions: 'Sessions', clientAi: 'OpenCode', clientAccount: 'Account / Profile', clientDashboardLead: 'Your trial, connections, projects and recent activity in one place.', clientRecentLabel: 'RECENT', clientRecentProjects: 'Projects and workspaces', adminNavTitle: 'Administration', adminConsole: 'Admin Console', adminOverview: 'Overview', adminUsers: 'Users', adminProjects: 'Projects', adminWorkspaces: 'Workspaces', adminSessions: 'Sessions', adminPlans: 'Plans & Offers', adminPolicy: 'AI / OpenCode Policy', adminGithub: 'GitHub', adminAudit: 'Audit / Activity', adminSettings: 'Platform Settings', adminPersonal: 'Personal account', adminOverviewLead: 'Real backend metrics only. Metrics without a real query show "Not available yet".', adminPlatformStatus: 'PLATFORM STATUS', adminIntegrations: 'Integrations', adminUsersLead: 'Real account records. Role, status and trial changes call the admin API.', adminActions: 'Actions', adminProjectsLead: 'Metadata only. Customer source code is never shown here.', adminWorkspacesLead: 'Real workspace metadata. The physical path is never exposed.', adminSessionsLead: 'Real OpenCode conversation metadata.', adminPlansLead: 'Published offers are read by the public landing page through the plans API.', adminPolicyLead: 'These settings persist and limit what clients can select. User API keys and OAuth credentials are never shown here.', adminBilling: 'Billing / Subscriptions', adminReports: 'Reports', adminHealth: 'Platform Logs / Health', adminGithubSettings: 'GitHub Integration Settings', adminTrial: 'Trial / Entitlement Settings', adminSecurity: 'Security', clientRecentSessionsTitle: 'Recent sessions', clientProjectsLead: 'Your projects and workspaces.', clientSessionsLead: 'Workspaces and their OpenCode sessions.', clientAiLead: 'Runtime, provider and tool status for your workspaces.', clientGithubLead: 'Connect your GitHub account, then choose a repository and branch.', clientBillingLead: "Your own subscription only. Other customers' billing is never shown here.", clientPlansTitle: 'Plans & offers', clientCancel: 'Cancel subscription', clientReactivate: 'Reactivate', clientRenew: 'Renew subscription', clientInvoicesTitle: 'Invoices & payments', clientAccountLead: 'Personal details and preferences.', clientPersonalInfo: 'Personal information', clientUsername: 'Username', clientEmail: 'Email', clientPhone: 'Phone', clientLocation: 'Location / postal code', clientPreferences: 'Language / theme', clientSecurityNote: 'Use Password & security to change your password, revoke sign-ins, or suspend your account.', clientSecurityLead: 'Session and account security.', clientSecurity: 'Password & Security', clientDashboardBadge: 'CLIENT DASHBOARD', adminConsoleBadge: 'ADMIN CONSOLE', adminBillingLead: 'Business finance view, separate from the client billing page.', adminReportsLead: 'Real platform counts. Revenue appears only when backed by real payment data.', aUsername: 'Username', aEmail: 'Email', aRole: 'Role', aStatus: 'Status', aTrialRemaining: 'Trial remaining', aTrialEnd: 'Trial end', aPlan: 'Plan', aLastLogin: 'Last login', aCreated: 'Created', aProjectsWorkspaces: 'Projects / Workspaces', aCode: 'Code', aName: 'Name', aPrice: 'Price (USD)', aDays: 'Duration', aActive: 'Active', aAddPlan: 'Add plan', aSubscriptionsSmall: 'SUBSCRIPTIONS', aSubsTitle: 'Subscriptions across users', aOwner: 'Owner', aStarted: 'Started', aPeriodEnd: 'Period end', aCancelled: 'Cancelled', aTransactionsSmall: 'TRANSACTIONS', aTransactions: 'Payment transactions', aRevenueSmall: 'REVENUE', aRevenue: 'Revenue', aNay: 'Not available yet.', aAuditLogging: 'Audit logging is not available yet.', aHealthLead: 'Runtime health from the real backend.', aLoading: 'Loading…', aEnabledProviders: 'Enabled providers (comma separated)', aAllowedModels: 'Allowed models (comma separated)', aEnabledTools: 'Enabled tools / capabilities (comma separated)', aRequireApproval: 'Require approval before running tools', aSavePolicy: 'Save policy', aGithubLead: 'Connection status. The real GitHub integration is a later phase.', aLoadingStatus: 'Loading status…', aTrialLead: 'Trial entitlement overview. Editing trial defaults is not available yet.', aPlatformSettings: 'Platform settings are not available yet.', aAdminSecurityNotAvail: 'Admin security settings are not available yet.', aPersonalLead: 'Your own account. Administrative controls are on the other pages.' });
   Object.assign(copy.ar, { clientNavTitle: 'العميل', clientDashboard: 'لوحة المعلومات', clientProjects: 'المشاريع', clientSessions: 'الجلسات', clientAi: 'OpenCode', clientAccount: 'الحساب / الملف', clientDashboardLead: 'تجربتك واتصالاتك ومشاريعك ونشاطك الأخير في مكان واحد.', clientRecentLabel: 'الأحدث', clientRecentProjects: 'المشاريع ومساحات العمل', adminNavTitle: 'الإدارة', adminConsole: 'لوحة الإدارة', adminOverview: 'نظرة عامة', adminUsers: 'المستخدمون', adminProjects: 'المشاريع', adminWorkspaces: 'مساحات العمل', adminSessions: 'الجلسات', adminPlans: 'الخطط والعروض', adminPolicy: 'سياسة الذكاء / OpenCode', adminGithub: 'GitHub', adminAudit: 'التدقيق / النشاط', adminSettings: 'إعدادات المنصة', adminPersonal: 'الحساب الشخصي', adminOverviewLead: 'مؤشرات حقيقية فقط. ما لا يوجد له استعلام حقيقي يظهر "غير متاح بعد".', adminPlatformStatus: 'حالة المنصة', adminIntegrations: 'التكاملات', adminUsersLead: 'سجلات حقيقية. تغيير الدور والحالة والتجربة يستدعي واجهة الإدارة.', adminActions: 'إجراءات', adminProjectsLead: 'بيانات وصفية فقط. لا يظهر كود العميل هنا.', adminWorkspacesLead: 'بيانات مساحة العمل الحقيقية. لا يُكشف المسار الفيزيائي.', adminSessionsLead: 'بيانات محادثات OpenCode الحقيقية.', adminPlansLead: 'تُقرأ العروض المنشورة في صفحة الهبوط عبر واجهة الخطط.', adminPolicyLead: 'تُحفظ هذه الإعدادات وتحدّ من اختيارات العملاء. لا تظهر مفاتيح المستخدمين أو رموز OAuth هنا.', adminBilling: 'الفوترة / الاشتراكات', adminReports: 'التقارير', adminHealth: 'سجلات المنصة / الحالة', adminGithubSettings: 'إعدادات تكامل GitHub', adminTrial: 'إعدادات التجربة / الاستحقاق', adminSecurity: 'الأمان', clientRecentSessionsTitle: 'الجلسات الأخيرة', clientProjectsLead: 'مشاريعك ومساحات العمل.', clientSessionsLead: 'مساحات العمل وجلسات OpenCode الخاصة بها.', clientAiLead: 'حالة وقت التشغيل والمزوّد والأدوات لمساحات عملك.', clientGithubLead: 'حالة الاتصال. التدفق الحقيقي للترخيص مرحلة لاحقة.', clientBillingLead: 'اشتراكك فقط. لا تظهر فوترة العملاء الآخرين هنا.', clientPlansTitle: 'الخطط والعروض', clientCancel: 'إلغاء الاشتراك', clientReactivate: 'إعادة التفعيل', clientRenew: 'تجديد الاشتراك', clientInvoicesTitle: 'الفواتير والمدفوعات', clientAccountLead: 'بياناتك وتفضيلاتك. لوحة المعلومات صفحة منفصلة.', clientPersonalInfo: 'المعلومات الشخصية', clientUsername: 'اسم المستخدم', clientEmail: 'البريد الإلكتروني', clientPhone: 'الهاتف', clientLocation: 'الموقع / الرمز البريدي', clientPreferences: 'اللغة / المظهر', clientSecurityNote: 'تغيير كلمة المرور وإدارة الأجهزة غير متاحين بعد. جلستك تستخدم ملف تعريف ارتباط HttpOnly وSameSite=Strict.', clientSecurityLead: 'أمان الجلسة والحساب.', clientSecurity: 'كلمة المرور والأمان', clientDashboardBadge: 'لوحة العميل', adminConsoleBadge: 'لوحة الإدارة', adminBillingLead: 'عرض مالي للعمل، منفصل عن صفحة فوترة العميل.', adminReportsLead: 'مؤشرات المنصة الحقيقية. تظهر الإيرادات فقط عند توفر بيانات دفع حقيقية.', aUsername: 'اسم المستخدم', aEmail: 'البريد الإلكتروني', aRole: 'الدور', aStatus: 'الحالة', aTrialRemaining: 'المتبقي من التجربة', aTrialEnd: 'نهاية التجربة', aPlan: 'الخطة', aLastLogin: 'آخر دخول', aCreated: 'تاريخ الإنشاء', aProjectsWorkspaces: 'المشاريع / مساحات العمل', aCode: 'الرمز', aName: 'الاسم', aPrice: 'السعر (سنتات)', aDays: 'الأيام', aActive: 'نشط', aAddPlan: 'إضافة خطة', aSubscriptionsSmall: 'الاشتراكات', aSubsTitle: 'الاشتراكات عبر المستخدمين', aOwner: 'المالك', aStarted: 'البدء', aPeriodEnd: 'نهاية الفترة', aCancelled: 'ملغى', aTransactionsSmall: 'المعاملات', aTransactions: 'معاملات الدفع', aRevenueSmall: 'الإيرادات', aRevenue: 'الإيرادات', aNay: 'غير متاح بعد.', aAuditLogging: 'سجل التدقيق غير متاح بعد.', aHealthLead: 'حالة وقت التشغيل من الخلفية الحقيقية.', aLoading: 'جارٍ التحميل…', aEnabledProviders: 'المزوّدون المفعّلون (مفصولة بفواصل)', aAllowedModels: 'النماذج المسموحة (مفصولة بفواصل)', aEnabledTools: 'الأدوات المفعّلة (مفصولة بفواصل)', aRequireApproval: 'تتطلب الموافقة قبل تشغيل الأدوات', aSavePolicy: 'حفظ السياسة', aGithubLead: 'حالة الاتصال. تكامل GitHub الحقيقي مرحلة لاحقة.', aLoadingStatus: 'جارٍ تحميل الحالة…', aTrialLead: 'نظرة عامة على استحقاق التجربة. تعديل مدة التجربة الافتراضية غير متاح بعد.', aPlatformSettings: 'إعدادات المنصة غير متاحة بعد.', aAdminSecurityNotAvail: 'إعدادات أمان الإدارة غير متاحة بعد.', aPersonalLead: 'حسابك الخاص. عناصر التحكم الإدارية في الصفحات الأخرى.' });
@@ -738,14 +722,53 @@
     projects.slice(0, 5).forEach(function (p) { if (box) box.append(projectNode(p)); });
   }
 
+  var clientSessionsRevision = 0;
   async function renderClientSessionsUI(data) {
+    var revision = ++clientSessionsRevision, owner = currentUser && currentUser.id;
     var box = document.getElementById('clientRecentSessions'); var full = document.getElementById('clientSessionsList');
     if (box) box.replaceChildren(); if (full) full.replaceChildren();
     var ws = []; (data.projects || []).forEach(function (p) { (p.workspaces || []).forEach(function (w) { ws.push({ project: p.name, projectObj: p, workspace: w }); }); });
-    var all = [];
-    for (var i = 0; i < ws.length && i < 12; i++) { try { var sess = await api('/api/workspaces/' + ws[i].workspace.id + '/sessions'); sess.forEach(function (s) { all.push({ project: ws[i].project, projectObj: ws[i].projectObj, workspace: ws[i].workspace, session: s }); }); } catch (e) {} }
-    var render = function (target, list) { if (!target) return; target.replaceChildren(); if (!list.length) { target.append(emptyState('#icon-chat', tr('No sessions yet', 'لا توجد جلسات بعد'), tr('Open a workspace and start a conversation.', 'افتح مساحة عمل وابدأ محادثة.'))); return; } list.forEach(function (r) { var card = listCard('#icon-chat', r.session.title || tr('Session', 'جلسة'), r.project + ' · ' + tr('Status', 'الحالة') + ': ' + (r.session.status || 'idle')); card.querySelector('.lc-actions').append(statusBadge(r.session.status)); var cont = textElement('button', tr('Open', 'فتح'), 'button ghost small'); cont.onclick = async function () { try{await openWorkspace(r.projectObj,r.workspace);await selectSession(r.session)}catch(e){toast(e.message)} }; card.querySelector('.lc-actions').append(cont); target.append(card); }); };
-    if (box) render(box, all.slice(0, 5)); if (full) render(full, all);
+    var rows;
+    try { rows = await api('/api/sessions?include_archived=true'); }
+    catch (e) { if (revision === clientSessionsRevision && full) full.append(textElement('p', e.message, 'api-message show error')); return; }
+    if (revision !== clientSessionsRevision || !currentUser || currentUser.id !== owner) return;
+    var all = rows.map(function (s) { var context = ws.find(function (w) { return w.workspace.id === s.workspace_id; }); return context ? Object.assign({ session: s }, context) : null; }).filter(Boolean);
+    var category = full && full.dataset.sessionCategory || 'active';
+    var labels = {active:tr('Active','نشطة'), running:tr('Running','قيد التنفيذ'), closed:tr('Closed','مغلقة'), archived:tr('Archived','مؤرشفة'), completed:tr('Completed','مكتملة'), failed:tr('Failed','فشلت')};
+    function action(r, kind, label) {
+      var button = textElement('button', label, 'button ghost small'); button.type = 'button'; button.dataset.sessionAction = kind;
+      button.onclick = async function () {
+        if (kind === 'delete' && !await window.confirmAction(tr('Delete from client history? OpenCode history and project files are preserved.', 'حذف من سجل العميل؟ يبقى سجل OpenCode وملفات المشروع محفوظة.'))) return;
+        button.disabled = true;
+        try {
+          if (kind === 'open') { await openWorkspace(r.projectObj, r.workspace); await selectSession(r.session); return; }
+          var result = await api('/api/sessions/' + r.session.id + (kind === 'delete' ? '' : '/' + kind), {method:kind === 'delete' ? 'DELETE' : 'POST'});
+          window.dispatchEvent(new CustomEvent('workspace-session-lifecycle', {detail:{sessionId:r.session.id, workspaceId:r.workspace.id, action:kind, result:result}}));
+          await renderClientSessionsUI(data);
+        } catch (e) { toast(e.message); } finally { button.disabled = false; }
+      }; return button;
+    }
+    function render(target, list, managed) {
+      if (!target) return; target.replaceChildren();
+      if (managed) {
+        var filters = textElement('div', '', 'session-filters');
+        [['active','Active','نشطة'],['closed','Previous / Closed','سابقة / مغلقة'],['archived','Archived','مؤرشفة']].forEach(function (entry) {
+          var button = textElement('button', tr(entry[1],entry[2]), 'button ghost small');button.type='button';button.id='clientSessions-'+entry[0];button.setAttribute('aria-pressed',String(category===entry[0]));
+          button.onclick=function(){full.dataset.sessionCategory=entry[0];category=entry[0];render(full,all.filter(function(r){return r.session.lifecycle===category;}),true);};filters.append(button);
+        });target.append(filters);
+      }
+      if (!list.length) { target.append(emptyState('#icon-chat', tr('No sessions in this category', 'لا توجد جلسات في هذا القسم'), tr('Open a workspace or choose another category.', 'افتح مساحة عمل أو اختر قسمًا آخر.'))); return; }
+      list.forEach(function (r) {
+        var card = listCard('#icon-chat', r.session.title || tr('Session', 'جلسة'), r.project + ' · ' + (labels[r.session.status] || r.session.status)), actions = card.querySelector('.lc-actions');card.dataset.sessionId=r.session.id;
+        actions.append(statusBadge(r.session.status));
+        if (r.session.lifecycle === 'archived') actions.append(action(r,'restore',tr('Restore','استعادة')));
+        else { actions.append(action(r,'open',tr('Open','فتح'))); if (managed) actions.append(action(r,r.session.lifecycle==='active'?'close':'archive',r.session.lifecycle==='active'?tr('Close / Disconnect','إغلاق / فصل'):tr('Archive','أرشفة'))); }
+        if (managed && r.session.lifecycle !== 'active') actions.append(action(r,'delete',tr('Delete from history','حذف من السجل')));
+        target.append(card);
+      });
+    }
+    render(box,all.filter(function(r){return r.session.lifecycle!=='archived';}).slice(0,5),false);
+    render(full,all.filter(function(r){return r.session.lifecycle===category;}),true);
   }
 
   loadClientGithub = async function () {

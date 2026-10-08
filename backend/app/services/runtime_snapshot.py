@@ -6,22 +6,26 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy import select
 from ..models import WorkspaceSession
-from . import policy, providers
+from . import policy, providers, session_lifecycle
 
 
 def policy_revision(row):
     return hashlib.sha256(((row.allowed_providers or "[]") + "\n" + (row.allowed_models or "[]")).encode()).hexdigest()[:16]
 
 
+def workspace_policy_revision(db, workspace, row):
+    return policy_revision(row) + ":" + str(providers.connection_revision(db, workspace))
+
+
 def sync_sessions(db, workspace, live):
     """Gateway stores ownership/execution mappings; titles/existence come from OpenCode."""
+    session_lifecycle.lock_workspace(db, workspace)
     rows = list(db.scalars(select(WorkspaceSession).where(
         WorkspaceSession.workspace_id == workspace.id, WorkspaceSession.user_id == workspace.user_id)))
     by_runtime = {row.opencode_session_id: row for row in rows}
-    result = []
     for entry in live:
         identifier = entry.get("id", "")
-        if not identifier.startswith("ses") or entry.get("parentID") or entry.get("time", {}).get("archived"):
+        if not identifier.startswith("ses") or entry.get("parentID"):
             continue
         row = by_runtime.get(identifier)
         if row is None:
@@ -30,11 +34,14 @@ def sync_sessions(db, workspace, live):
             milliseconds = entry.get("time", {}).get("created")
             if milliseconds is not None:
                 row.created_at = datetime.fromtimestamp(milliseconds / 1000, timezone.utc)
-            db.add(row)
+            db.add(row); rows.append(row); by_runtime[identifier] = row
+            if entry.get("time", {}).get("archived"):
+                session_lifecycle.set_state(db, row, "archived")
         row.title = entry.get("title", row.title)[:120]
-        result.append({**providers.public_metadata(entry), "id": str(row.id), "runtime_id": identifier,
-                       "workspace_id": str(workspace.id), "title": row.title, "status": row.status,
-                       "created_at": row.created_at})
+    db.flush()
+    values = session_lifecycle.states(db, rows)
+    result = [{**session_lifecycle.payload(row, values[row.id]), "runtime_id": row.opencode_session_id}
+              for row in rows if values[row.id] != "deleted"]
     db.commit()
     return result
 
@@ -42,12 +49,13 @@ def sync_sessions(db, workspace, live):
 def public_snapshot(service, workspace, db):
     started = time.monotonic()
     live = service.snapshot()
+    live = {**live, "provider_data": providers.client_catalog(db, workspace, live["provider_data"])}
     policy_row = policy.load(db)
     catalog = None
     if live["provider_data"] is not None:
         catalog = providers.catalog_index(live["provider_data"], policy_row)
     return {"status": "partial" if live["errors"] else "ready", "workspace_id": str(workspace.id),
-            "generation": live["generation"], "revision": live["revision"], "policy_revision": policy_revision(policy_row),
+            "generation": live["generation"], "revision": live["revision"], "policy_revision": workspace_policy_revision(db, workspace, policy_row),
             "health": live["health"], "version": live["health"]["version"],
             "providers": catalog, "connected": (live["provider_data"] or {}).get("connected") if live["provider_data"] is not None else None,
             "catalog_size": len((live["provider_data"] or {}).get("all", [])),
@@ -62,6 +70,7 @@ def public_snapshot(service, workspace, db):
 
 def public_provider_lookup(service, workspace, db, *, name=None, query=None):
     live = service.snapshot()
+    live = {**live, "provider_data": providers.client_catalog(db, workspace, live["provider_data"])}
     if live["provider_data"] is None:
         error = live["errors"]["provider_data"]
         raise HTTPException(error["status"], error["detail"])
@@ -72,19 +81,20 @@ def public_provider_lookup(service, workspace, db, *, name=None, query=None):
     else:
         rows = providers.search_index(live["provider_data"], query, policy_row)
     return {"workspace_id": str(workspace.id), "generation": live["generation"], "revision": live["revision"],
-            "policy_revision": policy_revision(policy_row),
+            "policy_revision": workspace_policy_revision(db, workspace, policy_row),
             "providers": [{**row, "auth_methods": live["auth_methods"].get(row["id"], [])
                            if live["auth_methods"] is not None else None} for row in rows]}
 
 
 def public_models(service, workspace, provider_id, db):
     live = service.snapshot()
+    live = {**live, "provider_data": providers.client_catalog(db, workspace, live["provider_data"])}
     if live["provider_data"] is None:
         error = live["errors"]["provider_data"]
         raise HTTPException(error["status"], error["detail"])
     policy_row = policy.load(db)
     return {"workspace_id": str(workspace.id), "generation": live["generation"],
-            "revision": live["revision"], "policy_revision": policy_revision(policy_row),
+            "revision": live["revision"], "policy_revision": workspace_policy_revision(db, workspace, policy_row),
             **providers.model_details(live["provider_data"], provider_id, policy_row)}
 
 

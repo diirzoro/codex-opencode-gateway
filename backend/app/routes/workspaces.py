@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
@@ -10,11 +11,12 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import ExecutionEvent, Project, ProviderCredential, User, Workspace, WorkspaceSession
-from ..services import credentials, github, opencode, policy, providers, runtime_snapshot, preview
+from ..services import credentials, github, opencode, policy, providers, runtime_snapshot, preview, session_lifecycle
 from ..services import workspaces as manager
 from .dependencies import require_user, require_workspace_entitlement
 
 router=APIRouter(prefix="/api",tags=["workspaces"],dependencies=[Depends(require_workspace_entitlement)])
+logger=logging.getLogger(__name__)
 
 class CreateProject(BaseModel):
     model_config=ConfigDict(extra="forbid",str_strip_whitespace=True)
@@ -227,10 +229,12 @@ def push(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=De
 def new_session(workspace_id: uuid.UUID,data: NewSession,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Workspace,workspace_id,user.id)
     manager.require_quota_headroom(row)
+    session_lifecycle.lock_workspace(db,row)
+    session_lifecycle.require_slot(db,row)
     runtime_id=opencode.for_workspace(row).create_session(data.title)
     session=WorkspaceSession(workspace_id=row.id,user_id=user.id,opencode_session_id=runtime_id,title=data.title)
-    db.add(session); db.commit(); db.refresh(session)
-    return session_payload(session)
+    db.add(session); db.flush(); session_lifecycle.set_state(db,session,"active"); db.commit(); db.refresh(session)
+    return session_lifecycle.payload(session,"active")
 
 @router.post("/workspaces/{workspace_id}/files/upload",status_code=201)
 def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),path: str=Form(default=""),user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -255,17 +259,19 @@ def storage(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session
     return manager.storage_payload(manager.owned(db,Workspace,workspace_id,user.id))
 
 @router.get("/workspaces/{workspace_id}/sessions")
-def sessions(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+def sessions(workspace_id: uuid.UUID,include_archived: bool=False,user: User=Depends(require_user),db: Session=Depends(get_db)):
     workspace,service=_workspace_service(db,user,workspace_id)
     with service.session_lock:
-        return runtime_snapshot.sync_sessions(db,workspace,service.request("GET","/session"))
+        rows=runtime_snapshot.sync_sessions(db,workspace,service.request("GET","/session"))
+        return rows if include_archived else [row for row in rows if row["lifecycle"]!="archived"]
 
 @router.get("/sessions/{session_id}")
 def session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,WorkspaceSession,session_id,user.id)
+    session_lifecycle.require_visible(db,row)
     workspace=manager.owned(db,Workspace,row.workspace_id,user.id)
     live=opencode.for_workspace(workspace).request("GET","/session/"+row.opencode_session_id)
-    return {**providers.public_metadata(live),**session_payload(row),"title":live["title"],"runtime_id":row.opencode_session_id}
+    return {**providers.public_metadata(live),**session_lifecycle.payload(row,session_lifecycle.state(db,row)),"title":live["title"],"runtime_id":row.opencode_session_id}
 
 def _workspace_service(db,user,workspace_id):
     row=manager.owned(db,Workspace,workspace_id,user.id)
@@ -285,7 +291,7 @@ def workspace_runtime(workspace_id: uuid.UUID,user: User=Depends(require_user),d
 @router.get("/workspaces/{workspace_id}/runtime/state")
 def workspace_runtime_state(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row,service=_workspace_service(db,user,workspace_id)
-    return {"workspace_id":str(row.id),"policy_revision":runtime_snapshot.policy_revision(policy.load(db)),**service.discovery_state()}
+    return {"workspace_id":str(row.id),"policy_revision":runtime_snapshot.workspace_policy_revision(db,row,policy.load(db)),**service.discovery_state()}
 
 @router.get("/workspaces/{workspace_id}/runtime/agents")
 def workspace_runtime_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -299,8 +305,9 @@ def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_us
 
 @router.get("/workspaces/{workspace_id}/providers")
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    _,service=_workspace_service(db,user,workspace_id)
-    return providers.discover(service,policy.load(db))
+    row,service=_workspace_service(db,user,workspace_id)
+    return providers.catalog(providers.client_catalog(db,row,service.request("GET","/provider")),
+                             providers.auth_methods(service),policy.load(db))
 
 @router.get("/workspaces/{workspace_id}/providers/{provider_id}/models")
 def provider_models(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -338,7 +345,8 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
     if not credentials.available():
         raise HTTPException(503,'Encrypted credential storage must be configured first')
     workspace,service=_workspace_service(db,user,workspace_id)
-    with service.state_lock:
+    with opencode.workspace_lock(workspace),service.state_lock:
+        session_lifecycle.lock_workspace(db,workspace)
         live=service.snapshot()
         if live["provider_data"] is None or live["auth_methods"] is None:
             raise HTTPException(502,"OpenCode provider/auth discovery must succeed before connecting")
@@ -351,7 +359,7 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
         if method is None or method >= len(methods) or methods[method].get("type")!="api":
             raise HTTPException(422,"Select an API key authentication method reported by OpenCode; OAuth-only providers require their OAuth flow")
         row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
-        if row is None and providers.is_connected(service,provider_id):
+        if row is None and providers.is_connected(service,provider_id) and not providers.is_locally_disconnected(db,workspace,provider_id):
             raise HTTPException(409,"Disconnect the existing runtime connection before replacing its authentication")
         old_ciphertext=row.ciphertext if row is not None else None
         try:
@@ -363,6 +371,7 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
                 db.add(row)
             row.ciphertext=encrypted
             row.last4=data.api_key[-4:]
+            providers.record_connection(db,workspace,provider_id,connected=True)
             db.commit()
         except Exception as exc:
             db.rollback()
@@ -378,17 +387,31 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
 
 @router.delete("/workspaces/{workspace_id}/providers/{provider_id}",status_code=204)
 def remove_provider_credential(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    workspace,service=_workspace_service(db,user,workspace_id)
-    with service.state_lock:
-        providers.remove(service,provider_id)
-        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    with opencode.workspace_lock(workspace):
+        session_lifecycle.lock_workspace(db,workspace)
+        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,
+            ProviderCredential.user_id==user.id,ProviderCredential.provider_id==provider_id))
         if row is not None:
-            db.delete(row); db.commit()
+            db.delete(row)
+        providers.record_connection(db,workspace,provider_id,connected=False)
+        db.commit()  # Client cleanup survives absent/unhealthy runtimes and auth DELETE failures.
+        service=None
+        try:
+            service=opencode.for_workspace(workspace,start=False)
+            with service.state_lock:
+                providers.remove(service,provider_id)
+        except Exception:
+            # Never include runtime exception bodies; they may contain credentials.
+            logger.warning("Runtime auth cleanup could not be confirmed for workspace %s; Gateway provider disconnect persisted",workspace.id)
+        finally:
+            if service is not None:
+                service.invalidate()
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/test")
 def test_provider(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    _,service=_workspace_service(db,user,workspace_id)
-    return {"connected":providers.is_connected(service,provider_id)}
+    row,service=_workspace_service(db,user,workspace_id)
+    return {"connected":not providers.is_locally_disconnected(db,row,provider_id) and providers.is_connected(service,provider_id)}
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/authorize")
 def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAuthAuthorize,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -400,11 +423,15 @@ def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAut
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/callback")
 def provider_oauth_callback(workspace_id: uuid.UUID,provider_id: str,data: OAuthCallback,user: User=Depends(require_user),db: Session=Depends(get_db)):
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
-    _,service=_workspace_service(db,user,workspace_id)
-    with service.state_lock:
+    workspace,service=_workspace_service(db,user,workspace_id)
+    with opencode.workspace_lock(workspace),service.state_lock:
+        session_lifecycle.lock_workspace(db,workspace)
         accepted=providers.oauth_callback(service,provider_id,data.method,data.code)
         # OAuth state belongs to OpenCode. Retire any old Gateway API-key binding.
         row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace_id,ProviderCredential.provider_id==provider_id))
         if row is not None:
-            db.delete(row); db.commit()
+            db.delete(row)
+        if accepted:
+            providers.record_connection(db,workspace,provider_id,connected=True)
+        db.commit()
         return {"connected":bool(accepted)}

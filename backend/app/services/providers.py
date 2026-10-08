@@ -1,5 +1,6 @@
 """OpenCode provider/auth catalog and real, tool-free credential validation."""
 import json
+import hashlib
 from urllib.parse import quote
 from fastapi import HTTPException
 
@@ -9,6 +10,59 @@ POPULAR_PROVIDER_IDS = (
     "xai", "cerebras", "togetherai", "fireworks-ai", "deepinfra", "cohere", "perplexity",
     "azure", "amazon-bedrock", "nvidia", "huggingface", "siliconflow",
 )
+
+
+def _binding(workspace, provider_id):
+    # Existing audit storage keeps workspace connection intent durable without
+    # storing credentials or requiring a database migration (action <= 80 chars).
+    return workspace.id.hex + ":" + hashlib.sha256(provider_id.encode()).hexdigest()[:24]
+
+
+def record_connection(db, workspace, provider_id, *, connected):
+    from ..models import AccountAudit
+    db.add(AccountAudit(actor_id=workspace.user_id, subject_id=workspace.user_id,
+                        action=("provider-on:" if connected else "provider-off:") + _binding(workspace, provider_id)))
+
+
+def _connection_events(db, workspace):
+    from sqlalchemy import select, or_
+    from ..models import AccountAudit
+    prefix = workspace.id.hex + ":"
+    return select(AccountAudit).where(AccountAudit.subject_id == workspace.user_id,
+        or_(AccountAudit.action.like("provider-on:" + prefix + "%"),
+            AccountAudit.action.like("provider-off:" + prefix + "%")))
+
+
+def connection_revision(db, workspace):
+    from ..models import AccountAudit
+    latest = db.scalar(_connection_events(db, workspace).order_by(AccountAudit.id.desc()).limit(1))
+    return latest.id if latest else 0
+
+
+def is_locally_disconnected(db, workspace, provider_id):
+    from sqlalchemy import select
+    from ..models import AccountAudit
+    binding = _binding(workspace, provider_id)
+    latest = db.scalar(select(AccountAudit).where(AccountAudit.subject_id == workspace.user_id,
+        AccountAudit.action.in_(["provider-on:" + binding, "provider-off:" + binding]))
+        .order_by(AccountAudit.id.desc()).limit(1))
+    return bool(latest and latest.action.startswith("provider-off:"))
+
+
+def client_catalog(db, workspace, data):
+    if data is None:
+        return None
+    from ..models import AccountAudit
+    disconnected = set()
+    for row in db.scalars(_connection_events(db, workspace).order_by(AccountAudit.id)):
+        kind, binding = row.action.split(":", 1)
+        if kind == "provider-off": disconnected.add(binding)
+        else: disconnected.discard(binding)
+    # Overlay only connected state; OpenCode still owns definitions/auth/models.
+    return {**data, "connected": [identifier for identifier in data.get("connected", [])
+                                  if _binding(workspace, identifier) not in disconnected],
+            "gateway_disconnected": [entry["id"] for entry in data.get("all", [])
+                                     if _binding(workspace, entry["id"]) in disconnected]}
 
 
 def public_metadata(value):
@@ -36,6 +90,7 @@ def catalog(data, methods, policy=None):
         provider = public_metadata(entry)
         provider_id = entry["id"]
         provider["connected"] = provider_id in connected
+        provider["locally_disconnected"] = provider_id in data.get("gateway_disconnected", [])
         provider["allowed"] = policy is None or provider_allowed(policy, provider_id)
         provider["models"] = [{**public_metadata(model), "id": identifier,
                                "allowed": provider["allowed"] and (policy is None or model_allowed(policy, identifier))}
@@ -61,6 +116,7 @@ def provider_index(entry, data, policy=None):
     from .policy import provider_allowed
     return {"id": entry["id"], "name": entry.get("name") or entry["id"],
             "connected": entry["id"] in data.get("connected", []),
+            "locally_disconnected": entry["id"] in data.get("gateway_disconnected", []),
             "allowed": policy is None or provider_allowed(policy, entry["id"]),
             "model_count": len(entry.get("models", {})),
             "default_model": data.get("default", {}).get(entry["id"])}
