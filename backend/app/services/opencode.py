@@ -98,7 +98,20 @@ class OpenCodeService:
         except httpx.TimeoutException:
             raise HTTPException(504, "OpenCode request timed out") from None
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(502, f"OpenCode returned HTTP {exc.response.status_code}") from None
+            error = HTTPException(502, f"OpenCode returned HTTP {exc.response.status_code}")
+            error.runtime_status = exc.response.status_code
+            # Preserve only recognized categories, never upstream error bodies.
+            try:
+                payload = exc.response.json()
+                category = payload.get("name") if isinstance(payload, dict) else None
+                if isinstance(category, str) and category in {"ProviderModelNotFoundError", "ProviderInitError", "ProviderAuthError",
+                                "APIError", "UnknownError", "ValidationError", "ProviderAuthOauthMissing",
+                                "ProviderAuthOauthCodeMissing", "ProviderAuthOauthCallbackFailed", "ProviderAuthValidationFailed"}:
+                    error.runtime_category = category
+                    error.detail += " (" + category + ")"
+            except ValueError:
+                pass
+            raise error from None
         except (httpx.HTTPError, ValueError):
             raise HTTPException(503, "OpenCode runtime request failed") from None
         finally:
@@ -127,6 +140,21 @@ class OpenCodeService:
             self.core_cache.clear()
             self.snapshot_cache = None
             self.snapshot_at = 0.0
+
+    def ensure_auth_idle(self):
+        statuses = self.request("GET", "/session/status")
+        if not isinstance(statuses, dict):
+            raise HTTPException(502, "OpenCode could not confirm that authentication can be changed safely")
+        if any(not isinstance(value, dict) or value.get("type") != "idle" for value in statuses.values()):
+            raise HTTPException(409, "Finish or stop active OpenCode work before changing provider authentication")
+
+    def refresh_auth(self):
+        # Auth PUT/DELETE changes storage, but OpenCode's provider/SDK instances
+        # retain the old credential. Dispose only this workspace's instance;
+        # the runtime process, persisted sessions and project files remain.
+        if self.request("POST", "/instance/dispose") is not True:
+            raise HTTPException(502, "OpenCode did not confirm its workspace authentication refresh")
+        self.invalidate()
 
     def discovery_state(self):
         # Only metadata: never read config contents or expose runtime paths.
