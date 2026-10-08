@@ -3,6 +3,8 @@
 Runtime model access is a separate prerequisite. No synthetic execution progress.
 """
 import asyncio, hashlib, json, re, time, uuid
+from contextlib import suppress
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -35,9 +37,74 @@ def normalize_states(parts):
             inp=state_obj.get("input") if isinstance(state_obj,dict) else {}
             command=str((inp or {}).get("command","")) if isinstance(inp,dict) else ""
             state="running_tests" if re.search(r"\b(test|pytest|jest|vitest|go test|cargo test|npm test|yarn test|pnpm test)\b",command,re.I) else "running_command"
-        else: state="analyzing"
+        else: state="tool_activity"
         if not states or states[-1]!=state: states.append(state)
     return states
+
+def safe_tool_activity(parts, workspace):
+    """Allowlisted execution metadata, never reasoning, tool output or raw commands."""
+    output=[]
+    if not any(isinstance(part,dict) and part.get('type')=='tool' for part in parts or []): return output
+    root=workspaces.root_for(workspace).resolve()
+    def filename(value):
+        if not isinstance(value,str) or not value: return None
+        try:
+            path=Path(value)
+            relative=(path if path.is_absolute() else root/path).resolve().relative_to(root)
+        except (ValueError,OSError): return None
+        if any(segment.startswith('.env') or segment.lower().endswith(('.key','.pem')) for segment in relative.parts): return '[private file]'
+        return _sanitize(relative.as_posix(),workspace)[:500]
+    for part in parts or []:
+        if not isinstance(part,dict) or part.get('type')!='tool': continue
+        tool=part.get('tool'); state=part.get('state')
+        if not isinstance(tool,str) or not re.fullmatch(r'[\w.-]{1,120}',tool) or not isinstance(state,dict): continue
+        status=state.get('status')
+        if status not in {'pending','running','completed','error'}: continue
+        item={'id':str(part.get('id') or part.get('callID') or '')[:160], 'tool':tool, 'status':status,
+              'stage':normalize_states([part])[0]}
+        inp=state.get('input') if isinstance(state.get('input'),dict) else {}
+        files=[]
+        if tool.lower() in {'read','edit','write','multiedit'}:
+            path=filename(inp.get('filePath'))
+            if path: files.append({'path':path,'operation':'inspected' if tool.lower()=='read' else 'changed'})
+        metadata=state.get('metadata') if isinstance(state.get('metadata'),dict) else {}
+        if tool.lower()=='apply_patch' and isinstance(metadata.get('files'),list):
+            for entry in metadata['files'][:50]:
+                if not isinstance(entry,dict): continue
+                path=filename(entry.get('relativePath') or entry.get('filePath'))
+                operation={'add':'created','update':'changed','delete':'deleted','move':'moved'}.get(entry.get('type'))
+                if path and operation: files.append({'path':path,'operation':operation})
+        if files: item['files']=files
+        # Showing only a known executable avoids disclosing command-line secrets.
+        if tool.lower() in {'bash','shell'} and isinstance(inp.get('command'),str):
+            executable=inp['command'].strip().split(' ',1)[0]
+            if executable in {'npm','pnpm','yarn','pytest','python','python3','node','git','rg','ls','cat','go','cargo','bun','make'}:
+                item['command']=executable
+        output.append(item)
+    return output[:100]
+
+async def monitor_activity(session_id,service,runtime_id,message_id,workspace,request_id,request_task):
+    seen=set()
+    while True:
+        done,_=await asyncio.wait({request_task},timeout=2)
+        try:
+            rows=await asyncio.to_thread(service.request,'GET',service.session_path(runtime_id,'/message'),timeout=5)
+            for row in rows:
+                if row.get('info',{}).get('role')!='assistant' or row.get('info',{}).get('parentID')!=message_id: continue
+                for activity in safe_tool_activity(row.get('parts',[]),workspace):
+                    key=(activity['id'],activity['status'])
+                    if key in seen: continue
+                    with SessionLocal() as db:
+                        session=db.get(WorkspaceSession,session_id)
+                        if session.status=='cancelled': return
+                        latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=='submission').order_by(ExecutionEvent.id.desc()).limit(1))
+                        if not latest or json.loads(latest.data)['request_id']!=str(request_id): return
+                        event(db,session_id,'activity',activity)
+                    seen.add(key)
+        except Exception:
+            # Optional observation must never fail/retry the model submission.
+            pass
+        if done: return
 
 class MessageRequest(BaseModel):
     request_id: uuid.UUID
@@ -68,7 +135,7 @@ def event(db,session_id,kind,data=None):
     db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
     db.commit()
 
-def finish_execution(db,session_id,kind,states=(),data=None,request_id=None):
+def finish_execution(db,session_id,kind,states=(),data=None,request_id=None,activities=()):
     # Abort and the background HTTP response can finish concurrently. Evaluate
     # cancellation in the database, not on a previously loaded ORM snapshot.
     current=db.scalar(select(WorkspaceSession).where(WorkspaceSession.id==session_id).with_for_update().execution_options(populate_existing=True))
@@ -81,6 +148,8 @@ def finish_execution(db,session_id,kind,states=(),data=None,request_id=None):
         WorkspaceSession.id==session_id,WorkspaceSession.status!='cancelled'
     ).values(status=kind).execution_options(synchronize_session=False)).rowcount
     if changed:
+        for activity in activities:
+            db.add(ExecutionEvent(session_id=session_id,kind='activity',data=json.dumps(activity)))
         for state in states:
             db.add(ExecutionEvent(session_id=session_id,kind=state,data='{}'))
         db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
@@ -99,7 +168,13 @@ async def execute(session_id,service,runtime_id,data,message_id):
             event(db,session.id,"analyzing")
         payload={"messageID":message_id,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
         if data.agent_id: payload["agent"]=data.agent_id
-        response=await asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),payload,600)
+        request_task=asyncio.create_task(asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),payload,600))
+        observer=asyncio.create_task(monitor_activity(session_id,service,runtime_id,message_id,workspace,data.request_id,request_task))
+        try:
+            response=await request_task
+        finally:
+            observer.cancel()
+            with suppress(asyncio.CancelledError): await observer
         info=response.get("info",{}) if isinstance(response,dict) else {}
         failure=info.get("role")!="assistant" or bool(info.get("error")) or not info.get("time",{}).get("completed")
         with SessionLocal() as db:
@@ -108,7 +183,8 @@ async def execute(session_id,service,runtime_id,data,message_id):
                 # execution feedback useful without relaying those bodies.
                 finish_execution(db,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'},request_id=data.request_id)
             else:
-                finish_execution(db,session_id,'completed',normalize_states(response.get('parts',[])),request_id=data.request_id)
+                finish_execution(db,session_id,'completed',request_id=data.request_id,
+                                 activities=safe_tool_activity(response.get('parts',[]),workspace))
     except Exception:
         with SessionLocal() as db:
             finish_execution(db,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'},request_id=data.request_id)
@@ -191,7 +267,8 @@ def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=
         info=item.get("info",{}); identifier=info.get("id")
         if identifier in hidden or (identifier and identifier in seen): continue
         seen.add(identifier)
-        output.append({"id":identifier,"role":info.get("role"),"text":_sanitize(text,workspace)})
+        output.append({"id":identifier,"role":info.get("role"),"text":_sanitize(text,workspace),
+                       "activity":safe_tool_activity(item.get('parts',[]),workspace)})
     return output
 
 @router.get("/{session_id}/diff")
@@ -348,7 +425,9 @@ async def events(session_id: uuid.UUID,request: Request,after: int=0,last_event_
                 try:
                     current_user=require_user(request,current)
                     context(current,current_user,session_id)
-                except HTTPException:
+                except HTTPException as exc:
+                    if exc.status_code in {401,403}:
+                        yield 'event: authentication_expired\ndata: {}\n\n'
                     return
                 rows=list(current.scalars(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.id>cursor).order_by(ExecutionEvent.id).limit(100)))
                 for row in rows:

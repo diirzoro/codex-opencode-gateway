@@ -299,9 +299,9 @@ def workspace_runtime_agents(workspace_id: uuid.UUID,user: User=Depends(require_
     return runtime_snapshot.public_agents(service,row)
 
 @router.get("/workspaces/{workspace_id}/runtime/capabilities")
-def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db),view: str|None=Query(default=None,pattern="^agent$")):
     row,service=_workspace_service(db,user,workspace_id)
-    return runtime_snapshot.public_capabilities(service,row,db)
+    return runtime_snapshot.public_capabilities(service,row,db,view=view)
 
 @router.get("/workspaces/{workspace_id}/providers")
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):

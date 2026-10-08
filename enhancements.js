@@ -315,6 +315,7 @@
 
   renderProfile = function (user) {
     currentUser = user; updateNavigation();
+    window.authSession?.start();
     var statusEl = document.getElementById('profileStatus'); if (statusEl) statusEl.textContent = (lang === 'ar' ? ({ active: 'نشط', suspended: 'موقوف' }[user.status] || user.status) : user.status);
     var trialEl = document.getElementById('profileTrial'); if (trialEl) trialEl.textContent = (typeof user.trial_remaining_days === 'number') ? (user.trial_remaining_days + ' trial days remaining') : '—';
     var dates = document.getElementById('profileTrialDates');
@@ -439,7 +440,7 @@
   });
 
   var adminLogout = document.getElementById('adminLogoutButton');
-  if (adminLogout) adminLogout.onclick = async function () { await api('/api/auth/logout', { method: 'POST' }).catch(function () {}); await page('landing'); };
+  if (adminLogout) adminLogout.onclick = () => window.logoutSession().catch(error=>toast(error.message));
 
   wireChatControls();
   // Landing pricing is loaded when that page becomes visible, after auth routing.
@@ -544,13 +545,7 @@
   });
   var clientLogout = document.getElementById('clientLogout');
   async function doLogout() {
-    try { await api('/api/auth/logout', { method: 'POST' }); } catch (error) { /* clear local state anyway */ }
-    window.workspaceRuntime?.clear();
-    currentUser = null; activeWorkspace = null; activeSession = null; activeProject = null;
-    stopEvents();
-    ['agentFeed', 'projectList', 'adminUsersBody'].forEach(function (id) { var el = document.getElementById(id); if (el) el.replaceChildren(); });
-    var tst = document.getElementById('toast'); if (tst) tst.classList.remove('show');
-    updateNavigation(); showPage('authPage');
+    try { await window.logoutSession(); } catch (error) { toast(error.message); }
   }
   var logoutBtn = document.getElementById('logoutButton');
   if (logoutBtn) logoutBtn.onclick = doLogout;
@@ -913,9 +908,7 @@
     var t = event.target.closest('[data-signout]');
     if (!t) return;
     event.preventDefault();
-    api('/api/auth/logout', { method: 'POST' })
-      .catch(function () {})
-      .then(function () { page('landing'); });
+    window.logoutSession().catch(function (error) { toast(error.message); });
   });
 
   function signOutRow() {
