@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import AuthSession, User, Subscription
-from ..security.sessions import hash_session_token
+from ..security.sessions import hash_session_token, idle_expires_at
 
 def require_user(request: Request, db: Session = Depends(get_db)) -> User:
     raw = request.cookies.get(settings.session_cookie_name)
@@ -15,11 +15,12 @@ def require_user(request: Request, db: Session = Depends(get_db)) -> User:
     now = datetime.now(timezone.utc)
     if not session or session.revoked_at is not None:
         raise HTTPException(401, "Invalid session")
-    expires = session.expires_at if session.expires_at.tzinfo else session.expires_at.replace(tzinfo=timezone.utc)
-    if expires <= now:
+    if idle_expires_at(session) <= now:
+        session.revoked_at = now
+        db.commit()
         raise HTTPException(401, "Session expired")
-    session.last_seen_at = now
-    db.commit()
+    # Polling, SSE and browser restoration are not meaningful user activity.
+    request.state.auth_session = session
     if session.user.status != "active":
         raise HTTPException(403, "Account is not active")
     return session.user

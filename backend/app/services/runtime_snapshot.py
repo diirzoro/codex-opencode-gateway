@@ -110,7 +110,17 @@ def public_agents(service, workspace):
             "errors": live["errors"]}
 
 
-def public_capabilities(service, workspace, db):
+def public_capabilities(service, workspace, db, view=None):
+    if view == "agent":
+        live = service.agent_capabilities()
+        _, _, allowed_tools = policy.provider_sets(policy.load(db))
+        # Skill bodies/prompts and host paths are never sent to this view.
+        skills = [{"name": str(row.get("name", ""))[:120]}
+                  for row in (live["skills"] or []) if isinstance(row, dict) and row.get("name")]
+        tools = [tool for tool in (live["tools"] or []) if isinstance(tool, str)]
+        return {"workspace_id": str(workspace.id), "generation": live["generation"],
+                "tools": tools, "skills": skills, "errors": live["errors"],
+                "tool_policy": {tool: not allowed_tools or tool in allowed_tools for tool in tools}}
     live = service.capabilities()
     _, _, allowed_tools = policy.provider_sets(policy.load(db))
     result = {name: providers.public_metadata(live[name]) for name in live if name not in {"diagnostics", "generation", "identity", "project"}}

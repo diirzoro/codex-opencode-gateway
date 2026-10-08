@@ -8,16 +8,21 @@ from ..database import get_db
 from ..models import AuthSession, City, Country, Region, User
 from ..schemas import LoginRequest, RegisterRequest, UserOut
 from ..security.passwords import hash_password, verify_password
-from ..security.sessions import hash_session_token, new_session_token
+from ..security.sessions import hash_session_token, new_session_token, idle_expires_at
 from ..services.accounts import user_payload
 from .dependencies import require_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 def set_session(response: Response, db: Session, user: User):
     raw, hashed = new_session_token()
-    db.add(AuthSession(user_id=user.id, token_hash=hashed, expires_at=datetime.now(timezone.utc)+timedelta(days=settings.session_days)))
+    now = datetime.now(timezone.utc)
+    session = AuthSession(user_id=user.id, token_hash=hashed, last_seen_at=now,
+                          expires_at=now+timedelta(days=settings.session_days))
+    db.add(session)
     db.commit()
-    response.set_cookie(settings.session_cookie_name, raw, max_age=settings.session_days*86400, httponly=True, secure=settings.cookie_secure, samesite="strict", path="/")
+    # A browser-session cookie, with authoritative server-side idle expiry.
+    response.set_cookie(settings.session_cookie_name, raw, httponly=True, secure=settings.cookie_secure, samesite="strict", path="/")
+    response.headers["X-Session-Idle-Expires-At"] = idle_expires_at(session).isoformat()
 
 def validate_locations(db, country_id, region_id, city_id):
     country = db.scalar(select(Country).where(Country.id == country_id, Country.enabled.is_(True)))
@@ -65,4 +70,21 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
     response.delete_cookie(settings.session_cookie_name, path="/", secure=settings.cookie_secure, httponly=True, samesite="strict")
 
 @router.get("/me", response_model=UserOut)
-def me(user: User = Depends(require_user)): return user_payload(user)
+def me(request: Request, response: Response, user: User = Depends(require_user)):
+    response.headers["X-Session-Idle-Expires-At"] = idle_expires_at(request.state.auth_session).isoformat()
+    return user_payload(user)
+
+@router.post("/activity")
+def activity(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    # Only an explicit activity acknowledgement extends the existing session.
+    # Revalidate under a row lock so it cannot revive a concurrently revoked token.
+    session = db.scalar(select(AuthSession).where(AuthSession.id == request.state.auth_session.id)
+                        .with_for_update().execution_options(populate_existing=True))
+    now = datetime.now(timezone.utc)
+    if session.revoked_at is not None or idle_expires_at(session) <= now:
+        session.revoked_at = session.revoked_at or now
+        db.commit()
+        raise HTTPException(401, "Session expired")
+    session.last_seen_at = now
+    db.commit()
+    return {"idle_expires_at": idle_expires_at(session).isoformat()}

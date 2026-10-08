@@ -68,6 +68,8 @@ class OpenCodeService:
         self.snapshot_at = 0.0
         self.capability_cache = None
         self.capability_at = 0.0
+        self.agent_capability_cache = None
+        self.agent_capability_at = 0.0
         self.cache_lock = threading.RLock()
         self.core_locks = {name: threading.Lock() for name in CORE_PATHS}
         self.core_cache = {}
@@ -140,6 +142,7 @@ class OpenCodeService:
             self.core_cache.clear()
             self.snapshot_cache = None
             self.snapshot_at = 0.0
+            self.agent_capability_cache = None
 
     def ensure_auth_idle(self):
         statuses = self.request("GET", "/session/status")
@@ -296,6 +299,17 @@ class OpenCodeService:
             result.update(errors=errors, generation=self.generation, diagnostics=self.diagnostics())
             self.capability_cache = result
             self.capability_at = time.monotonic()
+            return result
+
+    def agent_capabilities(self):
+        # Explicit Tools/Skills view only; never part of startup/core discovery.
+        with self.capability_lock:
+            if self.agent_capability_cache is not None and time.monotonic()-self.agent_capability_at < 60:
+                return self.agent_capability_cache
+            result, errors = self._discover({"tools": "/experimental/tool/ids", "skills": "/skill"})
+            result.update(errors=errors, generation=self.generation)
+            self.agent_capability_cache = result
+            self.agent_capability_at = time.monotonic()
             return result
 
 
