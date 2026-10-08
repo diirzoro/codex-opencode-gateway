@@ -292,6 +292,8 @@ def _initialize(service, workspace):
             ProviderCredential.workspace_id == workspace.id,
             ProviderCredential.user_id == workspace.user_id))
         for row in rows:
+            if providers.is_locally_disconnected(db,workspace,row.provider_id):
+                continue
             try:
                 providers.restore_credential(service, row.provider_id, credentials.decrypt(row.ciphertext))
                 service.restore_puts += 1

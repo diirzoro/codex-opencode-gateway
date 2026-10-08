@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
 from ..models import User, Workspace, WorkspaceSession, ExecutionEvent
-from ..services import workspaces, opencode, policy, session_lifecycle
+from ..services import workspaces, opencode, policy, providers, session_lifecycle
 from .dependencies import require_user, require_workspace_entitlement
 
 router=APIRouter(prefix="/api/sessions",tags=["agent"],dependencies=[Depends(require_workspace_entitlement)])
@@ -139,6 +139,8 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         raise HTTPException(403,"Provider is disabled by platform policy")
     if not policy.model_allowed(policy_row,data.model_id):
         raise HTTPException(403,"Model is disabled by platform policy")
+    if providers.is_locally_disconnected(db,workspace,data.provider_id):
+        raise HTTPException(409,"Provider is disconnected in this workspace; explicitly reconnect it before sending")
     receipt={"status":"submitted","session_id":str(session.id),"request_id":str(data.request_id)}
     message_id=session_lifecycle.new_message_id()
     session.status="submitted"
@@ -157,6 +159,7 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
             agents=await asyncio.to_thread(agent_choices,service)
             if data.agent_id not in {a["id"] for a in agents}: raise HTTPException(422,"Agent is unavailable")
         provider_data=await asyncio.to_thread(service.request,"GET","/provider")
+        provider_data=providers.client_catalog(db,workspace,provider_data)
         if data.provider_id not in provider_data.get("connected",[]):
             raise HTTPException(503,"Provider authentication is not configured in this workspace runtime")
         provider=next((p for p in provider_data.get("all",[]) if p["id"]==data.provider_id),{})
