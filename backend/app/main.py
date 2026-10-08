@@ -1,6 +1,9 @@
 from pathlib import Path
+from functools import lru_cache
+import hashlib
+import re
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
 from .routes import workspaces, agent, github, dashboard, plans, billing, management
@@ -32,14 +35,45 @@ async def browser_boundary(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-Frame-Options"] = "DENY"
-    if request.url.path.startswith("/api/") or request.url.path in {"/", "/index.html", "/app.js", "/enhancements.js", "/management.js", "/dashboards.js", "/runtime-client.js", "/styles.css", "/config.js"}:
+    if request.url.path.startswith("/api/") or request.url.path == "/config.js":
         response.headers["Cache-Control"] = "no-store"
+    elif request.url.path in {"/", "/index.html"}:
+        response.headers["Cache-Control"] = "no-cache"
+    elif request.url.path.lstrip("/") in _VERSIONED_ASSETS:
+        name = request.url.path.lstrip("/")
+        response.headers["Cache-Control"] = ("public, max-age=31536000, immutable"
+            if request.query_params.get("v") == asset_version(name) else "public, max-age=0, must-revalidate")
     return response
 
 # Explicit public assets only. Never mount the repository, docs or runtime root.
+_VERSIONED_ASSETS = {"app.js", "enhancements.js", "management.js", "dashboards.js", "runtime-client.js", "styles.css"}
+
+@lru_cache(maxsize=32)
+def _asset_digest(name, modified, size):
+    return hashlib.sha256((frontend / name).read_bytes()).hexdigest()[:16]
+
+def asset_version(name):
+    stat = (frontend / name).stat()
+    return _asset_digest(name, stat.st_mtime_ns, stat.st_size)
+
 def public_file(name):
-    def serve():
-        return FileResponse(frontend / name)
+    def serve(request: Request):
+        if name == "index.html":
+            html = (frontend / name).read_text(encoding="utf-8")
+            # Content versions change automatically when any script/style changes.
+            html = re.sub(r'(src|href)="([\w.-]+)\?v=[^"]*"',
+                          lambda match: f'{match[1]}="{match[2]}?v={asset_version(match[2])}"'
+                          if match[2] in _VERSIONED_ASSETS else match[0], html)
+            etag = '"' + hashlib.sha256(html.encode()).hexdigest() + '"'
+            response = HTMLResponse(html, headers={"ETag": etag})
+        else:
+            path = frontend / name
+            response = FileResponse(path, stat_result=path.stat())
+            etag = response.headers["etag"]
+        if any(tag.strip().removeprefix("W/") in {etag, "*"}
+               for tag in request.headers.get("if-none-match", "").split(",")):
+            return Response(status_code=304, headers={"ETag": etag})
+        return response
     return serve
 
 for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/dashboards.js": "dashboards.js", "/runtime-client.js": "runtime-client.js", "/styles.css": "styles.css", "/config.js": "config.js", "/assets/yemen-hero.svg": "assets/yemen-hero.svg"}.items():

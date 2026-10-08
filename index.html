@@ -2,9 +2,20 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <script>
+    document.documentElement.classList.add('bootstrapping');
+    try { var savedPage=localStorage.getItem('og-page'); if(['workspacePage','connectionsPage','workspaceHomePage','clientPage','adminPage'].includes(savedPage))document.documentElement.dataset.restorePage=savedPage; } catch(error) {}
+  </script>
   <meta name="theme-color" content="#ffffff"><meta name="description" content="Your projects, conversations, and reviewed code changes in one OpenCode workspace."><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 20'%3E%3Cpath fill='%2324272d' d='M12 4H4V16H12V4ZM16 20H0V0H16V20Z'/%3E%3C/svg%3E"><title>OpenCode Gateway — Hosted OpenCode</title>
   <link rel="stylesheet" href="styles.css?v=20261007-opt2">
   <style>
+    html.bootstrapping .page { display:none!important }
+    html.bootstrapping .page.active { display:block!important }
+    html.bootstrapping #landing { display:none!important }
+    html.bootstrapping #welcomeSidebar,html.bootstrapping [data-header-guest] { display:none!important }
+    html.bootstrapping[data-restore-page="workspacePage"] #clientNav,
+    html.bootstrapping[data-restore-page="connectionsPage"] #clientNav,
+    html.bootstrapping[data-restore-page="workspaceHomePage"] #clientNav { display:flex!important }
     .pricing{padding:2.5rem 0;border-top:1px solid var(--border,#e6e6e6)}
     .pricing-head{text-align:center;margin-bottom:1.25rem}
     .pricing-cards{display:flex;gap:1rem;flex-wrap:wrap;justify-content:center}
@@ -699,6 +710,23 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
     shell.appendChild(header);
     shell.appendChild(frame);
     body.appendChild(shell);
+    var boot=el('main','page portal-page');boot.id='bootstrapPage';
+    var bootTitle=el('h1');bootTitle.textContent=document.documentElement.dataset.restorePage==='connectionsPage'?'Settings · Connections / الإعدادات · الاتصالات':'OpenCode Gateway';
+    var bootStatus=el('p');bootStatus.textContent='Loading your page… / جارٍ تحميل صفحتك…';bootStatus.setAttribute('role','status');
+    boot.append(bootTitle,bootStatus);main.append(boot);
+    if(document.documentElement.dataset.restorePage==='connectionsPage'){
+      var bootPicker=el('select');bootPicker.disabled=true;bootPicker.add(new Option('Restoring workspace… / جارٍ استعادة مساحة العمل…',''));
+      var bootSearch=el('input');bootSearch.type='search';bootSearch.setAttribute('role','combobox');bootSearch.setAttribute('aria-label','Search providers');bootSearch.placeholder='Search providers… / ابحث عن المزوّدات…';
+      boot.append(bootPicker,bootSearch);bootStatus.textContent='Loading OpenCode providers… / جارٍ تحميل مزوّدي OpenCode…';
+    }
+    window.showBootstrapFrame=function(){
+      if(!document.documentElement.classList.contains('bootstrapping'))return;
+      var target=document.getElementById(document.documentElement.dataset.restorePage)||boot;
+      var earlySearch=boot.querySelector('input[role=combobox]'),search=target.querySelector('input[role=combobox]');
+      if(earlySearch&&search&&earlySearch!==search)search.value=earlySearch.value;
+      main.querySelectorAll('.page').forEach(function(page){page.classList.toggle('active',page===target);});
+    };
+    window.showBootstrapFrame();
   })();
   </script>
   <style>
@@ -721,13 +749,14 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   #workspacePage .workspace-session-picker .new-session{padding:6px;margin:6px 0;font-size:12px}
   #workspacePage .agent-column{position:relative;min-width:0}
   </style>
-  <script src="app.js?v=20261007-msg2"></script>
-  <script src="enhancements.js?v=20261007-scope1"></script>
-  <script src="management.js?v=20261008-phase1"></script>
-  <script src="runtime-client.js?v=20261007-runtime1"></script>
-  <script src="dashboards.js?v=20261008-phase1"></script>
+  <script defer src="app.js?v=20261008-phase2"></script>
+  <script defer src="enhancements.js?v=20261008-phase2"></script>
+  <script type="application/json" id="managementAsset" data-src="management.js?v=20261008-phase2"></script>
+  <script defer src="runtime-client.js?v=20261008-phase2"></script>
+  <script defer src="dashboards.js?v=20261008-phase2"></script>
   <script>
   // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
+  document.addEventListener('DOMContentLoaded',function(){
   (function () {
     function byId(id) { return document.getElementById(id); }
     function all(selector, root) { return Array.prototype.slice.call((root || document).querySelectorAll(selector)); }
@@ -843,6 +872,7 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
     syncShellState();
     setDrawer(false);
   })();
+  },{once:true});
   </script>
 </body>
 </html>

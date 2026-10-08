@@ -6,15 +6,47 @@ const copy={
 };
 function applyPrefs(){document.documentElement.lang=lang;document.documentElement.dir=lang==='ar'?'rtl':'ltr';document.documentElement.classList.toggle('dark',dark);$$('[data-i18n]').forEach(el=>{if(copy[lang][el.dataset.i18n])el.textContent=copy[lang][el.dataset.i18n]});$$('[data-i18n-placeholder]').forEach(el=>el.placeholder=copy[lang][el.dataset.i18nPlaceholder]||'');$$('#langBtn,.lang-mirror').forEach(el=>el.textContent=lang==='ar'?'EN':'AR');localStorage.setItem('og-lang',lang);localStorage.setItem('og-theme',dark?'dark':'light')}
 let currentUser=null, activeWorkspace=null, activeSession=null, activeProject=null, eventStream=null, permissionTimer=null;
+let navigationRevision=0,workspaceSelectionRevision=0,permissionPending=null;
 function authenticatedHome(user=currentUser){return ['admin','owner'].includes(user?.role)?'adminPage':'workspaceHomePage'}
 const interfaceReady=document.readyState==='loading'?new Promise(resolve=>document.addEventListener('DOMContentLoaded',resolve,{once:true})):Promise.resolve();
+let managementLoad=null;
+window.loadManagement=function(){
+ if(!managementLoad)managementLoad=interfaceReady.then(()=>new Promise((resolve,reject)=>{
+  const script=document.createElement('script');script.src=document.getElementById('managementAsset').dataset.src;
+  script.onload=resolve;script.onerror=()=>{script.remove();managementLoad=null;reject(new Error('Settings could not load. Retry to continue.'));};document.head.append(script);
+ }));return managementLoad;
+};
+window.renderManagement=async(...args)=>{await window.loadManagement();return window.renderManagement(...args);};
+window.openManagement=async(...args)=>{await window.loadManagement();return window.openManagement(...args);};
+if(new URLSearchParams(location.hash.slice(1)).has('reset-password')){
+ window.passwordRecoveryActive=true;window.loadManagement().catch(error=>{document.documentElement.classList.remove('bootstrapping');toast(error.message);});
+}
 const protectedPages=new Set(['clientPage','accountPage','onboarding','workspacePage','billingPage','adminPage']);
-const api=async(path,options={})=>{const response=await fetch(path,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})}});if(response.status===204)return null;const body=await response.json().catch(()=>({detail:'Unexpected server response'}));if(!response.ok){if(response.status===401&&!options.allowAnonymous&&currentUser){window.workspaceRuntime?.clear();currentUser=null;updateNavigation();stopEvents();showPage('authPage')}throw new Error(Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):(body.detail||'Request failed'))}return body};
+function invalidateProviderMutation(path,method='GET'){
+ const mutation=path.match(/^\/api\/workspaces\/([^/]+)\/providers\/[^/?]+(?:\/(?:credentials|oauth\/callback))?(?:\?|$)/);
+ if(mutation&&!['GET','HEAD'].includes(method.toUpperCase()))window.workspaceRuntime?.invalidate(decodeURIComponent(mutation[1]));
+}
+const api=async(path,options={})=>{
+ const response=await fetch(path,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})}});
+ if(response.status===204){invalidateProviderMutation(path,options.method);return null;}
+ const body=await response.json().catch(()=>({detail:'Unexpected server response'}));
+ if(!response.ok){
+  if(response.status===401&&!options.allowAnonymous&&currentUser){window.workspaceRuntime?.clear();currentUser=null;activeWorkspace=activeProject=activeSession=null;workspaceSelectionRevision++;updateNavigation();stopEvents();showPage('authPage');}
+  const error=new Error(Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):(body.detail||'Request failed'));error.status=response.status;throw error;
+ }
+ invalidateProviderMutation(path,options.method);return body;
+};
 function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');setTimeout(()=>$('#toast').classList.remove('show'),3500)}
-function showPage(id){if(['admin','owner'].includes(currentUser?.role)&&['workspaceHomePage','connectionsPage','workspacePage','onboarding','clientPage','accountPage','billingPage'].includes(id))id='adminPage';$('#welcomeSidebar').classList.remove('visible');$('#sessionSidebar').classList.remove('open');overlay(false);$$('.page').forEach(p=>p.classList.toggle('active',p.id===id));$('#siteHeader').style.display=id==='landing'?'flex':'none';window.scrollTo(0,0)}
-async function page(id){await authReady;await interfaceReady;if(protectedPages.has(id)&&!currentUser){showPage('authPage');return}if(id==='adminPage'&&!['admin','owner'].includes(currentUser?.role)){toast('Administrator access required');return}showPage(id);try{if(id==='accountPage'){renderProfile(await api('/api/profile'));await loadProjects()}if(id==='adminPage')await loadAdminUsers();if(id==='workspacePage'&&!activeWorkspace){showPage('onboarding')}}catch(error){if(currentUser)toast(error.message)}}
+function showPage(id){navigationRevision++;document.documentElement.classList.remove('bootstrapping');if(['admin','owner'].includes(currentUser?.role)&&['workspaceHomePage','connectionsPage','workspacePage','onboarding','clientPage','accountPage','billingPage'].includes(id))id='adminPage';$('#welcomeSidebar').classList.remove('visible');$('#sessionSidebar').classList.remove('open');overlay(false);$$('.page').forEach(p=>p.classList.toggle('active',p.id===id));$('#siteHeader').style.display=id==='landing'?'flex':'none';window.scrollTo(0,0);syncPermissionPolling()}
+async function page(id){await authReady;await interfaceReady;if(protectedPages.has(id)&&!currentUser){showPage('authPage');window.loadManagement().catch(error=>toast(error.message));return}if(id==='adminPage'&&!['admin','owner'].includes(currentUser?.role)){toast('Administrator access required');return}showPage(id);if(['authPage','landing'].includes(id))window.loadManagement().catch(error=>toast(error.message));try{if(id==='accountPage'){renderProfile(await api('/api/profile'));await loadProjects()}if(id==='adminPage')await loadAdminUsers();if(id==='workspacePage'&&!activeWorkspace&&!window.workspaceRestoring){showPage('onboarding')}}catch(error){if(currentUser)toast(error.message)}}
 function updateNavigation(){$$('[data-go="adminPage"]').forEach(el=>el.hidden=!['admin','owner'].includes(currentUser?.role))}
 function stopEvents(){eventStream?.close();eventStream=null;if(permissionTimer)clearInterval(permissionTimer);permissionTimer=null}
+function syncPermissionPolling(){
+ const needed=Boolean(currentUser&&activeSession&&!document.hidden&&$('#workspacePage')?.classList.contains('active'));
+ if(!needed){if(permissionTimer)clearInterval(permissionTimer);permissionTimer=null;return;}
+ if(!permissionTimer)permissionTimer=setInterval(()=>refreshPermissions().catch(()=>{}),4000);
+}
+document.addEventListener('visibilitychange',syncPermissionPolling);
 function apiMessage(id,text,error=false){const el=$('#'+id);el.textContent=text;el.className='api-message show'+(error?' error':'')}
 const value=id=>$('#'+id).value.trim();
 function textElement(tag,text,className){const el=document.createElement(tag);el.textContent=text;if(className)el.className=className;return el}
@@ -44,25 +76,68 @@ async function openWorkspace(project,workspace){if(['admin','owner'].includes(cu
 async function refreshGit(){if(!activeWorkspace)return;const state=await api(`/api/workspaces/${activeWorkspace.id}/git/status`);$('#commitButton').disabled=state.clean;$('#pushButton').disabled=true;$('#gitSummary').textContent=`${state.changes.length} ${t('changedFiles')} · ${state.head?state.head.slice(0,8):t('noCommits')}`}
 async function refreshSessions(){if(!activeWorkspace)return;const rows=await api(`/api/workspaces/${activeWorkspace.id}/sessions`);const list=$('#sessionList');list.replaceChildren();for(const row of rows){const button=textElement('button',row.title,'session');button.onclick=()=>selectSession(row);list.append(button)}}
 $('.new-session').onclick=async()=>{if(!activeWorkspace)return;const button=$('.new-session');button.disabled=true;try{const row=await api(`/api/workspaces/${activeWorkspace.id}/sessions`,{method:'POST',body:JSON.stringify({title:'New session'})});await refreshSessions();await selectSession(row)}catch(error){toast(error.message);$('#runtimeStatus').textContent='OpenCode unavailable'}finally{button.disabled=false}};
-async function selectSession(session){stopEvents();activeSession=session;$('#runtimeStatus').textContent='Session connected';$('#agentFeed').replaceChildren(textElement('p',session.title));await refreshMessages();startEvents();permissionTimer=setInterval(refreshPermissions,3000)}
+async function selectSession(session){stopEvents();activeSession=session;$('#runtimeStatus').textContent='Session connected';$('#agentFeed').replaceChildren(textElement('p',session.title));await refreshMessages();if(activeSession?.id!==session.id)return;startEvents();syncPermissionPolling()}
 Object.assign(copy.en,{repeatMsg:'Repeat',copyMsg:'Copy',editMsg:'Edit',copied:'Copied',copyFailed:'Could not copy',resent:'Message resubmitted'});
 Object.assign(copy.ar,{repeatMsg:'إعادة',copyMsg:'نسخ',editMsg:'تعديل',copied:'تم النسخ',copyFailed:'تعذر النسخ',resent:'أُعيد إرسال الرسالة'});
 function feedAction(kind,text){const icons={repeat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>',copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',edit:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>'};const label=t(kind==='repeat'?'repeatMsg':kind==='copy'?'copyMsg':'editMsg');const b=document.createElement('button');b.type='button';b.className='icon-btn';b.innerHTML=icons[kind];b.title=label;b.setAttribute('aria-label',label);b.onclick=async()=>{if(kind==='repeat'){$('#promptInput').value=text;$('#promptForm').requestSubmit();toast(t('resent'));}else if(kind==='edit'){$('#promptInput').value=text;$('#promptInput').focus();try{$('#promptInput').setSelectionRange(text.length,text.length)}catch(error){}}else{try{await navigator.clipboard.writeText(text);toast(t('copied'))}catch(error){try{const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();toast(t('copied'))}catch(fallbackError){toast(t('copyFailed'))}}}};return b;}
 async function refreshMessages(){if(!activeSession)return;try{const rows=await api(`/api/sessions/${activeSession.id}/messages`);if(rows.length){$('#agentFeed').replaceChildren();for(const row of rows){const node=textElement('div',row.text,row.role==='user'?'user-bubble':'agent-response');if(row.role==='user'){const bar=document.createElement('div');bar.className='feed-actions';bar.append(feedAction('repeat',row.text),feedAction('copy',row.text),feedAction('edit',row.text));node.append(bar)}$('#agentFeed').append(node)}}}catch(error){toast(error.message)}}
 function startEvents(){eventStream=new EventSource(`/api/sessions/${activeSession.id}/events`);for(const kind of ['submitted','waiting_approval','approval_decision','failed','completed','cancelled'])eventStream.addEventListener(kind,()=>{$('#runtimeStatus').textContent=kind;if(['failed','completed','cancelled'].includes(kind)){$('#stopAgent').disabled=true;refreshMessages();refreshGit().catch(e=>toast(e.message));$('#sendMessage').disabled=!value('modelSelect')}});eventStream.onerror=()=>$('#runtimeStatus').textContent='Reconnecting to event stream'}
-async function refreshPermissions(){if(!activeSession)return;try{const requests=await api(`/api/sessions/${activeSession.id}/permissions`);const box=$('#approvalBox');box.replaceChildren();for(const request of requests){const row=textElement('div',`${t('approval')}: ${request.permission} `);row.append(textElement('pre',(request.patterns||[]).join('\n')));for(const [label,reply] of [[t('allowOnce'),'once'],[t('deny'),'reject']]){const button=textElement('button',label);button.disabled=reply==='once'&&!request.reviewable;button.onclick=async()=>{try{await api(`/api/sessions/${activeSession.id}/permissions/${request.id}`,{method:'POST',body:JSON.stringify({reply})});await refreshPermissions()}catch(error){toast(error.message)}};row.append(button)}box.append(row)}}catch(error){stopEvents();toast(error.message)}}
+async function refreshPermissions(){
+ if(!activeSession)return [];
+ const sessionId=activeSession.id;
+ if(permissionPending?.id===sessionId)return permissionPending.promise;
+ const promise=(async()=>{try{
+  const requests=await api(`/api/sessions/${sessionId}/permissions`);
+  if(activeSession?.id!==sessionId)return [];
+  if(window.renderWorkspaceApprovals){window.renderWorkspaceApprovals(requests,sessionId);return requests;}
+  const box=$('#approvalBox');box.replaceChildren();
+  for(const request of requests){const row=textElement('div',`${t('approval')}: ${request.permission} `);row.append(textElement('pre',(request.patterns||[]).join('\n')));for(const [label,reply] of [[t('allowOnce'),'once'],[t('deny'),'reject']]){const button=textElement('button',label);button.disabled=reply==='once'&&!request.reviewable;button.onclick=async()=>{try{await api(`/api/sessions/${sessionId}/permissions/${request.id}`,{method:'POST',body:JSON.stringify({reply})});await refreshPermissions()}catch(error){toast(error.message)}};row.append(button)}box.append(row)}return requests;
+ }catch(error){if(activeSession?.id===sessionId){stopEvents();toast(error.message);}throw error;}})();
+ permissionPending={id:sessionId,promise};
+ try{return await promise;}finally{if(permissionPending?.promise===promise)permissionPending=null;}
+}
 $('#promptForm').onsubmit=async event=>{event.preventDefault();if(!activeSession)return;$('#sendMessage').disabled=true;try{await api(`/api/sessions/${activeSession.id}/messages`,{method:'POST',body:JSON.stringify({text:$('#promptInput').value,provider_id:value('providerSelect'),model_id:value('modelSelect')})});$('#promptInput').value='';$('#runtimeStatus').textContent='submitted';$('#stopAgent').disabled=false}catch(error){toast(error.message);$('#sendMessage').disabled=!value('modelSelect')}};
 $('#stopAgent').onclick=async()=>{if(activeSession)try{await api(`/api/sessions/${activeSession.id}/stop`,{method:'POST'})}catch(error){toast(error.message)}};
 const promptInput=$('#promptInput');if(promptInput){const growPrompt=()=>{promptInput.style.height='auto';promptInput.style.height=Math.min(promptInput.scrollHeight,260)+'px'};promptInput.addEventListener('input',growPrompt);promptInput.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();promptInput.closest('form')?.requestSubmit();}});growPrompt();}
 function overlay(open){$('#backdrop').classList.toggle('open',open)}$('#openSessions').onclick=()=>{$('#sessionSidebar').classList.add('open');overlay(true)};$('#closeSessions').onclick=()=>{$('#sessionSidebar').classList.remove('open');overlay(false)};$('#backdrop').onclick=()=>{overlay(false);$('#sessionSidebar').classList.remove('open')};
 async function loadAdminUsers(){try{const overview=await api('/api/admin/overview');$$('[data-overview]').forEach(el=>el.textContent=overview.users[el.dataset.overview]??'—')}catch(error){toast(error.message)}const body=$('#adminUsersBody');body.replaceChildren();try{for(const user of await api('/api/admin/users')){const row=document.createElement('tr');for(const text of [user.username+' · '+user.email,user.phone,[user.country,user.region,user.city].filter(Boolean).join(' · '),user.trial_remaining_days+' days','Not available yet','Not available yet',user.trial_remaining_days+' days','Not available yet','—',user.last_login_at||'Never',user.status])row.append(textElement('td',text));body.append(row)}}catch(error){const row=document.createElement('tr');const cell=textElement('td',error.message);cell.colSpan=11;row.append(cell);body.append(row)}}
 applyPrefs();updateNavigation();
-const authReady=(async()=>{try{const gh=await api('/api/github/status',{allowAnonymous:true});const opt=$('#sourceType')?.querySelector('option[value=github]');if(opt){opt.disabled=!gh.connected;opt.textContent=gh.connected?'GitHub Repository':'GitHub - Not connected';}}catch(error){}try{renderProfile(await api('/api/auth/me',{allowAnonymous:true}))}catch(error){if(currentUser)toast(error.message)}try{await fillSelect('registerCountry','/api/locations/countries','Select country')}catch(error){apiMessage('registerMessage',error.message,true)}})();
-authReady.then(async()=>{if(!currentUser||window.__navRestored)return;window.__navRestored=true;let target='';try{target=localStorage.getItem('og-page')||'';}catch(error){}
-if(!['workspaceHomePage','clientPage','connectionsPage','workspacePage'].includes(target))return;
-if(target==='workspacePage'){let wsid='';try{wsid=localStorage.getItem('og-workspace')||'';}catch(error){}if(wsid){try{const ws=await api('/api/workspaces/'+wsid);const project=await api('/api/projects/'+ws.project_id);await openWorkspace(project,ws);return;}catch(error){}}await page('workspaceHomePage');return;}
-if(target==='clientPage'){let view='';try{view=localStorage.getItem('og-clientview')||'';}catch(error){}if(view&&window.openClientView){await window.openClientView(view);return;}}
-try{await page(target);}catch(error){await page('workspaceHomePage');}}).catch(()=>{});
+const authReady=(async()=>{try{renderProfile(await api('/api/auth/me',{allowAnonymous:true}))}catch(error){if(currentUser)toast(error.message)}})();
+let registrationCountries=null;
+function ensureRegistrationCountries(){if(!registrationCountries)registrationCountries=fillSelect('registerCountry','/api/locations/countries','Select country').catch(error=>{registrationCountries=null;apiMessage('registerMessage',error.message,true)});return registrationCountries;}
+document.addEventListener('click',event=>{if(event.target.closest('[data-auth-tab="register"]'))ensureRegistrationCountries();});
+$('#registerCountry').addEventListener('focus',ensureRegistrationCountries);
+async function restoreWorkspaceContext(){
+ let workspaceId='';try{workspaceId=localStorage.getItem('og-workspace')||'';}catch(error){}
+ if(!workspaceId)return null;
+ const selection=workspaceSelectionRevision,owner=currentUser?.id;
+ try{
+  // The owned API validates the persisted ID before it becomes active context.
+  const workspace=await api('/api/workspaces/'+encodeURIComponent(workspaceId));
+  const project=await api('/api/projects/'+encodeURIComponent(workspace.project_id));
+  if(owner!==currentUser?.id||selection!==workspaceSelectionRevision)return null;
+  activeWorkspace=workspace;activeProject=project;return {workspace,project};
+ }catch(error){if(selection===workspaceSelectionRevision&&[403,404].includes(error.status)){try{localStorage.removeItem('og-workspace');}catch(ignored){}}return null;}
+}
+const navigationReady=authReady.then(async()=>{
+ await interfaceReady;if(window.passwordRecoveryActive)return;
+ if(!currentUser){await page('landing');return;}
+ window.__navRestored=true;
+ if(['admin','owner'].includes(currentUser.role)){await page('adminPage');return;}
+ let target='';try{target=localStorage.getItem('og-page')||'';}catch(error){}
+ if(!['workspaceHomePage','clientPage','connectionsPage','workspacePage'].includes(target))target='workspaceHomePage';
+ window.workspaceRestoring=['workspacePage','connectionsPage'].includes(target);
+ showPage(target);const navigation=navigationRevision;
+ window.workspaceContextReady=window.workspaceRestoring?restoreWorkspaceContext():Promise.resolve(null);
+ if(target==='workspacePage'){
+  const context=await window.workspaceContextReady;window.workspaceRestoring=false;
+  if(navigation!==navigationRevision){if(context&&document.querySelector('#workspacePage.active'))await openWorkspace(context.project,context.workspace);return;}
+  if(context)await openWorkspace(context.project,context.workspace);else await page('workspaceHomePage');return;
+ }
+ if(target==='clientPage'){let view='';try{view=localStorage.getItem('og-clientview')||'';}catch(error){}if(view&&window.openClientView){await window.openClientView(view);return;}}
+ await page(target);window.workspaceRestoring=false;
+}).catch(error=>{document.documentElement.classList.remove('bootstrapping');toast(error.message)});
+window.bootstrapGithubStatus=authReady.then(async()=>{await interfaceReady;if(!currentUser)return null;try{const gh=await api('/api/github/status');const opt=$('#sourceType')?.querySelector('option[value=github]');if(opt){opt.disabled=!gh.connected;opt.textContent=gh.connected?'GitHub Repository':'GitHub - Not connected';}return gh;}catch(error){return null;}});
 
 
 Object.assign(copy.en,{newProject:'New project',yourProjects:'Your projects',workspaceLabel:'YOUR WORKSPACE',projectsHint:'Your next idea starts here.',projectsSubhint:'Create a project to keep your work in one place.',notConnected:'Not connected',yourAccount:'Your account',accountHint:'Profile & preferences',getStarted:'Get started',yourSpace:'YOUR IDEAS. YOUR WORKSPACE.',welcomeTitle:'What will you build today?',welcomeSubtitle:'A little less setup. A lot more possibility.',welcomePlaceholder:'Describe an idea, start a project, or make something better…',buildWithAi:'Build with your AI',startBlank:'Start from scratch',useTemplate:'Use a template',openProject:'Open a project',madeForFlow:'A workspace that stays out of your way',filesTogether:'Your files, together',filesTogetherBody:'Start blank or choose a template. Your project has a space of its own.',keepContext:'Pick up where you left off',keepContextBody:'Start a new conversation while keeping the same project files.',reviewClearly:'See every change',reviewClearlyBody:'Browse files, inspect the diff, and commit when you are ready.',independentNotice:'Independent workspace. OpenCode and GitHub are external services.',pricingTitle:'Simple pricing',pricingSubtitle:'Pay only for the time you use. No hidden fees.',pricingSummary:'Live prices from the plan catalog.',});

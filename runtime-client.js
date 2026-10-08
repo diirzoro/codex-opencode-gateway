@@ -1,22 +1,74 @@
-/* One workspace-scoped bootstrap cache. Auth changes invalidate only that workspace. */
+/* User/workspace-scoped discovery. Cached UI may render while runtime state is verified. */
 (() => {
-  const states=new Map();
+  const states=new Map(),prefix='og-runtime-v2:',freshFor=60000;
+  const user=()=>typeof currentUser==='undefined'?'':String(currentUser?.id||'');
+  const key=id=>prefix+encodeURIComponent(user())+':'+encodeURIComponent(id);
+  function stateFor(id){
+    const cacheKey=key(id);let state=states.get(cacheKey);
+    if(!state){
+      state={cacheKey,snapshot:null,agents:null,checked:0,revision:0,pending:{},validation:null};
+      try{const saved=JSON.parse(sessionStorage.getItem(cacheKey)||'null');if(saved?.workspace_id===String(id)&&user())state.snapshot=saved;}catch(error){}
+      if(state.snapshot)state.agents=state.snapshot;
+      states.set(cacheKey,state);
+    }
+    return state;
+  }
+  const sameRuntime=(one,two)=>one?.generation===two?.generation&&one?.revision===two?.revision;
+  async function validate(id,state){
+    if(state.checked&&Date.now()-state.checked<freshFor)return true;
+    if(state.validation)return state.validation;
+    const revision=state.revision,owner=user();
+    state.validation=api('/api/workspaces/'+encodeURIComponent(id)+'/runtime/state').then(meta=>{
+      if(meta.workspace_id!==String(id))throw new Error('Unexpected workspace runtime');
+      if(user()!==owner)throw new Error('Authenticated session changed');
+      if(revision!==state.revision)return false;
+      if(!sameRuntime(state.snapshot||state.agents,meta)||(state.snapshot&&state.snapshot.policy_revision!==meta.policy_revision)){
+        state.snapshot=state.agents=null;try{sessionStorage.removeItem(state.cacheKey);}catch(error){}return false;
+      }
+      if(!meta.cache_valid)return false;
+      state.checked=Date.now();return true;
+    }).finally(()=>{state.validation=null;});
+    return state.validation;
+  }
+  async function load(id,kind,{force=false}={}){
+    if(!user())throw new Error('Authentication required');
+    const owner=user(),state=stateFor(id),revision=state.revision;
+    const pending=state.pending[kind];
+    if(pending){
+      if(pending.revision===revision){const result=await pending.promise;if(user()!==owner)throw new Error('Authenticated session changed');return revision===state.revision?result:load(id,kind,{force:true});}
+      await pending.promise.catch(()=>{});return load(id,kind,{force:true});
+    }
+    const run=(async()=>{
+      if(!force&&state[kind]&&await validate(id,state)&&state[kind])return state[kind];
+      const started=performance.now(),suffix=kind==='agents'?'/agents':'';
+      const result=await api('/api/workspaces/'+encodeURIComponent(id)+'/runtime'+suffix+(force&&kind==='snapshot'?'?refresh=true':''));
+      if(result.workspace_id!==String(id))throw new Error('Unexpected workspace runtime');
+      if(user()!==owner)throw new Error('Authenticated session changed');
+      if(revision===state.revision){
+        // A concurrent full snapshot is authoritative if an older agent reply arrives last.
+        if(kind==='agents'&&state.snapshot&&!sameRuntime(state.snapshot,result))return state.snapshot;
+        state[kind]=result;
+        if(kind==='snapshot'){
+          state.agents=result;
+          state.checked=Object.keys(result.errors||{}).length?0:Date.now();
+          if(!Object.keys(result.errors||{}).length){try{sessionStorage.setItem(key(id),JSON.stringify(result));}catch(error){}}
+        }
+      }
+      performance.measure('OpenCode '+kind+' '+id,{start:started,end:performance.now()});
+      return result;
+    })();
+    const promise=run.finally(()=>{if(state.pending[kind]?.promise===promise)delete state.pending[kind];});
+    state.pending[kind]={revision,promise};
+    const result=await promise;
+    if(user()!==owner)throw new Error('Authenticated session changed');
+    return revision===state.revision?result:load(id,kind,{force:true});
+  }
   window.workspaceRuntime={
-    async load(id,{force=false}={}){
-      let state=states.get(id);
-      if(!state){state={snapshot:null,loaded:0,pending:null,revision:0};states.set(id,state);}
-      if(state.pending){if(state.pendingRevision===state.revision)return state.pending;await state.pending.catch(()=>{});return this.load(id,{force:true});}
-      if(!force&&state.snapshot&&Date.now()-state.loaded<10000)return state.snapshot;
-      const revision=state.revision,started=performance.now();state.pendingRevision=revision;
-      state.pending=api('/api/workspaces/'+encodeURIComponent(id)+'/runtime').then(snapshot=>{
-        if(state.revision===revision){state.snapshot=snapshot;state.loaded=Date.now();}
-        performance.measure('OpenCode bootstrap '+id,{start:started,end:performance.now()});
-        return snapshot;
-      }).finally(()=>{state.pending=null;});
-      return state.pending;
-    },
-    invalidate(id){const state=states.get(id);if(state){state.snapshot=null;state.loaded=0;state.revision++;}},
-    peek(id){return states.get(id)?.snapshot;},
-    clear(){states.clear();}
+    load(id,options){return load(id,'snapshot',options);},
+    loadAgents(id,options){return load(id,'agents',options);},
+    invalidate(id){const state=stateFor(id);state.snapshot=state.agents=null;state.checked=0;state.revision++;try{sessionStorage.removeItem(key(id));}catch(error){}},
+    peek(id){return stateFor(id).snapshot;},
+    peekAgents(id){return stateFor(id).agents;},
+    clear(){states.clear();try{for(let i=sessionStorage.length-1;i>=0;i--){const name=sessionStorage.key(i);if(name?.startsWith(prefix))sessionStorage.removeItem(name);}}catch(error){}}
   };
 })();

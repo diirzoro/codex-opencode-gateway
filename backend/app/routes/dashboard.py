@@ -1,25 +1,16 @@
 """Client dashboard: real owned data only, aggregated for the account view."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import Project, ProviderCredential, User, Workspace, WorkspaceSession
-from ..services import github, opencode
+from ..services import github
 from ..services.accounts import user_payload
 from ..services.workspaces import project_payload, workspace_payload
 from .dependencies import require_user
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
-
-def _runtime_summary():
-    if settings.runtime_mode != "local":
-        return {"mode": settings.runtime_mode, "healthy": False}
-    try:
-        health = opencode.shared_health()
-        return {"mode": settings.runtime_mode, "healthy": True, "version": health.get("version")}
-    except HTTPException:
-        return {"mode": settings.runtime_mode, "healthy": False}
 
 @router.get("")
 def dashboard(user: User = Depends(require_user), db: Session = Depends(get_db)):
@@ -49,5 +40,5 @@ def dashboard(user: User = Depends(require_user), db: Session = Depends(get_db))
         "recent_workspaces": [{**workspace_payload(w),"session_count":session_counts.get(str(w.id),0)} for w in sorted(workspaces,key=lambda w:w.last_activity_at,reverse=True)[:10]],
         "counts": {"projects": len(projects), "workspaces": len(workspaces), "sessions": len(sessions), "credentials": credentials_count},
         "github": github.connection_status(db, user),
-        "runtime": _runtime_summary(),
+        "runtime": {"mode": settings.runtime_mode, "healthy": None},
     }
