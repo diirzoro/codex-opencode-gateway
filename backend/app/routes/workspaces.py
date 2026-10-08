@@ -272,13 +272,25 @@ def _workspace_service(db,user,workspace_id):
     return row,opencode.for_workspace(row)
 
 @router.get("/workspaces/{workspace_id}/runtime")
-def workspace_runtime(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+def workspace_runtime(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db),refresh: bool=False):
     started=time.monotonic()
     row,service=_workspace_service(db,user,workspace_id)
     with service.state_lock:
+        if refresh:
+            service.invalidate()
         snapshot=runtime_snapshot.public_snapshot(service,row,db)
         snapshot["diagnostics"]["total_runtime_bootstrap_ms"]=round((time.monotonic()-started)*1000,2)
         return snapshot
+
+@router.get("/workspaces/{workspace_id}/runtime/state")
+def workspace_runtime_state(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    row,service=_workspace_service(db,user,workspace_id)
+    return {"workspace_id":str(row.id),"policy_revision":runtime_snapshot.policy_revision(policy.load(db)),**service.discovery_state()}
+
+@router.get("/workspaces/{workspace_id}/runtime/agents")
+def workspace_runtime_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    row,service=_workspace_service(db,user,workspace_id)
+    return runtime_snapshot.public_agents(service,row)
 
 @router.get("/workspaces/{workspace_id}/runtime/capabilities")
 def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):

@@ -15,6 +15,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import quote
 
 import httpx
@@ -26,7 +27,8 @@ logger = logging.getLogger(__name__)
 SUPPORTED_RUNTIME_VERSIONS = {"1.18.31", "1.18.32"}
 STARTUP_TIMEOUT = 30.0
 HEALTH_INTERVAL = 5.0
-SNAPSHOT_TTL = 1.0  # Coalesce simultaneous callers; auth mutations invalidate it.
+SNAPSHOT_TTL = 300.0  # Safety refresh; mutations/config changes invalidate immediately.
+CAPABILITY_TTL = 1.0
 CORE_PATHS = {"provider_data": "/provider", "auth_methods": "/provider/auth",
               "agents": "/agent", "config": "/config"}
 CAPABILITY_PATHS = {"permissions": "/permission", "tools": "/experimental/tool/ids",
@@ -66,6 +68,15 @@ class OpenCodeService:
         self.snapshot_at = 0.0
         self.capability_cache = None
         self.capability_at = 0.0
+        self.cache_lock = threading.RLock()
+        self.core_locks = {name: threading.Lock() for name in CORE_PATHS}
+        self.core_cache = {}
+        self.discovery_revision = 0
+        self.config_paths = []
+        if directory:
+            self.config_paths = [Path(directory) / name for name in
+                                 ("opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc")]
+        self.config_stamp = None
         self.timings = {}
         self.call_counts = {}
         self.metrics_lock = threading.Lock()
@@ -111,16 +122,55 @@ class OpenCodeService:
         return self.health_state
 
     def invalidate(self):
-        with self.state_lock:
+        with self.cache_lock:
+            self.discovery_revision += 1
+            self.core_cache.clear()
             self.snapshot_cache = None
             self.snapshot_at = 0.0
+
+    def discovery_state(self):
+        # Only metadata: never read config contents or expose runtime paths.
+        stamp = []
+        for path in self.config_paths:
+            try:
+                stat = path.stat()
+                stamp.append((str(path), stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                stamp.append((str(path), None, None))
+        with self.cache_lock:
+            if self.config_stamp is not None and self.config_stamp != stamp:
+                self.invalidate()
+            self.config_stamp = stamp
+            now = time.monotonic()
+            valid = all(name in self.core_cache and now - self.core_cache[name][0] < SNAPSHOT_TTL
+                        for name in CORE_PATHS)
+            return {"generation": self.generation, "revision": self.discovery_revision, "cache_valid": valid}
+
+    def _core_value(self, name, path):
+        with self.core_locks[name]:
+            for _ in range(2):
+                with self.cache_lock:
+                    cached = self.core_cache.get(name)
+                    if cached is not None and time.monotonic() - cached[0] < SNAPSHOT_TTL:
+                        return cached[1]
+                    revision = self.discovery_revision
+                value = self.request("GET", path)
+                valid = (isinstance(value, dict) and isinstance(value.get("all"), list)) if name == "provider_data" else (
+                    isinstance(value, list) and all(isinstance(a, dict) and isinstance(a.get("name"), str) for a in value)
+                    if name == "agents" else isinstance(value, dict))
+                if not valid:
+                    raise HTTPException(502, "OpenCode returned invalid " + name + " data")
+                with self.cache_lock:
+                    if revision == self.discovery_revision:
+                        self.core_cache[name] = (time.monotonic(), value)
+                        return value
+            raise HTTPException(409, "Runtime discovery changed; retry")
 
     def create_session(self, title):
         result = self.request("POST", "/session", {"title": title, "permission": [
             {"permission": "external_directory", "pattern": "*", "action": "deny"}]})
         if not isinstance(result, dict) or not str(result.get("id", "")).startswith("ses"):
             raise HTTPException(502, "OpenCode returned an invalid session")
-        self.invalidate()
         return result["id"]
 
     def session_path(self, identifier, suffix=""):
@@ -142,7 +192,8 @@ class OpenCodeService:
     def _discover(self, paths):
         results, errors = {}, {}
         with ThreadPoolExecutor(max_workers=min(8, len(paths))) as pool:
-            futures = {name: pool.submit(self.request, "GET", path) for name, path in paths.items()}
+            futures = {name: pool.submit(self._core_value, name, path) if name in CORE_PATHS
+                       else pool.submit(self.request, "GET", path) for name, path in paths.items()}
             for name, future in futures.items():
                 try:
                     value = future.result()
@@ -171,26 +222,44 @@ class OpenCodeService:
         # Concurrent bootstrap calls share one discovery pass. Auth changes take
         # this same lock so a snapshot cannot straddle a credential mutation.
         with self.state_lock:
-            if self.snapshot_cache is not None and time.monotonic() - self.snapshot_at < SNAPSHOT_TTL:
+            state = self.discovery_state()
+            if state["cache_valid"] and self.snapshot_cache is not None and time.monotonic() - self.snapshot_at < SNAPSHOT_TTL:
                 return self.snapshot_cache
             started = time.monotonic()
             health = self.health_state if self.health_state and time.monotonic() - self.last_health < HEALTH_INTERVAL else self.health()
             result, errors = self._discover(CORE_PATHS)
-            result.update(health=health, errors=errors, generation=self.generation)
+            current = self.discovery_state()
+            if current["revision"] != state["revision"]:
+                raise HTTPException(409, "Runtime configuration changed during discovery; retry")
+            result.update(health=health, errors=errors, **current)
             result["default_agent"] = (result.get("config") or {}).get("default_agent")
             result["config"] = {key: (result.get("config") or {}).get(key)
                                 for key in ("default_agent", "model", "small_model", "permission")}
             with self.metrics_lock:
                 self.timings["bootstrap_ms"] = round((time.monotonic() - started) * 1000, 2)
             result["diagnostics"] = self.diagnostics()
-            self.snapshot_cache = result
-            self.snapshot_at = time.monotonic()
+            if not errors:
+                self.snapshot_cache = result
+                self.snapshot_at = time.monotonic()
             return result
+
+    def agent_snapshot(self):
+        # Provider discovery holds state_lock; agents/config deliberately do not.
+        state = self.discovery_state()
+        health = self.health_state if self.health_state and time.monotonic() - self.last_health < HEALTH_INTERVAL else self.health()
+        result, errors = self._discover({name: CORE_PATHS[name] for name in ("agents", "config")})
+        current = self.discovery_state()
+        if current["revision"] != state["revision"]:
+            raise HTTPException(409, "Runtime configuration changed during agent discovery; retry")
+        config = result.get("config") or {}
+        return {"agents": result["agents"], "default_agent": config.get("default_agent"),
+                "config": {key: config.get(key) for key in ("default_agent", "model", "small_model", "permission")},
+                "health": health, "errors": errors, **current}
 
     def capabilities(self):
         """Optional discovery is independent of the composer and auth locks."""
         with self.capability_lock:
-            if self.capability_cache is not None and time.monotonic() - self.capability_at < SNAPSHOT_TTL:
+            if self.capability_cache is not None and time.monotonic() - self.capability_at < CAPABILITY_TTL:
                 return self.capability_cache
             started = time.monotonic()
             result, errors = self._discover(CAPABILITY_PATHS)
@@ -275,6 +344,7 @@ def for_workspace(workspace, *, start=True):
             port = sock.getsockname()[1]
         log = open(context / "runtime.log", "a", encoding="utf-8")
         service = OpenCodeService(f"http://127.0.0.1:{port}", password, repo)
+        service.config_paths.extend(context / "config" / "opencode" / name for name in ("opencode.json", "opencode.jsonc"))
         owner_lock = None
         if os.name != "nt":
             import fcntl

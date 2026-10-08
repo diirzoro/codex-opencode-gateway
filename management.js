@@ -22,7 +22,8 @@
   async function render(root,name,isPlatform=false){
     await authReady;if(!currentUser)return page('authPage');
     if(isPlatform&&!admin())throw new Error('Administrator access required');
-    root.replaceChildren();root.dataset.managementSection=name;
+    if(name==='providers'&&!isPlatform&&root.providerView?.workspaceId===(activeWorkspace?.id||'')&&root.providerView.owner===currentUser.id)return root.providerView.refresh(false);
+    root.providerController?.abort();root.replaceChildren();root.dataset.managementSection=name;
     const loader={security,billing,connections,roles,locations,logs,providers,lifecycle}[name];
     if(!loader)throw new Error('Unknown section');
     try{await loader(root,isPlatform)}catch(e){root.append(node('p',e.message))}
@@ -96,24 +97,33 @@
     }
   }
   async function providers(body,platform=false){
+    const controller=new AbortController();body.providerController=controller;
+    const view={owner:currentUser.id,workspaceId:activeWorkspace?.id||'',ready:false,refresh:null};body.providerView=view;
+    const alive=()=>body.isConnected&&body.providerView===view&&currentUser?.id===view.owner;
     const workspaceSettings=section(body,tr('Runtime / workspace settings','إعدادات وقت التشغيل ومساحة العمل'));
-    const [workspaces,projects]=await Promise.all([api('/api/workspaces'),api('/api/projects')]);
-    const picker=select(workspaceSettings,tr('Workspace','مساحة العمل'),'workspace',[['',tr('Select workspace','اختر مساحة عمل')],...workspaces.map(w=>[w.id,(projects.find(p=>p.id===w.project_id)?.name||tr('Workspace','مساحة العمل'))+' · '+w.status])]);picker.value=activeWorkspace?.id||'';
-    picker.onchange=async()=>{const w=workspaces.find(w=>w.id===picker.value);if(!w){stopEvents();activeWorkspace=activeProject=activeSession=null;await open('providers');return;}try{await openWorkspace(await api('/api/projects/'+w.project_id),w,{navigate:false});await open('providers')}catch(e){toast(e.message)}};
+    const picker=select(workspaceSettings,tr('Workspace','مساحة العمل'),'workspace',[['',tr('Select workspace','اختر مساحة عمل')]]);
+    picker.disabled=true;
+    if(activeWorkspace)picker.add(new Option(activeProject?.name||tr('Selected workspace','مساحة العمل المختارة'),activeWorkspace.id));
+    picker.value=activeWorkspace?.id||'';
     const box=section(body,tr('Connect an AI provider','ربط مزوّد ذكاء'));
-    box.append(node('p',tr('The full OpenCode provider catalog is listed below. Search to filter it, then connect a provider with its real authentication method. Credentials are sent only to the workspace runtime and stored encrypted on the server.','يظهر كتالوج مزوّدي OpenCode الكامل أدناه. ابحث للتصفية ثم اربط المزوّد بطريقة المصادقة الفعلية الخاصة به. تُرسل بيانات الاعتماد إلى بيئة تشغيل مساحة العمل فقط وتُخزّن مشفرة على الخادم.')));
-    const configuredWorkspaceId=activeWorkspace?.id||'';
-    if(!configuredWorkspaceId){box.append(node('p',tr(workspaces.length?'Select a workspace above to inspect its OpenCode providers.':'Create a project first, then select its workspace.',workspaces.length?'اختر مساحة عمل أعلاه لفحص مزوّدي OpenCode الخاصين بها.':'أنشئ مشروعًا أولاً ثم اختر مساحة العمل الخاصة به.')));return;}
-    picker.value=configuredWorkspaceId;
-    const workspaceId=configuredWorkspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
-    let snapshot=await window.workspaceRuntime.load(workspaceId);
-    if(activeWorkspace?.id!==workspaceId)return;
+    box.append(node('p',tr('The full catalog and authentication methods come from the selected workspace OpenCode runtime.','يأتي الكتالوج الكامل وطرق المصادقة من بيئة OpenCode لمساحة العمل المختارة.')));
+    const comboWrap=node('div','','provider-combo'),combo=node('input');combo.type='search';
+    combo.value=body.dataset.providerQuery||'';combo.placeholder=tr('Search providers…','ابحث عن المزوّدات…');combo.setAttribute('role','combobox');combo.setAttribute('aria-expanded','false');combo.autocomplete='off';combo.setAttribute('aria-label',combo.placeholder);
+    const options=node('div','','provider-combo-options');options.hidden=true;comboWrap.append(combo,options);box.append(comboWrap);
+    const progress=node('p','','provider-loading');progress.setAttribute('role','status');progress.setAttribute('aria-live','polite');box.append(progress);
+    const status=node('p',tr('Choose a provider to inspect its connection.','اختر مزوّدًا لفحص اتصاله.'),'provider-combo-status');box.append(status);
+    let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
+    let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
+    const retry=button(tr('Retry','إعادة المحاولة'),()=>metadataReady?refresh(true):initialize());retry.hidden=true;box.append(retry);
+    const message=(text,error=false)=>{progress.textContent=text;progress.classList.toggle('connection-error',error);retry.hidden=!error;};
     const showError=(f,error)=>{let st=f.querySelector('[role=alert]');if(!st){st=node('p');st.setAttribute('role','alert');f.append(st)}st.textContent=error.message;toast(error.message)};
     const openAuthDialog=p=>{
+      if(!view.ready||!alive()||activeWorkspace?.id!==workspaceId)return;
       if(p.allowed===false){toast(tr('Available in OpenCode; restricted by platform policy.','متاح في OpenCode؛ مقيّد بسياسة المنصة.'));return;}
       if(snapshot.auth_methods===null){toast(tr('OpenCode authentication discovery failed. Refresh before connecting.','تعذر اكتشاف طرق مصادقة OpenCode. حدّث الحالة قبل الربط.'));return;}
       const methods=snapshot.auth_methods?.[p.id]||[];
-      const choices=methods.length?methods:[{type:'api',label:tr('OpenCode API key endpoint','نقطة مصادقة API key في OpenCode')}];
+      if(!methods.length){toast(tr('No authentication methods reported by OpenCode.','لم يعلن OpenCode عن طرق مصادقة.'));return;}
+      const choices=methods;
       const host=node('div');document.body.append(host);
       const dlg=document.createElement('dialog');dlg.className='action-form-dialog';dlg.dataset.formDialog='';
       const head=document.createElement('header');head.className='action-dialog-head';
@@ -160,41 +170,87 @@
       }
       methodPicker.onchange=renderMethod;renderMethod();dlg.showModal();
     };
-    const comboWrap=node('div','','provider-combo');
-    const combo=node('input');combo.type='text';combo.placeholder=tr('Search providers…','ابحث عن المزوّدات…');combo.setAttribute('role','combobox');combo.setAttribute('aria-expanded','false');combo.autocomplete='off';combo.setAttribute('aria-label',combo.placeholder);
-    const options=node('div','','provider-combo-options');options.hidden=true;
-    comboWrap.append(combo,options);box.append(comboWrap);
-    const status=node('p','','provider-combo-status');status.append(node('span',tr('No provider selected. Click the search box to see the full OpenCode catalog.','لم يُختر مزوّد بعد. انقر مربع البحث لعرض كتالوج OpenCode الكامل.')));box.append(status);
+    function renderSelected(p){
+      const state=p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
+      const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
+      status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String((p.models||[]).length)+' '+tr('models','نموذج')));
+      if(!view.ready){status.append(node('span',tr('Refreshing workspace state…','جارٍ تحديث حالة مساحة العمل…')));return;}
+      const act=node('div','','manage-actions');
+      if(p.connected)act.append(button(tr('Disconnect','فصل'),async()=>{if(!alive()||activeWorkspace?.id!==workspaceId||!view.ready)return;await api(base+encodeURIComponent(p.id),{method:'DELETE'});await reload();}));
+      else if(p.allowed!==false)act.append(button(tr('Connect','ربط'),()=>openAuthDialog(p)));
+      else act.append(node('span',tr('Restricted by platform policy','مقيّد بسياسة المنصة')));
+      status.append(act);
+    }
     const renderOptions=()=>{
       const query=(combo.value||'').trim().toLowerCase();options.replaceChildren();
-      const rows=(snapshot.providers||[]).filter(p=>!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query));
+      const rows=(snapshot?.providers||[]).filter(p=>!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query));
       for(const p of rows){
         const state=p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
         const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
         const o=node('button',(p.name||p.id)+' · '+state+restriction,'provider-combo-option');o.type='button';
         o.onclick=()=>{
-          // Selection is separate from search: reopening search shows the catalog.
-          combo.value='';options.hidden=true;combo.setAttribute('aria-expanded','false');
-          status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String((p.models||[]).length)+' '+tr('models','نموذج')));
-          const act=node('div','','manage-actions');
-          if(p.connected){act.append(button(tr('Disconnect','فصل'),async()=>{await api(base+encodeURIComponent(p.id),{method:'DELETE'});await reload();}));}
-          else if(p.allowed!==false){act.append(button(tr('Connect','ربط'),()=>openAuthDialog(p)));}
-          else{act.append(node('span',tr('Restricted by platform policy','مقيّد بسياسة المنصة')));}
-          status.append(act);
+          if(!alive()||activeWorkspace?.id!==workspaceId)return;
+          combo.value='';body.dataset.providerQuery='';options.hidden=true;combo.setAttribute('aria-expanded','false');
+          selectedProviderId=p.id;renderSelected(p);
         };
         options.append(o);
       }
       options.hidden=!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
     };
-    async function reload(){window.workspaceRuntime.invalidate(workspaceId);snapshot=await window.workspaceRuntime.load(workspaceId,{force:true});if(activeWorkspace?.id!==workspaceId)return;renderOptions();if(window.refreshWorkspaceChoices)await window.refreshWorkspaceChoices('',false);}
-    combo.addEventListener('input',renderOptions);
+    const customButton=button(tr('Add custom provider manually','إضافة مزوّد مخصص يدويًا'),()=>{const host=node('div');const f=node('form','','manage-form');const pid=input(f,tr('Provider ID','معرّف المزوّد'),'provider_id');pid.required=true;pid.placeholder='openai / anthropic / …';const key=input(f,tr('API key','مفتاح API'),'api_key','password');key.required=true;key.autocomplete='new-password';const save=node('button',tr('Connect','ربط'),'button');save.type='submit';f.append(save);host.append(f);document.body.append(host);const dlg=window.mountFormDialog(host,f,tr('Custom provider','مزوّد مخصص'));f.dialogTrigger.hidden=true;f.onsubmit=async event=>{event.preventDefault();if(!f.reportValidity())return;try{await api(base+encodeURIComponent(pid.value.trim())+'/credentials',{method:'POST',body:JSON.stringify({api_key:key.value})});key.value='';toast(tr('Provider connected.','تم ربط المزوّد.'));await reload()}catch(error){showError(f,error)}};dlg.addEventListener('close',()=>host.remove(),{once:true});f.openDialog();});customButton.disabled=true;box.append(customButton);
+    async function refresh(force=false){
+      if(!workspaceId||!alive())return;
+      view.ready=false;customButton.disabled=true;
+      status.querySelectorAll('button').forEach(button=>button.disabled=true);
+      message(snapshot?tr('Refreshing OpenCode providers…','جارٍ تحديث مزوّدي OpenCode…'):tr('Loading OpenCode providers…','جارٍ تحميل مزوّدي OpenCode…'));
+      try{
+        if(force)window.workspaceRuntime.invalidate(workspaceId);
+        const next=await window.workspaceRuntime.load(workspaceId,{force});
+        if(!alive()||activeWorkspace?.id!==workspaceId)return;
+        if(next.providers===null)throw new Error(next.errors?.provider_data?.detail||'OpenCode provider discovery failed');
+        snapshot=next;view.ready=true;customButton.disabled=false;
+        message(tr('OpenCode providers ready','مزوّدو OpenCode جاهزون')+' · '+snapshot.providers.length);renderOptions();
+        const selected=snapshot.providers.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
+        if(window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
+      }catch(error){if(alive()){message(error.message,true);renderOptions();}}
+    }
+    async function reload(){return refresh(true);}
+    view.refresh=refresh;
+    combo.addEventListener('input',()=>{body.dataset.providerQuery=combo.value;renderOptions();});
     combo.addEventListener('focus',renderOptions);
-    combo.addEventListener('keydown',event=>{if(event.key==='Escape'){options.hidden=true;combo.setAttribute('aria-expanded','false')}});
-    document.addEventListener('click',event=>{if(!comboWrap.contains(event.target))options.hidden=true});
-    box.append(button(tr('Refresh OpenCode state','حدّث حالة OpenCode'),()=>reload()));
-    renderOptions();
-    box.append(button(tr('Add custom provider manually','إضافة مزوّد مخصص يدويًا'),()=>{const host=node('div');const f=node('form','','manage-form');const pid=input(f,tr('Provider ID','معرّف المزوّد'),'provider_id');pid.required=true;pid.placeholder='openai / anthropic / …';const key=input(f,tr('API key','مفتاح API'),'api_key','password');key.required=true;key.autocomplete='new-password';const save=node('button',tr('Connect','ربط'),'button');save.type='submit';f.append(save);host.append(f);document.body.append(host);const dlg=window.mountFormDialog(host,f,tr('Custom provider','مزوّد مخصص'));f.dialogTrigger.hidden=true;f.onsubmit=async event=>{event.preventDefault();if(!f.reportValidity())return;try{await api(base+encodeURIComponent(pid.value.trim())+'/credentials',{method:'POST',body:JSON.stringify({api_key:key.value})});key.value='';toast(tr('Provider connected.','تم ربط المزوّد.'));await open('providers')}catch(error){showError(f,error)}};dlg.addEventListener('close',()=>host.remove(),{once:true});f.openDialog();}));
+    combo.addEventListener('keydown',event=>{if(event.key==='Escape'){options.hidden=true;combo.setAttribute('aria-expanded','false');}});
+    document.addEventListener('click',event=>{if(!comboWrap.contains(event.target))options.hidden=true;},{signal:controller.signal});
+    box.append(button(tr('Refresh OpenCode state','حدّث حالة OpenCode'),()=>metadataReady?refresh(true):initialize()));
+    async function initialize(){
+      message(snapshot?tr('Refreshing OpenCode providers…','جارٍ تحديث مزوّدي OpenCode…'):tr('Loading OpenCode providers…','جارٍ تحميل مزوّدي OpenCode…'));renderOptions();
+      try{
+        const [owned,projectRows]=await Promise.all([api('/api/workspaces'),api('/api/projects'),window.workspaceContextReady||Promise.resolve()]);
+        if(!alive())return;workspaces=owned;projects=projectRows;metadataReady=true;
+        picker.replaceChildren(new Option(tr('Select workspace','اختر مساحة عمل'),''));
+        for(const w of workspaces)picker.add(new Option((projects.find(p=>p.id===w.project_id)?.name||tr('Workspace','مساحة العمل'))+' · '+w.status,w.id));
+        // Never choose the first workspace or trust a stored ID without ownership validation.
+        let selected=workspaces.find(w=>w.id===activeWorkspace?.id);
+        if(!selected){
+          let persisted='';try{persisted=localStorage.getItem('og-workspace')||'';}catch(error){}
+          selected=workspaces.find(w=>w.id===persisted);
+          const project=selected&&projects.find(p=>p.id===selected.project_id);
+          if(project)await openWorkspace(project,selected,{navigate:false});
+          else{selected=null;if(activeWorkspace){stopEvents();workspaceSelectionRevision++;activeWorkspace=activeProject=activeSession=null;}}
+        }
+        workspaceId=selected?.id||'';view.workspaceId=workspaceId;picker.value=workspaceId;picker.disabled=false;
+        base='/api/workspaces/'+workspaceId+'/providers/';
+        if(!workspaceId){snapshot=null;renderOptions();message(tr('Select a workspace to load its OpenCode providers.','اختر مساحة عمل لتحميل مزوّدي OpenCode الخاصين بها.'));return;}
+        snapshot=window.workspaceRuntime.peek(workspaceId);renderOptions();await refresh();
+      }catch(error){if(alive())message(error.message,true);}
+    }
+    picker.onchange=async()=>{
+      const w=workspaces.find(w=>w.id===picker.value);view.ready=false;
+      if(!w){stopEvents();workspaceSelectionRevision++;activeWorkspace=activeProject=activeSession=null;try{localStorage.removeItem('og-workspace');}catch(error){}await open('providers');return;}
+      try{const project=projects.find(p=>p.id===w.project_id)||await api('/api/projects/'+w.project_id);await openWorkspace(project,w,{navigate:false});await open('providers');}catch(error){message(error.message,true);}
+    };
+    await initialize();
   }
+
   async function roles(body,platform=false){const box=section(body,tr('User roles','أدوار المستخدمين'));for(const u of await api('/api/admin/users'))row(box,u.username,u.role,[...(currentUser.role==='owner'&&u.id!==currentUser.id&&u.role!=='owner'?[button(tr('Change role','تغيير الدور'),async()=>{const picked=await window.requestForm(tr('Change role','تغيير الدور'),[{name:'role',label:tr('Role','الدور'),value:u.role,options:['admin','support','finance','customer']}]);const role=picked?.role;if(!role)return;await api('/api/admin/users/'+u.id+'/role',{method:'PUT',body:JSON.stringify({role})});await open('roles',true)})]:[])]);box.append(node('p',tr('Only an owner can assign roles. Finance can manage platform payment methods through its authorized API. Support currently has account-only access.','المالك وحده يعيّن الأدوار. دور المالية يتيح إدارة وسائل المنصة عبر واجهته المصرح بها. الدعم يمتلك حاليًا صلاحيات الحساب الشخصي فقط.')))}
   async function logs(body,platform=false,securityOnly=false){const box=section(body,tr(platform?'Audit log':securityOnly?'Login / security activity':'Account activity',platform?'سجل الإجراءات':securityOnly?'نشاط الدخول والأمان':'نشاط الحساب'));if(securityOnly)box.append(node('p',tr('Recorded password and session security actions. Login event tracking is not available yet.','إجراءات كلمة المرور والجلسات المسجلة. تتبع أحداث تسجيل الدخول غير متاح بعد.')));let before;async function load(){const items=await api((platform?'/api/admin/logs':'/api/account/logs')+(before?'?before='+before:''));for(const r of items.filter(r=>platform||(/^(password|session|auth|security|role)\./.test(r.action)===securityOnly)))row(box,r.action,new Date(r.created_at).toLocaleString());before=items.at(-1)?.id;more.hidden=items.length<100}const more=button(tr('Older records','سجلات أقدم'),load);body.append(more);await load()}
   async function locations(body,platform=false){const box=section(body,tr('Locations','المواقع'));let kind='countries',editing=null;const picker=select(box,tr('Type','النوع'),'type',[['countries',tr('Countries','الدول')],['regions',tr('Regions','المناطق')],['cities',tr('Cities','المدن')]]),list=node('div');box.append(list);const editor=section(body,tr('Location details','بيانات الموقع'));let parent;

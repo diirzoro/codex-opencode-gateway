@@ -458,7 +458,7 @@
   if (adminLogout) adminLogout.onclick = async function () { await api('/api/auth/logout', { method: 'POST' }).catch(function () {}); await page('landing'); };
 
   wireChatControls();
-  renderPricing();
+  // Landing pricing is loaded when that page becomes visible, after auth routing.
 
   // --- Routing: after auth, customer -> Client Dashboard; admin/owner -> Admin Console ---
   protectedPages.add('clientPage');
@@ -561,6 +561,7 @@
   var clientLogout = document.getElementById('clientLogout');
   async function doLogout() {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch (error) { /* clear local state anyway */ }
+    window.workspaceRuntime?.clear();
     currentUser = null; activeWorkspace = null; activeSession = null; activeProject = null;
     stopEvents();
     ['agentFeed', 'projectList', 'adminUsersBody'].forEach(function (id) { var el = document.getElementById(id); if (el) el.replaceChildren(); });
@@ -644,8 +645,7 @@
     finally { button.disabled = false; }
   };
 
-  authReady.then(async function () {
-    await interfaceReady;
+  navigationReady.then(async function () {
     if(window.passwordRecoveryActive)return;
     var flag = new URLSearchParams(location.search).get('github');
     if (flag) {
@@ -655,12 +655,10 @@
     }
     if (currentUser) {
       try {
-        var status = await api('/api/github/status');
+        var status = await window.bootstrapGithubStatus;
         var gh = document.getElementById('chatGithub');
-        if (gh) gh.title = status.connected ? ('GitHub connected as ' + (status.account_login || '')) : (status.configured ? 'GitHub not connected' : 'GitHub integration not configured');
+        if (gh && status) gh.title = status.connected ? ('GitHub connected as ' + (status.account_login || '')) : (status.configured ? 'GitHub not connected' : 'GitHub integration not configured');
       } catch (error) { /* leave the truthful default title */ }
-      var active = document.querySelector('.page.active');
-      if (!active || active.id === 'landing' || active.id === 'authPage') { await routeHome(); }
     }
   });
 

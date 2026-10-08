@@ -1,10 +1,15 @@
 """Safe, policy-annotated views of the selected OpenCode runtime."""
 import time
 import uuid
+import hashlib
 from datetime import datetime, timezone
 from sqlalchemy import select
 from ..models import WorkspaceSession
 from . import policy, providers
+
+
+def policy_revision(row):
+    return hashlib.sha256(((row.allowed_providers or "[]") + "\n" + (row.allowed_models or "[]")).encode()).hexdigest()[:16]
 
 
 def sync_sessions(db, workspace, live):
@@ -41,7 +46,8 @@ def public_snapshot(service, workspace, db):
     if live["provider_data"] is not None:
         catalog = providers.catalog(live["provider_data"], live["auth_methods"] or {}, policy_row)
     return {"status": "partial" if live["errors"] else "ready", "workspace_id": str(workspace.id),
-            "generation": live["generation"], "health": live["health"], "version": live["health"]["version"],
+            "generation": live["generation"], "revision": live["revision"], "policy_revision": policy_revision(policy_row),
+            "health": live["health"], "version": live["health"]["version"],
             "providers": catalog, "connected": (live["provider_data"] or {}).get("connected") if live["provider_data"] is not None else None,
             "auth_methods": live["auth_methods"], "models": {p["id"]: [model["id"] for model in p["models"]] for p in catalog} if catalog is not None else None,
             "agents": providers.public_metadata(live["agents"]), "default_agent": live["default_agent"],
@@ -49,6 +55,14 @@ def public_snapshot(service, workspace, db):
             "config": providers.public_metadata(live["config"]),
             "errors": live["errors"], "diagnostics": {**live["diagnostics"],
                 "gateway_bootstrap_ms": round((time.monotonic() - started) * 1000, 2)}}
+
+
+def public_agents(service, workspace):
+    live = service.agent_snapshot()
+    return {"workspace_id": str(workspace.id), "generation": live["generation"], "revision": live["revision"],
+            "health": live["health"], "agents": providers.public_metadata(live["agents"]),
+            "default_agent": live["default_agent"], "config": providers.public_metadata(live["config"]),
+            "errors": live["errors"]}
 
 
 def public_capabilities(service, workspace, db):
