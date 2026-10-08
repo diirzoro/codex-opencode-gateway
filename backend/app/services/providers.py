@@ -44,6 +44,36 @@ def discover(service, policy=None):
     return catalog(service.request("GET", "/provider"), service.request("GET", "/provider/auth"), policy)
 
 
+def catalog_index(data, policy=None):
+    """Initial browser discovery needs provider state, not every model schema."""
+    from .policy import provider_allowed
+    if not isinstance(data, dict) or not isinstance(data.get("all"), list):
+        raise HTTPException(502, "OpenCode returned an invalid provider catalog")
+    connected = set(data.get("connected", []))
+    return [{"id": entry["id"], "name": entry.get("name") or entry["id"],
+             "connected": entry["id"] in connected,
+             "allowed": policy is None or provider_allowed(policy, entry["id"]),
+             "model_count": len(entry.get("models", {})),
+             "default_model": data.get("default", {}).get(entry["id"])}
+            for entry in data["all"]]
+
+
+def model_details(data, provider_id, policy=None):
+    """Sanitize and annotate models for exactly one runtime-reported provider."""
+    from .policy import provider_allowed, model_allowed
+    if not isinstance(data, dict) or not isinstance(data.get("all"), list):
+        raise HTTPException(502, "OpenCode returned an invalid provider catalog")
+    entry = next((entry for entry in data["all"] if entry["id"] == provider_id), None)
+    if entry is None:
+        raise HTTPException(404, "Provider is not available in this workspace runtime")
+    allowed = policy is None or provider_allowed(policy, provider_id)
+    return {"provider_id": provider_id, "connected": provider_id in data.get("connected", []),
+            "allowed": allowed, "default_model": data.get("default", {}).get(provider_id),
+            "models": [{**public_metadata(model), "id": identifier,
+                        "allowed": allowed and (policy is None or model_allowed(policy, identifier))}
+                       for identifier, model in entry.get("models", {}).items()]}
+
+
 def auth_methods(service):
     return service.request("GET", "/provider/auth")
 

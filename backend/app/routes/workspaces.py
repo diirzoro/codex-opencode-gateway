@@ -302,6 +302,12 @@ def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user)
     _,service=_workspace_service(db,user,workspace_id)
     return providers.discover(service,policy.load(db))
 
+@router.get("/workspaces/{workspace_id}/providers/{provider_id}/models")
+def provider_models(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    row,service=_workspace_service(db,user,workspace_id)
+    with service.state_lock:
+        return runtime_snapshot.public_models(service,row,provider_id,db)
+
 @router.get("/workspaces/{workspace_id}/agents")
 def available_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Workspace,workspace_id,user.id)

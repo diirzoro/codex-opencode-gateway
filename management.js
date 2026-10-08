@@ -148,13 +148,35 @@
         }
         const updatePrompts=()=>{const values=Object.fromEntries(new FormData(f));for(const {prompt,field} of promptInputs){const condition=prompt.when;field.parentElement.hidden=Boolean(condition)&&(condition.op==='eq'?values[condition.key]!==condition.value:values[condition.key]===condition.value);field.disabled=field.parentElement.hidden;}};
         f.addEventListener('change',updatePrompts);updatePrompts();
+        let validationModel=null,validationModelsReady=false;
         if(method.type==='api'){
           const key=input(f,tr('API key (server-side only)','مفتاح API (على الخادم فقط)'),'api_key','password');key.required=true;key.autocomplete='new-password';
-          const model=select(f,tr('Model for real credential validation (may incur usage)','نموذج للتحقق الحقيقي من المفتاح (قد يحتسب استخدامًا)'),'model_id',(p.models||[]).filter(m=>m.allowed!==false&&(!m.modalities?.output||m.modalities.output.includes('text'))).map(m=>[m.id,m.name||m.id]));
-          model.required=true;if(p.default_model)model.value=p.default_model;
+          validationModel=select(f,tr('Model for real credential validation (may incur usage)','نموذج للتحقق الحقيقي من المفتاح (قد يحتسب استخدامًا)'),'model_id',[['',tr('Loading models…','جارٍ تحميل النماذج…')]]);
+          validationModel.required=true;validationModel.disabled=true;
         }
         const submit=node('button',method.type==='api'?tr('Validate and connect','تحقق واربط'):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
+        const currentForm=()=>alive()&&view.ready&&activeWorkspace?.id===workspaceId&&methodArea.contains(f)&&dlg.open;
+        if(validationModel){
+          submit.disabled=true;const modelStatus=node('p');modelStatus.setAttribute('role','status');f.append(modelStatus);
+          const retryModels=button(tr('Retry models','أعد تحميل النماذج'),()=>loadModels());retryModels.hidden=true;f.append(retryModels);
+          async function loadModels(){
+            validationModelsReady=false;submit.disabled=true;validationModel.disabled=true;retryModels.hidden=true;modelStatus.textContent=tr('Loading provider models…','جارٍ تحميل نماذج المزوّد…');
+            try{
+              const data=await window.workspaceRuntime.loadModels(workspaceId,p.id);
+              if(!currentForm())return;
+              const rows=data.models.filter(m=>data.allowed!==false&&m.allowed!==false&&(!m.modalities?.output||m.modalities.output.includes('text')));
+              validationModel.replaceChildren(new Option(tr('Select validation model','اختر نموذج التحقق'),''));
+              for(const model of rows)validationModel.add(new Option(model.name||model.id,model.id));
+              if(rows.some(m=>m.id===data.default_model))validationModel.value=data.default_model;
+              validationModelsReady=rows.length>0;validationModel.disabled=submit.disabled=!validationModelsReady;
+              modelStatus.textContent=validationModelsReady?'':tr('No allowed text models reported by OpenCode.','لم يعلن OpenCode عن نماذج نصية مسموحة.');
+            }catch(error){if(currentForm()){modelStatus.textContent=error.message;retryModels.hidden=false;}}
+          }
+          loadModels();
+        }
         f.onsubmit=async event=>{event.preventDefault();submit.disabled=true;try{
+          if(!currentForm())return;
+          if(method.type==='api'&&!validationModelsReady)throw new Error(tr('Wait for provider models before connecting.','انتظر تحميل نماذج المزوّد قبل الربط.'));
           const values=Object.fromEntries(new FormData(f));
           if(method.type==='api'){
             await api(base+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id,...(methods.length?{method:index}:{}),inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
@@ -166,14 +188,14 @@
             let code;if(authorization.method==='code'){const label=node('label',tr('Authorization code','رمز التفويض'));code=node('input');code.autocomplete='off';label.append(code);area.append(label);}
             area.append(button(tr('Complete authorization','أكمل التفويض'),async()=>{await api(base+encodeURIComponent(p.id)+'/oauth/callback',{method:'POST',body:JSON.stringify({method:index,...(code?{code:code.value}:{})})});if(code)code.value='';toast(tr('Provider connected.','تم ربط المزوّد.'));dlg.close();await reload();}));
           }
-        }catch(error){toast(error.message);}finally{submit.disabled=false;}};
+        }catch(error){toast(error.message);}finally{submit.disabled=method.type==='api'&&!validationModelsReady;}};
       }
       methodPicker.onchange=renderMethod;renderMethod();dlg.showModal();
     };
     function renderSelected(p){
       const state=p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
       const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
-      status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String((p.models||[]).length)+' '+tr('models','نموذج')));
+      status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String(p.model_count||0)+' '+tr('models','نموذج')));
       if(!view.ready){status.append(node('span',tr('Refreshing workspace state…','جارٍ تحديث حالة مساحة العمل…')));return;}
       const act=node('div','','manage-actions');
       if(p.connected)act.append(button(tr('Disconnect','فصل'),async()=>{if(!alive()||activeWorkspace?.id!==workspaceId||!view.ready)return;await api(base+encodeURIComponent(p.id),{method:'DELETE'});await reload();}));

@@ -3,6 +3,7 @@ import time
 import uuid
 import hashlib
 from datetime import datetime, timezone
+from fastapi import HTTPException
 from sqlalchemy import select
 from ..models import WorkspaceSession
 from . import policy, providers
@@ -44,17 +45,28 @@ def public_snapshot(service, workspace, db):
     policy_row = policy.load(db)
     catalog = None
     if live["provider_data"] is not None:
-        catalog = providers.catalog(live["provider_data"], live["auth_methods"] or {}, policy_row)
+        catalog = providers.catalog_index(live["provider_data"], policy_row)
     return {"status": "partial" if live["errors"] else "ready", "workspace_id": str(workspace.id),
             "generation": live["generation"], "revision": live["revision"], "policy_revision": policy_revision(policy_row),
             "health": live["health"], "version": live["health"]["version"],
             "providers": catalog, "connected": (live["provider_data"] or {}).get("connected") if live["provider_data"] is not None else None,
-            "auth_methods": live["auth_methods"], "models": {p["id"]: [model["id"] for model in p["models"]] for p in catalog} if catalog is not None else None,
+            "auth_methods": live["auth_methods"],
             "agents": providers.public_metadata(live["agents"]), "default_agent": live["default_agent"],
             "default_agent_resolution": "configured" if live["default_agent"] else "runtime",
             "config": providers.public_metadata(live["config"]),
             "errors": live["errors"], "diagnostics": {**live["diagnostics"],
                 "gateway_bootstrap_ms": round((time.monotonic() - started) * 1000, 2)}}
+
+
+def public_models(service, workspace, provider_id, db):
+    live = service.snapshot()
+    if live["provider_data"] is None:
+        error = live["errors"]["provider_data"]
+        raise HTTPException(error["status"], error["detail"])
+    policy_row = policy.load(db)
+    return {"workspace_id": str(workspace.id), "generation": live["generation"],
+            "revision": live["revision"], "policy_revision": policy_revision(policy_row),
+            **providers.model_details(live["provider_data"], provider_id, policy_row)}
 
 
 def public_agents(service, workspace):
