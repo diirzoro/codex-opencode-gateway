@@ -27,6 +27,12 @@ SUPPORTED_RUNTIME_VERSIONS = {"1.18.31", "1.18.32"}
 STARTUP_TIMEOUT = 30.0
 HEALTH_INTERVAL = 5.0
 SNAPSHOT_TTL = 1.0  # Coalesce simultaneous callers; auth mutations invalidate it.
+CORE_PATHS = {"provider_data": "/provider", "auth_methods": "/provider/auth",
+              "agents": "/agent", "config": "/config"}
+CAPABILITY_PATHS = {"permissions": "/permission", "tools": "/experimental/tool/ids",
+                    "identity": "/path", "vcs": "/vcs", "mcp": "/mcp", "lsp": "/lsp",
+                    "formatters": "/formatter", "project": "/project/current",
+                    "session_status": "/session/status", "questions": "/question"}
 _runtimes = {}
 _locks = {}
 _registry_lock = threading.Lock()
@@ -52,10 +58,14 @@ class OpenCodeService:
                                    timeout=15, trust_env=False)
         self.generation = secrets.token_hex(12)
         self.state_lock = threading.RLock()
+        self.session_lock = threading.Lock()
+        self.capability_lock = threading.Lock()
         self.last_health = 0.0
         self.health_state = None
         self.snapshot_cache = None
         self.snapshot_at = 0.0
+        self.capability_cache = None
+        self.capability_at = 0.0
         self.timings = {}
         self.call_counts = {}
         self.metrics_lock = threading.Lock()
@@ -129,6 +139,34 @@ class OpenCodeService:
                 raise HTTPException(502, "OpenCode did not confirm current session tool policy")
             self.session_policies[identifier] = signature
 
+    def _discover(self, paths):
+        results, errors = {}, {}
+        with ThreadPoolExecutor(max_workers=min(8, len(paths))) as pool:
+            futures = {name: pool.submit(self.request, "GET", path) for name, path in paths.items()}
+            for name, future in futures.items():
+                try:
+                    value = future.result()
+                    valid = True
+                    if name == "provider_data":
+                        valid = isinstance(value, dict) and isinstance(value.get("all"), list)
+                    elif name in {"config", "auth_methods"}:
+                        valid = isinstance(value, dict)
+                    elif name == "agents":
+                        valid = isinstance(value, list) and all(isinstance(a, dict) and isinstance(a.get("name"), str) for a in value)
+                    if not valid:
+                        raise HTTPException(502, "OpenCode returned invalid " + name + " data")
+                    results[name] = value
+                except HTTPException as exc:
+                    errors[name] = {"status": exc.status_code, "detail": exc.detail}
+        return {name: results.get(name) for name in paths}, errors
+
+    def diagnostics(self):
+        with self.metrics_lock:
+            return {"timings_ms": dict(self.timings), "api_calls": dict(self.call_counts),
+                    "credential_restore_passes": self.restore_passes,
+                    "credential_restore_puts": self.restore_puts,
+                    "credential_restore_errors": list(self.restore_errors)}
+
     def snapshot(self):
         # Concurrent bootstrap calls share one discovery pass. Auth changes take
         # this same lock so a snapshot cannot straddle a credential mutation.
@@ -136,33 +174,31 @@ class OpenCodeService:
             if self.snapshot_cache is not None and time.monotonic() - self.snapshot_at < SNAPSHOT_TTL:
                 return self.snapshot_cache
             started = time.monotonic()
-            health = self.health()
-            paths = {"provider_data": "/provider", "auth_methods": "/provider/auth", "agents": "/agent",
-                     "config": "/config", "permissions": "/permission", "tools": "/experimental/tool/ids",
-                     "sessions": "/session", "identity": "/path", "vcs": "/vcs", "mcp": "/mcp",
-                     "lsp": "/lsp", "formatters": "/formatter", "project": "/project/current",
-                     "session_status": "/session/status", "questions": "/question"}
-            results, errors = {}, {}
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                futures = {name: pool.submit(self.request, "GET", path) for name, path in paths.items()}
-                for name, future in futures.items():
-                    try:
-                        results[name] = future.result()
-                    except HTTPException as exc:
-                        errors[name] = {"status": exc.status_code, "detail": exc.detail}
-            # Missing capabilities remain null with an explicit error, never a fake empty list.
-            result = {name: results.get(name) for name in paths}
+            health = self.health_state if self.health_state and time.monotonic() - self.last_health < HEALTH_INTERVAL else self.health()
+            result, errors = self._discover(CORE_PATHS)
             result.update(health=health, errors=errors, generation=self.generation)
-            result["default_agent"] = (results.get("config") or {}).get("default_agent")
-            result["config"] = {key: (results.get("config") or {}).get(key)
+            result["default_agent"] = (result.get("config") or {}).get("default_agent")
+            result["config"] = {key: (result.get("config") or {}).get(key)
                                 for key in ("default_agent", "model", "small_model", "permission")}
-            self.timings["bootstrap_ms"] = round((time.monotonic() - started) * 1000, 2)
-            result["diagnostics"] = {"timings_ms": dict(self.timings), "api_calls": dict(self.call_counts),
-                                      "credential_restore_passes": self.restore_passes,
-                                      "credential_restore_puts": self.restore_puts,
-                                      "credential_restore_errors": list(self.restore_errors)}
+            with self.metrics_lock:
+                self.timings["bootstrap_ms"] = round((time.monotonic() - started) * 1000, 2)
+            result["diagnostics"] = self.diagnostics()
             self.snapshot_cache = result
             self.snapshot_at = time.monotonic()
+            return result
+
+    def capabilities(self):
+        """Optional discovery is independent of the composer and auth locks."""
+        with self.capability_lock:
+            if self.capability_cache is not None and time.monotonic() - self.capability_at < SNAPSHOT_TTL:
+                return self.capability_cache
+            started = time.monotonic()
+            result, errors = self._discover(CAPABILITY_PATHS)
+            with self.metrics_lock:
+                self.timings["capabilities_ms"] = round((time.monotonic() - started) * 1000, 2)
+            result.update(errors=errors, generation=self.generation, diagnostics=self.diagnostics())
+            self.capability_cache = result
+            self.capability_at = time.monotonic()
             return result
 
 

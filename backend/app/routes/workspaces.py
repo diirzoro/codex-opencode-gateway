@@ -257,7 +257,7 @@ def storage(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session
 @router.get("/workspaces/{workspace_id}/sessions")
 def sessions(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     workspace,service=_workspace_service(db,user,workspace_id)
-    with service.state_lock:
+    with service.session_lock:
         return runtime_snapshot.sync_sessions(db,workspace,service.request("GET","/session"))
 
 @router.get("/sessions/{session_id}")
@@ -279,6 +279,11 @@ def workspace_runtime(workspace_id: uuid.UUID,user: User=Depends(require_user),d
         snapshot=runtime_snapshot.public_snapshot(service,row,db)
         snapshot["diagnostics"]["total_runtime_bootstrap_ms"]=round((time.monotonic()-started)*1000,2)
         return snapshot
+
+@router.get("/workspaces/{workspace_id}/runtime/capabilities")
+def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    row,service=_workspace_service(db,user,workspace_id)
+    return runtime_snapshot.public_capabilities(service,row,db)
 
 @router.get("/workspaces/{workspace_id}/providers")
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):

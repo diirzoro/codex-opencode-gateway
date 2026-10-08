@@ -99,14 +99,15 @@
     const workspaceSettings=section(body,tr('Runtime / workspace settings','إعدادات وقت التشغيل ومساحة العمل'));
     const [workspaces,projects]=await Promise.all([api('/api/workspaces'),api('/api/projects')]);
     const picker=select(workspaceSettings,tr('Workspace','مساحة العمل'),'workspace',[['',tr('Select workspace','اختر مساحة عمل')],...workspaces.map(w=>[w.id,(projects.find(p=>p.id===w.project_id)?.name||tr('Workspace','مساحة العمل'))+' · '+w.status])]);picker.value=activeWorkspace?.id||'';
-    picker.onchange=async()=>{const w=workspaces.find(w=>w.id===picker.value);if(!w)return;try{await openWorkspace(await api('/api/projects/'+w.project_id),w);await open('providers')}catch(e){toast(e.message)}};
+    picker.onchange=async()=>{const w=workspaces.find(w=>w.id===picker.value);if(!w){stopEvents();activeWorkspace=activeProject=activeSession=null;await open('providers');return;}try{await openWorkspace(await api('/api/projects/'+w.project_id),w,{navigate:false});await open('providers')}catch(e){toast(e.message)}};
     const box=section(body,tr('Connect an AI provider','ربط مزوّد ذكاء'));
     box.append(node('p',tr('The full OpenCode provider catalog is listed below. Search to filter it, then connect a provider with its real authentication method. Credentials are sent only to the workspace runtime and stored encrypted on the server.','يظهر كتالوج مزوّدي OpenCode الكامل أدناه. ابحث للتصفية ثم اربط المزوّد بطريقة المصادقة الفعلية الخاصة به. تُرسل بيانات الاعتماد إلى بيئة تشغيل مساحة العمل فقط وتُخزّن مشفرة على الخادم.')));
-    const configuredWorkspaceId=activeWorkspace?.id||workspaces[0]?.id||'';
-    if(!configuredWorkspaceId){box.append(node('p',tr('Create a project first, then connect a provider.','أنشئ مشروعًا أولاً ثم اربط مزوّدًا.')));return;}
+    const configuredWorkspaceId=activeWorkspace?.id||'';
+    if(!configuredWorkspaceId){box.append(node('p',tr(workspaces.length?'Select a workspace above to inspect its OpenCode providers.':'Create a project first, then select its workspace.',workspaces.length?'اختر مساحة عمل أعلاه لفحص مزوّدي OpenCode الخاصين بها.':'أنشئ مشروعًا أولاً ثم اختر مساحة العمل الخاصة به.')));return;}
     picker.value=configuredWorkspaceId;
     const workspaceId=configuredWorkspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
     let snapshot=await window.workspaceRuntime.load(workspaceId);
+    if(activeWorkspace?.id!==workspaceId)return;
     const showError=(f,error)=>{let st=f.querySelector('[role=alert]');if(!st){st=node('p');st.setAttribute('role','alert');f.append(st)}st.textContent=error.message;toast(error.message)};
     const openAuthDialog=p=>{
       if(p.allowed===false){toast(tr('Available in OpenCode; restricted by platform policy.','متاح في OpenCode؛ مقيّد بسياسة المنصة.'));return;}
@@ -164,7 +165,27 @@
     const options=node('div','','provider-combo-options');options.hidden=true;
     comboWrap.append(combo,options);box.append(comboWrap);
     const status=node('p','','provider-combo-status');status.append(node('span',tr('No provider selected. Click the search box to see the full OpenCode catalog.','لم يُختر مزوّد بعد. انقر مربع البحث لعرض كتالوج OpenCode الكامل.')));box.append(status);
-    const renderOptions=()=>{const query=(combo.value||'').trim().toLowerCase();options.replaceChildren();const rows=(snapshot.providers||[]).filter(p=>!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query));for(const p of rows){const o=node('button',p.name+(p.connected?' ✓':(p.allowed===false?' · '+tr('Restricted','مقيّد'):'')),'provider-combo-option');o.type='button';o.onclick=()=>{combo.value=p.name||'';options.hidden=true;combo.setAttribute('aria-expanded','false');status.replaceChildren(node('strong',p.name||p.id),node('span',String((p.models||[]).length)+' '+tr('models','نموذج')+(p.allowed===false?tr(' · Restricted by platform',' · مقيّد من المنصة'):'')));const act=node('div','','manage-actions');if(p.connected){act.append(button(tr('Disconnect','فصل'),async()=>{await api(base+encodeURIComponent(p.id),{method:'DELETE'});await reload();}));}else if(p.allowed!==false){act.append(button(tr('Connect','ربط'),()=>openAuthDialog(p)));}else{act.append(node('span',tr('Restricted by platform policy','مقيّد بسياسة المنصة')));}status.append(act);};options.append(o);}options.hidden=!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));};
+    const renderOptions=()=>{
+      const query=(combo.value||'').trim().toLowerCase();options.replaceChildren();
+      const rows=(snapshot.providers||[]).filter(p=>!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query));
+      for(const p of rows){
+        const state=p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
+        const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
+        const o=node('button',(p.name||p.id)+' · '+state+restriction,'provider-combo-option');o.type='button';
+        o.onclick=()=>{
+          // Selection is separate from search: reopening search shows the catalog.
+          combo.value='';options.hidden=true;combo.setAttribute('aria-expanded','false');
+          status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String((p.models||[]).length)+' '+tr('models','نموذج')));
+          const act=node('div','','manage-actions');
+          if(p.connected){act.append(button(tr('Disconnect','فصل'),async()=>{await api(base+encodeURIComponent(p.id),{method:'DELETE'});await reload();}));}
+          else if(p.allowed!==false){act.append(button(tr('Connect','ربط'),()=>openAuthDialog(p)));}
+          else{act.append(node('span',tr('Restricted by platform policy','مقيّد بسياسة المنصة')));}
+          status.append(act);
+        };
+        options.append(o);
+      }
+      options.hidden=!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
+    };
     async function reload(){window.workspaceRuntime.invalidate(workspaceId);snapshot=await window.workspaceRuntime.load(workspaceId,{force:true});if(activeWorkspace?.id!==workspaceId)return;renderOptions();if(window.refreshWorkspaceChoices)await window.refreshWorkspaceChoices('',false);}
     combo.addEventListener('input',renderOptions);
     combo.addEventListener('focus',renderOptions);
