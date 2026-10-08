@@ -89,10 +89,10 @@ class OpenCodeService:
     def close(self):
         self.client.close()
 
-    def request(self, method, path, data=None, timeout=15):
+    def request(self, method, path, data=None, timeout=15, params=None):
         started = time.monotonic()
         try:
-            response = self.client.request(method, path, params=self.params, json=data, timeout=timeout)
+            response = self.client.request(method, path, params={**self.params, **(params or {})}, json=data, timeout=timeout)
             response.raise_for_status()
             return response.json() if response.content else None
         except httpx.TimeoutException:

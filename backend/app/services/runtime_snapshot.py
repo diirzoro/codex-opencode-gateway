@@ -80,10 +80,14 @@ def public_provider_lookup(service, workspace, db, *, name=None, query=None):
         rows = [providers.provider_index(entry, live["provider_data"], policy_row)]
     else:
         rows = providers.search_index(live["provider_data"], query, policy_row)
+    for row in rows:
+        if name is not None:
+            row["auth_methods"] = providers.connection_methods(service, row["id"])
+        else:
+            row["auth_methods"] = live["auth_methods"].get(row["id"], []) if live["auth_methods"] is not None else None
     return {"workspace_id": str(workspace.id), "generation": live["generation"], "revision": live["revision"],
             "policy_revision": workspace_policy_revision(db, workspace, policy_row),
-            "providers": [{**row, "auth_methods": live["auth_methods"].get(row["id"], [])
-                           if live["auth_methods"] is not None else None} for row in rows]}
+            "providers": rows}
 
 
 def public_models(service, workspace, provider_id, db):
