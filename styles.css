@@ -273,3 +273,24 @@ html,body{height:100%}
 dialog .session-idle-warning{position:sticky;inset:auto;margin:12px;flex:none;max-width:none}
 @media(hover:none){:root #workspacePage #agentFeed .feed-actions{opacity:1}}
 @media(max-width:600px){:root #workspacePage #agentFeed{font-size:16px;padding-inline:16px}:root #workspacePage #agentFeed .user-bubble{max-width:92%;padding:10px 14px}:root #workspacePage .composer-controls select{max-width:calc(50% - 8px);flex:1 1 110px}:root #workspacePage .prompt-box{width:calc(100% - 20px);padding:12px!important}.session-idle-warning{flex-wrap:wrap}}
+
+/* Shared form hotfix: retain native modal isolation with a recognizable backdrop. */
+:root dialog::backdrop,:root .action-form-dialog::backdrop,:root .grid-modal::backdrop,:root .checkout-dialog::backdrop,:root .agent-create-dialog::backdrop,:root .provider-auth-dialog::backdrop{background:rgba(15,23,42,.12);backdrop-filter:none}
+:root dialog{max-height:calc(100dvh - 32px);overflow:auto;overscroll-behavior:contain;text-align:start}
+:root dialog :is(.action-dialog-head,.grid-modal-head){position:sticky;top:0;z-index:2;background:var(--panel);cursor:grab;touch-action:none}
+:root dialog>h2{position:sticky;top:0;background:var(--panel);cursor:grab;touch-action:none;padding-inline-end:48px}
+:root dialog :is(input:not([type=checkbox]):not([type=radio]),select,textarea){color:var(--text);border:1px solid var(--surface-edge,var(--line));box-shadow:none;outline:none}
+:root :is(input,textarea)::placeholder{color:color-mix(in srgb,var(--muted) 65%,var(--panel));opacity:1;font-weight:400}
+:root dialog :is(input:not([type=checkbox]):not([type=radio]),select,textarea):focus-visible{border-color:var(--primary);outline:2px solid var(--primary);outline-offset:2px;box-shadow:none}
+:root dialog select:required:invalid{color:var(--muted)}
+:root .remember-identity{display:flex;flex-direction:row;align-items:center;gap:10px;font-size:13px;font-weight:400}
+:root .remember-identity input{width:auto;min-height:0;margin:0}
+.social-login-note{font-size:13px;line-height:1.6;color:var(--muted);text-align:start}.auth-card .github-button+.github-button{margin-top:8px}
+:root #composerAttachments{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px;max-height:150px;overflow:auto}
+:root .composer-attachment{display:flex;align-items:center;gap:8px;min-width:0;max-width:100%;padding:8px 10px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;font-size:12px}
+.composer-attachment img{width:42px;height:42px;object-fit:cover;border-radius:6px}.composer-attachment span{overflow-wrap:anywhere;min-width:0}.composer-attachment small{display:block;color:var(--muted)}
+:root .composer-attachment button{background:transparent;color:var(--text);flex:none}.message-attachments{display:flex;flex-wrap:wrap;gap:8px;margin-block:8px;font-size:13px}.message-attachments span{border:1px solid var(--line);border-radius:8px;padding:5px 10px;overflow-wrap:anywhere}
+@media(max-width:768px){:root dialog :is(.action-dialog-head,.grid-modal-head),:root dialog>h2{cursor:default;touch-action:auto}}
+
+:root dialog :is(input,textarea)::placeholder{color:color-mix(in srgb,var(--muted) 65%,var(--panel));opacity:1}
+:root dialog.checkout-dialog #checkoutClose{position:sticky;top:0;margin-inline-start:auto;display:block;background:var(--panel);z-index:3}

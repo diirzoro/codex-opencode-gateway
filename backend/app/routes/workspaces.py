@@ -28,6 +28,7 @@ class CreateProject(BaseModel):
     repository: str|None=None
     branch: str|None=None
     template: str|None=None
+    working_paths: list[str]=Field(default_factory=list,max_length=10)
 
 class RenameProject(BaseModel):
     model_config=ConfigDict(extra="forbid",str_strip_whitespace=True)
@@ -88,15 +89,17 @@ def templates(user: User=Depends(require_user)):
     return [{"id":key,"name":key} for key in manager.TEMPLATES]
 
 def _github_source(db,user,data):
+    paths=manager.validate_working_paths(data.working_paths)
     require_advanced(db,user)
     connection=github.connection_for(db,user)
     if not manager.valid_repository(data.repository) or not manager.valid_branch(data.branch):
         raise HTTPException(422,"A valid repository (owner/name) and branch are required")
     repo=github.authorized_repository(connection,data.repository)
-    return {"clone_url":repo["clone_url"],"branch":data.branch,"token":github.installation_token(connection),"repository_id":repo["id"],"installation_id":connection.installation_id}
+    return {"clone_url":repo["clone_url"],"branch":data.branch,"token":github.installation_token(connection),"repository_id":repo["id"],"installation_id":connection.installation_id,"working_paths":paths}
 
 @router.post("/projects",status_code=201)
 def create_project(data: CreateProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if data.working_paths and data.source_type!="github": raise HTTPException(422,"Selective working directories apply only to GitHub projects")
     github_source=_github_source(db,user,data) if data.source_type=="github" else None
     project,workspace=manager.create(db,user,data.project_name,data.source_type,data.template,data.repository,data.branch,github_source)
     if github_source:

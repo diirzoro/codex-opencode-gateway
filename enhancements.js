@@ -599,16 +599,20 @@
   if (billingRenew) billingRenew.onclick = async function () { try { const state=await api('/api/billing/subscription');const plan=state.plan||state.selected_plan;if(plan)await window.beginCheckout(plan.id);else document.getElementById('billingPlans').scrollIntoView({block:'center',behavior:'smooth'}); } catch (error) { apiMessage('billingMessage', error.message, true); } };
 
   // Re-route the auth completion handlers so Account is not the landing page.
-  $('#loginSubmit').onclick = async function () {
+  $('#loginForm').onsubmit = async function (event) {
+    event.preventDefault();if($('#loginSubmit').disabled||!event.currentTarget.reportValidity())return;
+    const identity=value('loginIdentity'),remember=$('#rememberIdentity').checked;
     const button = $('#loginSubmit'); button.disabled = true;
     try {
       renderProfile(await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ identity: value('loginIdentity'), password: $('#loginPassword').value }) }));
       $('#loginPassword').value = '';
+      try{if(remember)localStorage.setItem('og-login-identity',identity);else localStorage.removeItem('og-login-identity');}catch(error){}
       await routeHome();
     } catch (error) { apiMessage('loginMessage', error.message, true); }
     finally { button.disabled = false; }
   };
-  $('#registerSubmit').onclick = async function () {
+  $('#registerForm').onsubmit = async function (event) {
+    event.preventDefault();if($('#registerSubmit').disabled||!event.currentTarget.reportValidity())return;
     if (value('registerUsername').length < 6) { apiMessage('registerMessage', t('usernameHint'), true); return; }
     const password = $('#registerPassword').value;
     if (password.length < 8 || !/[0-9]/.test(password) || ![...password].some(function (c) { return passwordSymbols.includes(c); })) { apiMessage('registerMessage', t('passwordHint'), true); return; }
@@ -825,6 +829,8 @@
       if(!access.advanced_integrations||!access.core_access){var upgrade=textElement('button',tr('View plans / upgrade','عرض الخطط / الاشتراك'),'button small');upgrade.onclick=()=>window.openClientView('billing');information.append(upgrade);}
       var storage=document.createElement('details');storage.append(textElement('summary',tr('Local project storage (50 MB each)','تخزين المشاريع المحلية (50 MB لكل مشروع)')));var usage=textElement('div','');storage.append(usage);information.append(storage);var loaded=false;
       storage.ontoggle=async()=>{if(!storage.open||loaded)return;loaded=true;usage.replaceChildren(textElement('p',tr('Loading storage usage…','جارٍ تحميل استخدام التخزين…')));try{var rows=await Promise.all(data.projects.filter(p=>p.source_type!=='github').flatMap(p=>p.workspaces.map(async w=>{var s=await api('/api/workspaces/'+w.id+'/storage');return p.name+' · '+s.used_mb+' / '+s.limit_mb+' MB';})));if(currentUser?.id!==user.id)return;usage.replaceChildren(...rows.map(value=>textElement('p',value)));if(!rows.length)usage.append(textElement('p',tr('No local projects yet','لا توجد مشاريع محلية بعد')));}catch(error){loaded=false;usage.replaceChildren(textElement('p',error.message));}};
+      var signIns=textElement('div','','account-sign-ins');signIns.append(textElement('h4',tr('Link a sign-in identity','ربط هوية للدخول')));information.append(signIns);
+      api('/api/auth/social/options').then(function(options){if(currentUser?.id!==user.id||!signIns.isConnected)return;for(const provider of ['github','google']){var link=textElement('button',tr('Link sign-in with ','ربط الدخول عبر ')+provider,'button ghost small');link.disabled=!options[provider];link.title=link.disabled?tr('Not configured on this server','غير مهيأ على هذا الخادم'):'';link.onclick=()=>window.linkSignInProvider(provider);signIns.append(link);}signIns.append(textElement('p',tr('Sign-in identity does not authorize GitHub repositories. Linking requires an active sign-in session.','هوية الدخول لا تمنح صلاحية لمستودعات GitHub. الربط يتطلب جلسة دخول نشطة.')));}).catch(function(error){signIns.append(textElement('p',error.message));});
       information.append(textElement('h4',tr('How your data is handled','كيف تُدار بياناتك')),textElement('p',tr('Local projects remain on Gateway. GitHub repositories remain in your GitHub account; OpenCode uses a server-side working copy. Credentials are encrypted server-side. Trial expiry does not delete files. Working copies are preserved; no automatic cleanup or hardware isolation is promised.','تبقى المشاريع المحلية في Gateway ومستودعات GitHub في حسابك؛ يستخدم OpenCode نسخة عمل على الخادم. تُشفّر بيانات الاعتماد على الخادم. انتهاء التجربة لا يحذف الملفات. تُحفظ نسخ العمل؛ لا ندّعي التنظيف التلقائي أو العزل العتادي.')));
     } catch(error){if(currentUser?.id===user.id)information.replaceChildren(textElement('p',error.message));}
   }

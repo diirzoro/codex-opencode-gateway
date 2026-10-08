@@ -83,10 +83,10 @@ def installation_token(connection: GithubConnection) -> str:
 
 def _aware(value): return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
-def exchange_code(code):
+def exchange_code(code, redirect_uri=None, verifier=None):
     try:
         with httpx.Client(timeout=20,follow_redirects=False,trust_env=False) as client:
-            response=client.post(settings.github_web_base.rstrip('/')+'/login/oauth/access_token',headers={'Accept':'application/json'},data={'client_id':settings.github_client_id,'client_secret':settings.github_client_secret,'code':code,'redirect_uri':settings.github_callback_url})
+            response=client.post(settings.github_web_base.rstrip('/')+'/login/oauth/access_token',headers={'Accept':'application/json'},data={'client_id':settings.github_client_id,'client_secret':settings.github_client_secret,'code':code,'redirect_uri':redirect_uri or settings.github_callback_url,**({'code_verifier':verifier} if verifier else {})})
             result=response.json()
     except (httpx.HTTPError,ValueError): raise HTTPException(502,'GitHub authorization failed')
     if response.status_code!=200 or not result.get('access_token'): raise HTTPException(403,'GitHub authorization failed')

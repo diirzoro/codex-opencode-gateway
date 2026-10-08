@@ -31,6 +31,8 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    github_subject: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    google_subject: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     phone: Mapped[str] = mapped_column(String(30))
     postal_code: Mapped[str] = mapped_column(String(24))
     country_id: Mapped[int] = mapped_column(ForeignKey("countries.id"))

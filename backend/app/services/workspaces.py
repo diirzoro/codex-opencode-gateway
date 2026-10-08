@@ -140,9 +140,34 @@ def valid_repository(value):
 def valid_branch(value):
     return bool(value and _BRANCH.fullmatch(value) and ".." not in value and "//" not in value and not value.endswith(".lock"))
 
-def clone_github(workspace, clone_url, branch, token):
+def validate_working_paths(paths):
+    if not isinstance(paths, list) or len(paths)>10:
+        raise HTTPException(422, "Choose up to 10 working directories")
+    result=[]
+    for value in paths:
+        if not isinstance(value,str) or not re.fullmatch(r"[A-Za-z0-9_./ -]{1,200}",value):
+            raise HTTPException(422, "Working directories must be relative repository paths")
+        parts=Path(value).parts
+        if value.startswith(('/', '-')) or not parts or any(p in {'.','..','.git','.ssh'} or p.startswith('.env') for p in parts):
+            raise HTTPException(422, "Invalid working directory")
+        normalized=Path(value).as_posix()
+        if normalized not in result: result.append(normalized)
+    return result
+
+def clone_github(workspace, clone_url, branch, token, working_paths=None):
     root = root_for(workspace)
-    result = _run_git(root, ["clone", "--depth", "1", "--single-branch", "--no-tags", "--branch", branch, clone_url, "."], workspace=workspace,token=token)
+    paths=validate_working_paths(working_paths or [])
+    # Explicit sparse directories reduce checkout size. Keep shallow blobs locally:
+    # unconfigured promisor fetches from OpenCode could otherwise break private repos.
+    arguments=["clone", "--depth", "1", "--single-branch", "--no-tags"]
+    if paths: arguments.append("--no-checkout")
+    result = _run_git(root, [*arguments,"--branch",branch,clone_url,"."], workspace=workspace,token=token)
+    if paths:
+        for path in paths:
+            if git(workspace,"cat-file","-t","HEAD:"+path,check=False).stdout.strip() != "tree":
+                raise HTTPException(422,"A selected working directory does not exist in this branch; files were preserved")
+        _run_git(root,["sparse-checkout","set","--cone","--",*paths],workspace=workspace,token=token)
+        _run_git(root,["checkout",branch],workspace=workspace,token=token)
     if result.returncode:
         raise HTTPException(409, "GitHub clone failed; the selected repository or branch may be unavailable")
 
@@ -173,7 +198,7 @@ def create(db, user, name, source_type, template=None, repository=None, branch=N
     try:
         path.mkdir(parents=True, exist_ok=False)
         if source_type == "github":
-            clone_github(workspace, github_source["clone_url"], github_source["branch"], github_source["token"])
+            clone_github(workspace, github_source["clone_url"], github_source["branch"], github_source["token"],github_source.get("working_paths"))
             workspace.base_commit_sha = git(workspace, "rev-parse", "HEAD").stdout.strip()
         else:
             (path/".gitignore").write_text(".env\n.env.*\n!.env.example\n.venv/\nnode_modules/\n__pycache__/\n",encoding="utf-8")
