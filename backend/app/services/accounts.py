@@ -13,6 +13,7 @@ def user_payload(user) -> dict:
         "city": user.city.name if user.city else None, "role": user.role, "status": user.status,
         "preferred_language": user.preferred_language, "preferred_theme": user.preferred_theme,
         "trial_started_at": user.trial_started_at, "trial_ends_at": user.trial_ends_at,
+        "advanced_trial_started_at": user.advanced_trial_started_at,
         "trial_remaining_days": max(0, ceil((trial_end - now).total_seconds() / 86400)),
         "last_login_at": user.last_login_at,
     }

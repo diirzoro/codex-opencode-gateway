@@ -7,6 +7,7 @@ from ..database import get_db
 from ..models import Project, ProviderCredential, User, Workspace, WorkspaceSession
 from ..services import github, session_lifecycle
 from ..services.accounts import user_payload
+from ..services.entitlements import access_payload
 from ..services.workspaces import project_payload, workspace_payload
 from .dependencies import require_user
 
@@ -36,6 +37,7 @@ def dashboard(user: User = Depends(require_user), db: Session = Depends(get_db))
         payload_projects.append({**project_payload(project), "workspaces": items})
     return {
         "profile": {**user_payload(user), "plan": user.plan.name if user.plan else None},
+        "access": access_payload(db,user),
         "plan": {"name": user.plan.name, "active": user.plan.active} if user.plan else None,
         "projects": payload_projects,
         "recent_sessions": [session_lifecycle.payload(s, session_states[s.id]) for s in sessions[:10]],

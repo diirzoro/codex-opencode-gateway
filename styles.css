@@ -230,6 +230,10 @@ html,body{height:100%}
 :root .provider-auth-dialog .provider-feedback[data-kind=warning]{border-inline-start:3px solid var(--muted)}
 :root .provider-auth-dialog .provider-note{margin:0;color:var(--muted);font-size:13px;line-height:1.65}
 :root .provider-auth-dialog .provider-oauth{display:grid;gap:14px;min-width:0}
+#accountUsage{display:grid;gap:10px;width:100%;min-width:0;text-align:start}#accountUsage p{margin:0;line-height:1.65;overflow-wrap:anywhere}#accountUsage details{padding:12px;border:1px solid var(--surface-edge);border-radius:8px}#accountUsage button{justify-self:start}
+.workspace-repository-dialog{width:min(560px,calc(100% - 32px));max-height:calc(100dvh - 32px);overflow:auto;padding:24px;border:1px solid var(--surface-edge);border-radius:16px;text-align:start}.workspace-repository-dialog::backdrop{background:rgba(15,23,42,.16)}.workspace-repository-dialog form{display:grid;gap:16px}.workspace-repository-dialog label{display:grid;gap:6px}.workspace-repository-dialog #repositoryClose{position:sticky;top:0;margin-inline-start:auto;display:block;background:var(--panel)}.workspace-repository-dialog .api-message{white-space:pre-wrap;overflow-wrap:anywhere}
+#workspacePage .git-actions{flex-wrap:wrap}#workspacePage .git-actions>*{max-width:100%;overflow-wrap:anywhere}#workspacePage .git-actions small{flex-basis:100%;line-height:1.6}
+#workspacePage #sessionSidebar .git-actions .button{flex:1 1 120px;height:auto;min-height:36px;white-space:normal;text-decoration:none}
 @media(max-width:480px){:root .provider-auth-dialog{width:calc(100% - 20px);max-height:calc(100dvh - 20px)}:root .provider-auth-dialog .action-dialog-head,:root .provider-auth-dialog .action-dialog-body,:root .provider-auth-dialog>.action-form-actions{padding-inline:16px}}
 
 /* Workspace conversation refinement; the existing app header and navigation stay intact. */

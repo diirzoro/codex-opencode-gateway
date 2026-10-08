@@ -153,6 +153,7 @@
       const discovery=new AbortController(),onAbort=()=>dlg.close();controller.signal.addEventListener('abort',onAbort,{once:true});
       dlg.addEventListener('close',()=>{discovery.abort();controller.signal.removeEventListener('abort',onAbort);for(const input of dlg.querySelectorAll('input[type=password]'))input.value='';view.connecting=false;host.remove();},{once:true});
       const currentDialog=()=>alive()&&activeWorkspace?.id===workspaceId&&dlg.open;
+      body.append(node('p',tr('API keys are stored encrypted on the server only after OpenCode validates them. Advanced integrations have a 10-day first-use trial within your core trial.','تُحفظ مفاتيح API مشفّرة على الخادم بعد تحقق OpenCode منها. للتكاملات المتقدمة تجربة 10 أيام من أول استخدام ضمن تجربة الأساس.')));
       dlg.showModal();setFeedback(feedback,tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
       let choices;
       try{

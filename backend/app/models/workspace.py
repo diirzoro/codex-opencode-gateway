@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, CheckConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..database import Base
 
 class Project(Base):
@@ -31,6 +31,7 @@ class Workspace(Base):
     base_commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    project: Mapped[Project] = relationship(lazy="selectin")
     # Physical path is derived from owner/id, not accepted from clients or serialized.
 
 class WorkspaceSession(Base):

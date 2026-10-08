@@ -10,6 +10,7 @@ from ..schemas import LoginRequest, RegisterRequest, UserOut
 from ..security.passwords import hash_password, verify_password
 from ..security.sessions import hash_session_token, new_session_token, idle_expires_at
 from ..services.accounts import user_payload
+from ..services.entitlements import CORE_TRIAL_DAYS
 from .dependencies import require_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -42,7 +43,7 @@ def register(data: RegisterRequest, response: Response, db: Session = Depends(ge
         raise HTTPException(409, "Username or email already exists")
     validate_locations(db, data.country_id, data.region_id, data.city_id)
     now = datetime.now(timezone.utc)
-    user = User(username=username, email=email, password_hash=hash_password(data.password), phone=data.phone.strip(), postal_code=data.postal_code.strip(), country_id=data.country_id, region_id=data.region_id, city_id=data.city_id, trial_started_at=now, trial_ends_at=now+timedelta(days=10), last_login_at=now)
+    user = User(username=username, email=email, password_hash=hash_password(data.password), phone=data.phone.strip(), postal_code=data.postal_code.strip(), country_id=data.country_id, region_id=data.region_id, city_id=data.city_id, trial_started_at=now, trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS), last_login_at=now)
     db.add(user)
     try:
         db.commit()

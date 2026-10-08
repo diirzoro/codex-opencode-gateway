@@ -4,9 +4,15 @@ from ..database import get_db
 from ..models import User
 from ..schemas import ProfilePatch, UserOut
 from ..services.accounts import user_payload
+from ..services.entitlements import access_payload
 from .auth import validate_locations
 from .dependencies import require_user
 router = APIRouter(prefix="/api/profile", tags=["profile"])
+
+@router.get("/access")
+def get_access(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    # Lightweight; no billing mutation, runtime startup or external GitHub request.
+    return {"access": access_payload(db, user)}
 
 @router.get("", response_model=UserOut)
 def get_profile(user: User = Depends(require_user)): return user_payload(user)

@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +15,7 @@ from ..database import get_db
 from ..models import ExecutionEvent, Project, ProviderCredential, User, Workspace, WorkspaceSession
 from ..services import credentials, github, opencode, policy, providers, runtime_snapshot, preview, session_lifecycle
 from ..services import workspaces as manager
+from ..services.entitlements import access_payload, require_advanced
 from .dependencies import require_user, require_workspace_entitlement
 
 router=APIRouter(prefix="/api",tags=["workspaces"],dependencies=[Depends(require_workspace_entitlement)])
@@ -85,18 +88,19 @@ def templates(user: User=Depends(require_user)):
     return [{"id":key,"name":key} for key in manager.TEMPLATES]
 
 def _github_source(db,user,data):
+    require_advanced(db,user)
     connection=github.connection_for(db,user)
     if not manager.valid_repository(data.repository) or not manager.valid_branch(data.branch):
         raise HTTPException(422,"A valid repository (owner/name) and branch are required")
-    repo=next((r for r in github.list_repositories(connection) if r["full_name"]==data.repository),None)
-    if repo is None:
-        raise HTTPException(404,"Repository is not available to the connected GitHub installation")
+    repo=github.authorized_repository(connection,data.repository)
     return {"clone_url":repo["clone_url"],"branch":data.branch,"token":github.installation_token(connection),"repository_id":repo["id"],"installation_id":connection.installation_id}
 
 @router.post("/projects",status_code=201)
 def create_project(data: CreateProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
     github_source=_github_source(db,user,data) if data.source_type=="github" else None
     project,workspace=manager.create(db,user,data.project_name,data.source_type,data.template,data.repository,data.branch,github_source)
+    if github_source:
+        require_advanced(db,user,start=True); db.commit()
     return {"project":manager.project_payload(project),"workspace":manager.workspace_payload(workspace)}
 
 @router.post("/workspaces",status_code=201)
@@ -131,20 +135,20 @@ def delete_project(project_id: uuid.UUID,user: User=Depends(require_user),db: Se
 @router.post("/projects/{project_id}/publish")
 def publish_project(project_id: uuid.UUID,data: PublishProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
     project=manager.owned(db,Project,project_id,user.id)
+    require_advanced(db,user)
     connection=github.connection_for(db,user)
     if not manager.valid_repository(data.repository):
         raise HTTPException(422,"A repository in owner/name form is required")
     branch=data.branch or "work"
     if not manager.valid_branch(branch):
         raise HTTPException(422,"A valid branch name is required")
-    repo=next((r for r in github.list_repositories(connection) if r["full_name"]==data.repository),None)
-    if repo is None:
-        raise HTTPException(404,"Repository is not available to the connected GitHub installation")
+    repo=github.authorized_repository(connection,data.repository)
     project.repository=data.repository
     project.github_repository_id=repo["id"]
     project.github_installation_id=connection.installation_id
     project.remote_url=repo["clone_url"]
     project.remote_branch=branch
+    require_advanced(db,user,start=True)
     db.commit()
     return manager.project_payload(project)
 
@@ -180,6 +184,9 @@ def _git_status(db,user,workspace_id):
     state["push_available"]=bool(project.remote_url and project.remote_branch and connected)
     state["remote_url"]=project.remote_url
     state["remote_branch"]=project.remote_branch
+    state["repository"]=project.repository
+    state["github_access"]=access_payload(db,user)["github_access"]
+    state["push_available"]=state["push_available"] and state["github_access"]
     return workspace,project,state
 
 @router.get("/workspaces/{workspace_id}/git/status")
@@ -206,34 +213,78 @@ def logs(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=De
 
 @router.post("/workspaces/{workspace_id}/git/commit")
 def commit(workspace_id: uuid.UUID,data: CommitRequest,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return manager.commit(manager.owned(db,Workspace,workspace_id,user.id),user,data.message)
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    with opencode.workspace_lock(workspace):
+        _require_git_idle(db,workspace)
+        return manager.commit(workspace,user,data.message)
+
+def _require_git_idle(db,workspace):
+    session_lifecycle.lock_workspace(db,workspace)
+    if db.scalar(select(WorkspaceSession.id).where(WorkspaceSession.workspace_id==workspace.id,
+        WorkspaceSession.status.in_(["submitted","waiting_approval"]))):
+        raise HTTPException(409,"Stop active workspace work before changing Git history")
+
+def _github_remote(db,user,project):
+    require_advanced(db,user)
+    connection=github.connection_for(db,user)
+    repo=github.authorized_repository(connection,project.repository)
+    if project.github_repository_id and repo["id"]!=project.github_repository_id:
+        raise HTTPException(409,"GitHub repository identity changed; explicitly reconnect this project")
+    return connection,repo
 
 @router.post("/workspaces/{workspace_id}/git/push")
 def push(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     workspace,project=_workspace_and_project(db,user,workspace_id)
     if not project.remote_url or not project.remote_branch:
         raise HTTPException(503,"This project has no GitHub remote; publish or create it from a GitHub repository first")
-    connection=github.connection_for(db,user)
-    state=manager.status(workspace)
-    if not state["head"]:
-        raise HTTPException(409,"There is no commit to push")
-    token=github.installation_token(connection)
-    manager.push_remote(workspace,project.remote_url,project.remote_branch,token)
-    verified=github.verify_remote_commit(connection,project.repository,project.remote_branch,state["head"])
-    if not verified:
-        raise HTTPException(502,"Push finished but the expected commit was not verified on the remote branch")
-    workspace.status="pushed"; db.commit()
+    connection,repo=_github_remote(db,user,project)
+    with opencode.workspace_lock(workspace):
+        _require_git_idle(db,workspace)
+        state=manager.status(workspace)
+        if not state["head"]: raise HTTPException(409,"There is no commit to push")
+        if not state["clean"]: raise HTTPException(409,"Review and commit your working tree before pushing")
+        token=github.installation_token(connection)
+        manager.push_remote(workspace,repo["clone_url"],project.remote_branch,token)
+        verified=github.verify_remote_commit(connection,project.repository,project.remote_branch,state["head"])
+        if not verified:
+            raise HTTPException(502,"Push finished but the expected commit was not verified on the remote branch")
+        require_advanced(db,user,start=True)
+        workspace.status="pushed"; db.commit()
     return {"pushed":True,"branch":project.remote_branch,"head":state["head"],"verified":True}
+
+@router.post("/workspaces/{workspace_id}/git/sync")
+def sync(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    workspace,project=_workspace_and_project(db,user,workspace_id)
+    if not project.remote_branch: raise HTTPException(409,"This project has no GitHub remote")
+    connection,repo=_github_remote(db,user,project)
+    with opencode.workspace_lock(workspace):
+        _require_git_idle(db,workspace)
+        state=manager.sync_remote(workspace,repo['clone_url'],project.remote_branch,github.installation_token(connection))
+        require_advanced(db,user,start=True)
+        workspace.base_commit_sha=state['head']; db.commit()
+        return state
+
+@router.get("/workspaces/{workspace_id}/export")
+def export_workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    with opencode.workspace_lock(workspace):
+        _require_git_idle(db,workspace)
+        path=manager.export(workspace)
+    return FileResponse(path,media_type="application/zip",filename="workspace-source.zip",
+                        background=BackgroundTask(path.unlink,missing_ok=True))
 
 @router.post("/workspaces/{workspace_id}/sessions",status_code=201)
 def new_session(workspace_id: uuid.UUID,data: NewSession,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Workspace,workspace_id,user.id)
+    if row.project.source_type=="github": require_advanced(db,user)
     manager.require_quota_headroom(row)
     session_lifecycle.lock_workspace(db,row)
     session_lifecycle.require_slot(db,row)
     runtime_id=opencode.for_workspace(row).create_session(data.title)
     session=WorkspaceSession(workspace_id=row.id,user_id=user.id,opencode_session_id=runtime_id,title=data.title)
-    db.add(session); db.flush(); session_lifecycle.set_state(db,session,"active"); db.commit(); db.refresh(session)
+    db.add(session); db.flush(); session_lifecycle.set_state(db,session,"active")
+    if row.project.source_type=="github": require_advanced(db,user,start=True)
+    db.commit(); db.refresh(session)
     return session_lifecycle.payload(session,"active")
 
 @router.post("/workspaces/{workspace_id}/files/upload",status_code=201)
@@ -246,9 +297,8 @@ def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),pat
     folder=(path or "").strip().strip("/")
     if folder and not re.fullmatch(r"[A-Za-z0-9._/-]{1,500}",folder): raise HTTPException(422,"Invalid folder path")
     storage=manager.storage_payload(row)
-    content=file.file.read(manager.WORKSPACE_QUOTA_BYTES+1)
-    if len(content)>manager.WORKSPACE_QUOTA_BYTES: raise HTTPException(413,"File exceeds the 50 MB workspace limit")
-    if len(content)>storage["remaining_bytes"]: raise HTTPException(413,"Workspace storage limit reached (50 MB). Remove files before uploading.")
+    content=file.file.read(storage['limit_bytes']+1)
+    if len(content)>storage['remaining_bytes']: raise HTTPException(413,"Workspace storage limit reached. Remove files before uploading.")
     target=manager.safe_path(row,(folder+"/" if folder else "")+name)
     target.parent.mkdir(parents=True,exist_ok=True)
     target.write_bytes(content)
@@ -341,6 +391,7 @@ def agent_choices(service):
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/credentials")
 def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKeyCredential,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    require_advanced(db,user)
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
     if not credentials.available():
         raise HTTPException(503,'Encrypted credential storage must be configured first')
@@ -372,6 +423,7 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
             validated_model=providers.validate_model(service,provider_id,data.model_id,policy.load(db))
             stage="encrypted credential storage"
             encrypted=credentials.encrypt(json.dumps({"type":"api","key":data.api_key,"metadata":data.inputs or {}}))
+            require_advanced(db,user,start=True)
             if row is None:
                 row=ProviderCredential(workspace_id=workspace.id,user_id=user.id,provider_id=provider_id,ciphertext="",last4="")
                 db.add(row)
@@ -435,6 +487,7 @@ def test_provider(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(re
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/authorize")
 def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAuthAuthorize,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    require_advanced(db,user)
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
     _,service=_workspace_service(db,user,workspace_id)
     with service.state_lock:
@@ -442,6 +495,7 @@ def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAut
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/callback")
 def provider_oauth_callback(workspace_id: uuid.UUID,provider_id: str,data: OAuthCallback,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    require_advanced(db,user)
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
     workspace,service=_workspace_service(db,user,workspace_id)
     with opencode.workspace_lock(workspace),service.state_lock:
@@ -452,6 +506,7 @@ def provider_oauth_callback(workspace_id: uuid.UUID,provider_id: str,data: OAuth
         if row is not None:
             db.delete(row)
         if accepted:
+            require_advanced(db,user,start=True)
             providers.record_connection(db,workspace,provider_id,connected=True)
         db.commit()
         return {"connected":bool(accepted)}

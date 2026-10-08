@@ -560,7 +560,7 @@
       var planName = data.plan ? data.plan.name : tr('No plan assigned', 'لا توجد خطة');
       const end=data.access.reason==='subscription'?data.subscription.current_period_end:data.trial.ends_at;
       const days=end?Math.max(0,Math.ceil((new Date(end)-Date.now())/86400000)):0;
-      summary.append(billingCard(tr('Current plan','الخطة الحالية'),data.access.reason==='subscription'?planName:tr('10-day trial','تجربة عشرة أيام')));
+      summary.append(billingCard(tr('Current plan','الخطة الحالية'),data.access.reason==='subscription'?planName:tr('Core trial','تجربة الأساس')));
       summary.append(billingCard(tr('Days remaining','الأيام المتبقية'),days+' '+tr('days','يوم')));
       summary.append(billingCard(tr('Access status','حالة الوصول'),data.access.allowed?tr('Active','نشط'):tr('Expired — renew to continue','انتهت المدة — جدّد للمتابعة')));
       summary.append(billingCard(tr('Expiry','تاريخ الانتهاء'),fmtDate(end)));
@@ -808,12 +808,25 @@
   }
 
   async function loadClientAccount() {
-    var user = await api('/api/profile');
-    renderProfile(user);
-    var box = document.getElementById('accountSummary'); if (box) {
-      box.replaceChildren();
-      [['#icon-user', tr('Account status', 'حالة الحساب'), user.status, user.status === 'active' ? 'good' : 'danger'], ['#icon-shield', tr('Role', 'الدور'), user.role, 'muted']].forEach(function (r) { var c = textElement('div', '', 'summary-card'); c.append(scIcon(r[0])); var t = textElement('div', ''); t.append(textElement('small', r[1])); t.append(textElement('b', r[2])); c.append(t); c.append(badge(r[2], r[3])); box.append(c); });
-    }
+    var user=currentUser;if(!user)return;renderProfile(user);
+    var box=document.getElementById('accountSummary');if(!box)return;box.replaceChildren();
+    var information=textElement('div','', 'summary-card');information.id='accountUsage';information.append(textElement('p',tr('Loading usage and access…','جارٍ تحميل الاستخدام والصلاحيات…')));box.append(information);
+    try {
+      var data=await api('/api/dashboard');if(currentUser?.id!==user.id)return;renderProfile(data.profile);
+      var access=data.access,advanced=access.advanced_trial;
+      information.replaceChildren(textElement('h3',tr('Your access & usage','صلاحياتك واستخدامك')));
+      [[tr('Account status','حالة الحساب'),data.profile.status],[tr('Role','الدور'),data.profile.role],
+       [tr('Core trial','تجربة الأساس'),access.core_trial.remaining_days+' '+tr('days remaining','يوم متبقٍ')],
+       [tr('Advanced trial','التجربة المتقدمة'),advanced.state==='not_started'?tr('10 days from first actual use, capped by core trial','10 أيام من أول استخدام فعلي ولا تتجاوز تجربة الأساس'):advanced.remaining_days+' '+tr('days remaining','يوم متبقٍ')],
+       [tr('Access / plan','الوصول / الخطة'),access.reason==='subscription'?(data.profile.plan||tr('Active subscription','اشتراك نشط')):access.reason==='administration'?tr('Administration','إدارة'):access.allowed?tr('Core trial','تجربة الأساس'):tr('Read-only · upgrade to code','للقراءة فقط · اشترك للبرمجة')],
+       [tr('GitHub','GitHub'),data.github.connected?(data.github.account_login||tr('Connected','متصل')):tr('Not connected','غير متصل')],
+       [tr('Saved provider keys','مفاتيح المزوّدات المحفوظة'),data.counts.credentials]].forEach(function(row){information.append(textElement('p',row[0]+' · '+row[1]));});
+      var connections=textElement('button',tr('Connected providers · selected workspace','المزوّدات المتصلة · مساحة العمل المختارة'),'button ghost small');connections.onclick=()=>window.openConnections('providers');information.append(connections);
+      if(!access.advanced_integrations||!access.core_access){var upgrade=textElement('button',tr('View plans / upgrade','عرض الخطط / الاشتراك'),'button small');upgrade.onclick=()=>window.openClientView('billing');information.append(upgrade);}
+      var storage=document.createElement('details');storage.append(textElement('summary',tr('Local project storage (50 MB each)','تخزين المشاريع المحلية (50 MB لكل مشروع)')));var usage=textElement('div','');storage.append(usage);information.append(storage);var loaded=false;
+      storage.ontoggle=async()=>{if(!storage.open||loaded)return;loaded=true;usage.replaceChildren(textElement('p',tr('Loading storage usage…','جارٍ تحميل استخدام التخزين…')));try{var rows=await Promise.all(data.projects.filter(p=>p.source_type!=='github').flatMap(p=>p.workspaces.map(async w=>{var s=await api('/api/workspaces/'+w.id+'/storage');return p.name+' · '+s.used_mb+' / '+s.limit_mb+' MB';})));if(currentUser?.id!==user.id)return;usage.replaceChildren(...rows.map(value=>textElement('p',value)));if(!rows.length)usage.append(textElement('p',tr('No local projects yet','لا توجد مشاريع محلية بعد')));}catch(error){loaded=false;usage.replaceChildren(textElement('p',error.message));}};
+      information.append(textElement('h4',tr('How your data is handled','كيف تُدار بياناتك')),textElement('p',tr('Local projects remain on Gateway. GitHub repositories remain in your GitHub account; OpenCode uses a server-side working copy. Credentials are encrypted server-side. Trial expiry does not delete files. Working copies are preserved; no automatic cleanup or hardware isolation is promised.','تبقى المشاريع المحلية في Gateway ومستودعات GitHub في حسابك؛ يستخدم OpenCode نسخة عمل على الخادم. تُشفّر بيانات الاعتماد على الخادم. انتهاء التجربة لا يحذف الملفات. تُحفظ نسخ العمل؛ لا ندّعي التنظيف التلقائي أو العزل العتادي.')));
+    } catch(error){if(currentUser?.id===user.id)information.replaceChildren(textElement('p',error.message));}
   }
 
   CLIENT_LOADERS = { dashboard: loadClientDashboard, projects: loadClientDashboard, sessions: loadClientDashboard, github: loadClientGithub, ai: loadClientAi, billing: loadClientBilling, account: loadClientAccount, security: renderSecurityPanel };

@@ -11,9 +11,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
-from ..models import User, Workspace, WorkspaceSession, ExecutionEvent
+from ..models import User, Workspace, WorkspaceSession, ExecutionEvent, ProviderCredential, AccountAudit
 from ..services import workspaces, opencode, policy, providers, session_lifecycle
 from .dependencies import require_user, require_workspace_entitlement
+from ..services.entitlements import require_advanced
 
 router=APIRouter(prefix="/api/sessions",tags=["agent"],dependencies=[Depends(require_workspace_entitlement)])
 tasks={}
@@ -240,9 +241,26 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
             raise HTTPException(503,"Provider authentication is not configured in this workspace runtime")
         provider=next((p for p in provider_data.get("all",[]) if p["id"]==data.provider_id),{})
         if data.model_id not in provider.get("models",{}): raise HTTPException(422,"Model is unavailable")
+        # Availability remains OpenCode-owned; entitlement classifies actual use.
+        model=provider['models'][data.model_id]
+        costs=model.get('cost') or {}
+        free_model=costs.get('input')==0 and costs.get('output')==0
+        own_key=db.scalar(select(ProviderCredential.id).where(ProviderCredential.workspace_id==workspace.id,
+                         ProviderCredential.provider_id==data.provider_id)) is not None
+        # OAuth has no Gateway API-key row; reuse its durable connection intent.
+        client_binding=db.scalar(select(AccountAudit.id).where(AccountAudit.subject_id==user.id,
+            AccountAudit.action=='provider-on:'+providers._binding(workspace,data.provider_id)).limit(1)) is not None
+        agent_state=await asyncio.to_thread(service.agent_snapshot)
+        effective_agent=data.agent_id or agent_state.get('default_agent')
+        selected=next((a for a in agent_state.get('agents') or [] if a.get('name')==effective_agent),None)
+        custom_agent=bool(effective_agent and (not selected or selected.get('native') is not True))
+        advanced=workspace.project.source_type=='github' or own_key or client_binding or not free_model or custom_agent
+        if advanced: require_advanced(db,user)
         # Legacy session rules must not broaden current admin tool restrictions.
         await asyncio.to_thread(service.apply_session_policy,session.opencode_session_id,
                                 policy.session_permissions(policy_row))
+        if advanced:
+            require_advanced(db,user,start=True); db.commit()
     except Exception:
         db.rollback(); finish_execution(db,session_id,"failed",data={"reason":"Runtime preflight failed; no new message was dispatched"},request_id=data.request_id)
         raise
