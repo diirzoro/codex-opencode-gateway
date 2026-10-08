@@ -2,6 +2,7 @@
 import json
 import hashlib
 import time
+import logging
 from urllib.parse import quote
 from fastapi import HTTPException
 
@@ -234,10 +235,11 @@ def restore_credential(service, provider_id, plaintext):
 
 
 def remove(service, provider_id):
+    service.ensure_auth_idle()
     result = service.request("DELETE", "/auth/" + quote(provider_id, safe=""))
     if result is not True:
         raise HTTPException(502, "OpenCode did not confirm credential removal")
-    service.invalidate()
+    service.refresh_auth()
     data = service.request("GET", "/provider")
     if provider_id in set(data.get("connected", [])):
         raise HTTPException(502, "OpenCode still reports this provider as connected")
@@ -273,22 +275,42 @@ def validate_model(service, provider_id, model_id=None, policy=None):
         session_id = session.get("id") if isinstance(session, dict) else None
         if not session_id or not session_id.startswith("ses"):
             raise HTTPException(502, "OpenCode did not create the validation session")
-        answer = service.request("POST", service.session_path(session_id, "/message"), {
-            "parts": [{"type": "text", "text": "Reply with OK only. Do not use tools."}],
-            "model": {"providerID": provider_id, "modelID": selected}}, timeout=90)
+        try:
+            answer = service.request("POST", service.session_path(session_id, "/message"), {
+                "parts": [{"type": "text", "text": "Reply with OK only. Do not use tools."}],
+                "model": {"providerID": provider_id, "modelID": selected}}, timeout=90)
+        except HTTPException as exc:
+            raise HTTPException(exc.status_code, "OpenCode model request failed: " + str(exc.detail)) from None
         info = answer.get("info", {}) if isinstance(answer, dict) else {}
         parts = answer.get("parts", []) if isinstance(answer, dict) else []
-        if (info.get("role") != "assistant" or info.get("error") or not info.get("time", {}).get("completed")
+        if info.get("error"):
+            error = info["error"]
+            category = error.get("name") if isinstance(error, dict) else None
+            known = {"APIError", "ProviderAuthError", "ContextOverflowError", "MessageOutputLengthError", "UnknownError"}
+            category = category if isinstance(category, str) and category in known else "provider execution error"
+            error_data = error.get("data") if isinstance(error, dict) else None
+            status = error_data.get("statusCode") if isinstance(error_data, dict) else None
+            detail = f"OpenCode reported {category}"
+            if isinstance(status, int) and 400 <= status <= 599:
+                detail += f" (provider HTTP {status})"
+                if status in {401, 403}: detail += ": authentication or API access was rejected"
+                elif status in {402, 429}: detail += ": check provider balance, quota or rate limits"
+                elif status == 404: detail += ": the provider rejected the selected model or endpoint"
+            # Upstream messages/headers/bodies may contain secrets; never return them.
+            raise HTTPException(422, detail + "; no new key was stored")
+        if (info.get("role") != "assistant" or not info.get("time", {}).get("completed")
                 or info.get("providerID") != provider_id or info.get("modelID") != selected
                 or not any(p.get("type") == "text" and str(p.get("text", "")).strip() for p in parts)):
             raise HTTPException(422, "The provider did not complete a real OpenCode model request; no new key was stored")
         return selected
     finally:
         if session_id:
-            try:
-                service.request("POST", service.session_path(session_id, "/abort"))
-            finally:
-                service.request("DELETE", service.session_path(session_id))
+            # Cleanup failures must not replace the real validation outcome.
+            for method, suffix in (("POST", "/abort"), ("DELETE", "")):
+                try:
+                    service.request(method, service.session_path(session_id, suffix))
+                except Exception:
+                    logging.getLogger(__name__).warning("Temporary provider validation session cleanup could not be confirmed")
         service.invalidate()
 
 
@@ -305,12 +327,13 @@ def oauth_authorize(service, provider_id, method, inputs=None):
 def oauth_callback(service, provider_id, method, code=None):
     if service.oauth_pending.get(provider_id) != method:
         raise HTTPException(409, "Start OAuth in this workspace before completing it")
+    service.ensure_auth_idle()
     body = {"method": method}
     if code is not None: body["code"] = code
     accepted=service.request("POST", f"/provider/{quote(provider_id, safe='')}/oauth/callback", body, timeout=90)
     if accepted is not True:
         raise HTTPException(502, "OpenCode did not confirm the OAuth callback")
-    service.invalidate()
+    service.refresh_auth()
     if not is_connected(service, provider_id):
         raise HTTPException(502, "OpenCode did not confirm the OAuth provider connection")
     service.oauth_pending.pop(provider_id, None)

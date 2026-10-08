@@ -130,61 +130,67 @@
     }
     const retry=button(tr('Retry','إعادة المحاولة'),()=>metadataReady?refresh(true):initialize());retry.hidden=true;box.append(retry);
     const message=(text,error=false)=>{progress.textContent=text;progress.classList.toggle('connection-error',error);retry.hidden=!error;};
-    const showError=(f,error)=>{let st=f.querySelector('[role=alert]');if(!st){st=node('p');st.setAttribute('role','alert');f.append(st)}st.textContent=error.message;toast(error.message)};
+    const setFeedback=(element,text,kind='status')=>{
+      element.textContent=text;element.hidden=!text;element.dataset.kind=kind;
+      element.setAttribute('role',kind==='error'?'alert':'status');element.setAttribute('aria-live',kind==='error'?'assertive':'polite');
+    };
+    const showError=(f,error)=>{let st=f.querySelector('.provider-feedback');if(!st){st=node('p','','provider-feedback');f.append(st)}setFeedback(st,error.message,'error')};
     const openAuthDialog=async(p,resolved=false)=>{
-      if(!view.ready||!alive()||activeWorkspace?.id!==workspaceId)return;
-      if(p.allowed===false){toast(tr('Available in OpenCode; restricted by platform policy.','متاح في OpenCode؛ مقيّد بسياسة المنصة.'));return;}
-      if(view.connecting)return;view.connecting=true;
-      const connectButtons=[...status.querySelectorAll('button'),customButton];connectButtons.forEach(b=>b.disabled=true);
-      let choices;
-      try{
-        message(tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
-        if(!resolved)p=(await lookup('resolve',p.id,controller.signal))[0];
-        if(!view.ready||!alive()||activeWorkspace?.id!==workspaceId)return;
-        if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
-        choices=p.auth_methods;
-        if(!Array.isArray(choices)||!choices.length)throw new Error(tr('No authentication methods reported by OpenCode.','لم يعلن OpenCode عن طرق مصادقة.'));
-        message(tr('OpenCode authentication methods ready','طرق مصادقة OpenCode جاهزة'));
-      }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);return;}
-      finally{view.connecting=false;if(alive()&&view.ready)connectButtons.forEach(b=>b.disabled=false);}
+      if(!view.ready||!alive()||activeWorkspace?.id!==workspaceId||view.connecting)return;
+      view.connecting=true;
       const host=node('div');document.body.append(host);
-      const dlg=document.createElement('dialog');dlg.className='action-form-dialog';dlg.dataset.formDialog='';
+      const dlg=document.createElement('dialog');dlg.className='action-form-dialog provider-auth-dialog';dlg.dataset.formDialog='';
+      dlg.addEventListener('keydown',event=>event.stopPropagation());
       const head=document.createElement('header');head.className='action-dialog-head';
-      const heading=node('h2',tr('Connect ','ربط ')+p.name);head.append(heading);
+      const heading=node('h2',tr('Connect ','ربط ')+(p.name||p.id));heading.id='provider-auth-'+(crypto.randomUUID?.()||Date.now());dlg.setAttribute('aria-labelledby',heading.id);head.append(heading);
       const close=document.createElement('button');close.type='button';close.className='icon';close.textContent='×';close.setAttribute('aria-label',tr('Close','إغلاق'));close.onclick=()=>dlg.close();head.append(close);
       const body=document.createElement('div');body.className='action-dialog-body';
-      const methodPicker=select(body,tr('OpenCode authentication method','طريقة مصادقة OpenCode'),'auth_method',choices.map((m,i)=>[String(i),m.label||(['api','key'].includes(m.type)?tr('API key','مفتاح API'):m.type)]));
       const methodArea=node('div');body.append(methodArea);
+      const feedback=node('p','','provider-feedback');feedback.hidden=true;body.append(feedback);
       const foot=document.createElement('div');foot.className='action-form-actions';
       const cancel=document.createElement('button');cancel.type='button';cancel.className='button ghost';cancel.textContent=tr('Cancel','إلغاء');cancel.onclick=()=>dlg.close();foot.append(cancel);
       dlg.append(head,body,foot);host.append(dlg);
-      dlg.addEventListener('close',()=>host.remove(),{once:true});
+      const discovery=new AbortController(),onAbort=()=>dlg.close();controller.signal.addEventListener('abort',onAbort,{once:true});
+      dlg.addEventListener('close',()=>{discovery.abort();controller.signal.removeEventListener('abort',onAbort);for(const input of dlg.querySelectorAll('input[type=password]'))input.value='';view.connecting=false;host.remove();},{once:true});
+      const currentDialog=()=>alive()&&activeWorkspace?.id===workspaceId&&dlg.open;
+      dlg.showModal();setFeedback(feedback,tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
+      let choices;
+      try{
+        if(!resolved)p=(await lookup('resolve',p.id,discovery.signal))[0];
+        if(!currentDialog())return;
+        if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
+        choices=p.auth_methods;
+        if(!Array.isArray(choices)||!choices.length)throw new Error(tr('No authentication methods reported by OpenCode.','لم يعلن OpenCode عن طرق مصادقة.'));
+        setFeedback(feedback,'');
+      }catch(error){if(currentDialog()&&error.name!=='AbortError')setFeedback(feedback,error.message,'error');return;}
+      const methodPicker=select(body,tr('OpenCode authentication method','طريقة مصادقة OpenCode'),'auth_method',choices.map((m,i)=>[String(i),m.label||(['api','key'].includes(m.type)?tr('API key','مفتاح API'):m.type)]));
+      body.prepend(methodPicker.parentElement);
       function renderMethod(){
-        methodArea.replaceChildren();const index=Number(methodPicker.value),method=choices[index];
+        methodArea.replaceChildren();setFeedback(feedback,'');const index=Number(methodPicker.value),method=choices[index];
         const keyMethod=['api','key'].includes(method.type);
-        if(!keyMethod&&method.type!=='oauth'){methodArea.append(node('p',tr('This authentication type is not supported by the installed OpenCode HTTP API: ','نوع المصادقة غير مدعوم في واجهة OpenCode المثبتة: ')+method.type));return;}
+        if(!keyMethod&&method.type!=='oauth'){setFeedback(feedback,tr('This authentication type is not supported by the installed OpenCode HTTP API: ','نوع المصادقة غير مدعوم في واجهة OpenCode المثبتة: ')+method.type,'warning');return;}
         const f=node('form','','manage-form');methodArea.append(f);const promptInputs=[];
         for(const prompt of method.prompts||[]){
           let field;if(prompt.type==='select')field=select(f,prompt.message,prompt.key,prompt.options.map(o=>[o.value,o.label]));
           else if(prompt.type==='text'){field=input(f,prompt.message,prompt.key);field.placeholder=prompt.placeholder||'';}
-          else{f.append(node('p',tr('Unsupported auth prompt: ','حقل مصادقة غير مدعوم: ')+prompt.type));continue;}
+          else{setFeedback(feedback,tr('Unsupported auth prompt: ','حقل مصادقة غير مدعوم: ')+prompt.type,'warning');continue;}
           promptInputs.push({prompt,field});
         }
         const updatePrompts=()=>{const values=Object.fromEntries(new FormData(f));for(const {prompt,field} of promptInputs){const condition=prompt.when;field.parentElement.hidden=Boolean(condition)&&(condition.op==='eq'?values[condition.key]!==condition.value:values[condition.key]===condition.value);field.disabled=field.parentElement.hidden;}};
         f.addEventListener('change',updatePrompts);updatePrompts();
-        let validationModel=null,validationModelsReady=false;
+        let validationModel=null,validationModelsReady=false,submitting=false;
         if(keyMethod){
           const key=input(f,tr('API key (server-side only)','مفتاح API (على الخادم فقط)'),'api_key','password');key.required=true;key.autocomplete='new-password';
-          validationModel=select(f,tr('Model for real credential validation (may incur usage)','نموذج للتحقق الحقيقي من المفتاح (قد يحتسب استخدامًا)'),'model_id',[['',tr('Loading models…','جارٍ تحميل النماذج…')]]);
+          validationModel=select(f,tr('Model for real credential validation','نموذج للتحقق الحقيقي من المفتاح'),'model_id',[['',tr('Loading models…','جارٍ تحميل النماذج…')]]);
           validationModel.required=true;validationModel.disabled=true;
+          f.append(node('p',tr('Validation sends a real model request through OpenCode. Provider usage charges may apply. The key is saved only after validation succeeds.','يرسل التحقق طلب نموذج فعليًا عبر OpenCode وقد تُحتسب رسوم استخدام لدى المزوّد. يُحفظ المفتاح فقط بعد نجاح التحقق.'),'provider-note'));
         }
         const submit=node('button',keyMethod?tr('Validate and connect','تحقق واربط'):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
-        const currentForm=()=>alive()&&view.ready&&activeWorkspace?.id===workspaceId&&methodArea.contains(f)&&dlg.open;
+        const currentForm=()=>currentDialog()&&view.ready&&methodArea.contains(f);
         if(validationModel){
-          submit.disabled=true;const modelStatus=node('p');modelStatus.setAttribute('role','status');f.append(modelStatus);
-          const retryModels=button(tr('Retry models','أعد تحميل النماذج'),()=>loadModels());retryModels.hidden=true;f.append(retryModels);
+          submit.disabled=true;const retryModels=button(tr('Retry models','أعد تحميل النماذج'),()=>loadModels());retryModels.hidden=true;body.append(retryModels);
           async function loadModels(){
-            validationModelsReady=false;submit.disabled=true;validationModel.disabled=true;retryModels.hidden=true;modelStatus.textContent=tr('Loading provider models…','جارٍ تحميل نماذج المزوّد…');
+            validationModelsReady=false;submit.disabled=true;validationModel.disabled=true;retryModels.hidden=true;setFeedback(feedback,tr('Loading provider models…','جارٍ تحميل نماذج المزوّد…'));
             try{
               const data=await window.workspaceRuntime.loadModels(workspaceId,p.id);
               if(!currentForm())return;
@@ -193,28 +199,51 @@
               for(const model of rows)validationModel.add(new Option(model.name||model.id,model.id));
               if(rows.some(m=>m.id===data.default_model))validationModel.value=data.default_model;
               validationModelsReady=rows.length>0;validationModel.disabled=submit.disabled=!validationModelsReady;
-              modelStatus.textContent=validationModelsReady?'':tr('No allowed text models reported by OpenCode.','لم يعلن OpenCode عن نماذج نصية مسموحة.');
-            }catch(error){if(currentForm()){modelStatus.textContent=error.message;retryModels.hidden=false;}}
+              setFeedback(feedback,validationModelsReady?'':tr('No allowed text models reported by OpenCode.','لم يعلن OpenCode عن نماذج نصية مسموحة.'),'warning');
+            }catch(error){if(currentForm()){setFeedback(feedback,error.message,'error');retryModels.hidden=false;}}
           }
           loadModels();
+          methodPicker.addEventListener('change',()=>retryModels.remove(),{once:true});
         }
-        f.onsubmit=async event=>{event.preventDefault();submit.disabled=true;try{
-          if(!currentForm())return;
-          if(keyMethod&&!validationModelsReady)throw new Error(tr('Wait for provider models before connecting.','انتظر تحميل نماذج المزوّد قبل الربط.'));
-          const values=Object.fromEntries(new FormData(f));
-          if(keyMethod){
-            await api(base+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
-            f.reset();toast(tr('Provider connected. It is now available in the workspace composer.','تم ربط المزوّد. أصبح متاحًا الآن في محرر مساحة العمل.'));dlg.close();await reload();
-          }else{
-            const authorization=await api(base+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values})});
-            f.remove();const area=node('div');methodArea.append(area);area.append(node('p',authorization.instructions||''));
-            if(authorization.url){const url=new URL(authorization.url);if(url.protocol!=='https:'||['localhost','127.0.0.1','::1'].includes(url.hostname))throw new Error(tr('OpenCode returned an unsupported authorization URL','أعاد OpenCode رابط تفويض غير مدعوم'));const link=node('a',tr('Open provider authorization','افتح تفويض المزوّد'));link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';area.append(link);}
-            let code;if(authorization.method==='code'){const label=node('label',tr('Authorization code','رمز التفويض'));code=node('input');code.autocomplete='off';label.append(code);area.append(label);}
-            area.append(button(tr('Complete authorization','أكمل التفويض'),async()=>{await api(base+encodeURIComponent(p.id)+'/oauth/callback',{method:'POST',body:JSON.stringify({method:index,...(code?{code:code.value}:{})})});if(code)code.value='';toast(tr('Provider connected.','تم ربط المزوّد.'));dlg.close();await reload();}));
-          }
-        }catch(error){toast(error.message);}finally{submit.disabled=keyMethod&&!validationModelsReady;}};
+        f.onsubmit=async event=>{
+          event.preventDefault();if(submitting||!currentForm()||!f.reportValidity())return;
+          if(keyMethod&&!validationModelsReady){setFeedback(feedback,tr('Wait for provider models before connecting.','انتظر تحميل نماذج المزوّد قبل الربط.'),'warning');return;}
+          const values=Object.fromEntries(new FormData(f));submitting=true;submit.disabled=methodPicker.disabled=true;f.setAttribute('aria-busy','true');
+          try{
+            if(keyMethod){
+              setFeedback(feedback,tr('Installing the credential and validating a real OpenCode model request…','جارٍ تثبيت المفتاح والتحقق منه بطلب نموذج فعلي عبر OpenCode…'));
+              const result=await api(base+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
+              f.reset();if(!alive()||activeWorkspace?.id!==workspaceId)return;
+              if(result.connected!==true||result.persisted!==true)throw new Error(tr('OpenCode connection and credential storage were not confirmed.','لم يتم تأكيد اتصال OpenCode وحفظ المفتاح.'));
+              dlg.close();toast(tr('Provider connected. It is now available in the workspace composer.','تم ربط المزوّد. أصبح متاحًا الآن في محرر مساحة العمل.'));await reload();
+            }else{
+              setFeedback(feedback,tr('Starting OpenCode authorization…','جارٍ بدء تفويض OpenCode…'));
+              const authorization=await api(base+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values})});
+              if(!currentForm())return;
+              if(!authorization||!['auto','code'].includes(authorization.method))throw new Error(tr('OpenCode did not return a supported OAuth authorization flow.','لم يُرجع OpenCode مسار تفويض OAuth مدعومًا.'));
+              let url;if(authorization.url){url=new URL(authorization.url);if(url.protocol!=='https:'||['localhost','127.0.0.1','::1'].includes(url.hostname))throw new Error(tr('OpenCode returned an unsupported authorization URL','أعاد OpenCode رابط تفويض غير مدعوم'));}
+              const area=node('div','','provider-oauth');f.replaceWith(area);setFeedback(feedback,'');area.append(node('p',authorization.instructions||''));
+              if(url){const link=node('a',tr('Open provider authorization','افتح تفويض المزوّد'));link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';area.append(link);}
+              let code;if(authorization.method==='code')code=input(area,tr('Authorization code','رمز التفويض'),'code');
+              area.append(button(tr('Complete authorization','أكمل التفويض'),async()=>{
+                if(!currentDialog()||!view.ready)return;
+                setFeedback(feedback,tr('Completing OpenCode authorization…','جارٍ إكمال تفويض OpenCode…'));
+                try{
+                  const result=await api(base+encodeURIComponent(p.id)+'/oauth/callback',{method:'POST',body:JSON.stringify({method:index,...(code?{code:code.value}:{})})});
+                  if(!alive()||activeWorkspace?.id!==workspaceId)return;
+                  if(result.connected!==true)throw new Error(tr('OpenCode did not confirm the OAuth connection.','لم يؤكد OpenCode اتصال OAuth.'));
+                  if(code)code.value='';dlg.close();toast(tr('Provider connected.','تم ربط المزوّد.'));await reload();
+                }catch(error){if(currentDialog())setFeedback(feedback,error.message,'error');}
+              }));
+            }
+          }catch(error){
+            window.workspaceRuntime.invalidate(workspaceId);
+            if(currentDialog())setFeedback(feedback,error.message,'error');
+            if(alive()&&activeWorkspace?.id===workspaceId&&window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
+          }finally{submitting=false;f.removeAttribute('aria-busy');methodPicker.disabled=false;submit.disabled=keyMethod&&!validationModelsReady;}
+        };
       }
-      methodPicker.onchange=renderMethod;renderMethod();dlg.showModal();
+      methodPicker.onchange=renderMethod;renderMethod();methodPicker.focus();
     };
     function renderSelected(p){
       const state=p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
@@ -284,17 +313,18 @@
       const host=node('div'),f=node('form','','manage-form');
       const pid=input(f,tr('Provider name or ID','اسم المزوّد أو معرّفه'),'provider_id');pid.required=true;pid.maxLength=200;pid.placeholder='OpenAI / openai / …';
       f.append(node('p',tr('Only providers reported by this workspace’s OpenCode runtime can be added. OpenCode validates the key with a real model request before it is saved; provider usage may apply.','يمكن إضافة المزوّدات التي تعلنها بيئة OpenCode لهذه المساحة فقط. يتحقق OpenCode من المفتاح بطلب نموذج فعلي قبل حفظه؛ قد تُحتسب رسوم استخدام لدى المزوّد.')));
-      const validationState=node('p');validationState.setAttribute('role','status');f.append(validationState);
+      const validationState=node('p','','provider-feedback');setFeedback(validationState,'');f.append(validationState);
       const save=node('button',tr('Choose authentication method','اختر طريقة المصادقة'),'button');save.type='submit';f.append(save);host.append(f);document.body.append(host);
-      const dlg=window.mountFormDialog(host,f,tr('Custom provider','مزوّد مخصص'));f.dialogTrigger.hidden=true;
+      const dlg=window.mountFormDialog(host,f,tr('Custom provider','مزوّد مخصص'));dlg.classList.add('provider-auth-dialog');f.dialogTrigger.hidden=true;
+      dlg.addEventListener('keydown',event=>event.stopPropagation());
       const current=()=>alive()&&view.ready&&activeWorkspace?.id===workspaceId&&dlg.open;
       f.onsubmit=async event=>{
-        event.preventDefault();if(!current()||save.disabled||!f.reportValidity())return;save.disabled=true;validationState.textContent=tr('Checking the OpenCode provider…','جارٍ فحص المزوّد في OpenCode…');
+        event.preventDefault();if(!current()||save.disabled||!f.reportValidity())return;save.disabled=true;setFeedback(validationState,tr('Checking the OpenCode provider…','جارٍ فحص المزوّد في OpenCode…'));
         try{
           const rows=await lookup('resolve',pid.value.trim());if(!current())return;const p=rows[0];
           if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
           selectedProviderId=p.id;dlg.close();await openAuthDialog(p,true);
-        }catch(error){validationState.textContent='';if(error.name!=='AbortError')showError(f,error);}finally{save.disabled=false;}
+        }catch(error){if(error.name!=='AbortError')showError(f,error);}finally{save.disabled=false;}
       };
       dlg.addEventListener('close',()=>host.remove(),{once:true});f.openDialog();
     });customButton.disabled=true;box.append(customButton);

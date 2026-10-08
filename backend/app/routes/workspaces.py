@@ -361,10 +361,16 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
         row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
         if row is None and providers.is_connected(service,provider_id) and not providers.is_locally_disconnected(db,workspace,provider_id):
             raise HTTPException(409,"Disconnect the existing runtime connection before replacing its authentication")
+        service.ensure_auth_idle()
         old_ciphertext=row.ciphertext if row is not None else None
+        stage="credential installation"
         try:
             providers.set_api_key(service,provider_id,data.api_key,data.inputs)
+            stage="workspace authentication refresh"
+            service.refresh_auth()
+            stage="model validation"
             validated_model=providers.validate_model(service,provider_id,data.model_id,policy.load(db))
+            stage="encrypted credential storage"
             encrypted=credentials.encrypt(json.dumps({"type":"api","key":data.api_key,"metadata":data.inputs or {}}))
             if row is None:
                 row=ProviderCredential(workspace_id=workspace.id,user_id=user.id,provider_id=provider_id,ciphertext="",last4="")
@@ -375,14 +381,28 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
             db.commit()
         except Exception as exc:
             db.rollback()
+            rollback_confirmed=True
             try:
                 providers.remove(service,provider_id)
                 if old_ciphertext:
                     providers.restore_credential(service,provider_id,credentials.decrypt(old_ciphertext))
+                    service.refresh_auth()
             except Exception:
-                raise HTTPException(502,"Credential validation/storage failed and runtime rollback could not be confirmed; no new key was persisted") from None
-            if isinstance(exc,HTTPException): raise exc
-            raise HTTPException(502,"Credential validation/storage failed; no new key was persisted") from None
+                rollback_confirmed=False
+            if old_ciphertext is None or not rollback_confirmed:
+                # Failed/new credentials must not become composer connections
+                # even when runtime auth cleanup refuses deletion.
+                try:
+                    providers.record_connection(db,workspace,provider_id,connected=False)
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    logger.warning("Failed provider connection could not persist its disconnect state for workspace %s",workspace.id)
+            detail=f"Provider connection failed during {stage}"
+            if isinstance(exc,HTTPException): detail+=" — "+str(exc.detail)
+            detail+=". No new key was persisted."
+            if not rollback_confirmed: detail+=" Runtime credential cleanup could not be confirmed; disconnect before retrying."
+            raise HTTPException(exc.status_code if isinstance(exc,HTTPException) else 502,detail) from None
         return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],"persisted":True,"validated_model":validated_model}
 
 @router.delete("/workspaces/{workspace_id}/providers/{provider_id}",status_code=204)
