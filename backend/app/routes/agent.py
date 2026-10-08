@@ -2,7 +2,7 @@
 
 Runtime model access is a separate prerequisite. No synthetic execution progress.
 """
-import asyncio, json, re, uuid
+import asyncio, hashlib, json, re, time, uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
 from ..models import User, Workspace, WorkspaceSession, ExecutionEvent
-from ..services import workspaces, opencode, policy
+from ..services import workspaces, opencode, policy, session_lifecycle
 from .dependencies import require_user, require_workspace_entitlement
 
 router=APIRouter(prefix="/api/sessions",tags=["agent"],dependencies=[Depends(require_workspace_entitlement)])
@@ -40,6 +40,7 @@ def normalize_states(parts):
     return states
 
 class MessageRequest(BaseModel):
+    request_id: uuid.UUID
     text: str=Field(min_length=1,max_length=20000)
     provider_id: str=Field(min_length=1,max_length=120,pattern=r"^[A-Za-z0-9_.-]+$")
     model_id: str=Field(min_length=1,max_length=200)
@@ -51,15 +52,31 @@ class Approval(BaseModel):
 def context(db,user,session_id):
     session=workspaces.owned(db,WorkspaceSession,session_id,user.id)
     workspace=workspaces.owned(db,Workspace,session.workspace_id,user.id)
+    session_lifecycle.require_visible(db,session)
     return session,workspace
+
+@router.get("")
+def client_sessions(include_archived: bool=False,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    # Client history must not start every workspace runtime just to list rows.
+    rows=list(db.scalars(select(WorkspaceSession).join(Workspace,Workspace.id==WorkspaceSession.workspace_id).where(
+        WorkspaceSession.user_id==user.id,Workspace.user_id==user.id).order_by(WorkspaceSession.created_at.desc())))
+    values=session_lifecycle.states(db,rows)
+    return [session_lifecycle.payload(row,values[row.id]) for row in rows
+            if values[row.id]!="deleted" and (include_archived or values[row.id]!="archived")]
 
 def event(db,session_id,kind,data=None):
     db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
     db.commit()
 
-def finish_execution(db,session_id,kind,states=(),data=None):
+def finish_execution(db,session_id,kind,states=(),data=None,request_id=None):
     # Abort and the background HTTP response can finish concurrently. Evaluate
     # cancellation in the database, not on a previously loaded ORM snapshot.
+    current=db.scalar(select(WorkspaceSession).where(WorkspaceSession.id==session_id).with_for_update().execution_options(populate_existing=True))
+    if current is None:
+        db.rollback(); return
+    latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=="submission").order_by(ExecutionEvent.id.desc()).limit(1))
+    if request_id is not None and (not latest or json.loads(latest.data)["request_id"]!=str(request_id)):
+        db.rollback(); return
     changed=db.execute(update(WorkspaceSession).where(
         WorkspaceSession.id==session_id,WorkspaceSession.status!='cancelled'
     ).values(status=kind).execution_options(synchronize_session=False)).rowcount
@@ -69,38 +86,50 @@ def finish_execution(db,session_id,kind,states=(),data=None):
         db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
     db.commit()
 
-async def execute(session_id,service,runtime_id,data):
+async def execute(session_id,service,runtime_id,data,message_id):
     try:
         with SessionLocal() as db:
             session=db.get(WorkspaceSession,session_id)
-            if session and session.status!="cancelled": event(db,session.id,"analyzing")
-        payload={"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
+            workspace=db.get(Workspace,session.workspace_id)
+            session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+            latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=="submission").order_by(ExecutionEvent.id.desc()).limit(1))
+            if session.status not in session_lifecycle.BUSY or not latest or json.loads(latest.data)["request_id"]!=str(data.request_id):
+                return
+            db.add(ExecutionEvent(session_id=session_id,kind="dispatch",data=json.dumps({"request_id":str(data.request_id),"message_id":message_id})))
+            event(db,session.id,"analyzing")
+        payload={"messageID":message_id,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
         if data.agent_id: payload["agent"]=data.agent_id
         response=await asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),payload,600)
         info=response.get("info",{}) if isinstance(response,dict) else {}
         failure=info.get("role")!="assistant" or bool(info.get("error")) or not info.get("time",{}).get("completed")
         with SessionLocal() as db:
             if failure:
-                error=info.get("error") if isinstance(info.get("error"),dict) else {}
-                error_name=str(error.get("name") or "")
-                error_data=error.get("data") if isinstance(error.get("data"),dict) else {}
-                error_msg=str(error_data.get("message") or error.get("message") or "")
-                detail=(": "+error_name+(" - "+error_msg if error_msg else "")).strip(" :") if (error_name or error_msg) else ""
-                finish_execution(db,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'+detail[:400]})
+                # Provider error bodies can contain arbitrary credentials. Keep
+                # execution feedback useful without relaying those bodies.
+                finish_execution(db,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'},request_id=data.request_id)
             else:
-                finish_execution(db,session_id,'completed',normalize_states(response.get('parts',[])))
+                finish_execution(db,session_id,'completed',normalize_states(response.get('parts',[])),request_id=data.request_id)
     except Exception:
         with SessionLocal() as db:
-            finish_execution(db,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'})
+            finish_execution(db,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'},request_id=data.request_id)
     finally:
-        tasks.pop(str(session_id),None)
+        if tasks.get(str(session_id)) is asyncio.current_task(): tasks.pop(str(session_id),None)
 
 @router.post("/{session_id}/messages",status_code=202)
 async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
+    fingerprint=hashlib.sha256(json.dumps(data.model_dump(mode="json",exclude={"request_id"}),sort_keys=True).encode()).hexdigest()
+    session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    saved=session_lifecycle.receipt(db,session_id,data.request_id)
+    if saved:
+        db.rollback()
+        if saved["fingerprint"]!=fingerprint: raise HTTPException(409,"Submission ID belongs to a different message")
+        return {**saved["receipt"],"replayed":True}
+    if session_lifecycle.state(db,session)!="active": raise HTTPException(409,"Open this session before sending")
+    session_lifecycle.require_slot(db,workspace,session.id)
     from ..services import workspaces as manager
     manager.require_quota_headroom(workspace)
-    if str(session_id) in tasks or session.status in {"submitted","waiting_approval"}:
+    if session.status in {"submitted","waiting_approval"}:
         raise HTTPException(409,"Session already has an active or interrupted request; stop or review it first")
     # One mutating agent at a time per workspace to protect shared files.
     busy=db.scalar(select(WorkspaceSession).where(WorkspaceSession.workspace_id==workspace.id,WorkspaceSession.status.in_(["submitted","waiting_approval"])))
@@ -110,42 +139,56 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         raise HTTPException(403,"Provider is disabled by platform policy")
     if not policy.model_allowed(policy_row,data.model_id):
         raise HTTPException(403,"Model is disabled by platform policy")
-    service=await asyncio.to_thread(opencode.for_workspace,workspace)
-    # Self-heal orphaned runtime sessions (for example after a runtime restart):
-    # when the stored runtime session no longer exists, create a fresh one for the same files.
+    receipt={"status":"submitted","session_id":str(session.id),"request_id":str(data.request_id)}
+    message_id=session_lifecycle.new_message_id()
+    session.status="submitted"
+    db.add(ExecutionEvent(session_id=session.id,kind="submission",data=json.dumps({"request_id":str(data.request_id),"fingerprint":fingerprint,"message_id":message_id,"receipt":receipt})))
+    event(db,session.id,"submitted",{"request_id":str(data.request_id)})
+    # Admission is durable BEFORE asynchronous runtime/provider preflight. A
+    # concurrent/replayed POST never creates a second task or OpenCode message.
     try:
+        service=await asyncio.to_thread(opencode.for_workspace,workspace)
+        # Never replace conversation history silently after a probe failure.
         probe=await asyncio.to_thread(service.request,"GET",service.session_path(session.opencode_session_id))
-    except HTTPException:
-        probe=None
-    if not isinstance(probe,dict) or probe.get("id")!=session.opencode_session_id:
-        new_runtime_id=await asyncio.to_thread(service.create_session,session.title)
-        session.opencode_session_id=new_runtime_id; db.commit()
-    if data.agent_id:
-        from .workspaces import agent_choices
-        agents=await asyncio.to_thread(agent_choices,service)
-        if data.agent_id not in {a["id"] for a in agents}: raise HTTPException(422,"Agent is unavailable")
-    provider_data=await asyncio.to_thread(service.request,"GET","/provider")
-    if data.provider_id not in provider_data.get("connected",[]):
-        raise HTTPException(503,"Provider authentication is not configured in this workspace runtime")
-    provider=next((p for p in provider_data.get("all",[]) if p["id"]==data.provider_id),{})
-    if data.model_id not in provider.get("models",{}): raise HTTPException(422,"Model is unavailable")
-    # Refresh session-level rules too: legacy session overrides and later admin
-    # policy changes must not broaden the runtime's current tool restrictions.
-    await asyncio.to_thread(service.apply_session_policy,session.opencode_session_id,
-                            policy.session_permissions(policy_row))
-    session.status="submitted"; event(db,session.id,"submitted")
-    tasks[str(session_id)]=asyncio.create_task(execute(session.id,service,session.opencode_session_id,data))
-    return {"status":"submitted","session_id":str(session.id)}
+        if not isinstance(probe,dict) or probe.get("id")!=session.opencode_session_id:
+            raise HTTPException(409,"OpenCode conversation is unavailable; close this session and start a new one")
+        if data.agent_id:
+            from .workspaces import agent_choices
+            agents=await asyncio.to_thread(agent_choices,service)
+            if data.agent_id not in {a["id"] for a in agents}: raise HTTPException(422,"Agent is unavailable")
+        provider_data=await asyncio.to_thread(service.request,"GET","/provider")
+        if data.provider_id not in provider_data.get("connected",[]):
+            raise HTTPException(503,"Provider authentication is not configured in this workspace runtime")
+        provider=next((p for p in provider_data.get("all",[]) if p["id"]==data.provider_id),{})
+        if data.model_id not in provider.get("models",{}): raise HTTPException(422,"Model is unavailable")
+        # Legacy session rules must not broaden current admin tool restrictions.
+        await asyncio.to_thread(service.apply_session_policy,session.opencode_session_id,
+                                policy.session_permissions(policy_row))
+    except Exception:
+        db.rollback(); finish_execution(db,session_id,"failed",data={"reason":"Runtime preflight failed; no new message was dispatched"},request_id=data.request_id)
+        raise
+    tasks[str(session_id)]=asyncio.create_task(execute(session.id,service,session.opencode_session_id,data,message_id))
+    return receipt
+
+@router.get("/{session_id}/submissions/{request_id}")
+def submission_receipt(session_id: uuid.UUID,request_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,_=context(db,user,session_id)
+    saved=session_lifecycle.receipt(db,session_id,request_id)
+    if not saved: raise HTTPException(404,"Submission has not been confirmed")
+    return {**saved["receipt"],"status":session.status,"message_id":saved["message_id"]}
 
 @router.get("/{session_id}/messages")
 def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
     service=opencode.for_workspace(workspace)
     result=service.request("GET",service.session_path(session.opencode_session_id,"/message"))
-    output=[]
+    output=[]; hidden=session_lifecycle.hidden_messages(db,session.id); seen=set()
     for item in result:
         text="\n".join(p.get("text","") for p in item.get("parts",[]) if p.get("type")=="text")[:50000]
-        output.append({"role":item.get("info",{}).get("role"),"text":_sanitize(text,workspace)})
+        info=item.get("info",{}); identifier=info.get("id")
+        if identifier in hidden or (identifier and identifier in seen): continue
+        seen.add(identifier)
+        output.append({"id":identifier,"role":info.get("role"),"text":_sanitize(text,workspace)})
     return output
 
 @router.get("/{session_id}/diff")
@@ -162,11 +205,92 @@ def session_diff(session_id: uuid.UUID,user: User=Depends(require_user),db: Sess
 @router.post("/{session_id}/stop")
 def stop(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    service=opencode.for_workspace(workspace,start=False)
-    if service.request("POST",service.session_path(session.opencode_session_id,"/abort")) is not True:
-        raise HTTPException(502,"Runtime did not confirm cancellation")
-    session.status="cancelled"; event(db,session.id,"cancelled")
-    return {"status":"cancelled"}
+    session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    cancel(db,session,workspace)
+    db.commit()
+    return {"status":session.status}
+
+def cancel(db,session,workspace):
+    if session.status not in session_lifecycle.BUSY: return
+    saved=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session.id,ExecutionEvent.kind=="submission").order_by(ExecutionEvent.id.desc()).limit(1))
+    dispatch=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session.id,ExecutionEvent.kind=="dispatch").order_by(ExecutionEvent.id.desc()).limit(1))
+    # A stop during preflight prevents dispatch altogether. Once dispatch begins,
+    # wait for its specific user message before aborting: abort-before-POST must
+    # never leave a supposedly closed session executing in the background.
+    dispatched=not saved or (dispatch and json.loads(dispatch.data)["request_id"]==json.loads(saved.data)["request_id"])
+    if dispatched:
+        service=opencode.for_workspace(workspace,start=False)
+        if saved:
+            deadline=time.monotonic()+5
+            target=json.loads(saved.data)["message_id"]
+            while True:
+                rows=service.request("GET",service.session_path(session.opencode_session_id,"/message"),timeout=2)
+                db.refresh(session)
+                if session.status not in session_lifecycle.BUSY: return
+                if any(row.get("info",{}).get("id")==target for row in rows): break
+                if time.monotonic()>=deadline: raise HTTPException(409,"OpenCode is still accepting this request; retry Stop before closing")
+                time.sleep(.05)
+        if service.request("POST",service.session_path(session.opencode_session_id,"/abort")) is not True:
+            raise HTTPException(502,"Runtime did not confirm cancellation")
+    session.status="cancelled"
+    db.add(ExecutionEvent(session_id=session.id,kind="cancelled",data="{}"))
+
+@router.post("/{session_id}/open")
+def open_session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    if session_lifecycle.state(db,session)=="archived": raise HTTPException(409,"Restore this session before opening it")
+    session_lifecycle.require_slot(db,workspace,session.id)
+    if session_lifecycle.state(db,session)!="active": session_lifecycle.set_state(db,session,"active")
+    db.commit()
+    return session_lifecycle.payload(session,"active")
+
+@router.post("/{session_id}/close")
+def close_session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    if session_lifecycle.state(db,session)=="archived": raise HTTPException(409,"Session is archived")
+    cancel(db,session,workspace)
+    session_lifecycle.set_state(db,session,"closed"); db.commit()
+    return session_lifecycle.payload(session,"closed")
+
+@router.post("/{session_id}/archive")
+def archive_session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    if session_lifecycle.state(db,session)=="active" or session.status in session_lifecycle.BUSY:
+        raise HTTPException(409,"Stop and close this session before archiving")
+    session_lifecycle.set_state(db,session,"archived"); db.commit()
+    return session_lifecycle.payload(session,"archived")
+
+@router.post("/{session_id}/restore")
+def restore_session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    if session_lifecycle.state(db,session)!="archived": raise HTTPException(409,"Session is not archived")
+    session_lifecycle.set_state(db,session,"closed"); db.commit()
+    return session_lifecycle.payload(session,"closed")
+
+@router.delete("/{session_id}",status_code=204)
+def delete_session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    if session_lifecycle.state(db,session)=="active" or session.status in session_lifecycle.BUSY:
+        raise HTTPException(409,"Stop and close this session before deleting it from client history")
+    session_lifecycle.set_state(db,session,"deleted"); db.commit()
+
+@router.delete("/{session_id}/messages/{message_id}",status_code=204)
+def hide_message(session_id: uuid.UUID,message_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    if session.status in session_lifecycle.BUSY: raise HTTPException(409,"Stop the running request before hiding messages")
+    if not re.fullmatch(r"msg_[A-Za-z0-9_-]{1,120}",message_id): raise HTTPException(422,"Invalid message ID")
+    service=opencode.for_workspace(workspace)
+    rows=service.request("GET",service.session_path(session.opencode_session_id,"/message"))
+    if not any(row.get("info",{}).get("id")==message_id for row in rows): raise HTTPException(404,"Message not found in this session")
+    if message_id not in session_lifecycle.hidden_messages(db,session.id):
+        db.add(ExecutionEvent(session_id=session.id,kind="client_message_hidden",data=json.dumps({"message_id":message_id})))
+    db.commit()
 
 @router.get("/{session_id}/permissions")
 def permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -182,7 +306,10 @@ def permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Sessi
         details=[p.replace(str(workspaces.root_for(workspace)),"[workspace]") for p in patterns] if reviewable else []
         owned.append({"id":pending["id"],"permission":pending.get("permission"),"patterns":details,"reviewable":reviewable})
     if owned and session.status=="submitted":
-        session.status="waiting_approval"; event(db,session.id,"waiting_approval")
+        changed=db.execute(update(WorkspaceSession).where(WorkspaceSession.id==session.id,
+            WorkspaceSession.status=="submitted").values(status="waiting_approval").execution_options(synchronize_session=False)).rowcount
+        if changed: event(db,session.id,"waiting_approval")
+        else: db.rollback()
     return owned
 
 @router.post("/{session_id}/permissions/{permission_id}")
@@ -200,7 +327,9 @@ def approve(session_id: uuid.UUID,permission_id: str,data: Approval,user: User=D
     from urllib.parse import quote
     result=opencode.for_workspace(workspace).request("POST","/permission/"+quote(permission_id,safe="")+"/reply",{"reply":data.reply})
     if result is not True: raise HTTPException(502,"Runtime did not confirm the decision")
-    session.status="submitted"; event(db,session.id,"approval_decision",{"reply":data.reply})
+    db.execute(update(WorkspaceSession).where(WorkspaceSession.id==session.id,
+        WorkspaceSession.status=="waiting_approval").values(status="submitted").execution_options(synchronize_session=False))
+    event(db,session.id,"approval_decision",{"reply":data.reply})
     return {"accepted":True}
 
 @router.get("/{session_id}/events")

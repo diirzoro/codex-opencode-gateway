@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy import select
 from ..models import WorkspaceSession
-from . import policy, providers
+from . import policy, providers, session_lifecycle
 
 
 def policy_revision(row):
@@ -15,13 +15,13 @@ def policy_revision(row):
 
 def sync_sessions(db, workspace, live):
     """Gateway stores ownership/execution mappings; titles/existence come from OpenCode."""
+    session_lifecycle.lock_workspace(db, workspace)
     rows = list(db.scalars(select(WorkspaceSession).where(
         WorkspaceSession.workspace_id == workspace.id, WorkspaceSession.user_id == workspace.user_id)))
     by_runtime = {row.opencode_session_id: row for row in rows}
-    result = []
     for entry in live:
         identifier = entry.get("id", "")
-        if not identifier.startswith("ses") or entry.get("parentID") or entry.get("time", {}).get("archived"):
+        if not identifier.startswith("ses") or entry.get("parentID"):
             continue
         row = by_runtime.get(identifier)
         if row is None:
@@ -30,11 +30,14 @@ def sync_sessions(db, workspace, live):
             milliseconds = entry.get("time", {}).get("created")
             if milliseconds is not None:
                 row.created_at = datetime.fromtimestamp(milliseconds / 1000, timezone.utc)
-            db.add(row)
+            db.add(row); rows.append(row); by_runtime[identifier] = row
+            if entry.get("time", {}).get("archived"):
+                session_lifecycle.set_state(db, row, "archived")
         row.title = entry.get("title", row.title)[:120]
-        result.append({**providers.public_metadata(entry), "id": str(row.id), "runtime_id": identifier,
-                       "workspace_id": str(workspace.id), "title": row.title, "status": row.status,
-                       "created_at": row.created_at})
+    db.flush()
+    values = session_lifecycle.states(db, rows)
+    result = [{**session_lifecycle.payload(row, values[row.id]), "runtime_id": row.opencode_session_id}
+              for row in rows if values[row.id] != "deleted"]
     db.commit()
     return result
 
