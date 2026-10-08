@@ -51,7 +51,11 @@
     if(status.connected)github.append(btn('settingsDisconnectGithub','Disconnect','إلغاء الربط',async()=>{await api('/api/github/disconnect',{method:'POST'});await loadConnections();}));
     github.append(text('p','Repository permissions and installation access are managed in GitHub authorization. Choose your working repository beside the prompt.','تُدار صلاحيات المستودعات والتثبيت عبر تفويض GitHub. اختر مستودع العمل بجوار محرر الطلب.'));
     const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Selected workspace runtime','وقت تشغيل مساحة العمل المختارة'));
-    if(activeWorkspace){const state=await window.workspaceRuntime.load(activeWorkspace.id);runtime.append(textElement('p',state.version+' · '+state.status));}
+    if(activeWorkspace){
+      const workspaceId=activeWorkspace.id,state=await window.workspaceRuntime.load(workspaceId);
+      if(activeWorkspace?.id!==workspaceId)return;
+      runtime.append(textElement('p',state.version+' · '+state.status));
+    }
     else runtime.append(text('p','Select a workspace to inspect its runtime.','اختر مساحة عمل لفحص وقت تشغيلها.'));
 
   }
@@ -72,7 +76,7 @@
   async function loadStorage(){if(!activeWorkspace){storageChip.textContent='';return;}try{const s=await api('/api/workspaces/'+activeWorkspace.id+'/storage');storageChip.textContent=tr('Storage: ','التخزين: ')+s.used_mb+' / '+s.limit_mb+' MB · '+tr('remaining','المتبقي')+' '+(s.remaining_bytes/1048576).toFixed(1)+' MB';}catch(error){storageChip.textContent='';}}
   setInterval(()=>{if(activeWorkspace&&q('workspacePage').classList.contains('active'))loadStorage().catch(()=>{});},15000);
   const controls=q('promptForm').lastElementChild;controls.classList.add('composer-controls');
-  const agent=document.createElement('select');agent.id='agentSelect';agent.hidden=true;agent.setAttribute('aria-label','Agent');agent.title=tr('Agent','الوكيل');controls.insertBefore(agent,q('providerSelect'));
+  const agent=q('agentSelect');agent.title=tr('Agent','الوكيل');controls.insertBefore(agent,q('providerSelect'));
   const newTask=textElement('button','','icon-btn');newTask.id='composerNewTask';newTask.type='button';newTask.title=tr('New task','مهمة جديدة');newTask.setAttribute('aria-label',tr('New task','مهمة جديدة'));newTask.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>';newTask.onclick=async()=>{if(!activeWorkspace){toast(tr('Open a workspace first.','افتح مساحة عمل أولاً.'));return;}try{await createSession();toast(tr('New task started in this workspace.','بدأت مهمة جديدة في مساحة العمل.'));}catch(error){toast(error.message)}};
   q('providerSelect').setAttribute('aria-label','Provider');q('modelSelect').setAttribute('aria-label','Model');
   const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Attach a file to this workspace','أرفق ملفًا في مساحة العمل');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);controls.insertBefore(newTask,agent);
@@ -193,6 +197,11 @@
     if(!rows)return;const list=q('sessionList');list.replaceChildren();
     for(const row of rows){const button=textElement('button',row.title,'session');button.onclick=()=>selectSession(row);list.append(button);}
   }
+  refreshSessions=async function(){
+    if(!activeWorkspace)return;
+    const workspaceId=activeWorkspace.id,rows=await api('/api/workspaces/'+workspaceId+'/sessions');
+    if(activeWorkspace?.id===workspaceId)renderRuntimeSessions(rows);
+  };
   async function refreshChoices(preferredProvider='',force=false){
     if(!activeWorkspace||admin())return;
     if(!workAccess){agent.disabled=q('providerSelect').disabled=q('modelSelect').disabled=true;updateSend();return;}
@@ -210,14 +219,14 @@
       if(preferredProvider)chosenProvider=preferredProvider;
       if(!chosenProvider){const configured=snapshot.config?.model;const configuredProvider=providers.find(p=>typeof configured==='string'&&configured.startsWith(p.id+'/'));const connected=providers.filter(p=>p.connected&&p.allowed!==false);chosenProvider=configuredProvider?.id||(connected.length===1?connected[0].id:'');if(configuredProvider)chosenModel=configured.slice(configuredProvider.id.length+1);}
       if(providers.some(p=>p.id===chosenProvider))q('providerSelect').value=chosenProvider;
-      agent.replaceChildren(new Option(tr('Default','الافتراضي')+(snapshot.default_agent?' · '+snapshot.default_agent:''),''));
+      agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode')+(snapshot.default_agent?' · '+snapshot.default_agent:''),''));
       for(const a of agents){const option=new Option(a.name+(a.mode==='subagent'?tr(' · Subagent',' · وكيل فرعي'):''),a.name);option.disabled=Boolean(a.hidden)||!['primary','all'].includes(a.mode);agent.add(option);}
       agent.hidden=false;agent.disabled=snapshot.agents===null;
       agent.value=agents.some(a=>a.name===chosenAgent&&!a.hidden&&['primary','all'].includes(a.mode))?chosenAgent:'';
       chosenAgent=agent.value;
       q('providerSelect').onchange=()=>{chosenProvider=q('providerSelect').value;chosenModel='';models();};
       agent.onchange=()=>{chosenAgent=agent.value;updateSend();};q('modelSelect').onchange=()=>{chosenModel=q('modelSelect').value;updateSend();};
-      models();renderRuntimeSessions(snapshot.sessions);
+      models();
       q('runtimeStatus').textContent='OpenCode '+snapshot.version+' · '+snapshot.status;
       for(const [name,error] of Object.entries(snapshot.errors||{}))toast(name+': '+error.detail);
       performance.measure('OpenCode first visible providers '+workspaceId,{start:started,end:performance.now()});
@@ -233,19 +242,21 @@
     chosenModel=q('modelSelect').value;updateSend();
   }
   window.refreshWorkspaceChoices=async(preferredProvider='',force=true)=>{if(activeWorkspace&&force)window.workspaceRuntime.invalidate(activeWorkspace.id);return refreshChoices(preferredProvider,force);};
-  openWorkspace=async function(project,workspace){
+  openWorkspace=async function(project,workspace,{navigate=true}={}){
     if(admin()){await page('adminPage');return;}
     stopEvents();activeProject=project;activeWorkspace=workspace;activeSession=null;try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
     chosenAgent=chosenProvider=chosenModel='';runtimeReady=false;events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
-    renderWorkspaceEmpty();q('promptInput').value=pendingIdea;pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('Default','الافتراضي'),''));updateSend();
+    renderWorkspaceEmpty();q('promptInput').value=pendingIdea;pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode'),''));updateSend();
+    if(!navigate)return;
     await page('workspacePage');
     loadStorage().catch(()=>{});
     loadFiles().catch(()=>{});
+    refreshSessions().catch(error=>toast(error.message));
     Promise.all([refreshGit(),api('/api/github/status').then(state=>{if(activeWorkspace?.id!==workspace.id)return;gitState.textContent=state.connected?'GitHub · '+(state.account_login||tr('Connected','متصل')):tr('GitHub · Not connected','GitHub · غير متصل');})]).catch(error=>toast(error.message));
   };
   const originalSession=selectSession;selectSession=async function(session){if(!workAccess){toast(tr('Subscribe to resume this conversation.','اشترك لاستئناف هذه المحادثة.'));return;}await originalSession(session);updateSend();if(panelMode==='changes'&&!shell.classList.contains('sessions-collapsed'))loadChanges();loadApprovals().catch(()=>{});};
-  async function createSession(){if(!activeWorkspace)return;await refreshEntitlement();if(!workAccess)return;const b=newSessionButton;b.disabled=true;try{const row=await api('/api/workspaces/'+activeWorkspace.id+'/sessions',{method:'POST',body:JSON.stringify({title:tr('New session','جلسة جديدة')})});window.workspaceRuntime.invalidate(activeWorkspace.id);await refreshChoices('',true);sessionsSection.open=true;await selectSession(row);}catch(error){toast(error.message);q('runtimeStatus').textContent=tr('OpenCode unavailable','OpenCode غير متاح');}finally{b.disabled=!workAccess;}}
+  async function createSession(){if(!activeWorkspace)return;await refreshEntitlement();if(!workAccess)return;const b=newSessionButton;b.disabled=true;try{const row=await api('/api/workspaces/'+activeWorkspace.id+'/sessions',{method:'POST',body:JSON.stringify({title:tr('New session','جلسة جديدة')})});await refreshSessions();sessionsSection.open=true;await selectSession(row);}catch(error){toast(error.message);q('runtimeStatus').textContent=tr('OpenCode unavailable','OpenCode غير متاح');}finally{b.disabled=!workAccess;}}
   newSessionButton.onclick=createSession;
   q('promptForm').onsubmit=async event=>{event.preventDefault();await refreshEntitlement();if(!workAccess)return;const prompt=q('promptInput').value.trim();if(!prompt)return;if(!activeSession){await createSession();}if(!activeSession){toast(tr('Could not start an OpenCode session. Check the workspace runtime.','\u062a\u0639\u0630\u0631 \u0628\u062f\u0621 \u062c\u0644\u0633\u0629 OpenCode. \u062a\u062d\u0642\u0642 \u0645\u0646 \u062a\u0634\u063a\u064a\u0644 \u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644.'));return;}if(!q('providerSelect').value||!q('modelSelect').value){toast(tr('Connect a provider and select a model before sending.','\u0627\u0631\u0628\u0637 \u0645\u0632\u0648\u062f\u064b\u0627 \u0648\u0627\u062e\u062a\u0631 \u0646\u0645\u0648\u0630\u062c\u064b\u0627 \u0642\u0628\u0644 \u0627\u0644\u0625\u0631\u0633\u0627\u0644.'));updateSend();return;}q('sendMessage').disabled=true;try{await api('/api/sessions/'+activeSession.id+'/messages',{method:'POST',body:JSON.stringify({text:prompt,provider_id:q('providerSelect').value,model_id:q('modelSelect').value,...(agent.value?{agent_id:agent.value}:{})})});q('promptInput').value='';q('stopAgent').disabled=false;}catch(error){toast(error.message);updateSend();}};
   q('promptInput').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();q('promptForm').requestSubmit();}});

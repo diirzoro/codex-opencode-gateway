@@ -40,21 +40,25 @@ def public_snapshot(service, workspace, db):
     catalog = None
     if live["provider_data"] is not None:
         catalog = providers.catalog(live["provider_data"], live["auth_methods"] or {}, policy_row)
-    identity = providers.public_metadata(live["identity"])
-    tools = live["tools"]
-    _, _, allowed_tools = policy.provider_sets(policy_row)
     return {"status": "partial" if live["errors"] else "ready", "workspace_id": str(workspace.id),
             "generation": live["generation"], "health": live["health"], "version": live["health"]["version"],
             "providers": catalog, "connected": (live["provider_data"] or {}).get("connected") if live["provider_data"] is not None else None,
             "auth_methods": live["auth_methods"], "models": {p["id"]: [model["id"] for model in p["models"]] for p in catalog} if catalog is not None else None,
             "agents": providers.public_metadata(live["agents"]), "default_agent": live["default_agent"],
+            "default_agent_resolution": "configured" if live["default_agent"] else "runtime",
             "config": providers.public_metadata(live["config"]),
-            "permissions": providers.public_metadata(live["permissions"]), "tools": tools,
-            "tool_policy": {tool: not allowed_tools or tool in allowed_tools for tool in (tools or [])},
-            "sessions": sync_sessions(db, workspace, live["sessions"]) if live["sessions"] is not None else None,
-            "identity": {"workspace_id": str(workspace.id), "runtime": identity, "project": providers.public_metadata(live["project"])},
-            "vcs": providers.public_metadata(live["vcs"]), "mcp": providers.public_metadata(live["mcp"]),
-            "lsp": providers.public_metadata(live["lsp"]), "formatters": providers.public_metadata(live["formatters"]),
-            "session_status": live["session_status"], "questions": providers.public_metadata(live["questions"]),
             "errors": live["errors"], "diagnostics": {**live["diagnostics"],
                 "gateway_bootstrap_ms": round((time.monotonic() - started) * 1000, 2)}}
+
+
+def public_capabilities(service, workspace, db):
+    live = service.capabilities()
+    _, _, allowed_tools = policy.provider_sets(policy.load(db))
+    result = {name: providers.public_metadata(live[name]) for name in live if name not in {"diagnostics", "generation", "identity", "project"}}
+    result.update(workspace_id=str(workspace.id), generation=live["generation"],
+                  status="partial" if live["errors"] else "ready",
+                  identity={"workspace_id": str(workspace.id), "runtime": providers.public_metadata(live["identity"]),
+                            "project": providers.public_metadata(live["project"])},
+                  tool_policy={tool: not allowed_tools or tool in allowed_tools for tool in (live["tools"] or [])},
+                  diagnostics=live["diagnostics"])
+    return result
