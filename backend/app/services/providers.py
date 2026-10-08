@@ -3,6 +3,13 @@ import json
 from urllib.parse import quote
 from fastapi import HTTPException
 
+# Presentation priorities only. IDs, names, models and auth come from OpenCode.
+POPULAR_PROVIDER_IDS = (
+    "opencode", "openai", "anthropic", "google", "deepseek", "openrouter", "groq", "mistral",
+    "xai", "cerebras", "togetherai", "fireworks-ai", "deepinfra", "cohere", "perplexity",
+    "azure", "amazon-bedrock", "nvidia", "huggingface", "siliconflow",
+)
+
 
 def public_metadata(value):
     """Keep capabilities while excluding credentials and private runtime paths."""
@@ -44,18 +51,50 @@ def discover(service, policy=None):
     return catalog(service.request("GET", "/provider"), service.request("GET", "/provider/auth"), policy)
 
 
-def catalog_index(data, policy=None):
-    """Initial browser discovery needs provider state, not every model schema."""
-    from .policy import provider_allowed
+def _catalog_entries(data):
     if not isinstance(data, dict) or not isinstance(data.get("all"), list):
         raise HTTPException(502, "OpenCode returned an invalid provider catalog")
+    return data["all"]
+
+
+def provider_index(entry, data, policy=None):
+    from .policy import provider_allowed
+    return {"id": entry["id"], "name": entry.get("name") or entry["id"],
+            "connected": entry["id"] in data.get("connected", []),
+            "allowed": policy is None or provider_allowed(policy, entry["id"]),
+            "model_count": len(entry.get("models", {})),
+            "default_model": data.get("default", {}).get(entry["id"])}
+
+
+def resolve_provider(data, name):
+    entries = _catalog_entries(data)
+    wanted = name.strip().casefold()
+    exact = next((entry for entry in entries if entry["id"].casefold() == wanted), None)
+    if exact is not None:
+        return exact
+    matches = [entry for entry in entries if (entry.get("name") or "").casefold() == wanted]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        raise HTTPException(422, "Multiple providers use this name; enter the OpenCode provider ID")
+    raise HTTPException(404, "This provider is not supported by the installed OpenCode runtime.")
+
+
+def catalog_index(data, policy=None):
+    """Initial browser discovery needs provider state, not every model schema."""
+    entries = _catalog_entries(data)
     connected = set(data.get("connected", []))
-    return [{"id": entry["id"], "name": entry.get("name") or entry["id"],
-             "connected": entry["id"] in connected,
-             "allowed": policy is None or provider_allowed(policy, entry["id"]),
-             "model_count": len(entry.get("models", {})),
-             "default_model": data.get("default", {}).get(entry["id"])}
-            for entry in data["all"]]
+    return [provider_index(entry, data, policy) for entry in entries
+            if entry["id"] in POPULAR_PROVIDER_IDS or entry["id"] in connected]
+
+
+def search_index(data, query, policy=None):
+    wanted = query.strip().casefold()
+    matches = [entry for entry in _catalog_entries(data)
+               if wanted in entry["id"].casefold() or wanted in (entry.get("name") or "").casefold()]
+    matches.sort(key=lambda entry: (entry["id"].casefold() != wanted and (entry.get("name") or "").casefold() != wanted,
+                                    entry.get("name") or entry["id"]))
+    return [provider_index(entry, data, policy) for entry in matches[:20]]
 
 
 def model_details(data, provider_id, policy=None):

@@ -226,6 +226,13 @@
   q('commitButton').onclick=async()=>{if(!activeWorkspace)return;const message=await window.requestInput(tr('Commit message','رسالة الالتزام'));if(!message?.trim())return;try{await api('/api/workspaces/'+activeWorkspace.id+'/git/commit',{method:'POST',body:JSON.stringify({message:message.trim()})});await loadChanges();}catch(error){toast(error.message);}};
   let providers=[],chosenAgent='',chosenProvider='',chosenModel='',discovery=0,modelRequest=0,runtimeReady=false,agentsReady=false,modelsReady=false;
   const retryModels=btn('retryWorkspaceModels','Retry models','أعد تحميل النماذج',()=>models());retryModels.hidden=true;controls.append(retryModels);
+  window.addEventListener('workspace-provider-disconnected',event=>{
+    if(activeWorkspace?.id!==event.detail.workspaceId)return;
+    const id=event.detail.providerId;providers=providers.filter(p=>p.id!==id);runtimeReady=false;
+    for(const option of [...q('providerSelect').options])if(option.value===id)option.remove();
+    if(chosenProvider===id){chosenProvider=chosenModel='';modelRequest++;modelsReady=false;retryModels.hidden=true;q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));}
+    updateSend();
+  });
   updateSend=function(){
     const selected=providers.find(p=>p.id===q('providerSelect').value);
     agent.disabled=!workAccess||!agentsReady;

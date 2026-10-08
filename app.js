@@ -23,8 +23,11 @@ if(new URLSearchParams(location.hash.slice(1)).has('reset-password')){
 }
 const protectedPages=new Set(['clientPage','accountPage','onboarding','workspacePage','billingPage','adminPage']);
 function invalidateProviderMutation(path,method='GET'){
- const mutation=path.match(/^\/api\/workspaces\/([^/]+)\/providers\/[^/?]+(?:\/(?:credentials|oauth\/callback))?(?:\?|$)/);
- if(mutation&&!['GET','HEAD'].includes(method.toUpperCase()))window.workspaceRuntime?.invalidate(decodeURIComponent(mutation[1]));
+ const mutation=path.match(/^\/api\/workspaces\/([^/]+)\/providers\/([^/?]+)(?:\/(?:credentials|oauth\/callback))?(?:\?|$)/);
+ if(mutation&&!['GET','HEAD'].includes(method.toUpperCase())){
+  const workspaceId=decodeURIComponent(mutation[1]);window.workspaceRuntime?.invalidate(workspaceId);
+  if(method.toUpperCase()==='DELETE')window.dispatchEvent(new CustomEvent('workspace-provider-disconnected',{detail:{workspaceId,providerId:decodeURIComponent(mutation[2])}}));
+ }
 }
 const api=async(path,options={})=>{
  const response=await fetch(path,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})}});

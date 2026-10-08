@@ -1,8 +1,8 @@
 /* User/workspace-scoped discovery. Cached UI may render while runtime state is verified. */
 (() => {
-  const states=new Map(),prefix='og-runtime-v3:',freshFor=60000;
-  // Older snapshots contained every model. Retire them on the first upgraded load.
-  try{for(let i=sessionStorage.length-1;i>=0;i--){const name=sessionStorage.key(i);if(name?.startsWith('og-runtime-v2:'))sessionStorage.removeItem(name);}}catch(error){}
+  const states=new Map(),prefix='og-runtime-v4:',freshFor=60000;
+  // Retire snapshots from before curated discovery, including old full-model data.
+  try{for(let i=sessionStorage.length-1;i>=0;i--){const name=sessionStorage.key(i);if(name?.startsWith('og-runtime-v2:')||name?.startsWith('og-runtime-v3:'))sessionStorage.removeItem(name);}}catch(error){}
   const user=()=>typeof currentUser==='undefined'?'':String(currentUser?.id||'');
   const key=id=>prefix+encodeURIComponent(user())+':'+encodeURIComponent(id);
   function stateFor(id){

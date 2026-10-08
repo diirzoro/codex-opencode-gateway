@@ -50,12 +50,31 @@ def public_snapshot(service, workspace, db):
             "generation": live["generation"], "revision": live["revision"], "policy_revision": policy_revision(policy_row),
             "health": live["health"], "version": live["health"]["version"],
             "providers": catalog, "connected": (live["provider_data"] or {}).get("connected") if live["provider_data"] is not None else None,
-            "auth_methods": live["auth_methods"],
+            "catalog_size": len((live["provider_data"] or {}).get("all", [])),
+            "auth_methods": ({p["id"]: live["auth_methods"].get(p["id"], []) for p in (catalog or [])}
+                             if live["auth_methods"] is not None else None),
             "agents": providers.public_metadata(live["agents"]), "default_agent": live["default_agent"],
             "default_agent_resolution": "configured" if live["default_agent"] else "runtime",
             "config": providers.public_metadata(live["config"]),
             "errors": live["errors"], "diagnostics": {**live["diagnostics"],
                 "gateway_bootstrap_ms": round((time.monotonic() - started) * 1000, 2)}}
+
+
+def public_provider_lookup(service, workspace, db, *, name=None, query=None):
+    live = service.snapshot()
+    if live["provider_data"] is None:
+        error = live["errors"]["provider_data"]
+        raise HTTPException(error["status"], error["detail"])
+    policy_row = policy.load(db)
+    if name is not None:
+        entry = providers.resolve_provider(live["provider_data"], name)
+        rows = [providers.provider_index(entry, live["provider_data"], policy_row)]
+    else:
+        rows = providers.search_index(live["provider_data"], query, policy_row)
+    return {"workspace_id": str(workspace.id), "generation": live["generation"], "revision": live["revision"],
+            "policy_revision": policy_revision(policy_row),
+            "providers": [{**row, "auth_methods": live["auth_methods"].get(row["id"], [])
+                           if live["auth_methods"] is not None else None} for row in rows]}
 
 
 def public_models(service, workspace, provider_id, db):
