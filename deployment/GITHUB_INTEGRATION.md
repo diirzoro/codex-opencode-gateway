@@ -45,3 +45,7 @@ After deployment and migration, sign into a Gateway customer account, choose **C
 This document does not configure GitHub on the VPS or certify the current server deployment. The present source contains connection, repository, branch, clone, commit and push paths, but user tokens expire and require reconnection. The Gateway's OpenCode workspace execution still requires the separate isolation gates in [OPENCODE_INTEGRATION.md](OPENCODE_INTEGRATION.md).
 
 Official GitHub guidance: [user authorization callback URL](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-user-authorization-callback-url), [OAuth during installation](https://docs.github.com/en/apps/maintaining-github-apps/modifying-a-github-app-registration), and [GitHub App best practices](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/best-practices-for-creating-a-github-app).
+
+## Sign-in identity versus repository authorization
+
+GitHub sign-in and GitHub repository authorization are separate security purposes. A verified GitHub sign-in identity may authenticate an account, but it does not by itself authorize repository access. Repository access continues to use the GitHub App installation/authorization flow and the existing repository permission checks. Archived accounts cannot use social sign-in to bypass the reactivation flow.

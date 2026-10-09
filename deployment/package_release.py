@@ -25,14 +25,17 @@ EXCLUDED_SUFFIXES = {
 }
 REQUIRED_RELEASE_FILES = {
     "README.md",
+    "PROJECT_MEMORY.md",
+    "PROJECT_ISSUES_AND_IMPROVEMENT_PLAN.md",
     "backend/app/services/opencode.py",
-    "backend/alembic/versions/0008_paypal_checkout.py",
+    "backend/alembic/versions/0012_advanced_trial.py",
+    "backend/alembic/versions/0013_login_identity.py",
     "deployment/opencode-gateway.service",
     "deployment/.env.production.example",
     "deployment/OPENCODE_INTEGRATION.md",
     "deployment/GITHUB_INTEGRATION.md",
+    "deployment/NETWORK_CONFIGURATION.md",
     "deployment/check_opencode_runtime.sh",
-    "docs/PRODUCT_BOUNDARIES.md",
 }
 
 

@@ -32,17 +32,18 @@ Keep the current stack unless evidence justifies a change. FastAPI/PostgreSQL/Op
 20. **The frontend has outgrown a small vanilla-SPA organization.** The issue is maintainability/loading architecture, not the chosen backend language.
 
 ## Status classification
-- Confirmed: 1-10, 12-20 from current repository inspection.
-- Needs targeted validation before change: 11 (HTML validator/browser DOM check) and any individual CSS/function override chosen for removal.
-- Issue 13 cleanup may be performed independently because the prototype is not runtime-loaded.
+- Confirmed/open: 1-10, 14-20 from current repository inspection.
+- Resolved in cleanup: 11 (stray auth form-closing tag removed), 12 (dead legacy asset/config routes removed), 13 (obsolete prototype directory removed).
+- Any further CSS/function removal still requires targeted validation before change.
 
 ## Improvement plan
 
 ### Performance 1 — Audit and safe cleanup
 - establish before/after measurements
-- remove verified dead reference files and stale copy
-- validate HTML
-- remove only proven-dead routes/styles/comments
+- verified dead reference/prototype files removed
+- initial malformed auth markup corrected
+- dead config/asset routes removed
+- continue removing only proven-dead styles/comments after validation
 - no API/connection/runtime behavior changes
 
 ### Performance 2 — Lazy loading / frontend splitting

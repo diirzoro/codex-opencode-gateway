@@ -1,6 +1,6 @@
-# Future manual deployment — NOT executed
+# Production deployment reference
 
-This guide prepares a source package only. Packaging is local and never contacts a server. Do not deploy or run the server commands below until the owner explicitly asks. The production example enables the existing per-workspace OpenCode process mode as requested, but that mode is not an OS/network sandbox and is not safe for public customer execution until production isolation is implemented and reviewed.
+This guide documents the current production update path. Packaging is local and never contacts a server. Host commands remain operator actions. Per-workspace OpenCode processes use loopback isolation, but this is not a hardware/OS/network sandbox; preserve the existing runtime and security boundaries during deployment.
 
 ## Build the manual-upload package
 
@@ -61,7 +61,7 @@ OpenCode startup time. No proxy settings or deployment automation are changed.
 
 ### Internal OpenCode configuration (2026-10-05)
 
-The operator reports that the existing `opencode-web.service` binds only `127.0.0.1:4096`, without the retired shared login. Keep that service and port private. Configure `OPENCODE_BASE_URL=http://127.0.0.1:4096` only in the Gateway backend environment. Replace the obsolete `OPENCODE_URL` name manually in the existing environment when deployment is later authorized; remove retired shared OpenCode credential entries. Do not add OpenCode URLs/credentials to frontend config or reverse-proxy its raw UI/port for customers. The current adapter uses this reference for health only; public customer execution stays disabled pending per-workspace production isolation. See `docs/INTERNAL_OPENCODE_INFRASTRUCTURE.md`. No commands below change the OpenCode service or firewall.
+The existing reference OpenCode service binds only `127.0.0.1:4096`. Keep that service and port private. Configure `OPENCODE_BASE_URL=http://127.0.0.1:4096` only in the Gateway backend environment. Do not add OpenCode URLs/credentials to frontend code or reverse-proxy the raw OpenCode UI/port for customers. Customer prompts use Gateway-managed workspace-specific runtimes. See [PROJECT_MEMORY.md](../PROJECT_MEMORY.md) for the current architecture. No commands below change the OpenCode service or firewall.
 
 Before deployment, validate the release on the target Python/PostgreSQL versions; configure HTTPS, recovery email, GitHub and payment credentials; and resolve per-customer OpenCode process/filesystem/provider-state isolation, resource limits, supervision, and secret backup/rotation. Existing server state, service file, installed OpenCode version, and DB credentials have not been inspected. Preserve `.env`, runtime/workspaces and backups. Do not replace secrets with example values.
 
@@ -107,6 +107,20 @@ Migration failure: keep the service stopped, preserve backup and diagnose; do no
 
 Existing service template is illustrative and has not been installed or validated against the VPS. Do not run a second public OpenCode UI; internal ports must remain firewalled. Do not use production secrets in local tests.
 
-## Merged account management
+## Current migration and account-management state
 
-Expected migration head: `0008_paypal_checkout`, including `0006_subscriptions_archive` and `0007_payment_orders` after the existing `0005_account_management`. Back up the database before running `python -m alembic upgrade head`. Keep CREDENTIALS_ENCRYPTION_KEY outside Git and preserve it across releases. Configure SMTP and HTTPS PUBLIC_BASE_URL for recovery. Existing GitHub connections must reconnect to grant user authorization; tokens expire within 8 hours. Payment methods support manual receipt review, hosted links and backend PayPal order/capture verification. Actual PayPal acceptance is pending merchant credentials; Google Pay needs a processor-hosted link and Binance transfers remain manual. See `docs/PAYMENT_CHECKOUT_REPORT.md`. Preserve existing live environment values: merge new variable names individually, never replace the live `.env` with an example. Production APP_PORT remains 8000. The local private `backend/.env.paypal.local` is for sandbox testing only and must not be uploaded. No server connection or deployment was performed during this review.
+Current migration head in source is `0013_login_identity.py`. Production upgrades must run the complete Alembic chain through `head`, including `0012_advanced_trial.py` followed by `0013_login_identity.py`.
+
+The current source includes:
+- 30-day Core trial and 10-day Advanced trial
+- paid renewal carry-over without losing remaining paid time
+- 90-day expired-account retention followed by customer archival
+- archived-customer reactivation through verified email, renewal-only access, verified real payment and a fresh password
+- explicit marketing-consent state
+- local project cleanup after 7 days of meaningful inactivity
+- temporary GitHub worktree cleanup after 73 hours
+- Google/GitHub sign-in identity support
+
+Preserve `CREDENTIALS_ENCRYPTION_KEY` across releases. Configure SMTP and HTTPS `PUBLIC_BASE_URL` for recovery/reactivation email. Configure social-login and payment credentials only in the protected server environment. Never replace the live `.env` with an example file; merge new variable names individually.
+
+See [PROJECT_MEMORY.md](../PROJECT_MEMORY.md) for current product policy and [PROJECT_ISSUES_AND_IMPROVEMENT_PLAN.md](../PROJECT_ISSUES_AND_IMPROVEMENT_PLAN.md) for planned performance work.
