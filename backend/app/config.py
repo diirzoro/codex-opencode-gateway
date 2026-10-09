@@ -54,6 +54,8 @@ class Settings:
     github_api_base: str
     github_web_base: str
     credentials_encryption_key: str | None
+    google_client_id: str | None = field(default=None, repr=False)
+    google_client_secret: str | None = field(default=None, repr=False)
     paypal_environment: str = 'sandbox'
     paypal_client_id: str | None = field(default=None,repr=False)
     paypal_client_secret: str | None = field(default=None,repr=False)
@@ -126,6 +128,7 @@ class Settings:
             callback, os.getenv("GITHUB_API_BASE", "https://api.github.com").rstrip("/"),
             os.getenv("GITHUB_WEB_BASE", "https://github.com").rstrip("/"),
             optional("CREDENTIALS_ENCRYPTION_KEY"),
+            optional('GOOGLE_CLIENT_ID'),optional('GOOGLE_CLIENT_SECRET'),
             paypal_environment,optional('PAYPAL_CLIENT_ID'),optional('PAYPAL_CLIENT_SECRET'),optional('PAYPAL_MERCHANT_ID'),paypal_decline,
         )
 

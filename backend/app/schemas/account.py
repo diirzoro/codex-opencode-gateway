@@ -59,4 +59,5 @@ class UserOut(BaseModel):
     trial_started_at: datetime
     trial_ends_at: datetime
     trial_remaining_days: int
+    advanced_trial_started_at: datetime | None
     last_login_at: datetime | None

@@ -11,6 +11,7 @@ from ..config import settings
 from ..database import get_db
 from ..models import User
 from ..services import github
+from ..services.entitlements import require_advanced
 from .dependencies import require_user
 
 router = APIRouter(prefix="/api/github", tags=["github"])
@@ -21,6 +22,7 @@ def status(user: User = Depends(require_user), db: Session = Depends(get_db)):
 
 @router.get("/install")
 def install(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_advanced(db, user)  # The timer starts only after successful authorization.
     return RedirectResponse(github.begin_install(db, user), status_code=302)
 
 @router.get("/callback")

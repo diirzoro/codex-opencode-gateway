@@ -65,6 +65,14 @@ function clearAuthenticatedState(){
  pendingIdea='';window.dispatchEvent(new Event('authentication-cleared'));updateNavigation();showPage('authPage');
 }
 window.logoutSession=async()=>{try{await api('/api/auth/logout',{method:'POST',signal:AbortSignal.timeout(5000)});}finally{clearAuthenticatedState();}};
+window.workspaceRetentionNotice=cache=>{
+ if(!cache)return '';
+ const ar=lang==='ar',github=cache.scope==='github_working_copy';
+ if(cache.expired)return github?(ar?'نُظّفت نسخة العمل المؤقتة؛ يبقى مستودع GitHub وبيانات الحساب محفوظين.':'Temporary worktree cleaned; the GitHub repository and account data remain preserved.'):(ar?'نُظّفت ملفات المشروع المحلي بعد الخمول؛ تبقى بيانات الحساب محفوظة.':'Inactive local project files were cleaned; account data remains preserved.');
+ const expiry=new Date(cache.expires_at).toLocaleString(lang);
+ if(cache.warning)return (ar?'تنبيه: المشروع المحلي خامل منذ نحو 5 أيام. افتحه أو صدّره قبل التنظيف في ':'Warning: local project inactive for about 5 days. Open or export it before cleanup at ')+expiry;
+ return (github?(ar?'كاش نسخة العمل: 73 ساعة من آخر نشاط حقيقي. ':'Worktree cache: 73 hours from last meaningful activity. '):(ar?'ملفات المشروع المحلي: 7 أيام من آخر نشاط حقيقي. ':'Local project files: 7 days from last meaningful activity. '))+(ar?'موعد التنظيف: ':'Cleanup at: ')+expiry;
+};
 window.authSession=(()=>{
  let deadline=0,timer=null,flushTimer=null,pending=false,dirty=false,stopped=true,warning=null,lastAcknowledged=0,expiring=false;
  const label=(en,ar)=>lang==='ar'?ar:en;
@@ -73,7 +81,8 @@ window.authSession=(()=>{
  async function flush(){
   flushTimer=null;if(stopped||pending||!dirty||!currentUser||document.hidden)return;
   pending=true;dirty=false;const revision=authenticationRevision;
-  try{const result=await api('/api/auth/activity',{method:'POST'});if(revision===authenticationRevision){lastAcknowledged=Date.now();observe(result.idle_expires_at);}}
+  const workspaceId=activeWorkspace&&$('#workspacePage.active')?activeWorkspace.id:null;
+  try{const result=await api('/api/auth/activity',{method:'POST',body:JSON.stringify({workspace_id:workspaceId})});if(revision===authenticationRevision){lastAcknowledged=Date.now();observe(result.idle_expires_at);}}
   catch(error){if(currentUser&&revision===authenticationRevision)dirty=true;}
   finally{pending=false;}
  }
@@ -108,7 +117,7 @@ window.authSession=(()=>{
  }
  for(const kind of ['pointerdown','keydown','wheel','touchstart'])document.addEventListener(kind,scheduleActivity,{capture:true,passive:true});
  document.addEventListener('visibilitychange',()=>{tick();if(!document.hidden&&dirty)flush();});
- return {observe,stop,start(){stopped=false;if(!timer)timer=setInterval(tick,1000);tick();}};
+ return {observe,stop,workspaceOpened(){if(dirty){clearTimeout(flushTimer);flush();}},start(){stopped=false;if(!timer)timer=setInterval(tick,1000);tick();}};
 })();
 function showPage(id){navigationRevision++;document.documentElement.classList.remove('bootstrapping');if(['admin','owner'].includes(currentUser?.role)&&['workspaceHomePage','connectionsPage','workspacePage','onboarding','clientPage','accountPage','billingPage'].includes(id))id='adminPage';$('#welcomeSidebar').classList.remove('visible');$('#sessionSidebar').classList.remove('open');overlay(false);$$('.page').forEach(p=>p.classList.toggle('active',p.id===id));$('#siteHeader').style.display=id==='landing'?'flex':'none';window.scrollTo(0,0);syncPermissionPolling()}
 async function page(id){await authReady;await interfaceReady;if(protectedPages.has(id)&&!currentUser){showPage('authPage');window.loadManagement().catch(error=>toast(error.message));return}if(id==='adminPage'&&!['admin','owner'].includes(currentUser?.role)){toast('Administrator access required');return}showPage(id);if(['authPage','landing'].includes(id))window.loadManagement().catch(error=>toast(error.message));try{if(id==='accountPage'){renderProfile(await api('/api/profile'));await loadProjects()}if(id==='adminPage')await loadAdminUsers();if(id==='workspacePage'&&!activeWorkspace&&!window.workspaceRestoring){showPage('onboarding')}}catch(error){if(currentUser)toast(error.message)}}
@@ -137,15 +146,15 @@ $$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));$$('[data-start]
 $$('[data-auth-tab]').forEach(el=>el.onclick=()=>{$$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-auth-form]').forEach(f=>f.classList.toggle('active',f.dataset.authForm===el.dataset.authTab))});
 $('#registerCountry').onchange=async()=>{try{await fillSelect('registerRegion',value('registerCountry')?`/api/locations/countries/${value('registerCountry')}/regions`:null,'Optional');await fillSelect('registerCity',null,'Optional')}catch(error){toast(error.message)}};
 $('#registerRegion').onchange=async()=>{try{await fillSelect('registerCity',value('registerRegion')?`/api/locations/regions/${value('registerRegion')}/cities`:null,'Optional')}catch(error){toast(error.message)}};
-$('#registerSubmit').onclick=async()=>{if(value('registerUsername').length<6){apiMessage('registerMessage',t('usernameHint'),true);return}const password=$('#registerPassword').value;if(password.length<8||!/[0-9]/.test(password)||![...password].some(c=>passwordSymbols.includes(c))){apiMessage('registerMessage',t('passwordHint'),true);return}const button=$('#registerSubmit');button.disabled=true;try{const prefs={preferred_language:lang,preferred_theme:dark?'dark':'light'};await api('/api/auth/register',{method:'POST',body:JSON.stringify({username:value('registerUsername'),email:value('registerEmail'),password:$('#registerPassword').value,phone:value('registerPhone'),postal_code:value('registerPostal'),country_id:Number(value('registerCountry')),region_id:value('registerRegion')?Number(value('registerRegion')):null,city_id:value('registerCity')?Number(value('registerCity')):null})});renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));$('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('registerMessage',error.message,true)}finally{button.disabled=false}};
-$('#loginSubmit').onclick=async()=>{const button=$('#loginSubmit');button.disabled=true;try{renderProfile(await api('/api/auth/login',{method:'POST',body:JSON.stringify({identity:value('loginIdentity'),password:$('#loginPassword').value})}));$('#loginPassword').value='';await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
+$('#registerForm').onsubmit=async event=>{event.preventDefault();if($('#registerSubmit').disabled||!event.currentTarget.reportValidity())return;if(value('registerUsername').length<6){apiMessage('registerMessage',t('usernameHint'),true);return}const password=$('#registerPassword').value;if(password.length<8||!/[0-9]/.test(password)||![...password].some(c=>passwordSymbols.includes(c))){apiMessage('registerMessage',t('passwordHint'),true);return}const button=$('#registerSubmit');button.disabled=true;try{const prefs={preferred_language:lang,preferred_theme:dark?'dark':'light'};await api('/api/auth/register',{method:'POST',body:JSON.stringify({username:value('registerUsername'),email:value('registerEmail'),password:$('#registerPassword').value,phone:value('registerPhone'),postal_code:value('registerPostal'),country_id:Number(value('registerCountry')),region_id:value('registerRegion')?Number(value('registerRegion')):null,city_id:value('registerCity')?Number(value('registerCity')):null})});renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));$('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('registerMessage',error.message,true)}finally{button.disabled=false}};
+$('#loginForm').onsubmit=async event=>{event.preventDefault();if($('#loginSubmit').disabled||!event.currentTarget.reportValidity())return;const button=$('#loginSubmit');button.disabled=true;try{renderProfile(await api('/api/auth/login',{method:'POST',body:JSON.stringify({identity:value('loginIdentity'),password:$('#loginPassword').value})}));$('#loginPassword').value='';try{if($('#rememberIdentity').checked)localStorage.setItem('og-login-identity',value('loginIdentity'));else localStorage.removeItem('og-login-identity');}catch(error){}await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
 $('#logoutButton').onclick=()=>window.logoutSession().catch(error=>toast(error.message));
-$$('[data-start-onboarding]').forEach(el=>{el.disabled=true;el.title='GitHub App is not connected';el.textContent='GitHub login — Not available yet'});
+
 $$('[data-preview-action]').forEach(el=>{el.disabled=true;el.title='Not available yet'});
 $$('[data-payment]').forEach(el=>el.onclick=()=>{$$('[data-payment]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-payment-panel]').forEach(p=>p.classList.toggle('active',p.dataset.paymentPanel===el.dataset.payment))});
 async function loadProjects(){const projects=await api('/api/projects'),workspaces=await api('/api/workspaces');const list=$('#projectList');list.replaceChildren();if(!projects.length)list.append(textElement('p',t('noProjects')));for(const project of projects){const button=textElement('button',`${project.name} · ${project.source_type}`,'button ghost');button.onclick=()=>{const workspace=workspaces.find(w=>w.project_id===project.id);if(workspace)openWorkspace(project,workspace);else toast('Workspace unavailable')};list.append(button)}}
 $('#sourceType').onchange=()=>{const hint=$('#githubHint');if(hint)hint.hidden=value('sourceType')!=='github';};$('#githubHintOpen').onclick=()=>window.openConnections&&window.openConnections('github');
-$('#createProjectForm').onsubmit=async event=>{event.preventDefault();const button=$('#createProjectButton');button.disabled=true;try{if(value('sourceType')==='github'){window.openConnections&&window.openConnections('github');return;}const result=await api('/api/projects',{method:'POST',body:JSON.stringify({project_name:value('projectName'),source_type:value('sourceType')})});await openWorkspace(result.project,result.workspace)}catch(error){apiMessage('createProjectMessage',error.message,true)}finally{button.disabled=false}};
+$('#createProjectForm').onsubmit=async event=>{event.preventDefault();const button=$('#createProjectButton');button.disabled=true;try{if(value('sourceType')==='github'){document.querySelector('#createProjectForm').closest('dialog')?.close();await window.openGithubProject();return;}const result=await api('/api/projects',{method:'POST',body:JSON.stringify({project_name:value('projectName'),source_type:value('sourceType')})});await openWorkspace(result.project,result.workspace)}catch(error){apiMessage('createProjectMessage',error.message,true)}finally{button.disabled=false}};
 async function openWorkspace(project,workspace){if(['admin','owner'].includes(currentUser?.role)){await page('adminPage');return;}stopEvents();activeProject=project;activeWorkspace=workspace;activeSession=null;$('#workspaceRepo').textContent=project.name;$('#workspaceBranch').textContent=project.branch||'No branch';renderWorkspaceEmpty();$('#promptInput').value=pendingIdea;pendingIdea='';$('#runtimeStatus').textContent=t('sessionDisconnected');await page('workspacePage');await Promise.all([refreshSessions(),refreshGit()]);$('#sendMessage').disabled=true;$('#providerSelect').replaceChildren(new Option(t('selectProvider'),''));$('#modelSelect').replaceChildren(new Option(t('selectModel'),''))}
 async function refreshGit(){if(!activeWorkspace)return;const state=await api(`/api/workspaces/${activeWorkspace.id}/git/status`);$('#commitButton').disabled=state.clean;$('#pushButton').disabled=true;$('#gitSummary').textContent=`${state.changes.length} ${t('changedFiles')} · ${state.head?state.head.slice(0,8):t('noCommits')}`}
 async function refreshSessions(){if(!activeWorkspace)return;const rows=await api(`/api/workspaces/${activeWorkspace.id}/sessions`);const list=$('#sessionList');list.replaceChildren();for(const row of rows){const button=textElement('button',row.title,'session');button.onclick=()=>selectSession(row);list.append(button)}}
@@ -153,24 +162,24 @@ $('.new-session').onclick=async()=>{if(!activeWorkspace)return;const button=$('.
 async function selectSession(session){const revision=++sessionSelectionRevision,workspaceId=activeWorkspace?.id;const opened=await api(`/api/sessions/${session.id}/open`,{method:'POST'});if(revision!==sessionSelectionRevision||activeWorkspace?.id!==workspaceId)return;stopEvents();activeSession={...session,...opened};$('#runtimeStatus').textContent=opened.status;$('#agentFeed').replaceChildren(textElement('p',session.title));await refreshMessages();if(revision!==sessionSelectionRevision||activeSession?.id!==session.id)return;startEvents();syncPermissionPolling()}
 Object.assign(copy.en,{repeatMsg:'Repeat',copyMsg:'Copy',editMsg:'Edit',regenerateMsg:'Regenerate (new request)',hideMsg:'Hide from your view',copied:'Copied',copyFailed:'Could not copy',resent:'Message resubmitted'});
 Object.assign(copy.ar,{repeatMsg:'إعادة',copyMsg:'نسخ',editMsg:'تعديل',regenerateMsg:'إعادة التوليد بطلب جديد',hideMsg:'إخفاء من واجهتك',copied:'تم النسخ',copyFailed:'تعذر النسخ',resent:'أُعيد إرسال الرسالة'});
-function feedAction(kind,text){const icons={repeat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>',copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',edit:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>'};icons.regenerate=icons.repeat;icons.hide='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.5 5.3A12 12 0 0 1 12 5c6 0 10 7 10 7a19 19 0 0 1-3.1 3.8M6.5 6.5C3.7 8.5 2 12 2 12s4 7 10 7a12 12 0 0 0 5.5-1.5"/></svg>';const label=t({repeat:'repeatMsg',regenerate:'regenerateMsg',copy:'copyMsg',edit:'editMsg',hide:'hideMsg'}[kind]);const b=document.createElement('button');b.type='button';b.className='icon-btn';b.innerHTML=icons[kind];b.querySelector('svg')?.setAttribute('aria-hidden','true');b.title=label;b.setAttribute('aria-label',label);b.onclick=async()=>{if(kind==='repeat'||kind==='regenerate'){if(window.workspaceSubmissionBlocked?.())return;$('#promptInput').value=text;$('#promptForm').requestSubmit();toast(t('resent'));}else if(kind==='edit'){$('#promptInput').value=text;$('#promptInput').focus();try{$('#promptInput').setSelectionRange(text.length,text.length)}catch(error){}}else{try{await navigator.clipboard.writeText(text);toast(t('copied'))}catch(error){try{const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();toast(t('copied'))}catch(fallbackError){toast(t('copyFailed'))}}}};return b;}
+function feedAction(kind,text,attachments=[]){const icons={repeat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>',copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',edit:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>'};icons.regenerate=icons.repeat;icons.hide='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.5 5.3A12 12 0 0 1 12 5c6 0 10 7 10 7a19 19 0 0 1-3.1 3.8M6.5 6.5C3.7 8.5 2 12 2 12s4 7 10 7a12 12 0 0 0 5.5-1.5"/></svg>';const label=t({repeat:'repeatMsg',regenerate:'regenerateMsg',copy:'copyMsg',edit:'editMsg',hide:'hideMsg'}[kind]);const b=document.createElement('button');b.type='button';b.className='icon-btn';b.innerHTML=icons[kind];b.querySelector('svg')?.setAttribute('aria-hidden','true');b.title=label;b.setAttribute('aria-label',label);b.onclick=async()=>{if(kind==='repeat'||kind==='regenerate'){if(window.workspaceSubmissionBlocked?.())return;window.restoreComposerAttachments?.(attachments);$('#promptInput').value=text;$('#promptForm').requestSubmit();toast(t('resent'));}else if(kind==='edit'){window.restoreComposerAttachments?.(attachments);$('#promptInput').value=text;$('#promptInput').focus();try{$('#promptInput').setSelectionRange(text.length,text.length)}catch(error){}}else{try{await navigator.clipboard.writeText(text);toast(t('copied'))}catch(error){try{const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();toast(t('copied'))}catch(fallbackError){toast(t('copyFailed'))}}}};return b;}
 async function refreshMessages(){
  if(!activeSession)return;
  const sessionId=activeSession.id,owner=currentUser?.id,revision=++messageRenderRevision;
  try{
   const rows=await api(`/api/sessions/${sessionId}/messages`);
   if(revision!==messageRenderRevision||activeSession?.id!==sessionId||currentUser?.id!==owner)return;
-  const feed=$('#agentFeed');feed.replaceChildren();const seen=new Set();let previousPrompt='';
+  const feed=$('#agentFeed');feed.replaceChildren();const seen=new Set();let previousPrompt='',previousAttachments=[];
   for(const row of rows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
-   if(row.role==='user')previousPrompt=row.text;
+   if(row.role==='user'){previousPrompt=row.text;previousAttachments=row.attachments||[];}
    const node=document.createElement('article');node.className=row.role==='user'?'user-bubble':'agent-response';node.dir='auto';
    if(row.id)node.dataset.messageId=row.id;
-   const content=textElement('div',row.text,'message-content');node.append(content);
+   const content=textElement('div',row.text,'message-content');node.append(content);if(row.role==='user'&&row.attachments?.length){const attached=textElement('div','','message-attachments');for(const file of row.attachments){const label=textElement('span',file.name+' · '+Math.ceil(file.size/1024)+' KB');label.dir='auto';label.title=file.path;attached.append(label);}node.append(attached);}
    window.renderMessageActivity?.(node,row.activity||[]);
    const bar=document.createElement('div');bar.className='feed-actions';bar.setAttribute('role','group');bar.setAttribute('aria-label',lang==='ar'?'إجراءات الرسالة':'Message actions');
-   if(row.role==='user')bar.append(feedAction('repeat',row.text),feedAction('edit',row.text));
-   else if(previousPrompt){const regenerate=feedAction('regenerate',previousPrompt);regenerate.disabled=window.workspaceSubmissionBlocked?.()||false;bar.append(regenerate);}
+   if(row.role==='user')bar.append(feedAction('repeat',row.text,row.attachments),feedAction('edit',row.text,row.attachments));
+   else if(previousPrompt){const regenerate=feedAction('regenerate',previousPrompt,previousAttachments);regenerate.disabled=window.workspaceSubmissionBlocked?.()||false;bar.append(regenerate);}
    bar.append(feedAction('copy',row.text));
    if(row.id){
     const hide=feedAction('hide',row.text);hide.disabled=['submitted','waiting_approval'].includes(activeSession.execution_status);
@@ -212,6 +221,12 @@ const authReady=(async()=>{
   if(error.status===401){
    let hadWorkspace=false;try{hadWorkspace=Boolean(localStorage.getItem('og-workspace'));}catch(ignored){}
    window.authRestoreExpired=hadWorkspace||error.message!=='Authentication required';clearAuthenticatedState();
+   if(error.message==='Account reactivation required'){
+    try{
+     window.reactivationAccount=await api('/api/auth/reactivation',{allowAnonymous:true});window.passwordRecoveryActive=true;
+     window.loadManagement().then(()=>window.openReactivation()).catch(error=>toast(error.message));
+    }catch(ignored){/* An expired limited session needs a new email proof. */}
+   }
   }else if(currentUser)toast(error.message);
  }
 })();
@@ -233,7 +248,7 @@ async function restoreWorkspaceContext(){
 }
 const navigationReady=authReady.then(async()=>{
  await interfaceReady;if(window.passwordRecoveryActive)return;
- if(!currentUser){await page(window.authRestoreExpired?'authPage':'landing');return;}
+ if(!currentUser){await page(location.hash.startsWith('#social=')||window.authRestoreExpired?'authPage':'landing');return;}
  window.__navRestored=true;
  if(['admin','owner'].includes(currentUser.role)){await page('adminPage');return;}
  let target='';try{target=localStorage.getItem('og-page')||'';}catch(error){}
@@ -249,7 +264,9 @@ const navigationReady=authReady.then(async()=>{
  if(target==='clientPage'){let view='';try{view=localStorage.getItem('og-clientview')||'';}catch(error){}if(view&&window.openClientView){await window.openClientView(view);return;}}
  await page(target);window.workspaceRestoring=false;
 }).catch(error=>{document.documentElement.classList.remove('bootstrapping');toast(error.message)});
-window.bootstrapGithubStatus=authReady.then(async()=>{await interfaceReady;if(!currentUser)return null;try{const gh=await api('/api/github/status');const opt=$('#sourceType')?.querySelector('option[value=github]');if(opt){opt.disabled=!gh.connected;opt.textContent=gh.connected?'GitHub Repository':'GitHub - Not connected';}return gh;}catch(error){return null;}});
+// GitHub authorization/repository metadata loads only when its UI is opened.
+window.bootstrapGithubStatus=Promise.resolve(null);
+$('#sourceType').querySelector('option[value=github]').disabled=false;
 
 
 Object.assign(copy.en,{newProject:'New project',yourProjects:'Your projects',workspaceLabel:'YOUR WORKSPACE',projectsHint:'Your next idea starts here.',projectsSubhint:'Create a project to keep your work in one place.',notConnected:'Not connected',yourAccount:'Your account',accountHint:'Profile & preferences',getStarted:'Get started',yourSpace:'YOUR IDEAS. YOUR WORKSPACE.',welcomeTitle:'What will you build today?',welcomeSubtitle:'A little less setup. A lot more possibility.',welcomePlaceholder:'Describe an idea, start a project, or make something better…',buildWithAi:'Build with your AI',startBlank:'Start from scratch',useTemplate:'Use a template',openProject:'Open a project',madeForFlow:'A workspace that stays out of your way',filesTogether:'Your files, together',filesTogetherBody:'Start blank or choose a template. Your project has a space of its own.',keepContext:'Pick up where you left off',keepContextBody:'Start a new conversation while keeping the same project files.',reviewClearly:'See every change',reviewClearlyBody:'Browse files, inspect the diff, and commit when you are ready.',independentNotice:'Independent workspace. OpenCode and GitHub are external services.',pricingTitle:'Simple pricing',pricingSubtitle:'Pay only for the time you use. No hidden fees.',pricingSummary:'Live prices from the plan catalog.',});
@@ -338,11 +355,51 @@ applyPrefs();
     }
     const authPage=document.getElementById('authPage'),card=authPage.querySelector('.auth-card');
     const authDialog=element('dialog','','action-form-dialog auth-action-dialog');authDialog.id='authDialog';authDialog.setAttribute('aria-label',tr('Account access','الدخول للحساب'));
-    const head=element('header','','action-dialog-head'),heading=element('h2',tr('Start your free 10-day trial','ابدأ تجربتك المجانية لمدة 10 أيام')),close=element('button','×','icon');close.type='button';close.setAttribute('aria-label',tr('Close','إغلاق'));close.onclick=()=>authDialog.close();head.append(heading,close);
-    const body=element('div','','action-dialog-body');const trialNote=element('p',tr('New accounts receive 10 free days. No payment required. Signing in does not restart an existing trial.','يحصل الحساب الجديد على 10 أيام مجانية دون دفع. تسجيل الدخول لا يعيد بدء تجربة سابقة.'),'trial-entry-note');body.append(trialNote,card);authDialog.append(head,body);authPage.append(authDialog);
+    const head=element('header','','action-dialog-head'),heading=element('h2',tr('Start your free 30-day core trial','ابدأ تجربة الأساس المجانية لمدة 30 يومًا')),close=element('button','×','icon');close.type='button';close.setAttribute('aria-label',tr('Close','إغلاق'));close.onclick=()=>authDialog.close();head.append(heading,close);
+    const body=element('div','','action-dialog-body');const trialNote=element('p',tr('30 days of core access with 50 MB per local project. Advanced integrations receive 10 days from first use, capped by the core trial. Signing in does not restart trials.','30 يومًا للوصول الأساسي و50 MB لكل مشروع محلي. تجربة التكاملات المتقدمة 10 أيام من أول استخدام، ولا تتجاوز نهاية تجربة الأساس. تسجيل الدخول لا يعيد بدء التجارب.'),'trial-entry-note');body.append(trialNote,card);authDialog.append(head,body);authPage.append(authDialog);
     const syncAuth=()=>{if(authPage.classList.contains('active')&&!window.passwordRecoveryActive){if(!authDialog.open)authDialog.showModal();}else if(authDialog.open)authDialog.close();};
     authDialog.addEventListener('close',()=>{if(authPage.classList.contains('active')&&!currentUser&&!window.passwordRecoveryActive)page('landing');});
     new MutationObserver(syncAuth).observe(authPage,{attributes:true,attributeFilter:['class']});syncAuth();
     const welcomeInput=document.getElementById('welcomeInput');const requireEntry=async()=>{await authReady;if(!currentUser)await page('authPage');};welcomeInput.addEventListener('focus',requireEntry);welcomeInput.addEventListener('beforeinput',event=>{if(!currentUser){event.preventDefault();requireEntry();}});
   });
 })();
+
+/* Shared viewport-bounded dragging for existing native dialogs. */
+(() => {
+ const handles='.action-dialog-head,.grid-modal-head,dialog>h2';
+ const clamp=dialog=>{const rect=dialog.getBoundingClientRect(),gap=8;dialog.style.left=Math.max(gap,Math.min(rect.left,innerWidth-rect.width-gap))+'px';dialog.style.top=Math.max(gap,Math.min(rect.top,innerHeight-rect.height-gap))+'px';};
+ document.addEventListener('pointerdown',event=>{
+  const header=event.target.closest(handles),dialog=header?.closest('dialog[open]');
+  if(!dialog||event.button!==0||event.target.closest('button,a,input,select,textarea')||!matchMedia('(min-width: 769px) and (pointer: fine)').matches)return;
+  const rect=dialog.getBoundingClientRect(),x=event.clientX,y=event.clientY;
+  Object.assign(dialog.style,{position:'fixed',inset:'auto',margin:'0',left:rect.left+'px',top:rect.top+'px'});dialog.dataset.dragged='';
+  header.setPointerCapture(event.pointerId);event.preventDefault();
+  const move=e=>{dialog.style.left=rect.left+e.clientX-x+'px';dialog.style.top=rect.top+e.clientY-y+'px';clamp(dialog);};
+  const stop=()=>{header.removeEventListener('pointermove',move);header.removeEventListener('pointerup',stop);header.removeEventListener('pointercancel',stop);header.removeEventListener('lostpointercapture',stop);};
+  header.addEventListener('pointermove',move);header.addEventListener('pointerup',stop);header.addEventListener('pointercancel',stop);header.addEventListener('lostpointercapture',stop);
+ });
+ document.addEventListener('close',event=>{if(event.target.matches('dialog[data-dragged]')){event.target.removeAttribute('data-dragged');for(const key of ['position','inset','margin','left','top'])event.target.style[key]='';}},true);
+ window.addEventListener('resize',()=>document.querySelectorAll('dialog[open][data-dragged]').forEach(dialog=>{if(innerWidth<=768){dialog.removeAttribute('data-dragged');for(const key of ['position','inset','margin','left','top'])dialog.style[key]='';}else clamp(dialog);}));
+})();
+/* Password managers own passwords; Remember stores identity text only. */
+Object.assign(copy.en,{rememberIdentity:'Remember email / username only',socialGithub:'Continue with GitHub',socialGoogle:'Continue with Google'});
+Object.assign(copy.ar,{rememberIdentity:'تذكّر البريد / اسم المستخدم فقط',socialGithub:'المتابعة باستخدام GitHub',socialGoogle:'المتابعة باستخدام Google'});
+try{const remembered=localStorage.getItem('og-login-identity');if(remembered){$('#loginIdentity').value=remembered;$('#rememberIdentity').checked=true;}}catch(error){}
+let socialOptions;
+async function loadSocialOptions(){
+ if(!socialOptions)socialOptions=api('/api/auth/social/options',{allowAnonymous:true}).catch(error=>{socialOptions=null;throw error;});
+ try{const options=await socialOptions;for(const button of $$('[data-social-login]')){button.disabled=!options[button.dataset.socialLogin];button.title=button.disabled?(lang==='ar'?'غير مهيأ على هذا الخادم':'Not configured on this server'):'';}}
+ catch(error){$('#socialLoginNote').textContent=error.message;}
+}
+$$('[data-social-login]').forEach(button=>{button.disabled=true;button.onclick=()=>location.assign('/api/auth/social/'+button.dataset.socialLogin+'/start');});
+new MutationObserver(()=>{if($('#authPage').classList.contains('active'))loadSocialOptions();}).observe($('#authPage'),{attributes:true,attributeFilter:['class']});
+window.linkSignInProvider=provider=>location.assign('/api/auth/social/'+provider+'/start');
+navigationReady.then(async()=>{
+ const result=new URLSearchParams(location.hash.slice(1)).get('social');if(!result)return;
+ history.replaceState(null,'',location.pathname+location.search);
+ if(result==='register'){
+  try{const pending=await api('/api/auth/social/pending',{allowAnonymous:true});if(pending.pending){await page('authPage');$('[data-auth-tab=register]').click();$('#registerEmail').value=pending.email;$('#registerEmail').readOnly=true;apiMessage('registerMessage',lang==='ar'?'أكمل بيانات الحساب لربط هوية الدخول المتحققة.':'Complete account details to bind your verified sign-in identity.');}}
+  catch(error){apiMessage('loginMessage',error.message,true);}
+ }else if(result==='success')toast(lang==='ar'?'تم تسجيل الدخول بنجاح.':'Signed in successfully.');
+ else apiMessage('loginMessage',result==='existing'?(lang==='ar'?'ادخل بكلمة المرور الحالية ثم اربط مزوّد الدخول من الحساب.':'Sign in with your existing password, then link the sign-in provider from Account.'):(lang==='ar'?'تعذر التحقق من الدخول أو أُلغي. حاول مجددًا.':'Sign-in could not be verified or was cancelled. Try again.'),true);
+}).catch(()=>{});

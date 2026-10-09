@@ -20,6 +20,8 @@
   protectedPages.add('workspaceHomePage');protectedPages.add('connectionsPage');
   Object.assign(copy.en,{workspaceHome:'Workspace / Home',connectionsSettings:'Settings / Connections'});
   Object.assign(copy.ar,{workspaceHome:'مساحة العمل / الرئيسية',connectionsSettings:'الإعدادات / الاتصالات'});
+  Object.assign(copy.en,{ui51:'Local project · 50 MB',ui53:'GitHub-backed project',githubHintText:'Choose a repository and branch authorized by your GitHub App connection.'});
+  Object.assign(copy.ar,{ui51:'مشروع محلي · 50 MB',ui53:'مشروع مرتبط بـGitHub',githubHintText:'اختر مستودعًا وفرعًا مصرحًا بهما عبر اتصال GitHub App الخاص بك.'});
   Object.assign(copy.en,{subscriptionNoRefund:'Subscription payments are non-refundable.',clientAccountLead:'Personal details and preferences.'});
   Object.assign(copy.ar,{subscriptionNoRefund:'الاشتراكات غير قابلة لاسترداد المبلغ.',clientAccountLead:'البيانات الشخصية والتفضيلات.'});
   function navButton(id,key,icon,action){const node=document.createElement('button');node.id=id;node.dataset.go=action;node.innerHTML='<svg class="nav-icon"><use href="'+icon+'"/></svg><span data-i18n="'+key+'">'+t(key)+'</span>';node.onclick=()=>page(action);return node;}
@@ -33,7 +35,7 @@
   q('adminNav').querySelectorAll('[data-admin-view]').forEach(button=>button.onclick=()=>window.openAdminView(button.dataset.adminView));
   async function loadHome(){
     const data=await api('/api/dashboard');const projects=q('homeProjects');projects.replaceChildren();
-    for(const project of data.projects){for(const workspace of project.workspaces){const row=textElement('div','','home-project-row');row.append(textElement('strong',project.name),textElement('small',(project.repository||tr('Local project','مشروع محلي'))+' · '+workspace.status));row.append(btn('home-open-'+workspace.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace)),btn('home-session-'+workspace.id,'New session','جلسة جديدة',async()=>{await openWorkspace(project,workspace);await createWorkspaceSession();}));projects.append(row);}}
+    for(const project of data.projects){for(const workspace of project.workspaces){const row=textElement('div','','home-project-row');row.append(textElement('strong',project.name),textElement('small',(project.repository||tr('Local project','مشروع محلي'))+' · '+workspace.status));if(workspace.cache?.warning||workspace.cache?.expired)row.append(textElement('small',window.workspaceRetentionNotice(workspace.cache),'project-retention-warning'));row.append(btn('home-open-'+workspace.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace)),btn('home-session-'+workspace.id,'New session','جلسة جديدة',async()=>{await openWorkspace(project,workspace);await createWorkspaceSession();}));projects.append(row);}}
     if(!projects.children.length)projects.append(text('p','No projects yet. Create your first workspace.','لا توجد مشاريع بعد. أنشئ مساحة عملك الأولى.','home-empty'));
     const sessions=q('homeSessions');sessions.replaceChildren();
     for(const session of data.recent_sessions){const project=data.projects.find(p=>p.workspaces.some(w=>w.id===session.workspace_id));const workspace=project?.workspaces.find(w=>w.id===session.workspace_id);if(!workspace)continue;const row=btn('home-recent-'+session.id,session.title,session.title,async()=>{await openWorkspace(project,workspace);await selectSession(session);},'home-session-row');row.append(textElement('small',project.name+' · '+session.status));row.dataset.search=(session.title+' '+project.name).toLowerCase();sessions.append(row);}
@@ -66,7 +68,7 @@
     const status=await api('/api/github/status');github.append(textElement('p',status.connected?(status.account_login||'GitHub'):tr('Not connected','غير متصل')));
     const authorize=btn('settingsAuthorizeGithub','Authorize GitHub','تفويض GitHub',()=>window.location.assign('/api/github/install'));authorize.disabled=!status.configured;github.append(authorize);
     if(status.connected)github.append(btn('settingsDisconnectGithub','Disconnect','إلغاء الربط',async()=>{await api('/api/github/disconnect',{method:'POST'});await loadConnections();}));
-    github.append(text('p','Repository permissions and installation access are managed in GitHub authorization. Choose your working repository beside the prompt.','تُدار صلاحيات المستودعات والتثبيت عبر تفويض GitHub. اختر مستودع العمل بجوار محرر الطلب.'));
+    github.append(text('p','GitHub App authorization controls repository access. Your repository remains in GitHub; the server working copy is preserved until you resolve or export your work. Select a repository when creating a GitHub-backed project.','يحدد تفويض GitHub App صلاحيات المستودعات. يبقى المستودع في GitHub وتُحفظ نسخة العمل بالخادم حتى تحفظ عملك أو تصدّره. اختر المستودع عند إنشاء مشروع مرتبط بـGitHub.'));
   }
 
   let workAccess=false,entitlement=null,workspaceInitialized=false;
@@ -74,17 +76,53 @@
   let createWorkspaceSession=async()=>{initializeWorkspace();return createWorkspaceSession();};
   const homeAccess=textElement('div','','access-notice');homeAccess.id='homeAccessState';home.querySelector('.work-home-heading').append(homeAccess);
   const workspaceAccess=textElement('div','','access-notice');workspaceAccess.id='workspaceAccessState';q('promptForm').before(workspaceAccess);
-  function renderEntitlement(){if(!entitlement)return;const end=entitlement.access.ends_at,days=end?Math.max(0,Math.ceil((new Date(end)-Date.now())/86400000)):0;homeAccess.replaceChildren(textElement('span',workAccess?(entitlement.access.reason==='trial'?tr('Free trial · ','التجربة المجانية · '):tr('Subscription · ','الاشتراك · '))+days+' '+tr('days remaining','يوم متبقٍ'):tr('Your access has expired. Subscribe to continue.','انتهت مدة الوصول. اشترك للمتابعة.')));workspaceAccess.replaceChildren();workspaceAccess.hidden=workAccess;if(!workAccess){const subscribe=()=>window.openClientView('billing');homeAccess.append(btn('homeSubscribe','Subscribe / Renew','اشترك / جدّد',subscribe));workspaceAccess.append(textElement('span',tr('Read-only workspace. Subscribe to continue coding.','مساحة العمل للقراءة فقط. اشترك لمتابعة البرمجة.')),btn('workspaceSubscribe','Subscribe / Renew','اشترك / جدّد',subscribe));}q('homeNewProject').disabled=!workAccess;q('promptInput').disabled=!workAccess;document.querySelectorAll('#workspacePage .new-session,#homeProjects [id^=home-session-],#sessionList .session,#homeSessions [id^=home-recent-]').forEach(n=>n.disabled=!workAccess);if(!workAccess){q('sendMessage').disabled=true;q('commitButton').disabled=true;q('pushButton').disabled=true;}}
-  async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/billing/subscription');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();}
-  const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(currentUser&&!admin()&&['onboarding'].includes(id)){const state=await api('/api/billing/subscription');if(!state.access.allowed){stopEvents();await oldClientView('billing');toast(tr('Your 10-day trial has ended. Subscribe to continue.','انتهت تجربتك لمدة عشرة أيام. اشترك للمتابعة.'));return;}}if(id==='workspacePage'&&currentUser&&!admin())initializeWorkspace();await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage'].includes(id))refreshEntitlement().then(()=>updateSend()).catch(error=>toast(error.message));if(!admin()&&id==='workspacePage'&&activeWorkspace){refreshChoices().catch(error=>toast(error.message));loadWorkspaceDetails();}if(admin()){if(q('adminPage').classList.contains('active')&&document.querySelector('[data-admin-panel=billing].active'))await loadPaymentOrders(true);return;}if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')loadHome().catch(error=>toast(error.message));if(id==='connectionsPage')loadConnections().catch(error=>toast(error.message));}};
+  const workspaceDays=textElement('span','','workspace-days');workspaceDays.id='workspaceRemainingDays';workspaceDays.hidden=true;
+  function renderEntitlement(){
+    if(!entitlement)return;
+    const access=entitlement.access,days=access.remaining_days;
+    const label=(access.kind==='trial'?tr('Core trial · ','تجربة الأساس · '):tr('Subscription · ','الاشتراك · '))+days+tr(' days left',' يومًا متبقيًا');
+    homeAccess.replaceChildren(textElement('span',workAccess?label:tr('Your access has expired. Subscribe to continue.','انتهت مدة الوصول. اشترك للمتابعة.')));
+    const advanced=access.advanced_trial;
+    homeAccess.append(textElement('span',advanced.state==='not_started'?tr(' · Advanced trial: 10 days from first use',' · المتقدمة: 10 أيام من أول استخدام'):tr(' · Advanced trial: ',' · التجربة المتقدمة: ')+advanced.remaining_days+tr(' days remaining',' يوم متبقٍ')));
+    workspaceDays.hidden=false;
+    workspaceDays.textContent=workAccess?label:tr('Access expired','انتهت مدة الوصول');
+    workspaceDays.title=access.ends_at?tr('Expires: ','تنتهي: ')+new Date(access.ends_at).toLocaleString(lang):'';
+    const urgent=workAccess&&(days===2||days===1);
+    workspaceDays.dataset.urgency=!workAccess?'expired':urgent?String(days):'';
+    workspaceAccess.replaceChildren();workspaceAccess.hidden=true;workspaceAccess.dataset.urgency='';
+    const subscribe=()=>window.openClientView('billing');
+    if(!workAccess||urgent){
+      workspaceAccess.hidden=false;workspaceAccess.dataset.urgency=workspaceDays.dataset.urgency;
+      workspaceAccess.append(textElement('span',!workAccess?
+        tr('Execution and coding access is frozen until renewal. Account data and payment records are preserved; access expiry does not delete project files.','يُجمّد الوصول للتنفيذ والبرمجة حتى التجديد. بيانات الحساب وسجلات الدفع محفوظة؛ انتهاء الصلاحية لا يحذف ملفات المشروع.'):
+        days===1?tr('Access expires within one day. Renew to keep coding without interruption.','ينتهي الوصول خلال يوم واحد. جدّد للاستمرار في البرمجة دون انقطاع.'):
+        tr('Two days of access remain. Renew soon to keep coding.','متبقي يومان من الوصول. جدّد قريبًا لمتابعة البرمجة.')),
+        btn('workspaceSubscribe','Subscribe / Renew','اشترك / جدّد',subscribe));
+      if(!workAccess&&access.account_retention){
+        const retention=access.account_retention;
+        workspaceAccess.append(textElement('small',tr('Account data is retained for at least ','تُحفظ بيانات الحساب لمدة لا تقل عن ')+retention.minimum_days+tr(' days after expiry, then the customer is archived and operational secrets are removed. Project-file storage follows its separate policy.',' يومًا بعد انتهاء الصلاحية، ثم يُؤرشف العميل وتُنظّف بيانات التشغيل الحساسة. تتبع ملفات المشروع سياسة تخزين مستقلة.')));
+      }
+      if(!workAccess)homeAccess.append(btn('homeSubscribe','Subscribe / Renew','اشترك / جدّد',subscribe));
+    }
+    if(workAccess&&!access.advanced_integrations){
+      workspaceAccess.hidden=false;
+      workspaceAccess.append(textElement('span',tr('Advanced integrations expired. Core access and free platform models remain available.','انتهت تجربة التكاملات المتقدمة. يبقى الوصول الأساسي ونماذج المنصة المجانية متاحين.')),btn('workspaceAdvancedUpgrade','View plans','عرض الخطط',subscribe));
+    }
+    q('homeNewProject').disabled=!workAccess;q('promptInput').disabled=!workAccess;
+    document.querySelectorAll('#workspacePage .new-session,#homeProjects [id^=home-session-],#sessionList .session,#homeSessions [id^=home-recent-]').forEach(n=>n.disabled=!workAccess);
+    if(!workAccess){q('sendMessage').disabled=true;q('commitButton').disabled=true;q('pushButton').disabled=true;}
+  }
+  async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/profile/access');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();}
+  const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(id==='workspacePage'&&currentUser&&!admin())initializeWorkspace();await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage','onboarding'].includes(id))refreshEntitlement().then(()=>updateSend()).catch(error=>toast(error.message));if(!admin()&&id==='workspacePage'&&activeWorkspace){refreshChoices().catch(error=>toast(error.message));loadWorkspaceDetails();}if(admin()){if(q('adminPage').classList.contains('active')&&document.querySelector('[data-admin-panel=billing].active'))await loadPaymentOrders(true);return;}if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')loadHome().catch(error=>toast(error.message));if(id==='connectionsPage')loadConnections().catch(error=>toast(error.message));}};
   const previousShow=showPage;showPage=function(id){if(id==='adminPage'&&!admin()){toast('Administrator access required');id=currentUser?'workspaceHomePage':'authPage';}if(admin()&&['workspaceHomePage','connectionsPage','workspacePage'].includes(id))id='adminPage';q('sessionSidebar').classList.remove('open');overlay(false);try{if(currentUser)localStorage.setItem('og-page',id);}catch(error){}previousShow(id);syncWorkspacePolling();q('clientWorkspaceHome').classList.toggle('active',['workspaceHomePage','workspacePage'].includes(id));q('clientConnections').classList.toggle('active',id==='connectionsPage');if(['workspaceHomePage','workspacePage','connectionsPage'].includes(id))q('clientNav').querySelectorAll('[data-client-view]').forEach(n=>n.classList.remove('active'));};
   openWorkspace=async function(project,workspace,options={}){
     if(options.navigate===false&&!workspaceInitialized){
-      stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;
+      if(activeWorkspace?.id!==workspace.id)clearAttachments();stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;
       try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}return;
     }
     initializeWorkspace();return openWorkspace(project,workspace,options);
   };
+  window.openGithubProject=()=>{initializeWorkspace();return window.openGithubProject();};
   function initializeWorkspace(){
     if(workspaceInitialized)return;workspaceInitialized=true;
   const shell=document.querySelector('#workspacePage .workspace-shell'),center=shell.querySelector('.agent-column'),pane=q('sessionSidebar');
@@ -93,13 +131,13 @@
 
   const projectbar=center.querySelector('.project-bar');projectbar.querySelector('.statuses').hidden=true;
   projectbar.querySelector('.repo-title')?.setAttribute('hidden','');
-  const context=textElement('div','','composer-context');projectbar.append(context);context.append(q('workspaceRepo'),q('workspaceBranch'));const gitState=text('span','GitHub: checking…','GitHub: جارٍ التحقق…');gitState.id='workspaceGithubState';context.append(gitState,q('runtimeStatus'));
+  const context=textElement('div','','composer-context');projectbar.append(context);context.append(q('workspaceRepo'),q('workspaceBranch'));const gitState=textElement('span',tr('GitHub: checking…','GitHub: جارٍ التحقق…'));gitState.id='workspaceGithubState';context.append(gitState,q('runtimeStatus'),workspaceDays);
   const storageChip=text('span','Storage: …','التخزين: …');storageChip.id='workspaceStorage';context.append(storageChip);
   let storageTimer=null,storagePending=null;
   async function loadStorage(){
     if(!activeWorkspace){storageChip.textContent='';return;}
     const workspaceId=activeWorkspace.id;if(storagePending?.id===workspaceId)return storagePending.promise;
-    const promise=(async()=>{try{const s=await api('/api/workspaces/'+workspaceId+'/storage');if(activeWorkspace?.id===workspaceId)storageChip.textContent=tr('Storage: ','التخزين: ')+s.used_mb+' / '+s.limit_mb+' MB · '+tr('remaining','المتبقي')+' '+(s.remaining_bytes/1048576).toFixed(1)+' MB';}catch(error){if(activeWorkspace?.id===workspaceId)storageChip.textContent='';}})();
+    const promise=(async()=>{try{const s=await api('/api/workspaces/'+workspaceId+'/storage');if(activeWorkspace?.id===workspaceId){storageChip.title=window.workspaceRetentionNotice(s.cache);storageChip.textContent=s.cache?.expired?storageChip.title:(s.scope==='github_working_copy'?tr('Working copy: ','نسخة العمل: '):tr('Local storage: ','التخزين المحلي: '))+s.used_mb+' / '+s.limit_mb+' MB · '+tr('remaining','المتبقي')+' '+(s.remaining_bytes/1048576).toFixed(1)+' MB';}}catch(error){if(activeWorkspace?.id===workspaceId)storageChip.textContent='';}})();
     storagePending={id:workspaceId,promise};try{return await promise;}finally{if(storagePending?.promise===promise)storagePending=null;}
   }
   syncWorkspacePolling=function(){
@@ -158,7 +196,37 @@
   const newTask=textElement('button','','icon-btn');newTask.id='composerNewTask';newTask.type='button';newTask.title=tr('New task','مهمة جديدة');newTask.setAttribute('aria-label',tr('New task','مهمة جديدة'));newTask.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>';newTask.onclick=async()=>{if(!activeWorkspace){toast(tr('Open a workspace first.','افتح مساحة عمل أولاً.'));return;}try{await createSession();toast(tr('New task started in this workspace.','بدأت مهمة جديدة في مساحة العمل.'));}catch(error){toast(error.message)}};
   q('providerSelect').setAttribute('aria-label','Provider');q('modelSelect').setAttribute('aria-label','Model');
   const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Attach a file to this workspace','أرفق ملفًا في مساحة العمل');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);controls.insertBefore(newTask,agent);
-  function openAttachPicker(){if(!activeWorkspace){toast(tr('Open a workspace first.','افتح مساحة عمل أولاً.'));return;}const picker=document.createElement('input');picker.type='file';picker.hidden=true;picker.onchange=async()=>{const file=picker.files&&picker.files[0];if(!file)return;try{const fd=new FormData();fd.append('file',file);const data=await api('/api/workspaces/'+activeWorkspace.id+'/files/upload',{method:'POST',body:fd});toast(tr('File added to the workspace: ','أُضيف الملف إلى مساحة العمل: ')+data.path);await loadStorage().catch(()=>{});await loadFiles().catch(()=>{});await refreshGit().catch(()=>{});}catch(error){toast(error.message);}finally{picker.remove();}};document.body.append(picker);picker.click();}
+  const attachmentList=textElement('div','','composer-attachments');attachmentList.id='composerAttachments';attachmentList.setAttribute('aria-live','polite');q('promptInput').before(attachmentList);
+  let attachments=[];let attachmentRevision=0;
+  const clearAttachments=()=>{attachmentRevision++;for(const item of attachments)if(item.preview)URL.revokeObjectURL(item.preview);attachments=[];attachmentList.replaceChildren();};
+  const renderAttachments=()=>{
+    attachmentList.replaceChildren();for(const item of attachments){const card=textElement('div','','composer-attachment');
+      if(item.preview){const image=document.createElement('img');image.src=item.preview;image.alt='';card.append(image);}
+      const label=textElement('span',item.name);label.dir='auto';label.append(textElement('small',item.error|| (item.path?item.type+' · '+Math.ceil(item.size/1024)+' KB':tr('Uploading…','جارٍ الرفع…'))));
+      const remove=textElement('button','×');remove.type='button';remove.disabled=sending||Boolean(pendingSubmission);remove.setAttribute('aria-label',tr('Remove attachment; keep workspace file','إزالة المرفق مع إبقاء ملف مساحة العمل'));remove.onclick=()=>{if(sending||pendingSubmission)return;attachments=attachments.filter(a=>a!==item);if(item.preview)URL.revokeObjectURL(item.preview);renderAttachments();};card.append(label,remove);attachmentList.append(card);
+    }
+  };
+  window.restoreComposerAttachments=files=>{if(sending||pendingSubmission)return;clearAttachments();attachments=(files||[]).slice(0,10).map(file=>({name:file.name,path:file.path,size:file.size,type:file.mime||tr('File','ملف')}));renderAttachments();};
+  const sentAttachments=payload=>{const paths=new Set((payload?.attachments||[]).map(a=>a.path));for(const item of attachments.filter(a=>paths.has(a.path)))if(item.preview)URL.revokeObjectURL(item.preview);attachments=attachments.filter(a=>!paths.has(a.path));renderAttachments();};
+  async function openAttachPicker(){
+    if(!activeWorkspace||window.workspaceSubmissionBlocked?.())return;
+    const picker=document.createElement('input');picker.type='file';picker.multiple=true;picker.hidden=true;
+    picker.oncancel=()=>picker.remove();picker.onchange=async()=>{
+      const files=[...(picker.files||[])],workspaceId=activeWorkspace.id,owner=currentUser?.id,revision=attachmentRevision;picker.remove();
+      if(files.length+attachments.length>10){toast(tr('Attach up to 10 files per message.','أرفق حتى 10 ملفات لكل رسالة.'));return;}
+      for(const file of files){
+        if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)break;
+        // The existing upload endpoint writes by name; reject duplicate draft names.
+        if(attachments.some(a=>a.name===file.name)){toast(tr('This filename is already attached.','اسم الملف مرفق بالفعل.'));continue;}
+        const item={name:file.name,size:file.size,type:file.type||tr('File','ملف'),preview:['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)?URL.createObjectURL(file):null};attachments.push(item);renderAttachments();
+        try{const fd=new FormData();fd.append('file',file);const data=await api('/api/workspaces/'+workspaceId+'/files/upload',{method:'POST',body:fd});
+          if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)continue;item.path=data.path;item.size=data.size;
+        }catch(error){if(revision===attachmentRevision)item.error=error.message;}
+        if(revision===attachmentRevision)renderAttachments();
+      }
+      if(revision===attachmentRevision){loadStorage().catch(()=>{});loadFiles().catch(()=>{});refreshGit().catch(()=>{});}
+    };document.body.append(picker);picker.click();
+  }
   q('openTools').onclick=()=>window.openConnections('providers');q('openTools').title=tr('Open OpenCode provider and workspace setup','\u0641\u062a\u062d \u0625\u0639\u062f\u0627\u062f \u0645\u0632\u0648\u062f OpenCode \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644');q('chatGithub').onclick=()=>openConnections('github');
   // Option 2 layout: Sessions and project files are sections of the right workspace panel.
   const sessionsSection=document.createElement('details');sessionsSection.className='workspace-side-section workspace-sessions';sessionsSection.open=true;
@@ -256,8 +324,8 @@
   async function loadChanges(){
     if(!activeWorkspace)return;const id=activeWorkspace.id,stamp=++changesStamp;diffView.textContent=tr('Loading changes…','جارٍ تحميل التغييرات…');
     try{const [state,sessionDiff]=await Promise.all([api('/api/workspaces/'+id+'/git/status'),activeSession?api('/api/sessions/'+activeSession.id+'/diff'):Promise.resolve([])]);if(stamp!==changesStamp||activeWorkspace?.id!==id)return;
-      gitSummary.textContent=state.changes.length+' '+tr('changed files','ملفات متغيرة')+' · '+(state.branch||'—');changedFiles.replaceChildren();
-      q('commitButton').disabled=state.clean;q('pushButton').disabled=!state.push_available||!state.clean;
+      gitSummary.textContent=state.changes.length+' '+tr('working tree changes','تغييرات نسخة العمل')+' · '+(state.branch||'—')+(state.ahead!==undefined?' · '+state.ahead+tr(' unpushed commits',' commits غير مرسلة'):'');gitState.textContent=state.repository?'GitHub · '+state.repository+' → '+state.remote_branch:tr('Local project · stored on Gateway','مشروع محلي · محفوظ في Gateway');syncGit.hidden=reviewPR.hidden=!state.repository;syncGit.disabled=!state.clean||!state.github_access;reviewPR.href=state.repository?'https://github.com/'+state.repository+'/compare/'+encodeURIComponent(state.remote_branch):'#';changedFiles.replaceChildren();
+      q('commitButton').disabled=state.clean;q('pushButton').disabled=!state.push_available||!state.clean;q('pushButton').textContent=tr('Push to ','Push إلى ')+(state.remote_branch||'—');q('pushButton').title=state.repository?state.repository+' / '+state.remote_branch:tr('No GitHub remote','لا يوجد مستودع GitHub');
       const runtimeFiles=new Map((sessionDiff||[]).map(row=>[row.file,row]));const names=new Set([...state.changes.map(row=>row.path),...runtimeFiles.keys()]);
       for(const name of names){const b=btn('changed-'+changedFiles.children.length,name,name,async()=>{const patch=runtimeFiles.get(name)?.patch;if(patch){diffView.textContent=patch;return;}const result=await api('/api/workspaces/'+id+'/diff?path='+encodeURIComponent(name));if(stamp===changesStamp&&activeWorkspace?.id===id)diffView.textContent=result.diff||tr('No textual diff','لا يوجد فرق نصّي');});changedFiles.append(b);}
       diffView.textContent=names.size?tr('Select a changed file to review its diff.','اختر ملفًا متغيرًا لمراجعة الفرق.'):tr('No changes in this workspace.','لا توجد تغييرات في مساحة العمل.');
@@ -274,6 +342,10 @@
   const events=textElement('div');previewPanel.hidden=true;changesMode.setAttribute('aria-pressed','true');previewMode.setAttribute('aria-pressed','false');
   refreshGit=async()=>{await loadChanges();q('manageProviders')?.remove();};
   q('commitButton').onclick=async()=>{if(!activeWorkspace)return;const message=await window.requestInput(tr('Commit message','رسالة الالتزام'));if(!message?.trim())return;try{await api('/api/workspaces/'+activeWorkspace.id+'/git/commit',{method:'POST',body:JSON.stringify({message:message.trim()})});await loadChanges();}catch(error){toast(error.message);}};
+  const syncGit=btn('syncWorkspaceGit','Pull / Sync (fast-forward only)','Pull / Sync (تقديم سريع فقط)',async()=>{if(!activeWorkspace)return;if(!await window.confirmAction(tr('Fetch the selected GitHub branch and fast-forward only? Uncommitted/divergent work is preserved.','جلب فرع GitHub المختار والتقديم السريع فقط؟ تُحفظ الأعمال غير المحفوظة أو المتباعدة.')))return;await api('/api/workspaces/'+activeWorkspace.id+'/git/sync',{method:'POST'});await loadChanges();await loadFiles();});syncGit.hidden=true;
+  const exportSource=btn('exportWorkspaceSource','Download source','تنزيل ملفات المشروع',()=>{if(activeWorkspace)window.location.assign('/api/workspaces/'+activeWorkspace.id+'/export');});
+  const reviewPR=textElement('a',tr('Review PR / Merge in GitHub','مراجعة PR / Merge في GitHub'),'button ghost small');reviewPR.target='_blank';reviewPR.rel='noopener noreferrer';reviewPR.hidden=true;
+  gitActions.append(syncGit,exportSource,reviewPR,textElement('small',tr('Commit saves locally. Push updates GitHub. PR and merge are reviewed in GitHub; nothing is sent automatically.','Commit يحفظ محليًا. Push يحدّث GitHub. تُراجع PR وMerge في GitHub؛ لا إرسال تلقائي.')));
   let providers=[],chosenAgent='',chosenProvider='',chosenModel='',discovery=0,modelRequest=0,runtimeReady=false,agentsReady=false,modelsReady=false;
   const retryModels=btn('retryWorkspaceModels','Retry models','أعد تحميل النماذج',()=>models());retryModels.hidden=true;controls.append(retryModels);
   window.addEventListener('workspace-provider-disconnected',event=>{
@@ -290,6 +362,7 @@
     q('providerSelect').disabled=!workAccess||!providers.some(p=>(p.connected||p.id==='opencode')&&p.allowed!==false);
     q('modelSelect').disabled=!workAccess||!modelsReady||!selected?.connected||selected.allowed===false||q('modelSelect').options.length<2;
     const busy=['submitted','waiting_approval'].includes(activeSession?.execution_status);
+    attach.disabled=!workAccess||sending||Boolean(pendingSubmission)||busy;attachmentList.querySelectorAll('button').forEach(button=>button.disabled=sending||Boolean(pendingSubmission));
     q('sendMessage').disabled=sending||Boolean(pendingSubmission)||busy||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     const hasActive=activeSession?.lifecycle==='active'||sessionRows.some(s=>s.lifecycle==='active');
     newSessionButton.disabled=newTask.disabled=!workAccess||hasActive||sending||Boolean(sessionCreating)||Boolean(pendingSubmission);
@@ -401,12 +474,13 @@
   openWorkspace=async function(project,workspace,{navigate=true}={}){
     if(admin()){await page('adminPage');return;}
     if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));
-    stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;sessionRows=[];retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
+    if(activeWorkspace?.id!==workspace.id)clearAttachments();stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;sessionRows=[];retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
     discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
     renderWorkspaceEmpty();q('promptInput').value=pendingIdea;pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode'),''));updateSend();
     if(!navigate){syncWorkspacePolling();return;}
     await page('workspacePage');
+    window.authSession?.workspaceOpened();
 
   };
   async function refreshSessionStatus(){
@@ -422,9 +496,9 @@
   }
   let eventRefreshTimer=null;
   window.addEventListener('authentication-cleared',()=>{
-    clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
+    clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
     pendingSubmission=null;sending=cancelRequested=false;sessionRows=[];providers=[];chosenAgent=chosenProvider=chosenModel='';
-    runtimeReady=agentsReady=modelsReady=workAccess=false;entitlement=null;retrySubmission.hidden=retryModels.hidden=true;
+    runtimeReady=agentsReady=modelsReady=workAccess=false;entitlement=null;workspaceDays.hidden=workspaceAccess.hidden=true;workspaceDays.textContent='';workspaceAccess.replaceChildren();homeAccess.replaceChildren();retrySubmission.hidden=retryModels.hidden=true;
     submissionStatus.textContent=storageChip.textContent=activityStage.textContent=activitySummary.textContent='';
     capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;approvalsList.replaceChildren();detailLoads.clear();updateSend();
   });
@@ -467,7 +541,7 @@
       try{result=await api('/api/sessions/'+pending.sessionId+'/submissions/'+pending.request_id);}catch(error){if(error.status!==404)throw error;if(pending.recovered)throw new Error(tr('Submission is not confirmed yet. Check again; no automatic resend occurred.','لم يتأكد الطلب بعد. تحقق مجددًا؛ لم تحدث إعادة إرسال تلقائية.'));}
       if(!result){if(!submissionCurrent(pending))return;result=await api('/api/sessions/'+pending.sessionId+'/messages',{method:'POST',body:JSON.stringify(pending.payload)});}
       if(!submissionCurrent(pending))return;
-      pendingSubmission=null;retrySubmission.hidden=true;submissionStatus.textContent=tr('Submission confirmed.','تم تأكيد الطلب.');
+      sentAttachments(pending.payload);pendingSubmission=null;retrySubmission.hidden=true;submissionStatus.textContent=tr('Submission confirmed.','تم تأكيد الطلب.');
       if(pending.payload&&q('promptInput').value.trim()===pending.payload.text)q('promptInput').value='';
       await refreshSessionStatus();await refreshMessages();
     }catch(error){if(submissionCurrent(pending)){retrySubmission.hidden=false;submissionStatus.textContent=error.message;toast(error.message);}}
@@ -475,7 +549,7 @@
   }
   window.workspaceSubmissionBlocked=()=>sending||Boolean(pendingSubmission)||['submitted','waiting_approval'].includes(activeSession?.execution_status);
   q('promptForm').onsubmit=async event=>{
-    event.preventDefault();if(window.workspaceSubmissionBlocked()||!activeWorkspace)return;
+    event.preventDefault();if(window.workspaceSubmissionBlocked()||!activeWorkspace)return;if(attachments.some(a=>!a.path||a.error)){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
     const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     // Synchronous lock precedes entitlement, creation, runtime and network waits.
@@ -485,12 +559,12 @@
       if(!activeSession)await createSession({checked:true});
       if(!activeSession||cancelRequested||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
       const requestId=crypto.randomUUID(),sessionId=activeSession.id;
-      const payload={request_id:requestId,text:prompt,provider_id:provider,model_id:model,...(selectedAgent?{agent_id:selectedAgent}:{})};
+      const payload={request_id:requestId,text:prompt,provider_id:provider,model_id:model,attachments:attachments.map(a=>({path:a.path})),...(selectedAgent?{agent_id:selectedAgent}:{})};
       const pending={request_id:requestId,sessionId,workspaceId,owner,payload};pendingSubmission=pending;
       try{sessionStorage.setItem('og-submit:'+owner+':'+sessionId,JSON.stringify({request_id:requestId}));}catch(error){}
       const result=await api('/api/sessions/'+sessionId+'/messages',{method:'POST',body:JSON.stringify(payload)});
       if(!submissionCurrent(pending))return;
-      pendingSubmission=null;retrySubmission.hidden=true;activeSession.execution_status=result.status;updateSend();
+      sentAttachments(payload);pendingSubmission=null;retrySubmission.hidden=true;activeSession.execution_status=result.status;updateSend();
       if(q('promptInput').value.trim()===prompt)q('promptInput').value='';submissionStatus.textContent=tr('Submission confirmed.','تم تأكيد الطلب.');
       await refreshSessionStatus();await refreshMessages();
     }catch(error){
@@ -516,11 +590,32 @@
     }catch(error){cancelRequested=false;toast(error.message);}finally{if(!sending)cancelRequested=false;updateSend();}
   };
   async function openRepositoryPicker(){
-    const dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog';const close=btn('repositoryClose','Close','إغلاق',()=>dialog.close());dialog.append(title('Working repository / branch','مستودع العمل / الفرع'),close);
-    const state=await api('/api/github/status');if(!state.connected){dialog.append(text('p','Connect GitHub in Settings to choose your repository.','اربط GitHub من الإعدادات لاختيار مستودعك.'),btn('repositoryConnect','Settings · GitHub','الإعدادات · GitHub',()=>{dialog.close();openConnections('github');}));}
-    else{const repos=await api('/api/github/repositories'),form=document.createElement('form'),repository=document.createElement('select'),branch=document.createElement('select'),name=document.createElement('input');repository.id='workspaceRepository';branch.id='workspaceRemoteBranch';name.id='workspaceProjectName';repository.setAttribute('aria-label','Repository');branch.setAttribute('aria-label','Branch');name.setAttribute('aria-label','Project name');name.placeholder=tr('Project name','اسم المشروع');name.required=repository.required=branch.required=true;repository.add(new Option(tr('Choose repository','اختر مستودعًا'),''));for(const r of repos)repository.add(new Option(r.full_name,r.full_name));repository.onchange=async()=>{branch.replaceChildren();if(!repository.value)return;try{for(const b of await api('/api/github/branches?repository='+encodeURIComponent(repository.value)))branch.add(new Option(b.name,b.name));name.value=repository.value.split('/').pop();}catch(error){toast(error.message);}};const submit=text('button','Open new workspace','فتح مساحة عمل جديدة','button');submit.type='submit';form.append(repository,branch,name,submit);form.onsubmit=async event=>{event.preventDefault();submit.disabled=true;try{const result=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'github',repository:repository.value,branch:branch.value,project_name:name.value})});dialog.close();await openWorkspace(result.project,result.workspace);}catch(error){toast(error.message);}finally{submit.disabled=false;}};dialog.append(form);}
-    document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
+    const dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog';dialog.setAttribute('aria-label',tr('GitHub repository and branch','مستودع وفرع GitHub'));
+    const close=btn('repositoryClose','Close','إغلاق',()=>dialog.close()),feedback=textElement('p',tr('Loading authorized repositories…','جارٍ تحميل المستودعات المصرّح بها…'),'api-message');feedback.setAttribute('role','status');
+    dialog.append(title('GitHub repository / branch','مستودع GitHub / الفرع'),close,text('p','Your repository stays in GitHub. OpenCode works on a server-side working copy. Commit and push are separate explicit actions.','يبقى المستودع في GitHub. يعمل OpenCode على نسخة عمل بالخادم. Commit وPush إجراءان منفصلان باختيارك.'),feedback);
+    document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();
+    try{
+      const state=await api('/api/github/status');if(!dialog.open)return;
+      if(!state.connected){feedback.textContent=tr('Connect GitHub in Settings first.','اربط GitHub من الإعدادات أولًا.');dialog.append(btn('repositoryConnect','Settings · GitHub','الإعدادات · GitHub',()=>{dialog.close();openConnections('github');}));return;}
+      const repos=await api('/api/github/repositories');if(!dialog.open)return;
+      const form=document.createElement('form'),repository=document.createElement('select'),branch=document.createElement('select'),name=document.createElement('input');
+      repository.id='workspaceRepository';branch.id='workspaceRemoteBranch';name.id='workspaceProjectName';name.maxLength=120;name.value=q('projectName').value;
+      function field(en,ar,input){const label=textElement('label',tr(en,ar));label.append(input);form.append(label);}
+      field('Repository','المستودع',repository);field('Branch','الفرع',branch);field('Project name','اسم المشروع',name);
+      const workingPaths=document.createElement('input');workingPaths.placeholder='src, tests';workingPaths.maxLength=2000;field('Working directories (optional, comma-separated)','مجلدات العمل (اختياري، مفصولة بفواصل)',workingPaths);
+      form.append(textElement('p',tr('Leave empty for the complete shallow copy. Selected directories include root files; include dependencies and tests you need. Git history/blobs still count toward the working-copy limit. No files or remote branches are deleted.','اتركه فارغًا لنسخة كاملة بتاريخ مختصر. المجلدات المختارة تشمل ملفات الجذر؛ اختر التبعيات والفحوص اللازمة. بيانات Git تحتسب ضمن حد نسخة العمل. لا تُحذف ملفات أو فروع بعيدة.')));
+      name.required=repository.required=branch.required=true;branch.disabled=true;repository.add(new Option(tr('Choose repository','اختر مستودعًا'),''));
+      for(const r of repos)repository.add(new Option(r.full_name+(r.private?tr(' · Private',' · خاص'):''),r.full_name));
+      const submit=textElement('button',tr('Create GitHub-backed project','إنشاء مشروع مرتبط بـGitHub'),'button');submit.type='submit';submit.disabled=true;form.append(submit);dialog.append(form);feedback.textContent='';let revision=0;
+      repository.onchange=async()=>{
+        const selected=repository.value,stamp=++revision;branch.replaceChildren();branch.disabled=submit.disabled=true;if(!selected)return;
+        feedback.textContent=tr('Loading branches…','جارٍ تحميل الفروع…');
+        try{const branches=await api('/api/github/branches?repository='+encodeURIComponent(selected));if(!dialog.open||stamp!==revision)return;for(const b of branches)branch.add(new Option(b.name,b.name));const preferred=repos.find(r=>r.full_name===selected)?.default_branch;if(branches.some(b=>b.name===preferred))branch.value=preferred;name.value=name.value||selected.split('/').pop();branch.disabled=false;submit.disabled=!branches.length;feedback.textContent='';}catch(error){if(stamp===revision)feedback.textContent=error.message;}
+      };
+      form.onsubmit=async event=>{event.preventDefault();if(!form.reportValidity()||submit.disabled)return;submit.disabled=true;feedback.textContent=tr('Preparing a shallow working copy…','جارٍ تجهيز نسخة عمل بتاريخ مختصر…');try{const result=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'github',repository:repository.value,branch:branch.value,project_name:name.value,working_paths:workingPaths.value.split(',').map(path=>path.trim()).filter(Boolean)})});if(!dialog.open)return;dialog.close();await openWorkspace(result.project,result.workspace);}catch(error){if(dialog.open)feedback.textContent=error.message;}finally{submit.disabled=false;}};
+    }catch(error){if(dialog.open)feedback.textContent=error.message;}
   }
+  window.openGithubProject=openRepositoryPicker;
   const detailLoads=new Map();
   loadWorkspaceDetails=function(){
     const workspace=activeWorkspace;if(!workspace)return;
@@ -529,7 +624,7 @@
     loadStorage().catch(()=>{});
     loadFiles().catch(()=>{});
     refreshSessions().catch(error=>toast(error.message));
-    Promise.all([refreshGit(),api('/api/github/status').then(state=>{if(activeWorkspace?.id!==workspace.id)return;gitState.textContent=state.connected?'GitHub · '+(state.account_login||tr('Connected','متصل')):tr('GitHub · Not connected','GitHub · غير متصل');})]).catch(error=>toast(error.message));
+    refreshGit().catch(error=>toast(error.message));
   };
   createWorkspaceSession=createSession;
   if(activeProject){q('workspaceRepo').textContent=activeProject.name;q('workspaceBranch').textContent=activeProject.branch||'—';}
@@ -567,14 +662,19 @@
         actions.append(act('confirm-'+order.id,ACTION_ICONS.confirm,tr('Verify receipt / Activate','تأكيد الاستلام / التفعيل'),async()=>{const reference=await window.requestInput(tr('After verifying the transfer was received, enter its receipt reference.','بعد التحقق من استلام التحويل، أدخل مرجع الاستلام.'));if(!reference)return;await api('/api/billing/admin/orders/'+order.id+'/confirm',{method:'POST',body:JSON.stringify({reference})});await loadPaymentOrders(true);}));
         actions.append(act('reject-'+order.id,ACTION_ICONS.reject,tr('Reject','رفض'),async()=>{const reason=await window.requestInput(tr('Rejection reason','سبب الرفض'));if(!reason?.trim())return;await api('/api/billing/admin/orders/'+order.id+'/reject',{method:'POST',body:JSON.stringify({reason:reason.trim()})});await loadPaymentOrders(true);}));
       }
-      if(!platform&&order.provider_environment&&!['paid','sandbox_paid'].includes(order.status))actions.append(act('capture-'+order.id,ACTION_ICONS.confirm,tr('Confirm PayPal payment','تأكيد دفع PayPal'),async()=>{const verified=await api('/api/billing/orders/'+order.id+'/paypal/capture',{method:'POST'});await oldClientView('billing');await loadPaymentOrders();toast(verified.status==='sandbox_paid'?tr('Sandbox payment verified. Real subscription unchanged.','تم التحقق من الدفع التجريبي دون تفعيل اشتراك حقيقي.'):tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));}));
+      if(!platform&&order.provider_environment&&!['paid','sandbox_paid'].includes(order.status))actions.append(act('capture-'+order.id,ACTION_ICONS.confirm,tr('Confirm PayPal payment','تأكيد دفع PayPal'),async()=>{const verified=await api('/api/billing/orders/'+order.id+'/paypal/capture',{method:'POST'});await refreshCustomerBilling();toast(verified.status==='sandbox_paid'?tr('Sandbox payment verified. Real subscription unchanged.','تم التحقق من الدفع التجريبي دون تفعيل اشتراك حقيقي.'):tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));}));
       if(!platform&&order.status==='awaiting_payment')actions.append(act('resume-'+order.id,ACTION_ICONS.resume,tr('Payment instructions','تعليمات الدفع'),()=>beginCheckout(order.plan_id,order.method_id)));
       if(!platform&&['awaiting_payment','pending_review'].includes(order.status))actions.append(act('cancel-'+order.id,ACTION_ICONS.cancel,tr('Cancel payment','إلغاء الدفع'),async()=>{if(!await window.confirmAction(tr('Cancel this payment request?','إلغاء طلب الدفع هذا؟')))return;await api('/api/billing/orders/'+order.id+'/cancel',{method:'POST'});await loadPaymentOrders();}));
-      if(!platform&&['failed','cancelled','rejected'].includes(order.status))actions.append(act('remove-'+order.id,ACTION_ICONS.remove,tr('Remove from history','حذف من السجل'),async()=>{if(!await window.confirmAction(tr('Remove this payment from your history?','حذف هذا الدفع من سجلك؟')))return;await api('/api/billing/orders/'+order.id,{method:'DELETE'});await loadPaymentOrders();}));
+      if(!platform&&!window.reactivationAccount&&['failed','cancelled','rejected'].includes(order.status))actions.append(act('remove-'+order.id,ACTION_ICONS.remove,tr('Remove from history','حذف من السجل'),async()=>{if(!await window.confirmAction(tr('Remove this payment from your history?','حذف هذا الدفع من سجلك؟')))return;await api('/api/billing/orders/'+order.id,{method:'DELETE'});await loadPaymentOrders();}));
       if(actions.children.length)row.append(actions);
       host.append(row);
     }
     if(!list.length)host.append(text('p',platform?tr('No payments to review','لا توجد مدفوعات للمراجعة'):tr('No payments yet. Successful payments stay here as records.','لا توجد مدفوعات بعد. تبقى المدفوعات الناجحة هنا كسجلات.')));
+  }
+  window.loadReactivationOrders=()=>loadPaymentOrders();
+  async function refreshCustomerBilling(){
+    if(window.reactivationAccount)return window.openReactivation();
+    await oldClientView('billing');await loadPaymentOrders();
   }
   async function beginCheckout(planId,methodId){
     const [plans]=await Promise.all([api('/api/plans',{cache:'no-store'})]);
@@ -614,9 +714,9 @@
           if(ppStatus&&ppStatus.configured&&ppStatus.client_id&&result.order.provider_order_id){
             const host=textElement('div');host.id='paypalButtonHost';body.append(host);
             const loadPp=()=>new Promise((resolve,reject)=>{if(window.paypal)return resolve(window.paypal);const s=document.createElement('script');s.src='https://www.paypal.com/sdk/js?client-id='+encodeURIComponent(ppStatus.client_id)+'&currency='+encodeURIComponent(result.order.currency)+'&intent=capture&components=buttons';s.onload=()=>resolve(window.paypal);s.onerror=()=>reject(new Error('paypal-sdk'));document.head.append(s);});
-            loadPp().then(pp=>{pp.Buttons({style:{layout:'vertical'},createOrder:()=>result.order.provider_order_id,onApprove:async()=>{const verified=await api('/api/billing/orders/'+result.order.id+'/paypal/capture',{method:'POST'});dialog.close();await oldClientView('billing');await loadPaymentOrders();toast(verified.status==='sandbox_paid'?tr('Sandbox payment verified. Real subscription unchanged.','تم التحقق من الدفع التجريبي دون تفعيل اشتراك حقيقي.'):tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));},onCancel:()=>toast(tr('Payment cancelled. No subscription activated.','تم إلغاء الدفع دون تفعيل الاشتراك.')),onError:()=>toast(tr('PayPal could not complete this payment. No subscription activated.','تعذر إتمام الدفع عبر PayPal دون تفعيل الاشتراك.'))}).render('#paypalButtonHost');}).catch(()=>{if(result.approval_url)window.location.assign(result.approval_url);});
+            loadPp().then(pp=>{pp.Buttons({style:{layout:'vertical'},createOrder:()=>result.order.provider_order_id,onApprove:async()=>{const verified=await api('/api/billing/orders/'+result.order.id+'/paypal/capture',{method:'POST'});dialog.close();await refreshCustomerBilling();toast(verified.status==='sandbox_paid'?tr('Sandbox payment verified. Real subscription unchanged.','تم التحقق من الدفع التجريبي دون تفعيل اشتراك حقيقي.'):tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));},onCancel:()=>toast(tr('Payment cancelled. No subscription activated.','تم إلغاء الدفع دون تفعيل الاشتراك.')),onError:()=>toast(tr('PayPal could not complete this payment. No subscription activated.','تعذر إتمام الدفع عبر PayPal دون تفعيل الاشتراك.'))}).render('#paypalButtonHost');}).catch(()=>{if(result.approval_url)window.location.assign(result.approval_url);});
           }else if(result.approval_url)window.location.assign(result.approval_url);
-          body.append(btn('confirmPayPalPayment','Confirm PayPal payment','تأكيد دفع PayPal',async()=>{const verified=await api('/api/billing/orders/'+result.order.id+'/paypal/capture',{method:'POST'});dialog.close();await oldClientView('billing');await loadPaymentOrders();toast(verified.status==='sandbox_paid'?tr('Sandbox payment verified. Real subscription unchanged.','تم التحقق من الدفع التجريبي دون تفعيل اشتراك حقيقي.'):tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));}));
+          body.append(btn('confirmPayPalPayment','Confirm PayPal payment','تأكيد دفع PayPal',async()=>{const verified=await api('/api/billing/orders/'+result.order.id+'/paypal/capture',{method:'POST'});dialog.close();await refreshCustomerBilling();toast(verified.status==='sandbox_paid'?tr('Sandbox payment verified. Real subscription unchanged.','تم التحقق من الدفع التجريبي دون تفعيل اشتراك حقيقي.'):tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));}));
         }else if(result.payment_url){
           const link=textElement('a',tr('Open the payment provider page','فتح صفحة مزود الدفع'),'button checkout-hosted-link');link.href=result.payment_url;link.target='_blank';link.rel='noopener noreferrer';const pvNote=tr('Complete payment on the provider page, then submit your reference for verification.','أكمل الدفع في صفحة المزود، ثم أرسل مرجعك للتحقق.');body.append(link,text('p',pvNote,pvNote,'checkout-lead'));
         }
@@ -646,7 +746,7 @@
         const up=await fetch('/api/billing/orders/'+result.order.id+'/receipt',{method:'POST',body:fd,credentials:'same-origin'});
         if(!up.ok)throw new Error((await up.json().catch(()=>({}))).detail||'Receipt upload failed');
         await api('/api/billing/orders/'+result.order.id+'/reference',{method:'PUT',body:JSON.stringify({reference:reference.value,sender_name:sender.value,sender_email:senderEmail.value,sender_bank:senderBank.value,sender_account:senderAccount.value,transfer_date:tdate.value,amount_sent_cents:Math.round(Number(sent.value)*100)})});
-        dialog.close();await oldClientView('billing');await loadPaymentOrders();
+        dialog.close();await refreshCustomerBilling();
         toast(tr('Payment submitted. Status: pending verification.','أُرسل الدفع. الحالة: بانتظار التحقق.'));
       }catch(error){showError(error);}finally{send.disabled=false;}};
       body.append(form);
@@ -659,11 +759,11 @@
       else renderManualForm(method);
     });go.disabled=!methods.length;
     if(!methods.length)dialog.append(text('p','No payment method is configured for this plan yet.','لم تُعدّ وسيلة دفع لهذه الخطة بعد.'));
-    dialog.append(rows,select,noteWrap,go,body,textElement('small',tr('Payment for: ','الدفع لحساب: ')+currentUser.email),text('p','Subscription payments are non-refundable.','الاشتراكات غير قابلة لاسترداد المبلغ.','refund-policy'));
+    dialog.append(rows,select,noteWrap,go,body,textElement('small',tr('Payment for: ','الدفع لحساب: ')+(currentUser||window.reactivationAccount).email),text('p','Subscription payments are non-refundable.','الاشتراكات غير قابلة لاسترداد المبلغ.','refund-policy'));
     document.body.append(dialog);dialog.onclose=()=>dialog.remove();dialog.showModal();
   }
   window.beginCheckout=beginCheckout;
-  authReady.then(async()=>{const params=new URLSearchParams(location.search);const ret=params.get('payment_return'),cancel=params.get('payment_cancel');if(!ret&&!cancel)return;history.replaceState(null,'',location.pathname+location.hash);if(!currentUser){page('authPage');return;}await window.openClientView('billing');try{await loadPaymentOrders()}catch(error){toast(error.message)}if(cancel){toast(tr('Payment cancelled. No subscription was activated.','تم إلغاء الدفع دون تفعيل أي اشتراك.'));return}try{const orders=await api('/api/billing/orders');const order=orders.find(o=>o.id===ret);const status=order&&order.status;if(status==='paid')toast(tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));else if(status==='sandbox_paid')toast(tr('Sandbox payment recorded. Real subscription unchanged.','سُجل الدفع التجريبي دون تفعيل اشتراك حقيقي.'));else if(status)toast(tr('Payment is pending verification. Press Confirm PayPal payment in Payment orders.','الدفع بانتظار التحقق. اضغط تأكيد دفع PayPal في طلبات الدفع.'));else toast(tr('Returned from PayPal. Confirm your payment in Payment orders.','عدت من PayPal. أكد الدفع من طلبات الدفع.'))}catch(error){toast(error.message)}}).catch(error=>toast(error.message));
+  authReady.then(async()=>{const params=new URLSearchParams(location.search);const ret=params.get('payment_return'),cancel=params.get('payment_cancel');if(!ret&&!cancel)return;history.replaceState(null,'',location.pathname+location.hash);if(window.reactivationAccount){await window.loadManagement();await window.openReactivation();}else if(!currentUser){page('authPage');return;}else await window.openClientView('billing');try{await loadPaymentOrders()}catch(error){toast(error.message)}if(cancel){toast(tr('Payment cancelled. No subscription was activated.','تم إلغاء الدفع دون تفعيل أي اشتراك.'));return}try{const orders=await api('/api/billing/orders');const order=orders.find(o=>o.id===ret);const status=order&&order.status;if(status==='paid')toast(tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));else if(status==='sandbox_paid')toast(tr('Sandbox payment recorded. Real subscription unchanged.','سُجل الدفع التجريبي دون تفعيل اشتراك حقيقي.'));else if(status)toast(tr('Payment is pending verification. Press Confirm PayPal payment in Payment orders.','الدفع بانتظار التحقق. اضغط تأكيد دفع PayPal في طلبات الدفع.'));else toast(tr('Returned from PayPal. Confirm your payment in Payment orders.','عدت من PayPal. أكد الدفع من طلبات الدفع.'))}catch(error){toast(error.message)}}).catch(error=>toast(error.message));
   setInterval(async()=>{if(!currentUser||admin()||!document.querySelector('#workspacePage.active,#workspaceHomePage.active'))return;try{await refreshEntitlement();}catch(error){toast(error.message);}},30000);
   document.addEventListener('click',event=>{if(event.target.closest('#clientNav [data-client-view=billing]'))loadPaymentOrders().catch(e=>toast(e.message));if(event.target.closest('#adminNav [data-admin-view=billing]'))loadPaymentOrders(true).catch(e=>toast(e.message));});
   matchMedia('(max-width:1100px)').addEventListener('change',()=>{q('sessionSidebar').classList.remove('open');overlay(false);});

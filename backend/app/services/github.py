@@ -7,11 +7,13 @@ from __future__ import annotations
 import hashlib, hmac, json, secrets
 from datetime import datetime, timedelta, timezone
 import httpx
+from urllib.parse import quote
 from fastapi import HTTPException
 from sqlalchemy import select
 from ..config import settings
 from ..models import GithubAuthState, GithubConnection, User
 from . import credentials
+from .entitlements import require_advanced
 
 STATE_TTL_MINUTES = 15
 
@@ -81,10 +83,10 @@ def installation_token(connection: GithubConnection) -> str:
 
 def _aware(value): return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
-def exchange_code(code):
+def exchange_code(code, redirect_uri=None, verifier=None):
     try:
         with httpx.Client(timeout=20,follow_redirects=False,trust_env=False) as client:
-            response=client.post(settings.github_web_base.rstrip('/')+'/login/oauth/access_token',headers={'Accept':'application/json'},data={'client_id':settings.github_client_id,'client_secret':settings.github_client_secret,'code':code,'redirect_uri':settings.github_callback_url})
+            response=client.post(settings.github_web_base.rstrip('/')+'/login/oauth/access_token',headers={'Accept':'application/json'},data={'client_id':settings.github_client_id,'client_secret':settings.github_client_secret,'code':code,'redirect_uri':redirect_uri or settings.github_callback_url,**({'code_verifier':verifier} if verifier else {})})
             result=response.json()
     except (httpx.HTTPError,ValueError): raise HTTPException(502,'GitHub authorization failed')
     if response.status_code!=200 or not result.get('access_token'): raise HTTPException(403,'GitHub authorization failed')
@@ -109,6 +111,7 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
         raise HTTPException(400, "GitHub authorization state expired")
     user=db.get(User,record.user_id)
     if not user or user.status!='active' or not code: raise HTTPException(403,'Active account and GitHub user authorization required')
+    require_advanced(db, user)
     token=exchange_code(code)
     authorized=False
     for page in range(1,101):
@@ -135,6 +138,7 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
     row.suspended = False
     row.user_token=credentials.encrypt(token['access_token'])
     row.token_expires_at=now+timedelta(seconds=min(int(token.get('expires_in',28800)),28800))
+    require_advanced(db, user, start=True)
     db.commit()
     return row
 
@@ -147,26 +151,40 @@ def disconnect(db, user):
 
 def list_repositories(connection: GithubConnection) -> list[dict]:
     token = installation_token(connection)
-    data = _api("GET", f"/user/installations/{connection.installation_id}/repositories", token=token, params={"per_page": 100})
     repos = []
-    for repo in (data or {}).get("repositories", []):
-        owner = (repo.get("owner") or {}).get("login")
-        repos.append({
-            "id": repo.get("id"), "full_name": repo.get("full_name"), "name": repo.get("name"),
-            "private": bool(repo.get("private")), "default_branch": repo.get("default_branch"),
-            "owner": owner, "clone_url": repo.get("clone_url"),
-        })
+    for page in range(1,101):
+        data = _api("GET", f"/user/installations/{connection.installation_id}/repositories", token=token, params={"per_page": 100,"page":page})
+        items = (data or {}).get("repositories", [])
+        for repo in items:
+            owner = (repo.get("owner") or {}).get("login")
+            repos.append({
+                "id": repo.get("id"), "full_name": repo.get("full_name"), "name": repo.get("name"),
+                "private": bool(repo.get("private")), "default_branch": repo.get("default_branch"),
+                "owner": owner, "clone_url": repo.get("clone_url"),
+            })
+        if len(items)<100: break
     return repos
 
+def authorized_repository(connection, full_name):
+    repo = next((repo for repo in list_repositories(connection) if repo['full_name'] == full_name), None)
+    if repo is None:
+        raise HTTPException(404, "Repository is not available to the connected GitHub installation")
+    return repo
+
 def list_branches(connection: GithubConnection, full_name: str) -> list[dict]:
+    authorized_repository(connection, full_name)
     token = installation_token(connection)
-    data = _api("GET", f"/repos/{full_name}/branches", token=token, params={"per_page": 100})
-    return [{"name": b.get("name"), "commit": (b.get("commit") or {}).get("sha")} for b in (data or [])]
+    rows = []
+    for page in range(1,101):
+        data = _api("GET", f"/repos/{full_name}/branches", token=token, params={"per_page": 100,"page":page}) or []
+        rows.extend({"name": b.get("name"), "commit": (b.get("commit") or {}).get("sha")} for b in data)
+        if len(data)<100: break
+    return rows
 
 def verify_remote_commit(connection: GithubConnection, full_name: str, branch: str, sha: str) -> bool:
     token = installation_token(connection)
     try:
-        data = _api("GET", f"/repos/{full_name}/git/ref/heads/{branch}", token=token)
+        data = _api("GET", f"/repos/{full_name}/git/ref/heads/{quote(branch,safe='')}", token=token)
     except HTTPException as exc:
         if exc.status_code == 404:
             return False

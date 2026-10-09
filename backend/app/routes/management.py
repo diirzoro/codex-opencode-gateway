@@ -2,7 +2,7 @@ import json, secrets, uuid
 from urllib.parse import urlsplit
 import ipaddress
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query
 from pydantic import BaseModel, ConfigDict, Field, EmailStr, field_validator
 from sqlalchemy import select, update, func
 from sqlalchemy.orm import Session
@@ -11,10 +11,11 @@ from ..models import User, AuthSession, Workspace, GithubConnection, Country, Re
 from ..models.management import BillingMethod, AccountAudit, PasswordReset
 from ..schemas.account import RegisterRequest
 from ..security.passwords import hash_password, verify_password
-from ..security.sessions import hash_session_token
+from ..security.sessions import (hash_session_token, new_reactivation_token,
+    reactivation_cookie_name, reactivation_eligible)
 from ..services import credentials, recovery, opencode, paypal
 from ..services.accounts import user_payload
-from .dependencies import require_user, require_admin
+from .dependencies import require_user, require_admin, require_billing_user, require_reactivation_user
 
 router=APIRouter(prefix='/api',tags=['account management'])
 def now(): return datetime.now(timezone.utc)
@@ -52,8 +53,9 @@ class Reset(BaseModel):
 
 @router.post('/auth/forgot-password',status_code=202)
 def forgot(data:Forgot,db:Session=Depends(get_db)):
-    message={'message':'If an active account matches and email delivery is available, a recovery link will be sent.'}
-    user=db.scalar(select(User).where(func.lower(User.email)==str(data.email).lower(),User.status=='active'))
+    message={'message':'If an eligible account matches and email delivery is available, a recovery link will be sent.'}
+    user=db.scalar(select(User).where(func.lower(User.email)==str(data.email).lower(),User.status.in_(['active','archived'])))
+    if user and user.status=='archived' and not reactivation_eligible(user): return message
     if not user: return message
     count=db.scalar(select(func.count()).select_from(PasswordReset).where(PasswordReset.user_id==user.id,PasswordReset.created_at>now()-timedelta(hours=1)))
     if count>=3: return message
@@ -65,15 +67,88 @@ def forgot(data:Forgot,db:Session=Depends(get_db)):
         record.used=True; audit(db,user,'password.recovery_delivery_unavailable'); db.commit()
     return message
 
+class RecoveryToken(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    token: str=Field(min_length=32,max_length=256)
+
+def recovery_record(db,token,*,lock=False):
+    query=select(PasswordReset).where(PasswordReset.token_hash==hash_session_token(token))
+    record=db.scalar(query)
+    if lock and record:
+        # User first, then proof: two different links must not each hold their
+        # proof while waiting to invalidate the account's other recovery links.
+        # This also matches archival/password completion's account lock order.
+        db.scalar(select(User).where(User.id==record.user_id).with_for_update().execution_options(populate_existing=True))
+        record=db.scalar(query.with_for_update().execution_options(populate_existing=True))
+    if not record or record.used or aware(record.expires_at)<=now(): raise HTTPException(400,'Recovery link is invalid or expired')
+    return record
+
+@router.post('/auth/recovery-status')
+def recovery_status(data:RecoveryToken,db:Session=Depends(get_db)):
+    record=recovery_record(db,data.token)
+    user=db.get(User,record.user_id)
+    if not user or user.status not in {'active','archived'}: raise HTTPException(400,'Recovery link is invalid or expired')
+    return {'reactivation_required':reactivation_eligible(user)}
+
+def reactivation_payload(db,user):
+    from ..services.entitlements import access_payload
+    access=access_payload(db,user)
+    return {'email':user.email,'username':user.username,'scope':'reactivation',
+        'payment_verified':user.status=='active' and access['reason']=='subscription' and access['allowed']}
+
+@router.post('/auth/reactivation/verify')
+def verify_reactivation(data:RecoveryToken,response:Response,db:Session=Depends(get_db)):
+    record=recovery_record(db,data.token,lock=True)
+    user=db.scalar(select(User).where(User.id==record.user_id).with_for_update().execution_options(populate_existing=True))
+    if not user or not reactivation_eligible(user): raise HTTPException(400,'Recovery link is invalid or expired')
+    # Single-use email proof issues a renewal-only AuthSession; it neither
+    # changes account status nor establishes a usable password/normal session.
+    revoke(db,user)
+    db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
+    raw,hashed=new_reactivation_token()
+    db.add(AuthSession(user_id=user.id,token_hash=hashed,last_seen_at=now(),expires_at=now()+timedelta(minutes=30)))
+    audit(db,user,'account.reactivation_verified');db.commit()
+    from ..config import settings
+    response.delete_cookie(settings.session_cookie_name,path='/',secure=settings.cookie_secure,httponly=True,samesite='strict')
+    response.set_cookie(reactivation_cookie_name(),raw,path='/api',httponly=True,secure=settings.cookie_secure,samesite='strict')
+    return reactivation_payload(db,user)
+
+@router.get('/auth/reactivation')
+def reactivation_status(user:User=Depends(require_reactivation_user),db:Session=Depends(get_db)):
+    return reactivation_payload(db,user)
+
+class ReactivationPassword(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    password: str=Field(min_length=8,max_length=128)
+    @field_validator('password')
+    @classmethod
+    def strong(cls,value): return RegisterRequest.strong_password(value)
+
+@router.post('/auth/reactivation/password')
+def reactivation_password(data:ReactivationPassword,response:Response,user:User=Depends(require_reactivation_user),db:Session=Depends(get_db)):
+    user=db.scalar(select(User).where(User.id==user.id).with_for_update().execution_options(populate_existing=True))
+    if not reactivation_eligible(user) or not reactivation_payload(db,user)['payment_verified']:
+        raise HTTPException(409,'Complete a verified real payment before setting the reactivation password')
+    user.password_hash=hash_password(data.password);revoke(db,user)
+    db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
+    audit(db,user,'account.reactivation_completed');audit(db,user,'password.reset');db.commit()
+    from ..config import settings
+    response.delete_cookie(reactivation_cookie_name(),path='/api',secure=settings.cookie_secure,httponly=True,samesite='strict')
+    return {'message':'Account reactivated. Sign in with your fresh password.'}
+
 @router.post('/auth/reset-password')
 def reset(data:Reset,db:Session=Depends(get_db)):
-    record=db.scalar(select(PasswordReset).where(PasswordReset.token_hash==hash_session_token(data.token)).with_for_update())
-    if not record or record.used or aware(record.expires_at)<=now(): raise HTTPException(400,'Recovery link is invalid or expired')
-    user=db.get(User,record.user_id)
-    if not user or user.status!='active': raise HTTPException(400,'Recovery link is invalid or expired')
+    record=recovery_record(db,data.token,lock=True)
+    user=db.scalar(select(User).where(User.id==record.user_id).with_for_update().execution_options(populate_existing=True))
+    if not user or user.status!='active': raise HTTPException(400,'Use account reactivation to renew this archived account')
+    finishing_reactivation=reactivation_eligible(user)
+    if finishing_reactivation and not reactivation_payload(db,user)['payment_verified']:
+        raise HTTPException(409,'Complete a verified real payment before setting the reactivation password')
     user.password_hash=hash_password(data.password); revoke(db,user)
     db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
-    audit(db,user,'password.reset'); db.commit()
+    audit(db,user,'password.reset')
+    if finishing_reactivation: audit(db,user,'account.reactivation_completed')
+    db.commit()
     return {'message':'Password reset. Sign in with your new password.'}
 
 class Lifecycle(BaseModel):
@@ -180,7 +255,7 @@ def methods(platform:bool=False,user:User=Depends(require_user),db:Session=Depen
     owner=scope(user,platform)
     return [method_payload(row) for row in db.scalars(select(BillingMethod).where(BillingMethod.user_id==owner))]
 @router.get('/billing/available-methods')
-def receiving(plan_id:int|None=Query(default=None,ge=1),include_unavailable:bool=False,user:User=Depends(require_user),db:Session=Depends(get_db)):
+def receiving(plan_id:int|None=Query(default=None,ge=1),include_unavailable:bool=False,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     from ..models import Plan
     plan=db.get(Plan,plan_id) if plan_id is not None else None
     if plan_id is not None and (plan is None or not plan.active): raise HTTPException(422,'Unknown or inactive plan')

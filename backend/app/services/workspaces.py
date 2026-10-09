@@ -1,7 +1,7 @@
 """Owned filesystem and Git operations; no shell strings or client local paths."""
 from pathlib import Path, PureWindowsPath
 from datetime import datetime, timezone
-import base64, difflib, os, re, subprocess, uuid
+import base64, difflib, os, re, subprocess, uuid, time, tempfile, zipfile
 from fastapi import HTTPException
 from sqlalchemy import select
 from ..config import settings
@@ -22,7 +22,9 @@ def owned(db, model, identifier, user_id):
         raise HTTPException(404, "Not found")
     return row
 
-def root_for(workspace):
+def root_for(workspace, *, allow_expired=False):
+    if not allow_expired and workspace.status in {"cache_expiring", "cache_expired"}:
+        raise HTTPException(410, "Workspace files were cleaned under the inactivity policy. Account data and the original GitHub repository were not deleted.")
     base = settings.workspace_root.resolve()
     candidate = base / str(workspace.user_id) / str(workspace.id) / "repo"
     current = base
@@ -36,8 +38,15 @@ def root_for(workspace):
 
 # Temporary workspace storage allowance for client projects (files, not database storage).
 WORKSPACE_QUOTA_BYTES = 50 * 1024 * 1024
+# Working materialization bound, distinct from the local-project product quota.
+GITHUB_WORKTREE_LIMIT_BYTES = 512 * 1024 * 1024
+
+def quota_bytes(workspace):
+    return GITHUB_WORKTREE_LIMIT_BYTES if workspace.project.source_type == "github" else WORKSPACE_QUOTA_BYTES
 
 def usage_bytes(workspace):
+    if workspace.status in {"cache_expiring", "cache_expired"}:
+        return 0
     root = root_for(workspace)
     if not root.is_dir():
         return 0
@@ -51,14 +60,17 @@ def usage_bytes(workspace):
     return total
 
 def storage_payload(workspace):
+    from .workspace_cache import cache_payload
     used = usage_bytes(workspace)
-    remaining = max(0, WORKSPACE_QUOTA_BYTES - used)
-    return {"used_bytes": used, "limit_bytes": WORKSPACE_QUOTA_BYTES, "remaining_bytes": remaining,
-            "used_mb": round(used / (1024 * 1024), 2), "limit_mb": WORKSPACE_QUOTA_BYTES // (1024 * 1024), "over_limit": used >= WORKSPACE_QUOTA_BYTES}
+    limit = quota_bytes(workspace)
+    remaining = max(0, limit - used)
+    return {"cache": cache_payload(workspace), "used_bytes": used, "limit_bytes": limit, "remaining_bytes": remaining,
+            "scope": "github_working_copy" if workspace.project.source_type == "github" else "local_project",
+            "used_mb": round(used / (1024 * 1024), 2), "limit_mb": limit // (1024 * 1024), "over_limit": used >= limit}
 
 def require_quota_headroom(workspace):
-    if usage_bytes(workspace) >= WORKSPACE_QUOTA_BYTES:
-        raise HTTPException(413, "Workspace storage limit reached (50 MB). Remove files before continuing.")
+    if usage_bytes(workspace) >= quota_bytes(workspace):
+        raise HTTPException(413, "Workspace storage limit reached. Export or safely resolve files before continuing.")
 
 def safe_path(workspace, relative=""):
     if "\x00" in relative or "\\" in relative or PureWindowsPath(relative).drive or Path(relative).is_absolute():
@@ -80,7 +92,7 @@ def _git_env():
     hooks = settings.runtime_root / "empty-hooks"
     hooks.mkdir(parents=True, exist_ok=True)
     env = {k:v for k,v in os.environ.items() if not k.upper().startswith("GIT_")}
-    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", GIT_LFS_SKIP_SMUDGE="1")
     return env, hooks
 
 def git(workspace, *arguments, check=True):
@@ -100,10 +112,27 @@ def git(workspace, *arguments, check=True):
 def _auth_header(token):
     return "AUTHORIZATION: basic " + base64.b64encode(f"x-access-token:{token}".encode()).decode()
 
-def _run_git(cwd, arguments, check=True):
+def _run_git(cwd, arguments, check=True, workspace=None, token=None):
     env, hooks = _git_env()
+    if token:
+        env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.extraHeader", GIT_CONFIG_VALUE_0=_auth_header(token))
     try:
-        result = subprocess.run(["git", "-c", f"core.hooksPath={hooks}", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "protocol.file.allow=never", *arguments], cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
+        # Auth stays in the child environment, never argv or persistent Git config.
+        with tempfile.TemporaryFile() as output:
+            with subprocess.Popen(["git", "-c", f"core.hooksPath={hooks}", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "protocol.file.allow=never", *arguments], cwd=cwd, env=env, stdout=output, stderr=output) as process:
+                started = time.monotonic()
+                try:
+                    while process.poll() is None:
+                        if time.monotonic()-started > 180:
+                            raise HTTPException(503, "Git operation timed out; working files were preserved")
+                        if workspace is not None and usage_bytes(workspace) >= quota_bytes(workspace):
+                            raise HTTPException(413, "GitHub working copy exceeds the temporary disk limit; files were preserved for export")
+                        time.sleep(0.25)
+                finally:
+                    if process.poll() is None:
+                        process.kill(); process.wait()
+                result = subprocess.CompletedProcess(arguments, process.returncode)
+            if workspace is not None: require_quota_headroom(workspace)
     except (OSError, subprocess.TimeoutExpired):
         raise HTTPException(503, "Git command unavailable or timed out")
     if check and result.returncode:
@@ -116,13 +145,36 @@ def valid_repository(value):
 def valid_branch(value):
     return bool(value and _BRANCH.fullmatch(value) and ".." not in value and "//" not in value and not value.endswith(".lock"))
 
-def clone_github(workspace, clone_url, branch, token):
+def validate_working_paths(paths):
+    if not isinstance(paths, list) or len(paths)>10:
+        raise HTTPException(422, "Choose up to 10 working directories")
+    result=[]
+    for value in paths:
+        if not isinstance(value,str) or not re.fullmatch(r"[A-Za-z0-9_./ -]{1,200}",value):
+            raise HTTPException(422, "Working directories must be relative repository paths")
+        parts=Path(value).parts
+        if value.startswith(('/', '-')) or not parts or any(p in {'.','..','.git','.ssh'} or p.startswith('.env') for p in parts):
+            raise HTTPException(422, "Invalid working directory")
+        normalized=Path(value).as_posix()
+        if normalized not in result: result.append(normalized)
+    return result
+
+def clone_github(workspace, clone_url, branch, token, working_paths=None):
     root = root_for(workspace)
-    header = _auth_header(token)
-    result = _run_git(root, ["-c", f"http.extraHeader={header}", "clone", "--depth", "1", "--single-branch", "--branch", branch, clone_url, "."])
+    paths=validate_working_paths(working_paths or [])
+    # Explicit sparse directories reduce checkout size. Keep shallow blobs locally:
+    # unconfigured promisor fetches from OpenCode could otherwise break private repos.
+    arguments=["clone", "--depth", "1", "--single-branch", "--no-tags"]
+    if paths: arguments.append("--no-checkout")
+    result = _run_git(root, [*arguments,"--branch",branch,clone_url,"."], workspace=workspace,token=token)
+    if paths:
+        for path in paths:
+            if git(workspace,"cat-file","-t","HEAD:"+path,check=False).stdout.strip() != "tree":
+                raise HTTPException(422,"A selected working directory does not exist in this branch; files were preserved")
+        _run_git(root,["sparse-checkout","set","--cone","--",*paths],workspace=workspace,token=token)
+        _run_git(root,["checkout",branch],workspace=workspace,token=token)
     if result.returncode:
         raise HTTPException(409, "GitHub clone failed; the selected repository or branch may be unavailable")
-    git(workspace, "checkout", "-b", "work")
 
 def create(db, user, name, source_type, template=None, repository=None, branch=None, github_source=None):
     if source_type == "github":
@@ -143,14 +195,15 @@ def create(db, user, name, source_type, template=None, repository=None, branch=N
         project.github_repository_id = github_source.get("repository_id")
         project.github_installation_id = github_source.get("installation_id")
         project.remote_url = github_source.get("clone_url")
-        project.remote_branch = "work"
-    workspace = Workspace(id=uuid.uuid4(), project_id=project.id, user_id=user.id, status="creating")
+        project.remote_branch = github_source["branch"]
+        project.default_branch = github_source["branch"]
+    workspace = Workspace(id=uuid.uuid4(), project=project, user_id=user.id, status="creating")
     db.add(project); db.flush(); db.add(workspace); db.flush()
     path = root_for(workspace)
     try:
         path.mkdir(parents=True, exist_ok=False)
         if source_type == "github":
-            clone_github(workspace, github_source["clone_url"], github_source["branch"], github_source["token"])
+            clone_github(workspace, github_source["clone_url"], github_source["branch"], github_source["token"],github_source.get("working_paths"))
             workspace.base_commit_sha = git(workspace, "rev-parse", "HEAD").stdout.strip()
         else:
             (path/".gitignore").write_text(".env\n.env.*\n!.env.example\n.venv/\nnode_modules/\n__pycache__/\n",encoding="utf-8")
@@ -171,7 +224,8 @@ def project_payload(row):
     return {"id":str(row.id),"name":row.name,"source_type":row.source_type,"repository":row.repository,"branch":row.default_branch,"template":row.template,"remote_url":row.remote_url,"remote_branch":row.remote_branch,"archived":row.archived_at is not None,"created_at":row.created_at}
 
 def workspace_payload(row):
-    return {"id":str(row.id),"project_id":str(row.project_id),"status":row.status,"base_commit_sha":row.base_commit_sha,"created_at":row.created_at,"last_activity_at":row.last_activity_at}
+    from .workspace_cache import cache_payload
+    return {"cache":cache_payload(row),"id":str(row.id),"project_id":str(row.project_id),"status":row.status,"base_commit_sha":row.base_commit_sha,"created_at":row.created_at,"last_activity_at":row.last_activity_at}
 
 def files(workspace, relative=""):
     path=safe_path(workspace,relative)
@@ -201,7 +255,13 @@ def status(workspace):
         entries.append(entry)
     head=git(workspace,"rev-parse","--verify","HEAD",check=False)
     branch=git(workspace,"symbolic-ref","--short","HEAD",check=False)
-    return {"branch":branch.stdout.strip() or None,"head":head.stdout.strip() if head.returncode==0 else None,"changes":entries,"clean":not entries,"push_available":False}
+    result = {"branch":branch.stdout.strip() or None,"head":head.stdout.strip() if head.returncode==0 else None,"changes":entries,"clean":not entries,"push_available":False}
+    remote_branch = workspace.project.remote_branch
+    if remote_branch and valid_branch(remote_branch):
+        counts = git(workspace,"rev-list","--left-right","--count",f"HEAD...refs/remotes/origin/{remote_branch}",check=False)
+        if counts.returncode == 0:
+            result["ahead"], result["behind"] = (int(value) for value in counts.stdout.split())
+    return result
 
 def diff(workspace, relative=None):
     if relative is not None: safe_path(workspace,relative)
@@ -226,7 +286,36 @@ def commit(workspace,user,message):
 
 def push_remote(workspace, remote_url, branch, token):
     root = root_for(workspace)
-    header = _auth_header(token)
-    result = _run_git(root, ["-c", f"http.extraHeader={header}", "push", remote_url, f"HEAD:refs/heads/{branch}"])
+    result = _run_git(root, ["push", remote_url, f"HEAD:refs/heads/{branch}"],workspace=workspace,token=token)
     if result.returncode:
         raise HTTPException(409, "Git push was rejected; the remote was not updated")
+
+def sync_remote(workspace, remote_url, branch, token):
+    if not status(workspace)["clean"]:
+        raise HTTPException(409, "Commit or export your uncommitted work before syncing; nothing was discarded")
+    ref = f"refs/remotes/origin/{branch}"
+    _run_git(root_for(workspace), ["fetch", "--depth=50", "--no-tags", remote_url, f"refs/heads/{branch}:{ref}"], workspace=workspace,token=token)
+    # No reset, rebase, force-push or conflict resolution. Divergence preserves work.
+    git(workspace, "merge", "--ff-only", ref)
+    return status(workspace)
+
+def export(workspace):
+    """User-requested source export, including uncommitted work, without Git/auth data."""
+    # The caller removes the temporary ZIP after the response is sent.
+    handle = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    path = Path(handle.name); handle.close()
+    try:
+        root = root_for(workspace)
+        if not root.is_dir(): raise HTTPException(409,"Workspace files are unavailable")
+        with zipfile.ZipFile(path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
+            for directory, folders, files in os.walk(root,followlinks=False):
+                folders[:] = [name for name in folders if name not in {'.git','.ssh'} and not (Path(directory)/name).is_symlink()]
+                for name in files:
+                    item=Path(directory)/name
+                    relative=item.relative_to(root).as_posix()
+                    if item.is_symlink() or any(part.startswith('.env') or part.endswith(('.key','.pem')) for part in item.relative_to(root).parts): continue
+                    archive.write(item,relative)
+        return path
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise

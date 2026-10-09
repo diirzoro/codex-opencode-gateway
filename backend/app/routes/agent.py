@@ -2,8 +2,9 @@
 
 Runtime model access is a separate prerequisite. No synthetic execution progress.
 """
-import asyncio, hashlib, json, re, time, uuid
+import asyncio, hashlib, json, re, time, uuid, mimetypes
 from contextlib import suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
@@ -11,9 +12,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
-from ..models import User, Workspace, WorkspaceSession, ExecutionEvent
+from ..models import User, Workspace, WorkspaceSession, ExecutionEvent, ProviderCredential, AccountAudit
 from ..services import workspaces, opencode, policy, providers, session_lifecycle
 from .dependencies import require_user, require_workspace_entitlement
+from ..services.entitlements import require_advanced
 
 router=APIRouter(prefix="/api/sessions",tags=["agent"],dependencies=[Depends(require_workspace_entitlement)])
 tasks={}
@@ -106,8 +108,26 @@ async def monitor_activity(session_id,service,runtime_id,message_id,workspace,re
             pass
         if done: return
 
+class AttachmentRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+
+def attachment_metadata(workspace, selected):
+    rows=[];seen=set()
+    for item in selected:
+        path=workspaces.safe_path(workspace,item.path)
+        if any(p.startswith('.env') or p.lower().endswith(('.pem','.key')) for p in Path(item.path).parts):
+            raise HTTPException(403, 'Private files cannot be attached')
+        if not path.is_file(): raise HTTPException(422, 'An attached workspace file is unavailable')
+        relative=path.relative_to(workspaces.root_for(workspace)).as_posix()
+        if relative in seen: continue
+        seen.add(relative)
+        mime=mimetypes.guess_type(relative)[0] or 'application/octet-stream'
+        rows.append({'path':relative,'name':path.name,'size':path.stat().st_size,'mime':mime})
+    return rows
+
 class MessageRequest(BaseModel):
     request_id: uuid.UUID
+    attachments: list[AttachmentRequest] = Field(default_factory=list, max_length=10)
     text: str=Field(min_length=1,max_length=20000)
     provider_id: str=Field(min_length=1,max_length=120,pattern=r"^[A-Za-z0-9_.-]+$")
     model_id: str=Field(min_length=1,max_length=200)
@@ -148,6 +168,8 @@ def finish_execution(db,session_id,kind,states=(),data=None,request_id=None,acti
         WorkspaceSession.id==session_id,WorkspaceSession.status!='cancelled'
     ).values(status=kind).execution_options(synchronize_session=False)).rowcount
     if changed:
+        from ..services.workspace_cache import touch
+        touch(db, current.workspace_id, current.user_id)
         for activity in activities:
             db.add(ExecutionEvent(session_id=session_id,kind='activity',data=json.dumps(activity)))
         for state in states:
@@ -167,6 +189,14 @@ async def execute(session_id,service,runtime_id,data,message_id):
             db.add(ExecutionEvent(session_id=session_id,kind="dispatch",data=json.dumps({"request_id":str(data.request_id),"message_id":message_id})))
             event(db,session.id,"analyzing")
         payload={"messageID":message_id,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
+        for item in attachment_metadata(workspace, data.attachments):
+            path=workspaces.safe_path(workspace,item['path'])
+            # Native file parts for formats OpenCode consumes directly. Other
+            # files remain explicit workspace paths for its file/tool context.
+            if item['mime'] in {'text/plain','application/pdf','image/png','image/jpeg','image/webp','image/gif'}:
+                payload['parts'].append({'type':'file','url':path.as_uri(),'filename':item['name'],'mime':item['mime']})
+            else:
+                payload['parts'].append({'type':'text','text':'Attached workspace file: '+json.dumps(item['path'])})
         if data.agent_id: payload["agent"]=data.agent_id
         request_task=asyncio.create_task(asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),payload,600))
         observer=asyncio.create_task(monitor_activity(session_id,service,runtime_id,message_id,workspace,data.request_id,request_task))
@@ -194,7 +224,10 @@ async def execute(session_id,service,runtime_id,data,message_id):
 @router.post("/{session_id}/messages",status_code=202)
 async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    fingerprint=hashlib.sha256(json.dumps(data.model_dump(mode="json",exclude={"request_id"}),sort_keys=True).encode()).hexdigest()
+    signature=data.model_dump(mode="json",exclude={"request_id"})
+    # Empty attachments preserve pre-hotfix receipt fingerprints on browser retry.
+    if not signature.get('attachments'): signature.pop('attachments',None)
+    fingerprint=hashlib.sha256(json.dumps(signature,sort_keys=True).encode()).hexdigest()
     session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
     saved=session_lifecycle.receipt(db,session_id,data.request_id)
     if saved:
@@ -217,10 +250,12 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         raise HTTPException(403,"Model is disabled by platform policy")
     if providers.is_locally_disconnected(db,workspace,data.provider_id):
         raise HTTPException(409,"Provider is disconnected in this workspace; explicitly reconnect it before sending")
+    attached=attachment_metadata(workspace,data.attachments)
     receipt={"status":"submitted","session_id":str(session.id),"request_id":str(data.request_id)}
     message_id=session_lifecycle.new_message_id()
     session.status="submitted"
-    db.add(ExecutionEvent(session_id=session.id,kind="submission",data=json.dumps({"request_id":str(data.request_id),"fingerprint":fingerprint,"message_id":message_id,"receipt":receipt})))
+    workspace.last_activity_at=datetime.now(timezone.utc)
+    db.add(ExecutionEvent(session_id=session.id,kind="submission",data=json.dumps({"request_id":str(data.request_id),"fingerprint":fingerprint,"message_id":message_id,"receipt":receipt,"attachments":attached,"text":_sanitize(data.text,workspace)})))
     event(db,session.id,"submitted",{"request_id":str(data.request_id)})
     # Admission is durable BEFORE asynchronous runtime/provider preflight. A
     # concurrent/replayed POST never creates a second task or OpenCode message.
@@ -240,9 +275,31 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
             raise HTTPException(503,"Provider authentication is not configured in this workspace runtime")
         provider=next((p for p in provider_data.get("all",[]) if p["id"]==data.provider_id),{})
         if data.model_id not in provider.get("models",{}): raise HTTPException(422,"Model is unavailable")
+        # Availability remains OpenCode-owned; entitlement classifies actual use.
+        model=provider['models'][data.model_id]
+        inputs=(model.get('capabilities') or {}).get('input') or {}
+        for item in attached:
+            category='image' if item['mime'].startswith('image/') else 'pdf' if item['mime']=='application/pdf' else None
+            if category and inputs.get(category) is False:
+                raise HTTPException(422, 'The selected OpenCode model does not support this attachment type; select a compatible model')
+        costs=model.get('cost') or {}
+        free_model=costs.get('input')==0 and costs.get('output')==0
+        own_key=db.scalar(select(ProviderCredential.id).where(ProviderCredential.workspace_id==workspace.id,
+                         ProviderCredential.provider_id==data.provider_id)) is not None
+        # OAuth has no Gateway API-key row; reuse its durable connection intent.
+        client_binding=db.scalar(select(AccountAudit.id).where(AccountAudit.subject_id==user.id,
+            AccountAudit.action=='provider-on:'+providers._binding(workspace,data.provider_id)).limit(1)) is not None
+        agent_state=await asyncio.to_thread(service.agent_snapshot)
+        effective_agent=data.agent_id or agent_state.get('default_agent')
+        selected=next((a for a in agent_state.get('agents') or [] if a.get('name')==effective_agent),None)
+        custom_agent=bool(effective_agent and (not selected or selected.get('native') is not True))
+        advanced=workspace.project.source_type=='github' or own_key or client_binding or not free_model or custom_agent
+        if advanced: require_advanced(db,user)
         # Legacy session rules must not broaden current admin tool restrictions.
         await asyncio.to_thread(service.apply_session_policy,session.opencode_session_id,
                                 policy.session_permissions(policy_row))
+        if advanced:
+            require_advanced(db,user,start=True); db.commit()
     except Exception:
         db.rollback(); finish_execution(db,session_id,"failed",data={"reason":"Runtime preflight failed; no new message was dispatched"},request_id=data.request_id)
         raise
@@ -261,14 +318,21 @@ def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=
     session,workspace=context(db,user,session_id)
     service=opencode.for_workspace(workspace)
     result=service.request("GET",service.session_path(session.opencode_session_id,"/message"))
+    attachments={};submitted_text={}
+    for recorded in db.scalars(select(ExecutionEvent).where(ExecutionEvent.session_id==session.id,ExecutionEvent.kind=='submission')):
+        try:
+            saved=json.loads(recorded.data);attachments[saved['message_id']]=saved.get('attachments',[])
+            if isinstance(saved.get('text'),str): submitted_text[saved['message_id']]=saved['text']
+        except (ValueError,KeyError): pass
     output=[]; hidden=session_lifecycle.hidden_messages(db,session.id); seen=set()
     for item in result:
         text="\n".join(p.get("text","") for p in item.get("parts",[]) if p.get("type")=="text")[:50000]
         info=item.get("info",{}); identifier=info.get("id")
         if identifier in hidden or (identifier and identifier in seen): continue
         seen.add(identifier)
+        if info.get('role')=='user': text=submitted_text.get(identifier,text)
         output.append({"id":identifier,"role":info.get("role"),"text":_sanitize(text,workspace),
-                       "activity":safe_tool_activity(item.get('parts',[]),workspace)})
+                       "attachments":attachments.get(identifier,[]),"activity":safe_tool_activity(item.get('parts',[]),workspace)})
     return output
 
 @router.get("/{session_id}/diff")
