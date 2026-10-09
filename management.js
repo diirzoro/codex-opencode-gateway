@@ -396,10 +396,61 @@
   const oldRefreshGit=refreshGit;refreshGit=async function(){await oldRefreshGit();const b=$('#manageProviders');if(b)b.onclick=()=>open('providers')};
   const welcome=$('#welcomePrompt');const connect=button(tr('Connect GitHub · choose repository & branch','اربط GitHub · اختر المستودع والفرع'),()=>open('connections'));connect.classList.add('landing-connect');const logo=document.createElementNS('http://www.w3.org/2000/svg','svg');const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href','#icon-github');logo.append(use);connect.prepend(logo);welcome.after(connect);
   const recovery=node('section','','manage-card recovery-box');recovery.hidden=true;$('#authPage').append(recovery);let resetToken=new URLSearchParams(location.hash.slice(1)).get('reset-password');if(resetToken)history.replaceState(null,'',location.pathname+location.search);
-  function closeRecovery(){window.passwordRecoveryActive=false;recovery.hidden=true;$('#authPage .auth-shell').hidden=false;window.scrollTo(0,0)}
-  function recover(reset=false){window.passwordRecoveryActive=true;document.getElementById('authDialog')?.close();showPage('authPage');$('#authPage .auth-shell').hidden=true;recovery.hidden=false;recovery.replaceChildren(node('h2',tr(reset?'Reset password':'Recover password',reset?'إعادة تعيين كلمة المرور':'استعادة كلمة المرور')));form(recovery,f=>{const i=input(f,tr(reset?'New password: 8+, number and symbol':'Account email',reset?'كلمة جديدة: 8 أحرف ورقم ورمز':'بريد الحساب'),reset?'password':'email',reset?'password':'email');i.required=true;if(reset)i.minLength=8},tr(reset?'Reset':'Send recovery link',reset?'إعادة تعيين':'إرسال رابط الاستعادة'),async values=>{const data=await api(reset?'/api/auth/reset-password':'/api/auth/forgot-password',{method:'POST',body:JSON.stringify(reset?{token:resetToken,password:values.password}:values)});toast(data.message);if(reset){resetToken=null;closeRecovery();signOut()}});recovery.append(button(tr('Back to login','رجوع للدخول'),closeRecovery));window.scrollTo(0,0)}
+  const billingPanel=document.querySelector('[data-client-panel=billing]'),billingParent=billingPanel.parentNode,billingNext=billingPanel.nextSibling;
+  function restoreBilling(){
+    if(billingPanel.parentNode!==billingParent)billingParent.insertBefore(billingPanel,billingNext?.parentNode===billingParent?billingNext:null);
+    billingPanel.classList.remove('active');$('#billingCancel').hidden=false;
+  }
+  function resetRecovery(){restoreBilling();window.passwordRecoveryActive=false;recovery.hidden=true;$('#authPage .auth-shell').hidden=false;}
+  async function closeRecovery(){
+    if(window.reactivationAccount)await window.logoutSession();
+    resetRecovery();window.scrollTo(0,0);
+  }
+  window.addEventListener('authentication-cleared',()=>{window.reactivationAccount=null;resetRecovery();});
+  window.openReactivation=async()=>{
+    await authReady;
+    const state=await api('/api/auth/reactivation',{allowAnonymous:true});window.reactivationAccount=state;window.passwordRecoveryActive=true;
+    document.getElementById('authDialog')?.close();showPage('authPage');$('#authPage .auth-shell').hidden=true;recovery.hidden=false;
+    restoreBilling();recovery.replaceChildren(node('h2',tr('Reactivate your account','إعادة تفعيل حسابك')),
+      node('p',tr('Email ownership verified. This short-lived session allows renewal only; workspace access remains unavailable.','تم إثبات ملكية البريد. تسمح هذه الجلسة القصيرة بالتجديد فقط؛ الوصول لمساحة العمل غير متاح.')));
+    if(state.payment_verified){
+      recovery.append(node('p',tr('Payment verified. Set a fresh password, then sign in normally.','تم التحقق من الدفع. عيّن كلمة مرور جديدة ثم سجّل الدخول بالطريقة المعتادة.')));
+      form(recovery,f=>{const i=input(f,tr('New password: 8+, number and symbol','كلمة جديدة: 8 أحرف ورقم ورمز'),'password','password');i.required=true;i.minLength=8;i.maxLength=128;i.autocomplete='new-password';},tr('Set password','تعيين كلمة المرور'),async(values,f)=>{
+        await api('/api/auth/reactivation/password',{method:'POST',body:JSON.stringify(values)});f.elements.password.value='';
+        await window.logoutSession();resetRecovery();toast(tr('Account reactivated. Sign in with your fresh password.','تمت إعادة تفعيل الحساب. سجّل الدخول بكلمة المرور الجديدة.'));
+      });
+    }else{
+      billingPanel.classList.add('active');$('#billingCancel').hidden=true;recovery.append(billingPanel);
+      await window.loadReactivationBilling();await window.loadReactivationOrders();
+      recovery.append(button(tr('Check payment status','التحقق من حالة الدفع'),()=>window.openReactivation().catch(error=>{apiMessage('billingMessage',error.message,true)})));
+    }
+    recovery.append(button(tr('Exit / request a new recovery link','خروج / طلب رابط استعادة جديد'),()=>closeRecovery().catch(error=>toast(error.message))));
+  };
+  async function recover(reset=false){
+    await authReady;window.passwordRecoveryActive=true;document.getElementById('authDialog')?.close();showPage('authPage');$('#authPage .auth-shell').hidden=true;recovery.hidden=false;
+    recovery.replaceChildren(node('h2',tr(reset?'Reset password':'Recover password',reset?'إعادة تعيين كلمة المرور':'استعادة كلمة المرور')));
+    let archived=false;
+    if(reset){
+      const status=node('p',tr('Checking recovery link…','جارٍ التحقق من رابط الاستعادة…'));status.setAttribute('role','status');recovery.append(status);
+      try{archived=(await api('/api/auth/recovery-status',{method:'POST',body:JSON.stringify({token:resetToken})})).reactivation_required;status.remove();}
+      catch(error){status.textContent=error.message;status.setAttribute('role','alert');recovery.append(button(tr('Back to recovery','العودة للاستعادة'),()=>recover()));return;}
+    }
+    if(archived){
+      recovery.append(node('p',tr('Your preserved account is archived. Verify ownership to renew; normal access requires verified payment and a fresh password.','حسابك المحفوظ مؤرشف. أثبت الملكية للتجديد؛ يتطلب الدخول العادي دفعًا موثّقًا وكلمة مرور جديدة.')));
+      form(recovery,()=>{},tr('Verify email and renew','إثبات البريد والتجديد'),async()=>{
+        const state=await api('/api/auth/reactivation/verify',{method:'POST',body:JSON.stringify({token:resetToken})});resetToken=null;clearAuthenticatedState();window.reactivationAccount=state;await window.openReactivation();
+      });
+    }else{
+      form(recovery,f=>{const i=input(f,tr(reset?'New password: 8+, number and symbol':'Account email',reset?'كلمة جديدة: 8 أحرف ورقم ورمز':'بريد الحساب'),reset?'password':'email',reset?'password':'email');i.required=true;if(reset){i.minLength=8;i.maxLength=128;i.autocomplete='new-password';}},tr(reset?'Reset':'Send recovery link',reset?'إعادة تعيين':'إرسال رابط الاستعادة'),async(values,f)=>{
+        const data=await api(reset?'/api/auth/reset-password':'/api/auth/forgot-password',{method:'POST',body:JSON.stringify(reset?{token:resetToken,password:values.password}:values)});
+        if(reset){f.elements.password.value='';resetToken=null;resetRecovery();await window.logoutSession();toast(tr('Password reset. Sign in with your new password.','تم تعيين كلمة المرور. سجّل الدخول بكلمة المرور الجديدة.'));}
+        else toast(tr('If an eligible account matches, a recovery link will be emailed. Archived customers can verify ownership to renew.','إذا وُجد حساب مؤهل، سيُرسل رابط استعادة إلى البريد. يمكن للعميل المؤرشف إثبات الملكية للتجديد.'));
+      });
+    }
+    recovery.append(button(tr('Back to login','رجوع للدخول'),()=>closeRecovery().catch(error=>toast(error.message))));window.scrollTo(0,0);
+  }
   const forgot=$('#authPage .auth-form .text-link');if(forgot){forgot.disabled=false;forgot.textContent=tr('Forgot password?','نسيت كلمة المرور؟');forgot.onclick=()=>recover()}
   window.renderManagement=render;
   window.openManagement=open;
-  if(resetToken)recover(true);
+  if(resetToken)recover(true).catch(error=>toast(error.message));
 })();

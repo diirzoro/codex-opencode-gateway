@@ -221,6 +221,12 @@ const authReady=(async()=>{
   if(error.status===401){
    let hadWorkspace=false;try{hadWorkspace=Boolean(localStorage.getItem('og-workspace'));}catch(ignored){}
    window.authRestoreExpired=hadWorkspace||error.message!=='Authentication required';clearAuthenticatedState();
+   if(error.message==='Account reactivation required'){
+    try{
+     window.reactivationAccount=await api('/api/auth/reactivation',{allowAnonymous:true});window.passwordRecoveryActive=true;
+     window.loadManagement().then(()=>window.openReactivation()).catch(error=>toast(error.message));
+    }catch(ignored){/* An expired limited session needs a new email proof. */}
+   }
   }else if(currentUser)toast(error.message);
  }
 })();

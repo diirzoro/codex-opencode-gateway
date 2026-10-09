@@ -591,6 +591,8 @@
 
 
   }
+  // Reuse the existing billing cards/plans without establishing normal login.
+  window.loadReactivationBilling=loadClientBilling;
   var billingCancel = document.getElementById('billingCancel');
   if (billingCancel) billingCancel.onclick = async function () { try { await api('/api/billing/subscription/cancel', { method: 'POST' }); apiMessage('billingMessage', 'Subscription cancelled'); await loadClientBilling(); } catch (error) { apiMessage('billingMessage', error.message, true); } };
   var billingReactivate = document.getElementById('billingReactivate');

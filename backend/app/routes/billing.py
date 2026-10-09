@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Plan, Subscription, User, PaymentOrder,BillingMethod,AccountAudit
-from .dependencies import require_user,require_admin,access_payload
+from .dependencies import require_user,require_admin,require_billing_user,access_payload
 from ..services import paypal
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
@@ -58,11 +58,11 @@ def subscription_payload(db, user) -> dict:
     }
 
 @router.get("/subscription")
-def get_subscription(user: User = Depends(require_user), db: Session = Depends(get_db)):
+def get_subscription(user: User = Depends(require_billing_user), db: Session = Depends(get_db)):
     return subscription_payload(db, user)
 
 @router.post("/subscription/select")
-def select_plan(data: SelectPlan, user: User = Depends(require_user), db: Session = Depends(get_db)):
+def select_plan(data: SelectPlan, user: User = Depends(require_billing_user), db: Session = Depends(get_db)):
     plan = db.get(Plan, data.plan_id)
     if plan is None or not plan.active:
         raise HTTPException(422, "Unknown or inactive plan")
@@ -165,7 +165,7 @@ def order_payload(row):
     data['has_receipt']=bool(row.receipt_path)
     return data
 @router.post('/checkout',status_code=201)
-def checkout(data:Checkout,user:User=Depends(require_user),db:Session=Depends(get_db)):
+def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     plan=db.get(Plan,data.plan_id);method=db.get(BillingMethod,data.method_id)
     if not plan or not plan.active: raise HTTPException(422,'Unknown or inactive plan')
     if not method or method.user_id is not None or not method.enabled: raise HTTPException(422,'Payment method is unavailable')
@@ -204,10 +204,10 @@ def checkout(data:Checkout,user:User=Depends(require_user),db:Session=Depends(ge
         return {'order':order_payload(row),'method':details,'automatic_processing':True,'approval_url':url,'message':'Approve payment on PayPal, then confirm payment here. Only verified completed captures activate subscriptions.'}
     return {'order':order_payload(row),'method':details,'payment_url':details['details'].get('payment_url') if details['details'].get('checkout_mode')=='link' else None,'automatic_processing':False,'message':'Complete payment, then submit its reference. Administration must verify receipt before activation.'}
 @router.get('/orders')
-def orders(user:User=Depends(require_user),db:Session=Depends(get_db)):
+def orders(user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     return [order_payload(row) for row in db.scalars(select(PaymentOrder).where(PaymentOrder.user_id==user.id).order_by(PaymentOrder.created_at.desc()))]
 @router.post('/orders/{order_id}/cancel')
-def cancel_order(order_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
+def cancel_order(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
     if row.provider_environment:raise HTTPException(409,'PayPal payments cannot be cancelled from here; use Confirm PayPal payment or contact support')
@@ -236,7 +236,7 @@ def delete_order(order_id:uuid.UUID,user:User=Depends(require_user),db:Session=D
     db.commit()
 
 @router.put('/orders/{order_id}/reference')
-def submit_reference(order_id:uuid.UUID,data:PaymentReference,user:User=Depends(require_user),db:Session=Depends(get_db)):
+def submit_reference(order_id:uuid.UUID,data:PaymentReference,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
     if row.provider_environment:raise HTTPException(409,'PayPal payments require server capture verification, not a manual reference')
@@ -245,7 +245,7 @@ def submit_reference(order_id:uuid.UUID,data:PaymentReference,user:User=Depends(
     row.payment_reference=data.reference;row.sender_name=data.sender_name;row.sender_email=data.sender_email;row.sender_bank=data.sender_bank;row.sender_account=data.sender_account;row.transfer_date=data.transfer_date;row.amount_sent_cents=data.amount_sent_cents
     row.status='pending_review';db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='billing.reference_submitted'));db.commit();return order_payload(row)
 @router.post('/orders/{order_id}/receipt')
-def upload_receipt(order_id:uuid.UUID,file:UploadFile=File(...),user:User=Depends(require_user),db:Session=Depends(get_db)):
+def upload_receipt(order_id:uuid.UUID,file:UploadFile=File(...),user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     from pathlib import Path
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
@@ -270,7 +270,7 @@ def upload_receipt(order_id:uuid.UUID,file:UploadFile=File(...),user:User=Depend
     row.receipt_path=str(target)
     db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='billing.receipt_uploaded'));db.commit();return order_payload(row)
 @router.get('/orders/{order_id}/receipt')
-def download_receipt(order_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
+def download_receipt(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     from pathlib import Path
     from fastapi.responses import FileResponse
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id))
@@ -326,11 +326,13 @@ def activate_order(db,row,actor_id,reference):
     if not paid_period or current_end<=now:
         subscription.started_at=now
     subscription.plan_id=row.plan_id;subscription.status='active';subscription.current_period_end=renewal_base+timedelta(days=row.duration_days);subscription.cancelled_at=None;subscription.auto_renew=False;target.plan_id=row.plan_id
-    if target.status=='archived':target.status='active'
+    if target.status=='archived':
+        target.status='active'
+        db.add(AccountAudit(actor_id=actor_id,subject_id=target.id,action='account.reactivated'))
     row.status='paid';row.paid_at=now;row.reviewed_by=actor_id;row.confirmation_reference=reference;db.add(AccountAudit(actor_id=actor_id,subject_id=target.id,action='billing.payment_confirmed'))
 
 @router.post('/orders/{order_id}/paypal/capture')
-def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
+def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
     if not row.provider_order_id:raise HTTPException(409,'This is not a PayPal API payment')
@@ -346,5 +348,5 @@ def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_user),db:Session
     db.commit();return order_payload(row)
 
 @router.get('/paypal/status')
-def paypal_status(user:User=Depends(require_user)):
+def paypal_status(user:User=Depends(require_billing_user)):
     return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','client_id':paypal.settings.paypal_client_id if paypal.configured() else None}

@@ -12,13 +12,16 @@ from ..database import get_db
 from ..models import AuthSession, City, Country, Region, User
 from ..schemas import LoginRequest, RegisterRequest, UserOut
 from ..security.passwords import hash_password, verify_password
-from ..security.sessions import hash_session_token, new_session_token, idle_expires_at
+from ..security.sessions import (hash_session_token, new_session_token, idle_expires_at,
+    normal_access_ready, reactivation_cookie_name)
 from ..services.accounts import user_payload
 from ..services.entitlements import CORE_TRIAL_DAYS
 from .dependencies import require_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 def set_session(response: Response, db: Session, user: User):
+    if not normal_access_ready(user):
+        raise HTTPException(403, "Complete account reactivation and set a fresh password first")
     raw, hashed = new_session_token()
     now = datetime.now(timezone.utc)
     session = AuthSession(user_id=user.id, token_hash=hashed, last_seen_at=now,
@@ -27,6 +30,7 @@ def set_session(response: Response, db: Session, user: User):
     db.commit()
     # A browser-session cookie, with authoritative server-side idle expiry.
     response.set_cookie(settings.session_cookie_name, raw, httponly=True, secure=settings.cookie_secure, samesite="strict", path="/")
+    response.delete_cookie(reactivation_cookie_name(), path="/api", secure=settings.cookie_secure, httponly=True, samesite="strict")
     response.headers["X-Session-Idle-Expires-At"] = idle_expires_at(session).isoformat()
 
 def validate_locations(db, country_id, region_id, city_id):
@@ -75,11 +79,14 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
 
 @router.post("/logout", status_code=204)
 def logout(request: Request, response: Response, db: Session = Depends(get_db)):
-    raw = request.cookies.get(settings.session_cookie_name)
-    if raw:
-        session = db.scalar(select(AuthSession).where(AuthSession.token_hash == hash_session_token(raw)))
-        if session: session.revoked_at = datetime.now(timezone.utc); db.commit()
+    for name in (settings.session_cookie_name, reactivation_cookie_name()):
+        raw = request.cookies.get(name)
+        if raw:
+            session = db.scalar(select(AuthSession).where(AuthSession.token_hash == hash_session_token(raw)))
+            if session: session.revoked_at = datetime.now(timezone.utc)
+    db.commit()
     response.delete_cookie(settings.session_cookie_name, path="/", secure=settings.cookie_secure, httponly=True, samesite="strict")
+    response.delete_cookie(reactivation_cookie_name(), path="/api", secure=settings.cookie_secure, httponly=True, samesite="strict")
 
 @router.get("/me", response_model=UserOut)
 def me(request: Request, response: Response, user: User = Depends(require_user)):
@@ -164,7 +171,7 @@ def social_callback(provider: str, request: Request, state: str = '', code: str 
             response.set_cookie(social_login.SIGNUP_COOKIE, social_login.seal(identity), max_age=social_login.TTL,
                                 httponly=True, secure=settings.cookie_secure, samesite='strict', path='/api/auth')
             return response
-        if user.status != 'active': raise HTTPException(403, 'Account is not active')
+        if not normal_access_ready(user): raise HTTPException(403, 'Complete account reactivation first')
         user.last_login_at = datetime.now(timezone.utc)
         db.commit()
         set_session(response, db, user)

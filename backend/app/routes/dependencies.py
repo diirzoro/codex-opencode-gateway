@@ -6,12 +6,38 @@ from ..config import settings
 from ..database import get_db
 from ..models import AuthSession, User
 from ..services.entitlements import access_payload
-from ..security.sessions import hash_session_token, idle_expires_at
+from ..security.sessions import (hash_session_token, idle_expires_at,
+    REACTIVATION_PREFIX, reactivation_cookie_name, normal_access_ready, reactivation_eligible)
+
+def require_reactivation_user(request: Request, db: Session = Depends(get_db)) -> User:
+    raw = request.cookies.get(reactivation_cookie_name(), "")
+    if not raw.startswith(REACTIVATION_PREFIX):
+        raise HTTPException(401, "Verify your account with a new recovery link to renew")
+    session = db.scalar(select(AuthSession).where(AuthSession.token_hash == hash_session_token(raw)))
+    now = datetime.now(timezone.utc)
+    if not session or session.revoked_at or idle_expires_at(session) <= now:
+        raise HTTPException(401, "Reactivation session expired; request a new recovery link")
+    if not reactivation_eligible(session.user):
+        raise HTTPException(403, "Account is not eligible for reactivation")
+    request.state.reactivation_session = session
+    return session.user
+
+def require_billing_user(request: Request, db: Session = Depends(get_db)) -> User:
+    # Used only on explicit renewal/payment endpoints, never profile/workspaces,
+    # credential management, social linking, billing-method editing or admin.
+    if request.cookies.get(reactivation_cookie_name()):
+        return require_reactivation_user(request, db)
+    return require_user(request, db)
 
 def require_user(request: Request, db: Session = Depends(get_db)) -> User:
     raw = request.cookies.get(settings.session_cookie_name)
     if not raw:
+        if request.url.path == "/api/auth/me" and request.cookies.get(reactivation_cookie_name()):
+            require_reactivation_user(request, db)
+            raise HTTPException(401, "Account reactivation required")
         raise HTTPException(401, "Authentication required")
+    if raw.startswith(REACTIVATION_PREFIX):
+        raise HTTPException(403, "Reactivation sessions allow renewal only")
     session = db.scalar(select(AuthSession).where(AuthSession.token_hash == hash_session_token(raw)))
     now = datetime.now(timezone.utc)
     if not session or session.revoked_at is not None:
@@ -22,7 +48,7 @@ def require_user(request: Request, db: Session = Depends(get_db)) -> User:
         raise HTTPException(401, "Session expired")
     # Polling, SSE and browser restoration are not meaningful user activity.
     request.state.auth_session = session
-    if session.user.status != "active":
+    if not normal_access_ready(session.user):
         raise HTTPException(403, "Account is not active")
     return session.user
 
