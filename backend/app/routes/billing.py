@@ -22,8 +22,11 @@ class SelectPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_id: int = Field(ge=1)
 
-def ensure_subscription(db, user, commit=True) -> Subscription:
-    row = db.scalar(select(Subscription).where(Subscription.user_id == user.id))
+def ensure_subscription(db, user, commit=True, *, lock=False) -> Subscription:
+    query = select(Subscription).where(Subscription.user_id == user.id)
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    row = db.scalar(query)
     if row is None:
         row = Subscription(user_id=user.id, status="trial", plan_id=user.plan_id, started_at=user.trial_started_at, current_period_end=user.trial_ends_at)
         db.add(row)
@@ -63,12 +66,20 @@ def select_plan(data: SelectPlan, user: User = Depends(require_user), db: Sessio
     plan = db.get(Plan, data.plan_id)
     if plan is None or not plan.active:
         raise HTTPException(422, "Unknown or inactive plan")
-    row = ensure_subscription(db, user)
-    row.plan_id = plan.id
-    row.status = "pending_payment"
-    row.current_period_end = None
-    row.cancelled_at = None
-    row.auto_renew = False
+    # Choosing a renewal must not erase already purchased access. Checkout's
+    # PaymentOrder records the purchased plan; activation changes the paid plan.
+    db.scalar(select(User).where(User.id == user.id).with_for_update())
+    row = ensure_subscription(db, user, commit=False, lock=True)
+    end = row.current_period_end
+    if end and end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    paid_period = row.plan_id and end and row.status in {"active", "expired", "cancelled", "pending_payment"}
+    if not paid_period:
+        row.plan_id = plan.id
+        row.status = "pending_payment"
+        row.current_period_end = None
+        row.cancelled_at = None
+        row.auto_renew = False
     db.commit()
     payload = subscription_payload(db, user)
     payload["message"] = f"Plan selected: {plan.name}. Complete checkout; this selection does not activate access."
@@ -296,11 +307,26 @@ def reject_payment(order_id:uuid.UUID,data:RejectRequest,user:User=Depends(requi
     db.commit();return order_payload(row)
 
 def activate_order(db,row,actor_id,reference):
-    target=db.scalar(select(User).where(User.id==row.user_id).with_for_update());subscription=ensure_subscription(db,target,commit=False)
+    # Keep the verified capture fields before refreshing the locked order.
+    db.flush()
+    row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==row.id).with_for_update().execution_options(populate_existing=True))
+    if row.status in {'paid','sandbox_paid'}:
+        return
+    # Serialize different purchases for the same account, including creation
+    # of its first subscription, and refresh any previously loaded state.
+    target=db.scalar(select(User).where(User.id==row.user_id).with_for_update().execution_options(populate_existing=True))
+    subscription=ensure_subscription(db,target,commit=False,lock=True)
     current_end=subscription.current_period_end
     if current_end and current_end.tzinfo is None:current_end=current_end.replace(tzinfo=timezone.utc)
-    now=datetime.now(timezone.utc);start=max(now,current_end) if subscription.status=='active' and current_end else now
-    subscription.plan_id=row.plan_id;subscription.status='active';subscription.started_at=now;subscription.current_period_end=start+timedelta(days=row.duration_days);subscription.cancelled_at=None;subscription.auto_renew=False;target.plan_id=row.plan_id
+    now=datetime.now(timezone.utc)
+    paid_period=subscription.status=='active' and subscription.plan_id and current_end
+    renewal_base=max(now,current_end) if paid_period else now
+    # duration_days is the purchased Plan.duration_days snapshot on this order.
+    # Trial time is never a renewal base, and its timers remain untouched.
+    if not paid_period or current_end<=now:
+        subscription.started_at=now
+    subscription.plan_id=row.plan_id;subscription.status='active';subscription.current_period_end=renewal_base+timedelta(days=row.duration_days);subscription.cancelled_at=None;subscription.auto_renew=False;target.plan_id=row.plan_id
+    if target.status=='archived':target.status='active'
     row.status='paid';row.paid_at=now;row.reviewed_by=actor_id;row.confirmation_reference=reference;db.add(AccountAudit(actor_id=actor_id,subject_id=target.id,action='billing.payment_confirmed'))
 
 @router.post('/orders/{order_id}/paypal/capture')

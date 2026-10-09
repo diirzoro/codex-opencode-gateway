@@ -22,7 +22,9 @@ def owned(db, model, identifier, user_id):
         raise HTTPException(404, "Not found")
     return row
 
-def root_for(workspace):
+def root_for(workspace, *, allow_expired=False):
+    if not allow_expired and workspace.status in {"cache_expiring", "cache_expired"}:
+        raise HTTPException(410, "Workspace files were cleaned under the inactivity policy. Account data and the original GitHub repository were not deleted.")
     base = settings.workspace_root.resolve()
     candidate = base / str(workspace.user_id) / str(workspace.id) / "repo"
     current = base
@@ -43,6 +45,8 @@ def quota_bytes(workspace):
     return GITHUB_WORKTREE_LIMIT_BYTES if workspace.project.source_type == "github" else WORKSPACE_QUOTA_BYTES
 
 def usage_bytes(workspace):
+    if workspace.status in {"cache_expiring", "cache_expired"}:
+        return 0
     root = root_for(workspace)
     if not root.is_dir():
         return 0
@@ -56,10 +60,11 @@ def usage_bytes(workspace):
     return total
 
 def storage_payload(workspace):
+    from .workspace_cache import cache_payload
     used = usage_bytes(workspace)
     limit = quota_bytes(workspace)
     remaining = max(0, limit - used)
-    return {"used_bytes": used, "limit_bytes": limit, "remaining_bytes": remaining,
+    return {"cache": cache_payload(workspace), "used_bytes": used, "limit_bytes": limit, "remaining_bytes": remaining,
             "scope": "github_working_copy" if workspace.project.source_type == "github" else "local_project",
             "used_mb": round(used / (1024 * 1024), 2), "limit_mb": limit // (1024 * 1024), "over_limit": used >= limit}
 
@@ -219,7 +224,8 @@ def project_payload(row):
     return {"id":str(row.id),"name":row.name,"source_type":row.source_type,"repository":row.repository,"branch":row.default_branch,"template":row.template,"remote_url":row.remote_url,"remote_branch":row.remote_branch,"archived":row.archived_at is not None,"created_at":row.created_at}
 
 def workspace_payload(row):
-    return {"id":str(row.id),"project_id":str(row.project_id),"status":row.status,"base_commit_sha":row.base_commit_sha,"created_at":row.created_at,"last_activity_at":row.last_activity_at}
+    from .workspace_cache import cache_payload
+    return {"cache":cache_payload(row),"id":str(row.id),"project_id":str(row.project_id),"status":row.status,"base_commit_sha":row.base_commit_sha,"created_at":row.created_at,"last_activity_at":row.last_activity_at}
 
 def files(workspace, relative=""):
     path=safe_path(workspace,relative)

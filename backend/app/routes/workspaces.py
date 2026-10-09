@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
@@ -121,13 +121,17 @@ def project(project_id: uuid.UUID,user: User=Depends(require_user),db: Session=D
 
 @router.patch("/projects/{project_id}")
 def rename(project_id: uuid.UUID,data: RenameProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    row=manager.owned(db,Project,project_id,user.id); row.name=data.name; db.commit()
+    row=manager.owned(db,Project,project_id,user.id); row.name=data.name
+    db.execute(update(Workspace).where(Workspace.project_id==row.id,Workspace.status.not_in(["cache_expiring","cache_expired"])).values(last_activity_at=datetime.now(timezone.utc)))
+    db.commit()
     return manager.project_payload(row)
 
 @router.post("/projects/{project_id}/archive")
 def archive_project(project_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Project,project_id,user.id)
-    row.archived_at=datetime.now(timezone.utc); db.commit()
+    row.archived_at=datetime.now(timezone.utc)
+    db.execute(update(Workspace).where(Workspace.project_id==row.id,Workspace.status.not_in(["cache_expiring","cache_expired"])).values(last_activity_at=datetime.now(timezone.utc)))
+    db.commit()
     return manager.project_payload(row)
 
 @router.delete("/projects/{project_id}")
@@ -219,7 +223,9 @@ def commit(workspace_id: uuid.UUID,data: CommitRequest,user: User=Depends(requir
     workspace=manager.owned(db,Workspace,workspace_id,user.id)
     with opencode.workspace_lock(workspace):
         _require_git_idle(db,workspace)
-        return manager.commit(workspace,user,data.message)
+        result=manager.commit(workspace,user,data.message)
+        workspace.last_activity_at=datetime.now(timezone.utc);db.commit()
+        return result
 
 def _require_git_idle(db,workspace):
     session_lifecycle.lock_workspace(db,workspace)
@@ -286,6 +292,7 @@ def new_session(workspace_id: uuid.UUID,data: NewSession,user: User=Depends(requ
     runtime_id=opencode.for_workspace(row).create_session(data.title)
     session=WorkspaceSession(workspace_id=row.id,user_id=user.id,opencode_session_id=runtime_id,title=data.title)
     db.add(session); db.flush(); session_lifecycle.set_state(db,session,"active")
+    row.last_activity_at=datetime.now(timezone.utc)
     if row.project.source_type=="github": require_advanced(db,user,start=True)
     db.commit(); db.refresh(session)
     return session_lifecycle.payload(session,"active")

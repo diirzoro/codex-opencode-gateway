@@ -65,6 +65,14 @@ function clearAuthenticatedState(){
  pendingIdea='';window.dispatchEvent(new Event('authentication-cleared'));updateNavigation();showPage('authPage');
 }
 window.logoutSession=async()=>{try{await api('/api/auth/logout',{method:'POST',signal:AbortSignal.timeout(5000)});}finally{clearAuthenticatedState();}};
+window.workspaceRetentionNotice=cache=>{
+ if(!cache)return '';
+ const ar=lang==='ar',github=cache.scope==='github_working_copy';
+ if(cache.expired)return github?(ar?'نُظّفت نسخة العمل المؤقتة؛ يبقى مستودع GitHub وبيانات الحساب محفوظين.':'Temporary worktree cleaned; the GitHub repository and account data remain preserved.'):(ar?'نُظّفت ملفات المشروع المحلي بعد الخمول؛ تبقى بيانات الحساب محفوظة.':'Inactive local project files were cleaned; account data remains preserved.');
+ const expiry=new Date(cache.expires_at).toLocaleString(lang);
+ if(cache.warning)return (ar?'تنبيه: المشروع المحلي خامل منذ نحو 5 أيام. افتحه أو صدّره قبل التنظيف في ':'Warning: local project inactive for about 5 days. Open or export it before cleanup at ')+expiry;
+ return (github?(ar?'كاش نسخة العمل: 73 ساعة من آخر نشاط حقيقي. ':'Worktree cache: 73 hours from last meaningful activity. '):(ar?'ملفات المشروع المحلي: 7 أيام من آخر نشاط حقيقي. ':'Local project files: 7 days from last meaningful activity. '))+(ar?'موعد التنظيف: ':'Cleanup at: ')+expiry;
+};
 window.authSession=(()=>{
  let deadline=0,timer=null,flushTimer=null,pending=false,dirty=false,stopped=true,warning=null,lastAcknowledged=0,expiring=false;
  const label=(en,ar)=>lang==='ar'?ar:en;
@@ -73,7 +81,8 @@ window.authSession=(()=>{
  async function flush(){
   flushTimer=null;if(stopped||pending||!dirty||!currentUser||document.hidden)return;
   pending=true;dirty=false;const revision=authenticationRevision;
-  try{const result=await api('/api/auth/activity',{method:'POST'});if(revision===authenticationRevision){lastAcknowledged=Date.now();observe(result.idle_expires_at);}}
+  const workspaceId=activeWorkspace&&$('#workspacePage.active')?activeWorkspace.id:null;
+  try{const result=await api('/api/auth/activity',{method:'POST',body:JSON.stringify({workspace_id:workspaceId})});if(revision===authenticationRevision){lastAcknowledged=Date.now();observe(result.idle_expires_at);}}
   catch(error){if(currentUser&&revision===authenticationRevision)dirty=true;}
   finally{pending=false;}
  }
@@ -108,7 +117,7 @@ window.authSession=(()=>{
  }
  for(const kind of ['pointerdown','keydown','wheel','touchstart'])document.addEventListener(kind,scheduleActivity,{capture:true,passive:true});
  document.addEventListener('visibilitychange',()=>{tick();if(!document.hidden&&dirty)flush();});
- return {observe,stop,start(){stopped=false;if(!timer)timer=setInterval(tick,1000);tick();}};
+ return {observe,stop,workspaceOpened(){if(dirty){clearTimeout(flushTimer);flush();}},start(){stopped=false;if(!timer)timer=setInterval(tick,1000);tick();}};
 })();
 function showPage(id){navigationRevision++;document.documentElement.classList.remove('bootstrapping');if(['admin','owner'].includes(currentUser?.role)&&['workspaceHomePage','connectionsPage','workspacePage','onboarding','clientPage','accountPage','billingPage'].includes(id))id='adminPage';$('#welcomeSidebar').classList.remove('visible');$('#sessionSidebar').classList.remove('open');overlay(false);$$('.page').forEach(p=>p.classList.toggle('active',p.id===id));$('#siteHeader').style.display=id==='landing'?'flex':'none';window.scrollTo(0,0);syncPermissionPolling()}
 async function page(id){await authReady;await interfaceReady;if(protectedPages.has(id)&&!currentUser){showPage('authPage');window.loadManagement().catch(error=>toast(error.message));return}if(id==='adminPage'&&!['admin','owner'].includes(currentUser?.role)){toast('Administrator access required');return}showPage(id);if(['authPage','landing'].includes(id))window.loadManagement().catch(error=>toast(error.message));try{if(id==='accountPage'){renderProfile(await api('/api/profile'));await loadProjects()}if(id==='adminPage')await loadAdminUsers();if(id==='workspacePage'&&!activeWorkspace&&!window.workspaceRestoring){showPage('onboarding')}}catch(error){if(currentUser)toast(error.message)}}

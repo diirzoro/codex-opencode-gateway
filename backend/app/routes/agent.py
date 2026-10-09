@@ -4,6 +4,7 @@ Runtime model access is a separate prerequisite. No synthetic execution progress
 """
 import asyncio, hashlib, json, re, time, uuid, mimetypes
 from contextlib import suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
@@ -167,6 +168,8 @@ def finish_execution(db,session_id,kind,states=(),data=None,request_id=None,acti
         WorkspaceSession.id==session_id,WorkspaceSession.status!='cancelled'
     ).values(status=kind).execution_options(synchronize_session=False)).rowcount
     if changed:
+        from ..services.workspace_cache import touch
+        touch(db, current.workspace_id, current.user_id)
         for activity in activities:
             db.add(ExecutionEvent(session_id=session_id,kind='activity',data=json.dumps(activity)))
         for state in states:
@@ -251,6 +254,7 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
     receipt={"status":"submitted","session_id":str(session.id),"request_id":str(data.request_id)}
     message_id=session_lifecycle.new_message_id()
     session.status="submitted"
+    workspace.last_activity_at=datetime.now(timezone.utc)
     db.add(ExecutionEvent(session_id=session.id,kind="submission",data=json.dumps({"request_id":str(data.request_id),"fingerprint":fingerprint,"message_id":message_id,"receipt":receipt,"attachments":attached,"text":_sanitize(data.text,workspace)})))
     event(db,session.id,"submitted",{"request_id":str(data.request_id)})
     # Admission is durable BEFORE asynchronous runtime/provider preflight. A

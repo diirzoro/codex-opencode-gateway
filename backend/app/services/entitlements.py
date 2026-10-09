@@ -7,6 +7,7 @@ from ..models import User, Subscription
 
 CORE_TRIAL_DAYS = 30
 ADVANCED_TRIAL_DAYS = 10
+ACCOUNT_RETENTION_DAYS = 90
 
 def aware(value):
     return value.replace(tzinfo=timezone.utc) if value and value.tzinfo is None else value
@@ -22,11 +23,22 @@ def access_payload(db, user, *, now=None):
     core = admin or paid or bool(core_end and core_end > now)
     advanced = admin or paid or (core and (started is None or advanced_end > now))
     reason = "administration" if admin else "subscription" if paid else "trial" if core else "subscription_required"
+    # Keep the last paid entitlement identifiable after expiry, without granting
+    # access or confusing its expiry/plan with the independent free trial.
+    subscription_entitlement = paid or bool(not core and row and row.plan_id
+        and row.status in {"active", "expired", "cancelled"} and row.current_period_end)
+    end = aware(row.current_period_end) if subscription_entitlement else core_end
+    # Account retention is independent of workspace-file/cache lifetimes. This
+    # marks archival rather than deletion of customer/billing relationships.
+    from .customer_lifecycle import archive_deadline
     def days(end):
         return max(0, ceil((end - now).total_seconds() / 86400)) if end else None
     return {
         "allowed": core, "reason": reason,
-        "ends_at": aware(row.current_period_end) if paid else core_end,
+        "kind": "administration" if admin else "subscription" if subscription_entitlement else "trial",
+        "ends_at": end, "remaining_days": None if admin else days(end),
+        "account_retention": {"minimum_days": ACCOUNT_RETENTION_DAYS,
+                              "archive_at": archive_deadline(user, row) if not core else None},
         "core_access": core, "advanced_integrations": advanced,
         "byok_access": advanced, "github_access": advanced, "custom_agent_access": advanced,
         "core_trial": {"started_at": user.trial_started_at, "ends_at": core_end, "remaining_days": days(core_end), "active": bool(core_end > now)},

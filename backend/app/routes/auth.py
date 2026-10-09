@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, ConfigDict
 import secrets, uuid
 from ..services import social_login
 from sqlalchemy import or_, select, func
@@ -85,8 +86,12 @@ def me(request: Request, response: Response, user: User = Depends(require_user))
     response.headers["X-Session-Idle-Expires-At"] = idle_expires_at(request.state.auth_session).isoformat()
     return user_payload(user)
 
+class Activity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workspace_id: uuid.UUID | None = None
+
 @router.post("/activity")
-def activity(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+def activity(request: Request, data: Activity | None = None, user: User = Depends(require_user), db: Session = Depends(get_db)):
     # Only an explicit activity acknowledgement extends the existing session.
     # Revalidate under a row lock so it cannot revive a concurrently revoked token.
     session = db.scalar(select(AuthSession).where(AuthSession.id == request.state.auth_session.id)
@@ -97,6 +102,9 @@ def activity(request: Request, user: User = Depends(require_user), db: Session =
         db.commit()
         raise HTTPException(401, "Session expired")
     session.last_seen_at = now
+    if data and data.workspace_id:
+        from ..services.workspace_cache import touch
+        touch(db, data.workspace_id, user.id, now)
     db.commit()
     return {"idle_expires_at": idle_expires_at(session).isoformat()}
 

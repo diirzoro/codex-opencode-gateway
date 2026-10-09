@@ -294,3 +294,11 @@ dialog .session-idle-warning{position:sticky;inset:auto;margin:12px;flex:none;ma
 
 :root dialog :is(input,textarea)::placeholder{color:color-mix(in srgb,var(--muted) 65%,var(--panel));opacity:1}
 :root dialog.checkout-dialog #checkoutClose{position:sticky;top:0;margin-inline-start:auto;display:block;background:var(--panel);z-index:3}
+/* Effective entitlement comes from the existing server access payload. */
+#workspacePage .workspace-first .composer-context .workspace-days{font-size:12px;line-height:1.5;padding:3px 8px;border:1px solid var(--line);border-radius:999px;background:var(--control-fill);max-inline-size:100%;overflow-wrap:anywhere}
+#workspacePage .workspace-days[data-urgency="2"],#workspacePage #workspaceAccessState[data-urgency="2"]{border:1px solid #ba8a30;background:color-mix(in srgb,#ba8a30 10%,var(--bg))}
+#workspacePage .workspace-days[data-urgency="1"],#workspacePage #workspaceAccessState[data-urgency="1"]{border:1px solid #cb6b27;background:color-mix(in srgb,#cb6b27 13%,var(--bg))}
+#workspacePage .workspace-days[data-urgency="expired"],#workspacePage #workspaceAccessState[data-urgency="expired"]{border:1px solid #c44e4e;background:color-mix(in srgb,#c44e4e 12%,var(--bg))}
+#workspacePage #workspaceAccessState{flex-shrink:0;margin:6px 16px;padding:8px 12px;font-size:13px;line-height:1.6}
+@media(max-width:600px){#workspacePage .workspace-first .composer-context .workspace-days{font-size:11px}#workspacePage #workspaceAccessState{margin-inline:10px;gap:8px}}
+.project-retention-warning{display:block;padding-inline-start:8px;border-inline-start:3px solid #ba8a30;color:var(--text);line-height:1.6;overflow-wrap:anywhere}
