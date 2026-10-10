@@ -587,7 +587,7 @@
         card.append(select); plans.append(card);
       });
     }
-    var note = document.getElementById('billingPaymentNote'); if (note) note.textContent = tr('Select a plan to pay using a platform method. Manual transfers activate after receipt verification. Card checkout is not configured yet.', 'اختر خطة للدفع بإحدى وسائل المنصة. يُفعّل التحويل اليدوي بعد التحقق من الاستلام. الدفع بالبطاقة غير مهيأ بعد.'); var cancelButton=document.getElementById('billingCancel');if(cancelButton)cancelButton.hidden=data.subscription?.status!=='active';var reactivateButton=document.getElementById('billingReactivate');if(reactivateButton)reactivateButton.hidden=!['cancelled','expired'].includes(data.subscription?.status);
+    var note = document.getElementById('billingPaymentNote'); if (note) note.textContent = tr('Select a plan to pay using a platform method. Manual transfers activate after receipt verification. Card checkout is not configured yet.', 'اختر خطة للدفع بإحدى وسائل المنصة. يُفعّل التحويل اليدوي بعد التحقق من الاستلام. الدفع بالبطاقة غير مهيأ بعد.');
 
 
   }
