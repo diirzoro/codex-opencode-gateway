@@ -12,6 +12,16 @@ Branch policy: development on `updates`; production on `master`. Do not merge or
 - Credentials remain encrypted server-side.
 - Production `.env`, PostgreSQL, encryption keys, PayPal/GitHub secrets, runtime and workspace data are protected operational state.
 
+## Local development baseline
+- Windows local setup uses Python 3.13 and the root `.venv`; Python 3.14 is unsupported with the current dependency pins. Do not force PyO3 forward compatibility.
+- Local development uses native Windows PostgreSQL (not Docker) on the default port. The DeepSeek and Codex copies share the `gateway_local` user/password/database on `127.0.0.1:5432` so they can share users, IDs, subscriptions and test data. Never use production credentials.
+- Run `setup-local.ps1` for dependency installation, ignored `.env` preparation, local random encryption-key generation and Alembic through `head`; run `run-local.ps1` for the loopback Gateway on port 7001. Both reject a non-3.13 `.venv`.
+- Existing `.env` files are preserved: explicitly set `OPENCODE_RUNTIME_MODE=local` for workspace/provider/agent/model testing. Workspace runtimes keep dynamic loopback ports; 4096 remains the optional reference health URL.
+- The DeepSeek main copy uses its own data roots so it never collides with the Codex copy: `WORKSPACE_ROOT=D:/deepseek-gateway-data/workspaces` and `RUNTIME_ROOT=D:/deepseek-gateway-data/runtime`.
+- The `agent-test/` folder is a git-ignored local sandbox for prototypes/experiments only; it is not part of the application, is not imported/served/deployed, and is never committed.
+- External integrations require separate local/test credentials. Do not copy production secrets or claim those integrations work without live evidence.
+- See README Local development for the Windows sequence and Phase 6 baseline checklist. These local setup rules do not alter production configuration or deployment requirements.
+
 ## Completed phases
 ### Phase 1
 Core Gateway/workspace/runtime architecture, backend/frontend integration and project/workspace/session foundations.

@@ -24,7 +24,6 @@ from ..config import settings
 from .workspaces import root_for
 
 logger = logging.getLogger(__name__)
-# Tested OpenCode baseline. Any version is accepted; versions outside this set log a warning.
 SUPPORTED_RUNTIME_VERSIONS = {"1.18.31", "1.18.32"}
 STARTUP_TIMEOUT = 30.0
 HEALTH_INTERVAL = 5.0
@@ -37,26 +36,13 @@ CAPABILITY_PATHS = {"permissions": "/permission", "tools": "/experimental/tool/i
                     "formatters": "/formatter", "project": "/project/current",
                     "session_status": "/session/status", "questions": "/question"}
 _runtimes = {}
-_account_runtimes = {}
 _locks = {}
 _registry_lock = threading.Lock()
 
 
-def _lock_for(key):
-    with _registry_lock:
-        return _locks.setdefault(key, threading.RLock())
-
-
 def workspace_lock(workspace):
-    return _lock_for(str(workspace.id))
-
-
-def account_runtime_key(user):
-    return "account:" + str(user.id)
-
-
-def account_lock(user):
-    return _lock_for(account_runtime_key(user))
+    with _registry_lock:
+        return _locks.setdefault(str(workspace.id), threading.RLock())
 
 
 @dataclass
@@ -101,7 +87,6 @@ class OpenCodeService:
         self.restore_errors = []
         self.oauth_pending = {}
         self.session_policies = {}
-        self.capability_generation = None
 
     def close(self):
         self.client.close()
@@ -145,32 +130,11 @@ class OpenCodeService:
         if not isinstance(result, dict) or result.get("healthy") is not True:
             raise HTTPException(503, "OpenCode health check failed")
         version = str(result.get("version", "unknown"))
-        # Accept any OpenCode runtime. The set above is only the tested baseline;
-        # other versions are used as-is with a warning instead of being refused.
         if version not in SUPPORTED_RUNTIME_VERSIONS:
-            logger.warning("OpenCode runtime version %s is outside the tested set %s; continuing", version, sorted(SUPPORTED_RUNTIME_VERSIONS))
+            raise HTTPException(503, "Unsupported OpenCode version: " + version)
         self.last_health = time.monotonic()
         self.health_state = {"healthy": True, "version": version}
         return self.health_state
-
-    def verify_capabilities(self):
-        """Capability-based compatibility check (no version whitelist).
-
-        Confirms the runtime actually exposes the endpoints Gateway requires
-        (provider discovery, provider authentication, agent discovery and
-        configuration). Runs once per runtime generation; the tested version set
-        is informational only. A missing or malformed capability fails clearly
-        instead of silently using an incompatible runtime.
-        """
-        with self.cache_lock:
-            if self.capability_generation == self.generation:
-                return
-        results, errors = self._discover(CORE_PATHS)
-        missing = sorted({name for name, value in results.items() if value is None} | set(errors))
-        if missing:
-            raise HTTPException(503, "OpenCode runtime is incompatible with this Gateway: missing or invalid capabilities: " + ", ".join(missing))
-        with self.cache_lock:
-            self.capability_generation = self.generation
 
     def invalidate(self):
         with self.cache_lock:
@@ -359,7 +323,7 @@ def shared_health():
 
 def _initialize(service, workspace):
     """One restoration pass per generation, regardless of which route starts it."""
-    from sqlalchemy import or_, select
+    from sqlalchemy import select
     from ..database import SessionLocal
     from ..models import ProviderCredential
     from . import credentials, providers
@@ -367,13 +331,10 @@ def _initialize(service, workspace):
     service.restore_passes += 1
     with SessionLocal() as db:
         rows = db.scalars(select(ProviderCredential).where(
-            ProviderCredential.user_id == workspace.user_id,
-            or_(ProviderCredential.workspace_id == workspace.id, ProviderCredential.workspace_id.is_(None))))
+            ProviderCredential.workspace_id == workspace.id,
+            ProviderCredential.user_id == workspace.user_id))
         for row in rows:
-            disconnected = (providers.is_account_disconnected(db, workspace.user_id, row.provider_id)
-                            if row.workspace_id is None
-                            else providers.is_locally_disconnected(db, workspace, row.provider_id))
-            if disconnected:
+            if providers.is_locally_disconnected(db,workspace,row.provider_id):
                 continue
             try:
                 providers.restore_credential(service, row.provider_id, credentials.decrypt(row.ciphertext))
@@ -384,128 +345,6 @@ def _initialize(service, workspace):
     service.timings["credential_restore_ms"] = round((time.monotonic() - started) * 1000, 2)
 
 
-def resolve_binary():
-    """Locate the OpenCode launcher without hardcoding machine-specific paths.
-
-    Order: an explicitly configured path, a normal PATH lookup, then the Windows
-    user-scoped install locations (npm global bin, ~/.opencode/bin, LocalAppData).
-    The launcher is a native executable so it spawns without a shell.
-    """
-    configured = (settings.opencode_binary or "opencode").strip()
-    candidate = Path(configured).expanduser()
-    if candidate.is_absolute() or candidate.parent != Path("."):
-        if candidate.is_file():
-            return str(candidate)
-    found = shutil.which(configured)
-    if found:
-        return found
-    if os.name == "nt":
-        for variable, parts in (
-            ("USERPROFILE", (".opencode", "bin", "opencode.exe")),
-            ("APPDATA", ("npm", "opencode.exe")),
-            ("LOCALAPPDATA", ("Programs", "opencode", "opencode.exe")),
-        ):
-            base = os.environ.get(variable)
-            if not base:
-                continue
-            path = Path(base).joinpath(*parts)
-            if path.is_file():
-                return str(path)
-    return None
-
-
-def _start_runtime(store, key, context, cwd, inject):
-    binary = resolve_binary()
-    if not binary:
-        raise HTTPException(503, "OpenCode executable is not installed")
-    context.mkdir(parents=True, exist_ok=True)
-    cwd.mkdir(parents=True, exist_ok=True)
-    env = {k: v for k, v in os.environ.items() if k.upper() in {
-        "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "PROCESSOR_ARCHITECTURE",
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"}}
-    for name, folder in {"HOME": "home", "USERPROFILE": "home", "APPDATA": "config", "LOCALAPPDATA": "data",
-                         "XDG_CONFIG_HOME": "config", "XDG_DATA_HOME": "data", "XDG_STATE_HOME": "state", "XDG_CACHE_HOME": "cache"}.items():
-        path = context / folder
-        path.mkdir(exist_ok=True)
-        env[name] = str(path)
-    from ..database import SessionLocal
-    from .policy import load, permission_config
-    with SessionLocal() as db:
-        permission = permission_config(load(db))
-    password = secrets.token_urlsafe(32)
-    env.update(OPENCODE_SERVER_PASSWORD=password, OPENCODE_CONFIG_CONTENT=json.dumps({
-        "autoupdate": False, "share": "disabled", "plugin": [], "permission": permission}))
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    log = open(context / "runtime.log", "a", encoding="utf-8")
-    service = OpenCodeService(f"http://127.0.0.1:{port}", password, cwd)
-    service.config_paths.extend(context / "config" / "opencode" / name for name in ("opencode.json", "opencode.jsonc"))
-    owner_lock = None
-    if os.name != "nt":
-        import fcntl
-        owner_lock = open(context / "process.lock", "a")
-        try:
-            fcntl.flock(owner_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            owner_lock.close()
-            service.close()
-            log.close()
-            raise HTTPException(503, "Runtime belongs to another Gateway worker; use one worker") from None
-    started = time.monotonic()
-    try:
-        process = subprocess.Popen([binary, "serve", "--pure", "--hostname", "127.0.0.1", "--port", str(port)],
-                                   cwd=cwd, env=env, stdout=log, stderr=log)
-    except OSError:
-        service.close()
-        log.close()
-        if owner_lock: owner_lock.close()
-        raise HTTPException(503, "Cannot spawn OpenCode process") from None
-    service.timings["process_spawn_ms"] = round((time.monotonic() - started) * 1000, 2)
-    store[key] = Runtime(process, log, service, owner_lock)
-    deadline = started + STARTUP_TIMEOUT
-    try:
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise HTTPException(503, "OpenCode exited before health-ready; inspect the private runtime log")
-            try:
-                service.health(timeout=min(1, max(.01, deadline - time.monotonic())))
-                break
-            except HTTPException as exc:
-                if str(exc.detail).startswith(("Unsupported", "OpenCode runtime is incompatible")):
-                    raise
-                time.sleep(min(.1, max(0, deadline - time.monotonic())))
-        else:
-            raise HTTPException(504, "OpenCode did not become healthy within the total startup deadline")
-        service.timings["health_ready_ms"] = round((time.monotonic() - started) * 1000, 2)
-        service.verify_capabilities()
-        inject(service)
-        return service
-    except Exception:
-        _stop_runtime(store, key)
-        raise
-
-
-def _stop_runtime(store, key):
-    runtime = store.pop(key, None)
-    if not runtime:
-        return
-    if runtime.process.poll() is None:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(runtime.process.pid), "/T", "/F"], capture_output=True, timeout=15)
-        else:
-            runtime.process.terminate()
-            try:
-                runtime.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                runtime.process.kill()
-                runtime.process.wait(timeout=5)
-    runtime.service.close()
-    runtime.log.close()
-    if runtime.owner_lock:
-        runtime.owner_lock.close()
-
-
 def for_workspace(workspace, *, start=True):
     if settings.runtime_mode != "local":
         raise HTTPException(503, "Workspace runtime is disabled")
@@ -514,92 +353,107 @@ def for_workspace(workspace, *, start=True):
         runtime = _runtimes.get(key)
         if runtime and runtime.process.poll() is None:
             if time.monotonic() - runtime.service.last_health > HEALTH_INTERVAL:
+                # Do not silently replace a living but unhealthy process.
                 runtime.service.health()
             return runtime.service
         if runtime:
             stop_workspace(workspace)
         if not start:
             raise HTTPException(409, "No running OpenCode runtime")
+        binary = shutil.which(settings.opencode_binary)
+        if not binary:
+            raise HTTPException(503, "OpenCode executable is not installed")
         repo = root_for(workspace)
         if not repo.is_dir():
             raise HTTPException(409, "Workspace files are missing")
         context = settings.runtime_root / str(workspace.user_id) / key
-        return _start_runtime(_runtimes, key, context, repo, lambda service: _initialize(service, workspace))
-
-
-def _initialize_account(service, user):
-    """Restore the user's account-level credentials into the account runtime."""
-    from sqlalchemy import select
-    from ..database import SessionLocal
-    from ..models import ProviderCredential
-    from . import credentials, providers
-    with SessionLocal() as db:
-        rows = db.scalars(select(ProviderCredential).where(
-            ProviderCredential.user_id == user.id, ProviderCredential.workspace_id.is_(None)))
-        for row in rows:
-            if providers.is_account_disconnected(db, user.id, row.provider_id):
-                continue
+        context.mkdir(parents=True, exist_ok=True)
+        env = {k: v for k, v in os.environ.items() if k.upper() in {
+            "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "PROCESSOR_ARCHITECTURE",
+            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"}}
+        for name, folder in {"HOME": "home", "USERPROFILE": "home", "APPDATA": "config", "LOCALAPPDATA": "data",
+                             "XDG_CONFIG_HOME": "config", "XDG_DATA_HOME": "data", "XDG_STATE_HOME": "state", "XDG_CACHE_HOME": "cache"}.items():
+            path = context / folder
+            path.mkdir(exist_ok=True)
+            env[name] = str(path)
+        from ..database import SessionLocal
+        from .policy import load, permission_config
+        with SessionLocal() as db:
+            permission = permission_config(load(db))
+        password = secrets.token_urlsafe(32)
+        env.update(OPENCODE_SERVER_PASSWORD=password, OPENCODE_CONFIG_CONTENT=json.dumps({
+            "autoupdate": False, "share": "disabled", "plugin": [], "permission": permission}))
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        log = open(context / "runtime.log", "a", encoding="utf-8")
+        service = OpenCodeService(f"http://127.0.0.1:{port}", password, repo)
+        service.config_paths.extend(context / "config" / "opencode" / name for name in ("opencode.json", "opencode.jsonc"))
+        owner_lock = None
+        if os.name != "nt":
+            import fcntl
+            owner_lock = open(context / "process.lock", "a")
             try:
-                providers.restore_credential(service, row.provider_id, credentials.decrypt(row.ciphertext))
-                service.restore_puts += 1
-            except Exception:
-                service.restore_errors.append({"provider_id": row.provider_id,
-                                                "detail": "Stored credential could not be restored"})
-
-
-def for_account(user, *, start=True):
-    """Account-level provider runtime.
-
-    A lightweight, loopback-only OpenCode context used only for account provider
-    discovery and validation. It holds no project files and is a separate process
-    from any workspace execution runtime, so a signed-in user can connect a
-    provider before creating any project. Kept warm and reused per user.
-    """
-    if settings.runtime_mode != "local":
-        raise HTTPException(503, "Workspace runtime is disabled")
-    key = account_runtime_key(user)
-    with account_lock(user):
-        runtime = _account_runtimes.get(key)
-        if runtime and runtime.process.poll() is None:
-            if time.monotonic() - runtime.service.last_health > HEALTH_INTERVAL:
-                runtime.service.health()
-            return runtime.service
-        if runtime:
-            _stop_runtime(_account_runtimes, key)
-        if not start:
-            raise HTTPException(409, "No running OpenCode runtime")
-        context = settings.runtime_root / str(user.id) / "account"
-        return _start_runtime(_account_runtimes, key, context, context / "work", lambda service: _initialize_account(service, user))
+                fcntl.flock(owner_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                owner_lock.close()
+                service.close()
+                log.close()
+                raise HTTPException(503, "Workspace runtime belongs to another Gateway worker; use one worker") from None
+        started = time.monotonic()
+        try:
+            process = subprocess.Popen([binary, "serve", "--pure", "--hostname", "127.0.0.1", "--port", str(port)],
+                                       cwd=repo, env=env, stdout=log, stderr=log)
+        except OSError:
+            service.close()
+            log.close()
+            if owner_lock: owner_lock.close()
+            raise HTTPException(503, "Cannot spawn OpenCode process") from None
+        service.timings["process_spawn_ms"] = round((time.monotonic() - started) * 1000, 2)
+        _runtimes[key] = Runtime(process, log, service, owner_lock)
+        deadline = started + STARTUP_TIMEOUT
+        try:
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    raise HTTPException(503, "OpenCode exited before health-ready; inspect the private runtime log")
+                try:
+                    service.health(timeout=min(1, max(.01, deadline - time.monotonic())))
+                    break
+                except HTTPException as exc:
+                    if str(exc.detail).startswith("Unsupported"):
+                        raise
+                    time.sleep(min(.1, max(0, deadline - time.monotonic())))
+            else:
+                raise HTTPException(504, "OpenCode did not become healthy within the total startup deadline")
+            service.timings["health_ready_ms"] = round((time.monotonic() - started) * 1000, 2)
+            _initialize(service, workspace)
+            return service
+        except Exception:
+            stop_workspace(workspace)
+            raise
 
 
 def stop_workspace(workspace):
     with workspace_lock(workspace):
-        _stop_runtime(_runtimes, str(workspace.id))
-
-
-def stop_account(user):
-    with account_lock(user):
-        _stop_runtime(_account_runtimes, account_runtime_key(user))
-
-
-def stop_user_workspaces(user_id):
-    """Stop the user's running workspace runtimes.
-
-    Called when an account-level credential changes so the next workspace open
-    re-runs credential injection (workspace + account rows). Project files and
-    OpenCode session data are unaffected; only the warm process is dropped.
-    """
-    from sqlalchemy import select
-    from ..database import SessionLocal
-    from ..models import Workspace
-    with SessionLocal() as db:
-        ids = [str(row) for row in db.scalars(select(Workspace.id).where(Workspace.user_id == user_id))]
-    for workspace_id in ids:
-        _stop_runtime(_runtimes, workspace_id)
+        runtime = _runtimes.pop(str(workspace.id), None)
+        if runtime:
+            if runtime.process.poll() is None:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/PID", str(runtime.process.pid), "/T", "/F"], capture_output=True, timeout=15)
+                else:
+                    runtime.process.terminate()
+                    try: runtime.process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        runtime.process.kill()
+                        runtime.process.wait(timeout=5)
+            runtime.service.close()
+            runtime.log.close()
+            if runtime.owner_lock: runtime.owner_lock.close()
 
 
 def stop_all():
     for key in list(_runtimes):
         stop_workspace(type("WorkspaceRef", (), {"id": key})())
-    for key in list(_account_runtimes):
-        _stop_runtime(_account_runtimes, key)
+
+
+atexit.register(stop_all)

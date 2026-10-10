@@ -219,7 +219,7 @@
   var ADMIN_LOADERS = { overview: loadAdminOverview, projects: loadAdminProjects, workspaces: loadAdminWorkspaces, sessions: loadAdminSessions, users: loadAdminUsersData, plans: loadAdminPlans, billing: loadAdminBilling, reports: loadAdminReports, audit: async function () {}, health: loadAdminHealth, policy: loadAdminPolicy, github: loadAdminGithubAdmin, trial: loadAdminTrial, settings: async function () {}, security: async function () {}, account: loadAdminAccount };
 
   function setAdminView(name) {
-    if (!['overview','users','plans','billing','reports','audit','health','policy','github','trial','settings','security','account','homepage'].includes(name)) name='overview';
+    if (!['overview','users','plans','billing','reports','audit','health','policy','github','trial','settings','security','account'].includes(name)) name='overview';
     adminView = name;
     document.querySelectorAll('#adminNav [data-admin-view]').forEach(function (b) { b.classList.toggle('active', b.dataset.adminView === name); });
     document.querySelectorAll('#adminPage [data-admin-panel]').forEach(function (p) { p.classList.toggle('active', p.dataset.adminPanel === name); });
@@ -278,7 +278,7 @@
     return lang === 'ar' ? planDurationLabel(plan.duration_days) : plan.name;
   }
   function planDisplayTerm(plan) {
-    return lang === 'ar' ? plan.duration_days + ' ' + tr('days', 'يومًا') : planDurationLabel(plan.duration_days);
+    return plan.duration_days + ' ' + tr('days', 'يوم');
   }
   window.planDisplayName = planDisplayName;
   window.planDisplayTerm = planDisplayTerm;
@@ -423,8 +423,6 @@
 
   Object.assign(copy.en, { clientNavTitle: 'Client', clientDashboard: 'Dashboard', clientProjects: 'Projects', clientSessions: 'Sessions', clientAi: 'OpenCode', clientAccount: 'Account / Profile', clientDashboardLead: 'Your trial, connections, projects and recent activity in one place.', clientRecentLabel: 'RECENT', clientRecentProjects: 'Projects and workspaces', adminNavTitle: 'Administration', adminConsole: 'Admin Console', adminOverview: 'Overview', adminUsers: 'Users', adminProjects: 'Projects', adminWorkspaces: 'Workspaces', adminSessions: 'Sessions', adminPlans: 'Plans & Offers', adminPolicy: 'AI / OpenCode Policy', adminGithub: 'GitHub', adminAudit: 'Audit / Activity', adminSettings: 'Platform Settings', adminPersonal: 'Personal account', adminOverviewLead: 'Real backend metrics only. Metrics without a real query show "Not available yet".', adminPlatformStatus: 'PLATFORM STATUS', adminIntegrations: 'Integrations', adminUsersLead: 'Real account records. Role, status and trial changes call the admin API.', adminActions: 'Actions', adminProjectsLead: 'Metadata only. Customer source code is never shown here.', adminWorkspacesLead: 'Real workspace metadata. The physical path is never exposed.', adminSessionsLead: 'Real OpenCode conversation metadata.', adminPlansLead: 'Published offers are read by the public landing page through the plans API.', adminPolicyLead: 'These settings persist and limit what clients can select. User API keys and OAuth credentials are never shown here.', adminBilling: 'Billing / Subscriptions', adminReports: 'Reports', adminHealth: 'Platform Logs / Health', adminGithubSettings: 'GitHub Integration Settings', adminTrial: 'Trial / Entitlement Settings', adminSecurity: 'Security', clientRecentSessionsTitle: 'Recent sessions', clientProjectsLead: 'Your projects and workspaces.', clientSessionsLead: 'Workspaces and their OpenCode sessions.', clientAiLead: 'Runtime, provider and tool status for your workspaces.', clientGithubLead: 'Connect your GitHub account, then choose a repository and branch.', clientBillingLead: "Your own subscription only. Other customers' billing is never shown here.", clientPlansTitle: 'Plans & offers', clientCancel: 'Cancel subscription', clientReactivate: 'Reactivate', clientRenew: 'Renew subscription', clientInvoicesTitle: 'Invoices & payments', clientAccountLead: 'Personal details and preferences.', clientPersonalInfo: 'Personal information', clientUsername: 'Username', clientEmail: 'Email', clientPhone: 'Phone', clientLocation: 'Location / postal code', clientPreferences: 'Language / theme', clientSecurityNote: 'Use Password & security to change your password, revoke sign-ins, or suspend your account.', clientSecurityLead: 'Session and account security.', clientSecurity: 'Password & Security', clientDashboardBadge: 'CLIENT DASHBOARD', adminConsoleBadge: 'ADMIN CONSOLE', adminBillingLead: 'Business finance view, separate from the client billing page.', adminReportsLead: 'Real platform counts. Revenue appears only when backed by real payment data.', aUsername: 'Username', aEmail: 'Email', aRole: 'Role', aStatus: 'Status', aTrialRemaining: 'Trial remaining', aTrialEnd: 'Trial end', aPlan: 'Plan', aLastLogin: 'Last login', aCreated: 'Created', aProjectsWorkspaces: 'Projects / Workspaces', aCode: 'Code', aName: 'Name', aPrice: 'Price (USD)', aDays: 'Duration', aActive: 'Active', aAddPlan: 'Add plan', aSubscriptionsSmall: 'SUBSCRIPTIONS', aSubsTitle: 'Subscriptions across users', aOwner: 'Owner', aStarted: 'Started', aPeriodEnd: 'Period end', aCancelled: 'Cancelled', aTransactionsSmall: 'TRANSACTIONS', aTransactions: 'Payment transactions', aRevenueSmall: 'REVENUE', aRevenue: 'Revenue', aNay: 'Not available yet.', aAuditLogging: 'Audit logging is not available yet.', aHealthLead: 'Runtime health from the real backend.', aLoading: 'Loading…', aEnabledProviders: 'Enabled providers (comma separated)', aAllowedModels: 'Allowed models (comma separated)', aEnabledTools: 'Enabled tools / capabilities (comma separated)', aRequireApproval: 'Require approval before running tools', aSavePolicy: 'Save policy', aGithubLead: 'Connection status. The real GitHub integration is a later phase.', aLoadingStatus: 'Loading status…', aTrialLead: 'Trial entitlement overview. Editing trial defaults is not available yet.', aPlatformSettings: 'Platform settings are not available yet.', aAdminSecurityNotAvail: 'Admin security settings are not available yet.', aPersonalLead: 'Your own account. Administrative controls are on the other pages.' });
   Object.assign(copy.ar, { clientNavTitle: 'العميل', clientDashboard: 'لوحة المعلومات', clientProjects: 'المشاريع', clientSessions: 'الجلسات', clientAi: 'OpenCode', clientAccount: 'الحساب / الملف', clientDashboardLead: 'تجربتك واتصالاتك ومشاريعك ونشاطك الأخير في مكان واحد.', clientRecentLabel: 'الأحدث', clientRecentProjects: 'المشاريع ومساحات العمل', adminNavTitle: 'الإدارة', adminConsole: 'لوحة الإدارة', adminOverview: 'نظرة عامة', adminUsers: 'المستخدمون', adminProjects: 'المشاريع', adminWorkspaces: 'مساحات العمل', adminSessions: 'الجلسات', adminPlans: 'الخطط والعروض', adminPolicy: 'سياسة الذكاء / OpenCode', adminGithub: 'GitHub', adminAudit: 'التدقيق / النشاط', adminSettings: 'إعدادات المنصة', adminPersonal: 'الحساب الشخصي', adminOverviewLead: 'مؤشرات حقيقية فقط. ما لا يوجد له استعلام حقيقي يظهر "غير متاح بعد".', adminPlatformStatus: 'حالة المنصة', adminIntegrations: 'التكاملات', adminUsersLead: 'سجلات حقيقية. تغيير الدور والحالة والتجربة يستدعي واجهة الإدارة.', adminActions: 'إجراءات', adminProjectsLead: 'بيانات وصفية فقط. لا يظهر كود العميل هنا.', adminWorkspacesLead: 'بيانات مساحة العمل الحقيقية. لا يُكشف المسار الفيزيائي.', adminSessionsLead: 'بيانات محادثات OpenCode الحقيقية.', adminPlansLead: 'تُقرأ العروض المنشورة في صفحة الهبوط عبر واجهة الخطط.', adminPolicyLead: 'تُحفظ هذه الإعدادات وتحدّ من اختيارات العملاء. لا تظهر مفاتيح المستخدمين أو رموز OAuth هنا.', adminBilling: 'الفوترة / الاشتراكات', adminReports: 'التقارير', adminHealth: 'سجلات المنصة / الحالة', adminGithubSettings: 'إعدادات تكامل GitHub', adminTrial: 'إعدادات التجربة / الاستحقاق', adminSecurity: 'الأمان', clientRecentSessionsTitle: 'الجلسات الأخيرة', clientProjectsLead: 'مشاريعك ومساحات العمل.', clientSessionsLead: 'مساحات العمل وجلسات OpenCode الخاصة بها.', clientAiLead: 'حالة وقت التشغيل والمزوّد والأدوات لمساحات عملك.', clientGithubLead: 'حالة الاتصال. التدفق الحقيقي للترخيص مرحلة لاحقة.', clientBillingLead: 'اشتراكك فقط. لا تظهر فوترة العملاء الآخرين هنا.', clientPlansTitle: 'الخطط والعروض', clientCancel: 'إلغاء الاشتراك', clientReactivate: 'إعادة التفعيل', clientRenew: 'تجديد الاشتراك', clientInvoicesTitle: 'الفواتير والمدفوعات', clientAccountLead: 'بياناتك وتفضيلاتك. لوحة المعلومات صفحة منفصلة.', clientPersonalInfo: 'المعلومات الشخصية', clientUsername: 'اسم المستخدم', clientEmail: 'البريد الإلكتروني', clientPhone: 'الهاتف', clientLocation: 'الموقع / الرمز البريدي', clientPreferences: 'اللغة / المظهر', clientSecurityNote: 'تغيير كلمة المرور وإدارة الأجهزة غير متاحين بعد. جلستك تستخدم ملف تعريف ارتباط HttpOnly وSameSite=Strict.', clientSecurityLead: 'أمان الجلسة والحساب.', clientSecurity: 'كلمة المرور والأمان', clientDashboardBadge: 'لوحة العميل', adminConsoleBadge: 'لوحة الإدارة', adminBillingLead: 'عرض مالي للعمل، منفصل عن صفحة فوترة العميل.', adminReportsLead: 'مؤشرات المنصة الحقيقية. تظهر الإيرادات فقط عند توفر بيانات دفع حقيقية.', aUsername: 'اسم المستخدم', aEmail: 'البريد الإلكتروني', aRole: 'الدور', aStatus: 'الحالة', aTrialRemaining: 'المتبقي من التجربة', aTrialEnd: 'نهاية التجربة', aPlan: 'الخطة', aLastLogin: 'آخر دخول', aCreated: 'تاريخ الإنشاء', aProjectsWorkspaces: 'المشاريع / مساحات العمل', aCode: 'الرمز', aName: 'الاسم', aPrice: 'السعر (سنتات)', aDays: 'الأيام', aActive: 'نشط', aAddPlan: 'إضافة خطة', aSubscriptionsSmall: 'الاشتراكات', aSubsTitle: 'الاشتراكات عبر المستخدمين', aOwner: 'المالك', aStarted: 'البدء', aPeriodEnd: 'نهاية الفترة', aCancelled: 'ملغى', aTransactionsSmall: 'المعاملات', aTransactions: 'معاملات الدفع', aRevenueSmall: 'الإيرادات', aRevenue: 'الإيرادات', aNay: 'غير متاح بعد.', aAuditLogging: 'سجل التدقيق غير متاح بعد.', aHealthLead: 'حالة وقت التشغيل من الخلفية الحقيقية.', aLoading: 'جارٍ التحميل…', aEnabledProviders: 'المزوّدون المفعّلون (مفصولة بفواصل)', aAllowedModels: 'النماذج المسموحة (مفصولة بفواصل)', aEnabledTools: 'الأدوات المفعّلة (مفصولة بفواصل)', aRequireApproval: 'تتطلب الموافقة قبل تشغيل الأدوات', aSavePolicy: 'حفظ السياسة', aGithubLead: 'حالة الاتصال. تكامل GitHub الحقيقي مرحلة لاحقة.', aLoadingStatus: 'جارٍ تحميل الحالة…', aTrialLead: 'نظرة عامة على استحقاق التجربة. تعديل مدة التجربة الافتراضية غير متاح بعد.', aPlatformSettings: 'إعدادات المنصة غير متاحة بعد.', aAdminSecurityNotAvail: 'إعدادات أمان الإدارة غير متاحة بعد.', aPersonalLead: 'حسابك الخاص. عناصر التحكم الإدارية في الصفحات الأخرى.' });
-Object.assign(copy.en, { accountUsageTitle: 'Permissions & Usage' });
-Object.assign(copy.ar, { accountUsageTitle: 'صلاحياتك واستخدامك' });
   applyPrefs();
 
   // Re-render the active surface after a language switch so dynamic panels match the shell.
@@ -557,6 +555,9 @@ Object.assign(copy.ar, { accountUsageTitle: 'صلاحياتك واستخدامك
   function billingCard(label, value, hint) { var c = textElement('article', ''); c.append(textElement('small', label)); c.append(textElement('h3', value)); if (hint) c.append(textElement('p', hint)); return c; }
   async function loadClientBilling() {
     var data = await api('/api/billing/subscription', { cache: 'no-store' });
+    var subStatus = data.subscription && data.subscription.status;
+    var cancelBtn = document.getElementById('billingCancel'); if (cancelBtn) cancelBtn.hidden = !(subStatus === 'active' || subStatus === 'pending_payment');
+    var reactivateBtn = document.getElementById('billingReactivate'); if (reactivateBtn) reactivateBtn.hidden = !(subStatus === 'cancelled' || subStatus === 'expired');
     var summary = document.getElementById('billingSummary'); if (summary) {
       summary.replaceChildren();
       var planName = data.plan ? data.plan.name : tr('No plan assigned', 'لا توجد خطة');
@@ -819,29 +820,24 @@ Object.assign(copy.ar, { accountUsageTitle: 'صلاحياتك واستخدامك
   async function loadClientAccount() {
     var user=currentUser;if(!user)return;renderProfile(user);
     var box=document.getElementById('accountSummary');if(!box)return;box.replaceChildren();
-    var secondary=document.getElementById('accountSecondary');if(secondary)secondary.replaceChildren();
-    var information=textElement('div','','account-rows');information.id='accountUsage';box.append(information);
-    function infoRow(label,value){var row=textElement('div','','ac-row');row.append(textElement('small',label));row.append(textElement('span',value===null||value===undefined?'\u2014':String(value)));return row;}
+    var information=textElement('div','', 'summary-card');information.id='accountUsage';information.append(textElement('p',tr('Loading usage and access…','جارٍ تحميل الاستخدام والصلاحيات…')));box.append(information);
     try {
       var data=await api('/api/dashboard');if(currentUser?.id!==user.id)return;renderProfile(data.profile);
       var access=data.access,advanced=access.advanced_trial;
-      information.replaceChildren(
-        infoRow(tr('Account status','حالة الحساب'),data.profile.status),
-        infoRow(tr('Role','الدور'),data.profile.role),
-        infoRow(tr('Core trial','تجربة الأساس'),access.core_trial.remaining_days+' '+tr('days remaining','يوم متبقٍ')),
-        infoRow(tr('Advanced trial','التجربة المتقدمة'),advanced.state==='not_started'?tr('30 days from first actual use, capped by core trial','30 يومًا من أول استخدام فعلي ولا تتجاوز تجربة الأساس'):advanced.remaining_days+' '+tr('days remaining','يوم متبقٍ')),
-        infoRow(tr('Access / plan','الوصول / الخطة'),access.reason==='subscription'?(data.profile.plan||tr('Active subscription','اشتراك نشط')):access.reason==='administration'?tr('Administration','إدارة'):access.allowed?tr('Core trial','تجربة الأساس'):tr('Read-only · upgrade to code','للقراءة فقط · اشترك للبرمجة')),
-        infoRow(tr('GitHub','GitHub'),data.github.connected?(data.github.account_login||tr('Connected','متصل')):tr('Not connected','غير متصل')),
-        infoRow(tr('Saved provider keys','مفاتيح المزوّدات المحفوظة'),data.counts.credentials)
-      );
-      if(!secondary)return;
-      var connections=textElement('button',tr('Connected providers · selected workspace','المزوّدات المتصلة · مساحة العمل المختارة'),'button ghost small');connections.onclick=()=>window.openConnections('providers');secondary.append(connections);
-      if(!access.advanced_integrations||!access.core_access){var upgrade=textElement('button',tr('View plans / upgrade','عرض الخطط / الاشتراك'),'button small');upgrade.onclick=()=>window.openClientView('billing');secondary.append(upgrade);}
-      var storage=document.createElement('details');storage.append(textElement('summary',tr('Local project storage (50 MB each)','تخزين المشاريع المحلية (50 MB لكل مشروع)')));var usage=textElement('div','');storage.append(usage);secondary.append(storage);var loaded=false;
+      information.replaceChildren(textElement('h3',tr('Your access & usage','صلاحياتك واستخدامك')));
+      [[tr('Account status','حالة الحساب'),data.profile.status],[tr('Role','الدور'),data.profile.role],
+       [tr('Core trial','تجربة الأساس'),access.core_trial.remaining_days+' '+tr('days remaining','يوم متبقٍ')],
+       [tr('Advanced trial','التجربة المتقدمة'),advanced.state==='not_started'?tr('10 days from first actual use, capped by core trial','10 أيام من أول استخدام فعلي ولا تتجاوز تجربة الأساس'):advanced.remaining_days+' '+tr('days remaining','يوم متبقٍ')],
+       [tr('Access / plan','الوصول / الخطة'),access.reason==='subscription'?(data.profile.plan||tr('Active subscription','اشتراك نشط')):access.reason==='administration'?tr('Administration','إدارة'):access.allowed?tr('Core trial','تجربة الأساس'):tr('Read-only · upgrade to code','للقراءة فقط · اشترك للبرمجة')],
+       [tr('GitHub','GitHub'),data.github.connected?(data.github.account_login||tr('Connected','متصل')):tr('Not connected','غير متصل')],
+       [tr('Saved provider keys','مفاتيح المزوّدات المحفوظة'),data.counts.credentials]].forEach(function(row){information.append(textElement('p',row[0]+' · '+row[1]));});
+      var connections=textElement('button',tr('Connected providers · selected workspace','المزوّدات المتصلة · مساحة العمل المختارة'),'button ghost small');connections.onclick=()=>window.openConnections('providers');information.append(connections);
+      if(!access.advanced_integrations||!access.core_access){var upgrade=textElement('button',tr('View plans / upgrade','عرض الخطط / الاشتراك'),'button small');upgrade.onclick=()=>window.openClientView('billing');information.append(upgrade);}
+      var storage=document.createElement('details');storage.append(textElement('summary',tr('Local project storage (50 MB each)','تخزين المشاريع المحلية (50 MB لكل مشروع)')));var usage=textElement('div','');storage.append(usage);information.append(storage);var loaded=false;
       storage.ontoggle=async()=>{if(!storage.open||loaded)return;loaded=true;usage.replaceChildren(textElement('p',tr('Loading storage usage…','جارٍ تحميل استخدام التخزين…')));try{var rows=await Promise.all(data.projects.filter(p=>p.source_type!=='github').flatMap(p=>p.workspaces.map(async w=>{var s=await api('/api/workspaces/'+w.id+'/storage');return p.name+' · '+s.used_mb+' / '+s.limit_mb+' MB';})));if(currentUser?.id!==user.id)return;usage.replaceChildren(...rows.map(value=>textElement('p',value)));if(!rows.length)usage.append(textElement('p',tr('No local projects yet','لا توجد مشاريع محلية بعد')));}catch(error){loaded=false;usage.replaceChildren(textElement('p',error.message));}};
-      var signIns=textElement('div','','account-sign-ins');signIns.append(textElement('h4',tr('Link a sign-in identity','ربط هوية للدخول')));secondary.append(signIns);
+      var signIns=textElement('div','','account-sign-ins');signIns.append(textElement('h4',tr('Link a sign-in identity','ربط هوية للدخول')));information.append(signIns);
       api('/api/auth/social/options').then(function(options){if(currentUser?.id!==user.id||!signIns.isConnected)return;for(const provider of ['github','google']){var link=textElement('button',tr('Link sign-in with ','ربط الدخول عبر ')+provider,'button ghost small');link.disabled=!options[provider];link.title=link.disabled?tr('Not configured on this server','غير مهيأ على هذا الخادم'):'';link.onclick=()=>window.linkSignInProvider(provider);signIns.append(link);}signIns.append(textElement('p',tr('Sign-in identity does not authorize GitHub repositories. Linking requires an active sign-in session.','هوية الدخول لا تمنح صلاحية لمستودعات GitHub. الربط يتطلب جلسة دخول نشطة.')));}).catch(function(error){signIns.append(textElement('p',error.message));});
-      secondary.append(textElement('h4',tr('How your data is handled','كيف تُدار بياناتك')),textElement('p',tr('Local projects remain on Gateway. GitHub repositories remain in your GitHub account; OpenCode uses a server-side working copy. Credentials are encrypted server-side. Trial expiry does not delete files. Local project files are cleaned after 7 days of meaningful inactivity; temporary GitHub worktrees after 73 hours. Customer records are archived after 90 days of expired access; identity, billing history and explicit marketing-consent state are preserved, while operational secrets are removed. Hardware isolation is not provided.','تبقى المشاريع المحلية في Gateway ومستودعات GitHub في حسابك؛ يستخدم OpenCode نسخة عمل على الخادم. تُشفّر بيانات الاعتماد على الخادم. انتهاء التجربة لا يحذف الملفات. تُنظّف ملفات المشاريع المحلية بعد 7 أيام من الخمول الحقيقي ونسخ GitHub المؤقتة بعد 73 ساعة. يُؤرشف العميل بعد 90 يومًا من انتهاء الوصول مع حفظ الهوية وسجل الفوترة وحالة الموافقة التسويقية الصريحة، وتنظيف بيانات التشغيل الحساسة. لا يُقدّم عزل عتادي.')));
+      information.append(textElement('h4',tr('How your data is handled','كيف تُدار بياناتك')),textElement('p',tr('Local projects remain on Gateway. GitHub repositories remain in your GitHub account; OpenCode uses a server-side working copy. Credentials are encrypted server-side. Trial expiry does not delete files. Local project files are cleaned after 7 days of meaningful inactivity; temporary GitHub worktrees after 73 hours. Customer records are archived after 90 days of expired access; identity, billing history and explicit marketing-consent state are preserved, while operational secrets are removed. Hardware isolation is not provided.','تبقى المشاريع المحلية في Gateway ومستودعات GitHub في حسابك؛ يستخدم OpenCode نسخة عمل على الخادم. تُشفّر بيانات الاعتماد على الخادم. انتهاء التجربة لا يحذف الملفات. تُنظّف ملفات المشاريع المحلية بعد 7 أيام من الخمول الحقيقي ونسخ GitHub المؤقتة بعد 73 ساعة. يُؤرشف العميل بعد 90 يومًا من انتهاء الوصول مع حفظ الهوية وسجل الفوترة وحالة الموافقة التسويقية الصريحة، وتنظيف بيانات التشغيل الحساسة. لا يُقدّم عزل عتادي.')));
     } catch(error){if(currentUser?.id===user.id)information.replaceChildren(textElement('p',error.message));}
   }
 
@@ -1160,7 +1156,7 @@ Object.assign(copy.ar, { accountUsageTitle: 'صلاحياتك واستخدامك
       row.append(el('td', '', u.trial_remaining_days + ' ' + tr('days', 'يوم')));
       row.append(el('td', '', fmtDate(u.trial_ends_at)));
       row.append(el('td', '', u.plan || tr('Not assigned', 'غير محدد')));
-      row.append(el('td', '', u.last_login_at ? new Date(u.last_login_at).toLocaleString() : tr('Never', 'أبدًا')));
+      row.append(el('td', '', u.last_login_at ? new Date(u.last_login_at).toLocaleString(lang === 'ar' ? 'ar-u-nu-latn' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : tr('Never', 'أبدًا')));
       row.append(el('td', '', fmtDate(u.created_at)));
       row.append(el('td', '', (u.projects_count || 0) + ' / ' + (u.workspaces_count || 0)));
       body.append(row);
@@ -1187,7 +1183,7 @@ Object.assign(copy.ar, { accountUsageTitle: 'صلاحياتك واستخدامك
       [tr('Plan', 'الخطة'), u.plan || tr('Not assigned', 'غير محدد')],
       [tr('Trial remaining', 'مدة التجربة المتبقية'), u.trial_remaining_days + ' ' + tr('days', 'يوم')],
       [tr('Trial end', 'نهاية التجربة'), fmtDate(u.trial_ends_at)],
-      [tr('Last login', 'آخر دخول'), u.last_login_at ? new Date(u.last_login_at).toLocaleString() : tr('Never', 'أبدًا')],
+      [tr('Last login', 'آخر دخول'), u.last_login_at ? new Date(u.last_login_at).toLocaleString(lang === 'ar' ? 'ar-u-nu-latn' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : tr('Never', 'أبدًا')],
       [tr('Projects / Workspaces', 'المشاريع / مساحات العمل'), (u.projects_count || 0) + ' / ' + (u.workspaces_count || 0)],
     ];
     if (!editable) {
@@ -1388,269 +1384,4 @@ Object.assign(copy.ar, { accountUsageTitle: 'صلاحياتك واستخدامك
   ADMIN_LOADERS.account=async function(){await adminAccountLoader();await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="account"]'),'adminAccountActivity'),'logs');};
   window.openClientView=async function(name){clientView=name;await page('clientPage');};
   window.openAdminView=async function(name){if(['admin','owner'].includes(currentUser?.role))adminView=name;await page('adminPage');};
-
-  /* ===== Homepage Content: Landing carousel + Admin "Homepage Content" ===== */
-  Object.assign(copy.en,{adminHomepage:'Homepage Content',adminHomepageLead:'Manage the Landing carousel: offers, announcements, partner promotions and platform messages.'});
-  Object.assign(copy.ar,{adminHomepage:'محتوى الصفحة الرئيسية',adminHomepageLead:'أدر شريط الصفحة الرئيسية: العروض والإعلانات وترويج الشركاء ورسائل المنصة.'});
-
-  var HOME_TYPE_LABEL = { platform:['Platform Information','معلومات المنصة'], announcement:['Announcement','إعلان'], offer:['Offer','عرض'], update:['Update / News','تحديث / خبر'], partner:['Partner Promotion','ترويج شريك'], advertisement:['Advertisement','إعلان مدفوع'] };
-  var HOME_BADGE_LABEL = { new:['New','جديد'], offer:['Offer','عرض'], important:['Important','مهم'], update:['Update','تحديث'] };
-  var HOME_ICONS = ['icon-opencode','icon-github','icon-grid','icon-file','icon-folder','icon-clock','icon-diff','icon-home','icon-chat','icon-commit','icon-shield','icon-settings','icon-search','icon-link','icon-user','icon-terminal'];
-  var home = { host:null, track:null, viewport:null, dots:null, prev:null, next:null, play:null, items:[], index:0, timer:null, autoEnabled:true, hovered:false, focused:false, built:false, editing:null };
-  var homeReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
-
-  function homeLabel(map, key) { var row = map[key]; return row ? (lang === 'ar' ? row[1] : row[0]) : ''; }
-  function homeSvg(id) { return '<svg class="ui-icon" aria-hidden="true"><use href="#' + id + '"/></svg>'; }
-  function homeControlSvg(kind) { return '<svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + (kind === 'pause' ? '<path d="M9 5v14M15 5v14"/>' : '<path d="m9 5 9 7-9 7Z"/>') + '</svg>'; }
-  function homeLocalized(target, value) {
-    target.replaceChildren();
-    String(value || '').split(/(OpenCode|GitHub|50 MB)/g).forEach(function (part) {
-      if (!part) return;
-      if (/^(OpenCode|GitHub|50 MB)$/.test(part)) { var b = document.createElement('bdi'); b.dir = 'ltr'; b.textContent = part; target.append(b); }
-      else target.append(document.createTextNode(part));
-    });
-  }
-  function homeVisible() { var v = home.host ? parseInt(getComputedStyle(home.host).getPropertyValue('--cards'), 10) : 3; return v > 0 ? v : 3; }
-  function homeMax() { return Math.max(0, home.items.length - homeVisible()); }
-  function homeRtl() { return (document.documentElement.dir || 'ltr') === 'rtl'; }
-
-  function homeBuildShell() {
-    var host = home.host; host.replaceChildren(); home.built = true;
-    var viewport = el('div', 'home-viewport'); var track = el('div', 'home-track'); viewport.append(track);
-    var nav = el('div', 'home-nav');
-    var prev = el('button', 'home-arrow home-prev'); prev.type = 'button'; prev.innerHTML = homeSvg('icon-back');
-    var dots = el('div', 'home-dots');
-    var next = el('button', 'home-arrow home-next'); next.type = 'button'; next.innerHTML = homeSvg('icon-back');
-    var play = el('button', 'home-arrow home-play'); play.type = 'button';
-    nav.append(prev, dots, next, play); host.append(viewport, nav);
-    home.viewport = viewport; home.track = track; home.dots = dots; home.prev = prev; home.next = next; home.play = play;
-    prev.addEventListener('click', function (e) { homeGo(home.index - 1); if (e.detail > 0) prev.blur(); });
-    next.addEventListener('click', function (e) { homeGo(home.index + 1); if (e.detail > 0) next.blur(); });
-    play.addEventListener('click', function (e) { home.autoEnabled = !home.autoEnabled; homeUpdate(); homeSchedule(); if (e.detail > 0) play.blur(); });
-    host.addEventListener('pointerenter', function (e) { if (e.pointerType === 'mouse') { home.hovered = true; homeSchedule(); } });
-    host.addEventListener('pointerleave', function () { home.hovered = false; homeSchedule(); });
-    host.addEventListener('focusin', function () { home.focused = true; homeSchedule(); });
-    host.addEventListener('focusout', function () { home.focused = false; homeSchedule(); });
-    host.addEventListener('keydown', function (e) {
-      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); homeGo(home.index + (((e.key === 'ArrowRight') !== homeRtl()) ? 1 : -1)); }
-      else if (e.key === 'Home') { e.preventDefault(); homeGo(0); }
-      else if (e.key === 'End') { e.preventDefault(); homeGo(homeMax()); }
-    });
-    var start = null;
-    viewport.addEventListener('pointerdown', function (e) { if (e.pointerType !== 'mouse') start = { x: e.clientX, y: e.clientY }; });
-    viewport.addEventListener('pointerup', function (e) {
-      if (!start) return; var dx = e.clientX - start.x, dy = e.clientY - start.y; start = null;
-      if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.3) homeGo(home.index + (((dx < 0) !== homeRtl()) ? 1 : -1));
-    });
-    document.addEventListener('visibilitychange', homeSchedule);
-    if (homeReduced.addEventListener) homeReduced.addEventListener('change', function () { home.autoEnabled = !homeReduced.matches; homeUpdate(); homeSchedule(); });
-    if (window.ResizeObserver) new ResizeObserver(function () { homeUpdate(); }).observe(viewport);
-  }
-
-  function homeRenderCards() {
-    if (!home.track) return;
-    var ar = lang === 'ar'; home.track.replaceChildren();
-    home.items.forEach(function (item) {
-      var card = el('article', 'home-card');
-      card.setAttribute('data-type', item.item_type || '');
-      card.setAttribute('data-media', item.media_kind || 'none');
-      if (item.media_kind !== 'none') {
-        var media = el('div', 'home-media');
-        if (item.media_kind === 'image' && item.image_url) {
-          var img = document.createElement('img'); img.src = item.image_url; img.alt = '';
-          img.onerror = function () { media.innerHTML = homeSvg(item.icon || 'icon-grid'); };
-          media.append(img);
-        }
-        else media.innerHTML = homeSvg(item.icon || 'icon-grid');
-        card.append(media);
-      }
-      if (item.badge && HOME_BADGE_LABEL[item.badge]) { var badge = el('span', 'home-badge', homeLabel(HOME_BADGE_LABEL, item.badge)); badge.setAttribute('data-badge', item.badge); card.append(badge); }
-      var title = el('h3', 'home-title'); homeLocalized(title, ar ? item.title_ar : item.title_en); card.append(title);
-      var body = el('p', 'home-text'); homeLocalized(body, ar ? item.body_ar : item.body_en); card.append(body);
-      var ctaLabel = ar ? item.cta_label_ar : item.cta_label_en;
-      if (ctaLabel && item.cta_url) { var link = el('a', 'home-cta'); link.href = item.cta_url; homeLocalized(link, ctaLabel); card.append(link); }
-      home.track.append(card);
-    });
-  }
-
-  function homeRenderDots() {
-    if (!home.dots) return;
-    var total = homeMax() + 1;
-    if (home.dots.children.length !== total) {
-      home.dots.replaceChildren();
-      for (var i = 0; i < total; i++) (function (n) {
-        var dot = el('button', 'home-dot'); dot.type = 'button';
-        dot.addEventListener('click', function (e) { homeGo(n); if (e.detail > 0) dot.blur(); });
-        home.dots.append(dot);
-      })(i);
-    }
-  }
-
-  function homeUpdate() {
-    if (!home.track || !home.items.length) return;
-    if (home.index > homeMax()) home.index = 0;
-    homeRenderDots();
-    var cards = home.track.children;
-    var gap = parseFloat(getComputedStyle(home.track).gap || '0') || 20;
-    var cw = cards[0] ? cards[0].getBoundingClientRect().width : 0;
-    var offset = home.index * (cw + gap);
-    home.track.style.transform = homeRtl() ? ('translateX(' + offset + 'px)') : ('translateX(-' + offset + 'px)');
-    var vis = homeVisible();
-    for (var i = 0; i < cards.length; i++) { var shown = i >= home.index && i < home.index + vis; cards[i].setAttribute('aria-hidden', String(!shown)); cards[i].inert = !shown; }
-    var dots = home.dots.children;
-    for (var j = 0; j < dots.length; j++) dots[j].setAttribute('aria-current', String(j === home.index));
-    if (home.play) { home.play.innerHTML = homeControlSvg(home.autoEnabled ? 'pause' : 'play'); home.play.setAttribute('aria-label', home.autoEnabled ? tr('Pause automatic rotation', 'إيقاف الدوران التلقائي') : tr('Resume automatic rotation', 'استئناف الدوران التلقائي')); }
-  }
-
-  function homeSchedule() {
-    if (home.timer) { clearTimeout(home.timer); home.timer = null; }
-    var playing = home.autoEnabled && !home.hovered && !home.focused && !document.hidden && !homeReduced.matches;
-    if (home.host) home.host.setAttribute('data-playing', playing ? 'true' : 'false');
-    if (playing) home.timer = setTimeout(function () { homeGo(home.index + 1); }, 6500);
-  }
-
-  function homeGo(next) { var max = homeMax(); home.index = next > max ? 0 : (next < 0 ? max : next); homeUpdate(); homeSchedule(); }
-
-  async function renderHomeCarousel() {
-    var host = document.getElementById('homeCarousel');
-    if (!host) return;
-    home.host = host;
-    var items;
-    try { items = await api('/api/homepage', { cache: 'no-store', allowAnonymous: true }); }
-    catch (error) { return; }
-    home.items = Array.isArray(items) ? items : [];
-    if (!home.items.length) { host.replaceChildren(); return; }
-    if (!home.built || !home.track) homeBuildShell();
-    homeRenderCards(); homeUpdate(); homeSchedule();
-  }
-  window.renderHomeCarousel = renderHomeCarousel;
-
-  function homeField(id, labelText, tag, attrs) { var wrap = el('label'); wrap.append(el('span', '', labelText)); var input = document.createElement(tag); input.id = id; if (attrs) for (var k in attrs) input.setAttribute(k, attrs[k]); wrap.append(input); return wrap; }
-  function homeOptions(select, pairs) { select.replaceChildren(); pairs.forEach(function (pair) { var o = document.createElement('option'); o.value = pair[0]; o.textContent = pair[1]; select.append(o); }); }
-
-  function adminHomepageRow(item, position, rows) {
-    var row = document.createElement('tr');
-    row.append(el('td', '', item.title_en + ' / ' + item.title_ar));
-    row.append(el('td', '', homeLabel(HOME_TYPE_LABEL, item.item_type)));
-    row.append(el('td', '', item.badge ? homeLabel(HOME_BADGE_LABEL, item.badge) : '—'));
-    var orderTd = el('td');
-    var up = el('button', 'button ghost small', '↑'); up.type = 'button'; up.disabled = position === 0; up.title = tr('Move up','تحريك لأعلى');
-    up.onclick = function () { homeMove(item, rows[position - 1]); };
-    var down = el('button', 'button ghost small', '↓'); down.type = 'button'; down.disabled = position === rows.length - 1; down.title = tr('Move down','تحريك لأسفل');
-    down.onclick = function () { homeMove(item, rows[position + 1]); };
-    orderTd.append(up, down, document.createTextNode(' ' + item.sort_order)); row.append(orderTd);
-    var pinTd = el('td'); var pinBtn = el('button', 'button ghost small', item.pinned ? '★' : '☆'); pinBtn.type = 'button';
-    pinBtn.onclick = function () { homePatch(item.id, { pinned: !item.pinned }); }; pinTd.append(pinBtn); row.append(pinTd);
-    var enTd = el('td'); var enBtn = el('button', 'button ghost small', item.enabled ? tr('Disable','تعطيل') : tr('Enable','تفعيل')); enBtn.type = 'button';
-    enBtn.onclick = function () { homePatch(item.id, { enabled: !item.enabled }); }; enTd.append(enBtn); row.append(enTd);
-    row.append(el('td', '', (item.starts_at ? String(item.starts_at).slice(0,10) : '—') + ' → ' + (item.ends_at ? String(item.ends_at).slice(0,10) : '—')));
-    var mediaTd = el('td');
-    mediaTd.append(el('span', '', item.media_kind === 'image' ? tr('image','صورة') : (item.icon || '—')));
-    var upload = document.createElement('input'); upload.type = 'file'; upload.accept = 'image/png,image/jpeg,image/webp';
-    upload.onchange = async function () { if (!upload.files[0]) return; var fd = new FormData(); fd.append('file', upload.files[0]); try { await api('/api/admin/homepage/' + item.id + '/image', { method: 'POST', body: fd }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } };
-    mediaTd.append(upload);
-    if (item.has_image) { var rm = el('button', 'button ghost small', tr('Remove image','إزالة الصورة')); rm.type = 'button'; rm.onclick = async function () { try { await api('/api/admin/homepage/' + item.id + '/image', { method: 'DELETE' }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } }; mediaTd.append(rm); }
-    row.append(mediaTd);
-    var actTd = el('td');
-    var edit = el('button', 'button ghost small', tr('Edit','تعديل')); edit.type = 'button'; edit.onclick = function () { homeEditItem(item); };
-    var del = el('button', 'button ghost small', tr('Delete','حذف')); del.type = 'button';
-    del.onclick = async function () { if (!await window.confirmAction(tr('Delete this homepage item?','حذف هذا العنصر؟'))) return; try { await api('/api/admin/homepage/' + item.id, { method: 'DELETE' }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } };
-    actTd.append(edit, del); row.append(actTd);
-    return row;
-  }
-
-  async function homePatch(id, payload) { try { await api('/api/admin/homepage/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } }
-  async function homeMove(item, neighbour) { if (!neighbour) return; try { await api('/api/admin/homepage/' + item.id, { method: 'PATCH', body: JSON.stringify({ sort_order: neighbour.sort_order }) }); await api('/api/admin/homepage/' + neighbour.id, { method: 'PATCH', body: JSON.stringify({ sort_order: item.sort_order }) }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } }
-
-  function homeEditItem(item) {
-    var set = function (id, v) { var node = document.getElementById(id); if (node) node.value = v == null ? '' : v; };
-    set('homeTitleEn', item.title_en); set('homeTitleAr', item.title_ar);
-    set('homeBodyEn', item.body_en); set('homeBodyAr', item.body_ar);
-    set('homeType', item.item_type); set('homeBadge', item.badge || ''); set('homeIcon', item.icon || HOME_ICONS[0]);
-    set('homeCtaEn', item.cta_label_en); set('homeCtaAr', item.cta_label_ar); set('homeCtaUrl', item.cta_url);
-    set('homeSort', item.sort_order);
-    set('homeStart', item.starts_at ? String(item.starts_at).slice(0,10) : ''); set('homeEnd', item.ends_at ? String(item.ends_at).slice(0,10) : '');
-    var pin = document.getElementById('homePinned'); if (pin) pin.checked = !!item.pinned;
-    home.editing = item.id;
-    var submit = document.getElementById('homeSubmit'); if (submit) submit.textContent = tr('Save changes','حفظ التغييرات');
-    var cancel = document.getElementById('homeCancel'); if (cancel) cancel.hidden = false;
-    var form = document.getElementById('adminHomepageForm'); if (form) form.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-
-  function buildAdminHomepage(panel, rows) {
-    panel.replaceChildren();
-    var msg = el('div', 'api-message'); msg.id = 'adminHomepageMessage'; panel.append(msg);
-    var wrap = el('div', 'table-wrap');
-    var table = document.createElement('table'); var thead = document.createElement('thead'); var htr = document.createElement('tr');
-    ['Title','Type','Badge','Order','Pinned','Enabled','Starts / Ends','Media','Actions'].forEach(function (t) { htr.append(el('th', '', t)); });
-    thead.append(htr); table.append(thead);
-    var body = document.createElement('tbody'); body.id = 'adminHomepageBody'; table.append(body);
-    rows.forEach(function (item, index) { body.append(adminHomepageRow(item, index, rows)); });
-    wrap.append(table); panel.append(wrap);
-
-    var form = document.createElement('form'); form.className = 'manage-form'; form.id = 'adminHomepageForm';
-    form.append(homeField('homeTitleEn', tr('Title (EN)','العنوان (إنجليزي)'), 'input', { required: 'required', maxlength: '200' }));
-    form.append(homeField('homeTitleAr', tr('Title (AR)','العنوان (عربي)'), 'input', { required: 'required', maxlength: '200' }));
-    form.append(homeField('homeBodyEn', tr('Description (EN)','الوصف (إنجليزي)'), 'input', { maxlength: '1000' }));
-    form.append(homeField('homeBodyAr', tr('Description (AR)','الوصف (عربي)'), 'input', { maxlength: '1000' }));
-    var typeField = homeField('homeType', tr('Content type','نوع المحتوى'), 'select'); homeOptions(typeField.querySelector('select'), Object.keys(HOME_TYPE_LABEL).map(function (k) { return [k, homeLabel(HOME_TYPE_LABEL, k)]; })); form.append(typeField);
-    var badgeField = homeField('homeBadge', tr('Badge','الشارة'), 'select'); homeOptions(badgeField.querySelector('select'), [['', tr('None','بدون')]].concat(Object.keys(HOME_BADGE_LABEL).map(function (k) { return [k, homeLabel(HOME_BADGE_LABEL, k)]; }))); form.append(badgeField);
-    var iconField = homeField('homeIcon', tr('Icon','الأيقونة'), 'select'); homeOptions(iconField.querySelector('select'), HOME_ICONS.map(function (i) { return [i, i.replace('icon-', '')]; })); form.append(iconField);
-    form.append(homeField('homeCtaEn', tr('CTA label (EN)','نص الزر (إنجليزي)'), 'input', { maxlength: '80' }));
-    form.append(homeField('homeCtaAr', tr('CTA label (AR)','نص الزر (عربي)'), 'input', { maxlength: '80' }));
-    form.append(homeField('homeCtaUrl', tr('CTA URL','رابط الزر'), 'input', { maxlength: '500', placeholder: 'https://… or /path' }));
-    form.append(homeField('homeSort', tr('Order','الترتيب'), 'input', { type: 'number', min: '0', max: '100000' }));
-    form.append(homeField('homeStart', tr('Starts on','يبدأ في'), 'input', { type: 'date' }));
-    form.append(homeField('homeEnd', tr('Ends on','ينتهي في'), 'input', { type: 'date' }));
-    form.append(homeField('homeImage', tr('Image (optional, ≤3 MB)','صورة (اختياري، ≤3 ميجابايت)'), 'input', { type: 'file', accept: 'image/png,image/jpeg,image/webp' }));
-    var pinRow = el('label', 'checkbox-row'); var pin = document.createElement('input'); pin.type = 'checkbox'; pin.id = 'homePinned'; pinRow.append(pin, el('span', '', tr('Pinned / featured','مثبّت / مميّز'))); form.append(pinRow);
-    var actions = el('div', 'admin-actions');
-    var submit = el('button', 'button', tr('Add item','إضافة عنصر')); submit.type = 'submit'; submit.id = 'homeSubmit';
-    var cancel = el('button', 'button ghost', tr('Cancel edit','إلغاء التعديل')); cancel.type = 'button'; cancel.id = 'homeCancel'; cancel.hidden = true;
-    actions.append(submit, cancel); form.append(actions);
-    panel.append(form);
-
-    home.editing = null;
-    cancel.onclick = function () { home.editing = null; form.reset(); submit.textContent = tr('Add item', 'إضافة عنصر'); cancel.hidden = true; };
-    form.onsubmit = async function (event) {
-      event.preventDefault();
-      var payload = {
-        item_type: value('homeType'), badge: value('homeBadge') || null,
-        title_en: value('homeTitleEn'), title_ar: value('homeTitleAr'),
-        body_en: value('homeBodyEn'), body_ar: value('homeBodyAr'),
-        cta_label_en: value('homeCtaEn') || null, cta_label_ar: value('homeCtaAr') || null,
-        cta_url: value('homeCtaUrl') || null, icon: value('homeIcon') || null,
-        pinned: pin.checked,
-        starts_at: value('homeStart') || null, ends_at: value('homeEnd') || null
-      };
-      var sort = value('homeSort'); if (sort !== '') payload.sort_order = Number(sort);
-      submit.disabled = true;
-      try {
-        var saved = home.editing ? await api('/api/admin/homepage/' + home.editing, { method: 'PATCH', body: JSON.stringify(payload) }) : await api('/api/admin/homepage', { method: 'POST', body: JSON.stringify(payload) });
-        var fileInput = document.getElementById('homeImage');
-        if (fileInput && fileInput.files && fileInput.files[0]) { var fd = new FormData(); fd.append('file', fileInput.files[0]); await api('/api/admin/homepage/' + saved.id + '/image', { method: 'POST', body: fd }); }
-        apiMessage('adminHomepageMessage', home.editing ? tr('Item updated','تم تحديث العنصر') : tr('Item added','تمت إضافة العنصر'));
-        await loadAdminHomepage(); await renderHomeCarousel();
-      } catch (error) { apiMessage('adminHomepageMessage', error.message, true); }
-      finally { submit.disabled = false; }
-    };
-  }
-
-  async function loadAdminHomepage() {
-    var panel = document.getElementById('adminHomepagePanel');
-    if (!panel) return;
-    try { var rows = await api('/api/admin/homepage', { cache: 'no-store' }); buildAdminHomepage(panel, rows); }
-    catch (error) { panel.replaceChildren(textElement('p', error.message)); }
-  }
-  ADMIN_LOADERS.homepage = loadAdminHomepage;
-
-  var prevHomePrefs = applyPrefs;
-  applyPrefs = function () { prevHomePrefs(); if (home.items.length) { homeRenderCards(); homeUpdate(); } };
-
-  function homeKick() { renderHomeCarousel().catch(function () {}); }
-  if (document.readyState === 'complete') homeKick(); else window.addEventListener('load', homeKick, { once: true });
-  window.setTimeout(homeKick, 900);
-  window.setTimeout(homeKick, 2600);
-  document.addEventListener('visibilitychange', function () { if (document.getElementById('landing')?.classList.contains('active')) homeKick(); });
-  window.addEventListener('focus', homeKick);
 })();

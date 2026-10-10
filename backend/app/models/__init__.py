@@ -1,5 +1,5 @@
 from .account import AuthSession, City, Country, Region, User
-from .platform import Plan, PlatformPolicy, Subscription, PaymentOrder, HomepageItem
+from .platform import Plan, PlatformPolicy, Subscription, PaymentOrder
 from .workspace import (
     ExecutionEvent,
     GithubAuthState,
@@ -10,7 +10,7 @@ from .workspace import (
     WorkspaceSession,
 )
 __all__ = [
-    "AuthSession", "City", "Country", "Region", "User", "Plan", "PlatformPolicy", "Subscription", "HomepageItem",
+    "AuthSession", "City", "Country", "Region", "User", "Plan", "PlatformPolicy", "Subscription",
     "ExecutionEvent", "GithubAuthState", "GithubConnection", "Project",
     "ProviderCredential", "Workspace", "WorkspaceSession",
 ]

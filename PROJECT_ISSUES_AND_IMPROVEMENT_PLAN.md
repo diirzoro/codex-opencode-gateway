@@ -8,6 +8,11 @@ Performance/refactor work must not change production ports, internal IP routing,
 
 Keep the current stack unless evidence justifies a change. FastAPI/PostgreSQL/OpenCode/Nginx are not being replaced as part of the performance plan.
 
+## Local setup prerequisite for Phase 6
+The clean Windows setup attempted installation with Python 3.14, causing the pinned Pydantic/PyO3 build to fail before Alembic was available. Local development is now explicitly pinned to Python 3.13 via `.python-version`, setup/start checks and the README workflow. Dependency versions and backend architecture remain unchanged.
+
+Use `setup-local.ps1` with the shared native Windows PostgreSQL database (`gateway_local` on `127.0.0.1:5432`), then `run-local.ps1`. Complete the README baseline checklist and record unavailable external integrations before drawing conclusions about Phase 6 readiness. This setup prerequisite is separate from the 20 performance issues below.
+
 ## 20 tracked issues
 
 1. **Large first-load frontend payload.** Landing/login currently load major application JavaScript and CSS that are not needed for the first view.

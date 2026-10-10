@@ -41,9 +41,13 @@
   }
   async function security(body,platform=false){
     const change=section(body,tr('Change password','تغيير كلمة المرور'));
-    form(change,f=>{input(f,tr('Current password','كلمة المرور الحالية'),'current_password','password').required=true;const n=input(f,tr('New password: 8+, number and symbol','كلمة جديدة: 8 أحرف، رقم ورمز'),'new_password','password');n.minLength=8;n.required=true},tr('Change and sign out','تغيير وتسجيل الخروج'),async values=>{await api('/api/account/password',{method:'PUT',body:JSON.stringify(values)});signOut()});
+    form(change,f=>{const c=input(f,tr('Current password','كلمة المرور الحالية'),'current_password','password');c.required=true;c.autocomplete='current-password';const n=input(f,tr('New password: 8+, number and symbol','كلمة جديدة: 8 أحرف، رقم ورمز'),'new_password','password');n.minLength=8;n.required=true;n.autocomplete='new-password'},tr('Change and sign out','تغيير وتسجيل الخروج'),async values=>{await api('/api/account/password',{method:'PUT',body:JSON.stringify(values)});signOut()});
     const sessions=section(body,tr('Active sessions','الجلسات النشطة'));
-    for(const s of await api('/api/account/sessions'))row(sessions,tr(s.current?'This session':'Other session',s.current?'الجلسة الحالية':'جلسة أخرى'),new Date(s.created_at).toLocaleString(),[button(tr('Sign out','تسجيل الخروج'),async()=>{await api('/api/account/sessions/'+s.id,{method:'DELETE'});if(s.current)signOut();else await open('security')})]);
+    const sessionRows=await api('/api/account/sessions');
+    const sessionDate=value=>new Date(value).toLocaleString(lang==='ar'?'ar-EG':'en-US',{dateStyle:'medium',timeStyle:'short'});
+    for(const s of sessionRows)row(sessions,tr(s.current?'This session':'Other session',s.current?'الجلسة الحالية':'جلسة أخرى'),sessionDate(s.created_at),[button(tr('Sign out','تسجيل الخروج'),async()=>{if(s.current&&!await window.confirmAction(tr('Sign out this session? You will need to sign in again.','تسجيل الخروج من هذه الجلسة؟ ستحتاج لتسجيل الدخول مجددًا.')))return;await api('/api/account/sessions/'+s.id,{method:'DELETE'});if(s.current)signOut();else await open('security')})]);
+    const others=sessionRows.filter(s=>!s.current);
+    if(others.length)sessions.append(button(tr('Sign out other sessions','تسجيل الخروج من الجلسات الأخرى'),async()=>{if(!await window.confirmAction(tr('Sign out '+others.length+' other session(s)?','تسجيل الخروج من '+others.length+' جلسة أخرى؟')))return;for(const s of others)await api('/api/account/sessions/'+s.id,{method:'DELETE'});await open('security')}));
     const twoFactor=section(body,tr('Two-factor authentication','المصادقة الثنائية'));
     twoFactor.append(node('p',tr('Not available yet. Two-factor authentication is not implemented.','غير متاحة بعد. لم يُنفّذ إعداد المصادقة الثنائية.')));
     const devices=section(body,tr('Devices','الأجهزة'));
@@ -98,29 +102,46 @@
   }
   async function providers(body,platform=false){
     const controller=new AbortController();body.providerController=controller;
-    const view={owner:currentUser.id,ready:false,refresh:null};body.providerView=view;
+    const view={owner:currentUser.id,workspaceId:activeWorkspace?.id||'',ready:false,refresh:null};body.providerView=view;
     const alive=()=>body.isConnected&&body.providerView===view&&currentUser?.id===view.owner;
-    const base='/api/providers/';function invalidateWorkspaceProviders(){try{if(window.workspaceRuntime&&window.workspaceRuntime.clear)window.workspaceRuntime.clear()}catch(error){}if(window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',true).catch(function(){})};
-    let snapshot=[],selectedProviderId='',searchRows=[],searchQuery='',searchTimer=null,searchAbort=null,searchSequence=0,optionsOpen=false;
-
+    const workspaceSettings=section(body,tr('Runtime / workspace settings','إعدادات وقت التشغيل ومساحة العمل'));
+    const picker=select(workspaceSettings,tr('Workspace','مساحة العمل'),'workspace',[['',tr('Select workspace','اختر مساحة عمل')]]);
+    picker.disabled=true;
+    if(activeWorkspace)picker.add(new Option(activeProject?.name||tr('Selected workspace','مساحة العمل المختارة'),activeWorkspace.id));
+    picker.value=activeWorkspace?.id||'';
     const box=section(body,tr('Connect an AI provider','ربط مزوّد ذكاء'));
-    box.append(node('p',tr('Provider connections are account-level. Connect a provider once and any workspace can use it according to platform policy. Popular and connected providers are shown first.','ربط المزوّدات على مستوى الحساب. اربط المزوّد مرة واحدة ليستخدمه أي مشروع وفق سياسة المنصة. تظهر المزوّدات الشائعة والمتصلة أولاً.')));
+    box.append(node('p',tr('Popular providers and your connected providers are shown first. Search or add another provider by name. Every provider and authentication method comes from this workspace’s OpenCode runtime.','تظهر المزوّدات الشائعة والمتصلة أولاً. ابحث أو أضف مزوّدًا آخر باسمه. تأتي كل المزوّدات وطرق المصادقة من بيئة OpenCode لمساحة العمل هذه.')));
     const comboWrap=node('div','','provider-combo'),combo=node('input');combo.type='search';
     combo.value=body.dataset.providerQuery||'';combo.placeholder=tr('Search providers…','ابحث عن المزوّدات…');combo.setAttribute('role','combobox');combo.setAttribute('aria-expanded','false');combo.autocomplete='off';combo.setAttribute('aria-label',combo.placeholder);
     const options=node('div','','provider-combo-options');options.hidden=true;comboWrap.append(combo,options);box.append(comboWrap);
     const progress=node('p','','provider-loading');progress.setAttribute('role','status');progress.setAttribute('aria-live','polite');box.append(progress);
     const status=node('p',tr('Choose a provider to inspect its connection.','اختر مزوّدًا لفحص اتصاله.'),'provider-combo-status');box.append(status);
     const connectedBox=section(body,tr('Connected providers','المزوّدات المتصلة'));
+    connectedBox.append(node('p',tr('Provider keys are saved per workspace. Use the workspace picker above to see each workspace’s connections.','تُحفظ مفاتيح المزوّدات لكل مساحة عمل. استخدم منتقي مساحة العمل أعلاه لعرض اتصالات كل مساحة.')));
+    let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
+    let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
+    let searchRows=[],searchQuery='',searchTimer=null,searchAbort=null,searchSequence=0,optionsOpen=false;
     const searchState=node('p','','provider-search-status');searchState.setAttribute('role','status');comboWrap.after(searchState);
-    const setFeedback=(element,text,kind='status')=>{element.textContent=text;element.hidden=!text;element.dataset.kind=kind;element.setAttribute('role',kind==='error'?'alert':'status');element.setAttribute('aria-live',kind==='error'?'assertive':'polite');};
-    const showError=(f,error)=>{let st=f.querySelector('.provider-feedback');if(!st){st=node('p','','provider-feedback');f.append(st)}setFeedback(st,error.message,'error');};
-    const retry=button(tr('Retry','إعادة المحاولة'),()=>refresh());retry.hidden=true;box.append(retry);
+    const sameCatalog=data=>data.workspace_id===workspaceId&&data.generation===snapshot?.generation&&data.revision===snapshot?.revision&&data.policy_revision===snapshot?.policy_revision;
+    async function lookup(kind,value,signal){
+      const data=await api(base+kind+'?'+(kind==='search'?'query':'name')+'='+encodeURIComponent(value),{signal});
+      if(!alive()||activeWorkspace?.id!==workspaceId)throw new DOMException('Workspace changed','AbortError');
+      if(!sameCatalog(data)){
+        view.ready=false;customButton.disabled=true;window.workspaceRuntime.invalidate(workspaceId);
+        message(tr('OpenCode state changed. Refresh before connecting.','تغيّرت حالة OpenCode. حدّث الحالة قبل الربط.'),true);
+        throw new Error(tr('OpenCode state changed. Close this dialog and refresh before connecting.','تغيّرت حالة OpenCode. أغلق النافذة وحدّث الحالة قبل الربط.'));
+      }
+      return data.providers;
+    }
+    const retry=button(tr('Retry','إعادة المحاولة'),()=>metadataReady?refresh(true):initialize());retry.hidden=true;box.append(retry);
     const message=(text,error=false)=>{progress.textContent=text;progress.classList.toggle('connection-error',error);retry.hidden=!error;};
-    async function lookup(kind,value,signal){return api(base+kind+'?'+(kind==='search'?'query':'name')+'='+encodeURIComponent(value),{signal});}
-
-    const openAuthDialog=async(p)=>{
-      if(!view.ready||!alive()||view.connecting)return;
-      p=(snapshot||[]).find(provider=>provider.id===p.id)||(searchRows||[]).find(provider=>provider.id===p.id)||p;
+    const setFeedback=(element,text,kind='status')=>{
+      element.textContent=text;element.hidden=!text;element.dataset.kind=kind;
+      element.setAttribute('role',kind==='error'?'alert':'status');element.setAttribute('aria-live',kind==='error'?'assertive':'polite');
+    };
+    const showError=(f,error)=>{let st=f.querySelector('.provider-feedback');if(!st){st=node('p','','provider-feedback');f.append(st)}setFeedback(st,error.message,'error')};
+    const openAuthDialog=async(p,resolved=false)=>{
+      if(!view.ready||!alive()||activeWorkspace?.id!==workspaceId||view.connecting)return;
       view.connecting=true;
       const host=node('div');document.body.append(host);
       const dlg=document.createElement('dialog');dlg.className='action-form-dialog provider-auth-dialog';dlg.dataset.formDialog='';
@@ -128,33 +149,28 @@
       const head=document.createElement('header');head.className='action-dialog-head';
       const heading=node('h2',tr('Connect ','ربط ')+(p.name||p.id));heading.id='provider-auth-'+(crypto.randomUUID?.()||Date.now());dlg.setAttribute('aria-labelledby',heading.id);head.append(heading);
       const close=document.createElement('button');close.type='button';close.className='icon';close.textContent='×';close.setAttribute('aria-label',tr('Close','إغلاق'));close.onclick=()=>dlg.close();head.append(close);
-      const dbody=document.createElement('div');dbody.className='action-dialog-body';
-      const methodArea=node('div');dbody.append(methodArea);
-      const feedback=node('p','','provider-feedback');feedback.hidden=true;dbody.append(feedback);
+      const body=document.createElement('div');body.className='action-dialog-body';
+      const methodArea=node('div');body.append(methodArea);
+      const feedback=node('p','','provider-feedback');feedback.hidden=true;body.append(feedback);
       const foot=document.createElement('div');foot.className='action-form-actions';
       const cancel=document.createElement('button');cancel.type='button';cancel.className='button ghost';cancel.textContent=tr('Cancel','إلغاء');cancel.onclick=()=>dlg.close();foot.append(cancel);
-      dlg.append(head,dbody,foot);host.append(dlg);
-      const onAbort=()=>dlg.close();controller.signal.addEventListener('abort',onAbort,{once:true});
-      dlg.addEventListener('close',()=>{controller.signal.removeEventListener('abort',onAbort);for(const x of dlg.querySelectorAll('input[type=password]'))x.value='';view.connecting=false;host.remove();},{once:true});
-      const currentDialog=()=>alive()&&dlg.open;
-      dbody.append(node('p',tr('API keys are stored encrypted on the server only after OpenCode validates them. Advanced integrations have a 30-day first-use trial within your core trial.','تُحفظ مفاتيح API مشفّرة على الخادم بعد تحقق OpenCode منها. للتكاملات المتقدمة تجربة 30 يومًا من أول استخدام ضمن تجربة الأساس.')));
+      dlg.append(head,body,foot);host.append(dlg);
+      const discovery=new AbortController(),onAbort=()=>dlg.close();controller.signal.addEventListener('abort',onAbort,{once:true});
+      dlg.addEventListener('close',()=>{discovery.abort();controller.signal.removeEventListener('abort',onAbort);for(const input of dlg.querySelectorAll('input[type=password]'))input.value='';view.connecting=false;host.remove();},{once:true});
+      const currentDialog=()=>alive()&&activeWorkspace?.id===workspaceId&&dlg.open;
+      body.append(node('p',tr('API keys are stored encrypted on the server only after OpenCode validates them. Advanced integrations have a 10-day first-use trial within your core trial.','تُحفظ مفاتيح API مشفّرة على الخادم بعد تحقق OpenCode منها. للتكاملات المتقدمة تجربة 10 أيام من أول استخدام ضمن تجربة الأساس.')));
       dlg.showModal();setFeedback(feedback,tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
       let choices;
       try{
+        if(!resolved)p=(await lookup('resolve',p.id,discovery.signal))[0];
         if(!currentDialog())return;
         if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
         choices=p.auth_methods;
-        if(!Array.isArray(choices)||!choices.length){
-          var resolved=(await lookup('resolve',p.id))[0];
-          if(!currentDialog())return;
-          if(resolved)p=Object.assign({},p,resolved);
-          choices=p.auth_methods;
-        }
         if(!Array.isArray(choices)||!choices.length)throw new Error(tr('No authentication methods reported by OpenCode.','لم يعلن OpenCode عن طرق مصادقة.'));
         setFeedback(feedback,'');
       }catch(error){if(currentDialog()&&error.name!=='AbortError')setFeedback(feedback,error.message,'error');return;}
-      const methodPicker=select(dbody,tr('OpenCode authentication method','طريقة مصادقة OpenCode'),'auth_method',choices.map((m,i)=>[String(i),m.label||(['api','key'].includes(m.type)?tr('API key','مفتاح API'):m.type)]));
-      dbody.prepend(methodPicker.parentElement);
+      const methodPicker=select(body,tr('OpenCode authentication method','طريقة مصادقة OpenCode'),'auth_method',choices.map((m,i)=>[String(i),m.label||(['api','key'].includes(m.type)?tr('API key','مفتاح API'):m.type)]));
+      body.prepend(methodPicker.parentElement);
       function renderMethod(){
         methodArea.replaceChildren();setFeedback(feedback,'');const index=Number(methodPicker.value),method=choices[index];
         const keyMethod=['api','key'].includes(method.type);
@@ -178,13 +194,13 @@
         const submit=node('button',keyMethod?tr('Validate and connect','تحقق واربط'):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
         const currentForm=()=>currentDialog()&&view.ready&&methodArea.contains(f);
         if(validationModel){
-          submit.disabled=true;const retryModels=button(tr('Retry models','أعد تحميل النماذج'),()=>loadModels());retryModels.hidden=true;dbody.append(retryModels);
+          submit.disabled=true;const retryModels=button(tr('Retry models','أعد تحميل النماذج'),()=>loadModels());retryModels.hidden=true;body.append(retryModels);
           async function loadModels(){
             validationModelsReady=false;submit.disabled=true;validationModel.disabled=true;retryModels.hidden=true;setFeedback(feedback,tr('Loading provider models…','جارٍ تحميل نماذج المزوّد…'));
             try{
-              const data=await api(base+encodeURIComponent(p.id)+'/models');
+              const data=await window.workspaceRuntime.loadModels(workspaceId,p.id);
               if(!currentForm())return;
-              const rows=(data.models||[]).filter(m=>data.allowed!==false&&m.allowed!==false&&(!m.modalities?.output||m.modalities.output.includes('text')));
+              const rows=data.models.filter(m=>data.allowed!==false&&m.allowed!==false&&(!m.modalities?.output||m.modalities.output.includes('text')));
               validationModel.replaceChildren(new Option(tr('Select validation model','اختر نموذج التحقق'),''));
               for(const model of rows)validationModel.add(new Option(model.name||model.id,model.id));
               if(rows.some(m=>m.id===data.default_model))validationModel.value=data.default_model;
@@ -203,9 +219,9 @@
             if(keyMethod){
               setFeedback(feedback,tr('Installing the credential and validating a real OpenCode model request…','جارٍ تثبيت المفتاح والتحقق منه بطلب نموذج فعلي عبر OpenCode…'));
               const result=await api(base+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
-              f.reset();if(!alive())return;
+              f.reset();if(!alive()||activeWorkspace?.id!==workspaceId)return;
               if(result.connected!==true||result.persisted!==true)throw new Error(tr('OpenCode connection and credential storage were not confirmed.','لم يتم تأكيد اتصال OpenCode وحفظ المفتاح.'));
-              dlg.close();toast(tr('Provider connected at the account level.','تم ربط المزوّد على مستوى الحساب.'));invalidateWorkspaceProviders();await refresh();
+              dlg.close();toast(tr('Provider connected. It is now available in the workspace composer.','تم ربط المزوّد. أصبح متاحًا الآن في محرر مساحة العمل.'));await reload();
             }else{
               setFeedback(feedback,tr('Starting OpenCode authorization…','جارٍ بدء تفويض OpenCode…'));
               const authorization=await api(base+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values})});
@@ -220,25 +236,26 @@
                 setFeedback(feedback,tr('Completing OpenCode authorization…','جارٍ إكمال تفويض OpenCode…'));
                 try{
                   const result=await api(base+encodeURIComponent(p.id)+'/oauth/callback',{method:'POST',body:JSON.stringify({method:index,...(code?{code:code.value}:{})})});
-                  if(!alive())return;
+                  if(!alive()||activeWorkspace?.id!==workspaceId)return;
                   if(result.connected!==true)throw new Error(tr('OpenCode did not confirm the OAuth connection.','لم يؤكد OpenCode اتصال OAuth.'));
-                  if(code)code.value='';dlg.close();toast(tr('Provider connected.','تم ربط المزوّد.'));invalidateWorkspaceProviders();await refresh();
+                  if(code)code.value='';dlg.close();toast(tr('Provider connected.','تم ربط المزوّد.'));await reload();
                 }catch(error){if(currentDialog())setFeedback(feedback,error.message,'error');}
               }));
             }
-          }catch(error){if(currentDialog())setFeedback(feedback,error.message,'error');}
-          finally{submitting=false;f.removeAttribute('aria-busy');methodPicker.disabled=false;submit.disabled=keyMethod&&!validationModelsReady;}
+          }catch(error){
+            window.workspaceRuntime.invalidate(workspaceId);
+            if(currentDialog())setFeedback(feedback,error.message,'error');
+            if(alive()&&activeWorkspace?.id===workspaceId&&window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
+          }finally{submitting=false;f.removeAttribute('aria-busy');methodPicker.disabled=false;submit.disabled=keyMethod&&!validationModelsReady;}
         };
       }
       methodPicker.onchange=renderMethod;renderMethod();methodPicker.focus();
     };
-
     function renderSelected(p){
       const state=p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
       const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
-      const count=p.model_count!=null?p.model_count:((p.models||[]).length||0);
-      status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String(count)+' '+tr('models','نموذج')));
-      if(!view.ready){status.append(node('span',tr('Refreshing provider state…','جارٍ تحديث حالة المزوّد…')));return;}
+      status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String(p.model_count||0)+' '+tr('models','نموذج')));
+      if(!view.ready){status.append(node('span',tr('Refreshing workspace state…','جارٍ تحديث حالة مساحة العمل…')));return;}
       const act=node('div','','manage-actions');
       if(p.connected)act.append(button(tr('Disconnect / delete key','فصل / حذف المفتاح'),()=>disconnect(p)));
       else if(p.allowed!==false)act.append(button(tr('Connect','ربط'),()=>openAuthDialog(p)));
@@ -246,18 +263,19 @@
       status.append(act);
     }
     async function disconnect(p){
-      if(!alive()||!view.ready)return;
+      if(!alive()||activeWorkspace?.id!==workspaceId||!view.ready)return;
       await api(base+encodeURIComponent(p.id),{method:'DELETE'});
-      if(!alive())return;
-      snapshot=snapshot.map(row=>row.id===p.id?{...row,connected:false}:row);
+      if(!alive()||activeWorkspace?.id!==workspaceId)return;
+      view.ready=false;
+      snapshot={...snapshot,providers:snapshot.providers.map(row=>row.id===p.id?{...row,connected:false}:row)};
       searchRows=searchRows.map(row=>row.id===p.id?{...row,connected:false}:row);
       renderConnected();renderOptions();
       if(selectedProviderId===p.id)renderSelected({...p,connected:false});
-      toast(tr('Provider disconnected. Its saved key was deleted.','فُصل المزوّد وحُذف مفتاحه المحفوظ.'));invalidateWorkspaceProviders();await refresh();
+      toast(tr('Provider disconnected. Its saved key was deleted.','فُصل المزوّد وحُذف مفتاحه المحفوظ.'));await reload();
     }
     function renderConnected(){
       connectedBox.replaceChildren(node('h2',tr('Connected providers','المزوّدات المتصلة')));
-      const rows=(snapshot||[]).filter(p=>p.connected);
+      const rows=(snapshot?.providers||[]).filter(p=>p.connected);
       if(!rows.length){connectedBox.append(node('p',tr('No connected providers.','لا توجد مزوّدات متصلة.')));return;}
       for(const p of rows){
         const item=node('div','','manage-actions');item.append(node('strong',p.name||p.id));
@@ -267,14 +285,14 @@
     }
     const renderOptions=()=>{
       const query=(combo.value||'').trim().toLowerCase();options.replaceChildren();
-      const available=[...(snapshot||[]),...(searchQuery===query?searchRows:[])];
+      const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
       const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query));
       for(const p of rows){
         const state=p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
         const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
         const o=node('button',(p.name||p.id)+' · '+state+restriction,'provider-combo-option');o.type='button';
         o.onclick=()=>{
-          if(!alive())return;
+          if(!alive()||activeWorkspace?.id!==workspaceId)return;
           combo.value='';body.dataset.providerQuery='';optionsOpen=false;options.hidden=true;combo.setAttribute('aria-expanded','false');
           stopSearch();
           selectedProviderId=p.id;renderSelected(p);
@@ -286,7 +304,7 @@
     function stopSearch(){searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}
     function scheduleSearch(){
       stopSearch();renderOptions();const query=combo.value.trim().toLowerCase();
-      if(query.length<2||!view.ready)return;
+      if(query.length<2||!workspaceId||!view.ready)return;
       const sequence=searchSequence;searchTimer=setTimeout(async()=>{
         searchAbort=new AbortController();searchState.textContent=tr('Searching OpenCode providers…','جارٍ البحث في مزوّدي OpenCode…');
         try{
@@ -300,51 +318,86 @@
     const customButton=button(tr('Add custom provider','إضافة مزوّد مخصص'),()=>{
       const host=node('div'),f=node('form','','manage-form');
       const pid=input(f,tr('Provider name or ID','اسم المزوّد أو معرّفه'),'provider_id');pid.required=true;pid.maxLength=200;pid.placeholder='OpenAI / openai / …';
-      f.append(node('p',tr('Only providers reported by the OpenCode runtime can be added. OpenCode validates the key with a real model request before it is saved; provider usage may apply.','يمكن إضافة المزوّدات التي تعلنها بيئة OpenCode فقط. يتحقق OpenCode من المفتاح بطلب نموذج فعلي قبل حفظه؛ قد تُحتسب رسوم استخدام لدى المزوّد.')));
+      f.append(node('p',tr('Only providers reported by this workspace’s OpenCode runtime can be added. OpenCode validates the key with a real model request before it is saved; provider usage may apply.','يمكن إضافة المزوّدات التي تعلنها بيئة OpenCode لهذه المساحة فقط. يتحقق OpenCode من المفتاح بطلب نموذج فعلي قبل حفظه؛ قد تُحتسب رسوم استخدام لدى المزوّد.')));
       const validationState=node('p','','provider-feedback');setFeedback(validationState,'');f.append(validationState);
       const save=node('button',tr('Choose authentication method','اختر طريقة المصادقة'),'button');save.type='submit';f.append(save);host.append(f);document.body.append(host);
       const dlg=window.mountFormDialog(host,f,tr('Custom provider','مزوّد مخصص'));dlg.classList.add('provider-auth-dialog');f.dialogTrigger.hidden=true;
       dlg.addEventListener('keydown',event=>event.stopPropagation());
-      const current=()=>alive()&&view.ready&&dlg.open;
+      const current=()=>alive()&&view.ready&&activeWorkspace?.id===workspaceId&&dlg.open;
       f.onsubmit=async event=>{
         event.preventDefault();if(!current()||save.disabled||!f.reportValidity())return;save.disabled=true;setFeedback(validationState,tr('Checking the OpenCode provider…','جارٍ فحص المزوّد في OpenCode…'));
         try{
           const rows=await lookup('resolve',pid.value.trim());if(!current())return;const p=rows[0];
           if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
-          selectedProviderId=p.id;dlg.close();await openAuthDialog(p);
+          selectedProviderId=p.id;dlg.close();await openAuthDialog(p,true);
         }catch(error){if(error.name!=='AbortError')showError(f,error);}finally{save.disabled=false;}
       };
       dlg.addEventListener('close',()=>host.remove(),{once:true});f.openDialog();
-    });customButton.disabled=true;box.append(customButton);
-    async function refresh(){
-      if(!alive())return;
+    });customButton.disabled=true;customButton.title=tr('Available after a workspace is selected and its OpenCode providers finish loading.','يتاح بعد اختيار مساحة عمل واكتمال تحميل مزوّدي OpenCode الخاصين بها.');box.append(customButton);
+    async function refresh(force=false){
+      if(!workspaceId||!alive())return;
       view.ready=false;customButton.disabled=true;
-      status.querySelectorAll('button').forEach(b=>b.disabled=true);
+      status.querySelectorAll('button').forEach(button=>button.disabled=true);
       renderConnected();
-      message(snapshot.length?tr('Refreshing providers…','جارٍ تحديث المزوّدات…'):tr('Loading providers…','جارٍ تحميل المزوّدات…'));
+      message(snapshot?tr('Refreshing OpenCode providers…','جارٍ تحديث مزوّدي OpenCode…'):tr('Loading OpenCode providers…','جارٍ تحميل مزوّدي OpenCode…'));
       try{
-        const next=await api(base,{cache:'no-store'});
-        if(!alive())return;
-        snapshot=Array.isArray(next)?next:[];
-        view.ready=true;customButton.disabled=false;
-        message(tr('Providers ready','المزوّدات جاهزة')+' · '+snapshot.length);renderOptions();renderConnected();
-        let selected=snapshot.find(p=>p.id===selectedProviderId);
+        if(force)window.workspaceRuntime.invalidate(workspaceId);
+        const next=await window.workspaceRuntime.load(workspaceId,{force});
+        if(!alive()||activeWorkspace?.id!==workspaceId)return;
+        if(next.providers===null)throw new Error(next.errors?.provider_data?.detail||'OpenCode provider discovery failed');
+        snapshot=next;view.ready=true;customButton.disabled=false;
+        message(tr('Popular and connected OpenCode providers ready','المزوّدات الشائعة والمتصلة جاهزة')+' · '+snapshot.providers.length);renderOptions();renderConnected();
+        let selected=snapshot.providers.find(p=>p.id===selectedProviderId);
         if(!selected&&selectedProviderId){try{selected=(await lookup('resolve',selectedProviderId))[0];}catch(error){if(error.name!=='AbortError')status.textContent=error.message;}}
-        if(selected)renderSelected(selected);
-        if(combo.value.trim().length>=2)scheduleSearch();
-      }catch(error){if(alive()){snapshot=[];message(error.message,true);renderOptions();}}
+        if(selected)renderSelected(selected);if(combo.value.trim().length>=2)scheduleSearch();
+        if(window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
+      }catch(error){if(alive()){message(error.message,true);renderOptions();}}
     }
+    async function reload(){return refresh(true);}
     view.refresh=refresh;
     combo.addEventListener('input',()=>{body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
     combo.addEventListener('focus',()=>{optionsOpen=true;scheduleSearch();});
     combo.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}});
     document.addEventListener('click',event=>{if(!comboWrap.contains(event.target)){optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}},{signal:controller.signal});
-    box.append(button(tr('Refresh OpenCode state','حدّث حالة OpenCode'),()=>refresh()));
-    await refresh();
+    box.append(button(tr('Refresh OpenCode state','حدّث حالة OpenCode'),()=>metadataReady?refresh(true):initialize()));
+    async function initialize(){
+      message(snapshot?tr('Refreshing OpenCode providers…','جارٍ تحديث مزوّدي OpenCode…'):tr('Loading OpenCode providers…','جارٍ تحميل مزوّدي OpenCode…'));renderOptions();renderConnected();
+      try{
+        const [owned,projectRows]=await Promise.all([api('/api/workspaces'),api('/api/projects'),window.workspaceContextReady||Promise.resolve()]);
+        if(!alive())return;workspaces=owned;projects=projectRows;metadataReady=true;
+        picker.replaceChildren(new Option(tr('Select workspace','اختر مساحة عمل'),''));
+        for(const w of workspaces)picker.add(new Option((projects.find(p=>p.id===w.project_id)?.name||tr('Workspace','مساحة العمل'))+' · '+w.status,w.id));
+        // Never choose the first workspace or trust a stored ID without ownership validation.
+        let selected=workspaces.find(w=>w.id===activeWorkspace?.id);
+        if(!selected){
+          let persisted='';try{persisted=localStorage.getItem('og-workspace')||'';}catch(error){}
+          selected=workspaces.find(w=>w.id===persisted);
+          const project=selected&&projects.find(p=>p.id===selected.project_id);
+          if(project)await openWorkspace(project,selected,{navigate:false});
+          else{selected=null;if(activeWorkspace){stopEvents();workspaceSelectionRevision++;activeWorkspace=activeProject=activeSession=null;}}
+        }
+        if(!selected&&workspaces.length===1){
+          selected=workspaces[0];
+          const project=projects.find(p=>p.id===selected.project_id);
+          if(project)await openWorkspace(project,selected,{navigate:false});
+          else selected=null;
+        }
+        workspaceId=selected?.id||'';view.workspaceId=workspaceId;picker.value=workspaceId;picker.disabled=false;
+        base='/api/workspaces/'+workspaceId+'/providers/';
+        if(!workspaceId){snapshot=null;renderOptions();message(tr('Select a workspace to load its OpenCode providers.','اختر مساحة عمل لتحميل مزوّدي OpenCode الخاصين بها.'));return;}
+        snapshot=window.workspaceRuntime.peek(workspaceId);renderOptions();await refresh();
+      }catch(error){if(alive())message(error.message,true);}
+    }
+    picker.onchange=async()=>{
+      const w=workspaces.find(w=>w.id===picker.value);view.ready=false;
+      if(!w){stopEvents();workspaceSelectionRevision++;activeWorkspace=activeProject=activeSession=null;try{localStorage.removeItem('og-workspace');}catch(error){}await open('providers');return;}
+      try{const project=projects.find(p=>p.id===w.project_id)||await api('/api/projects/'+w.project_id);await openWorkspace(project,w,{navigate:false});await open('providers');}catch(error){message(error.message,true);}
+    };
+    await initialize();
   }
 
   async function roles(body,platform=false){const box=section(body,tr('User roles','أدوار المستخدمين'));for(const u of await api('/api/admin/users'))row(box,u.username,u.role,[...(currentUser.role==='owner'&&u.id!==currentUser.id&&u.role!=='owner'?[button(tr('Change role','تغيير الدور'),async()=>{const picked=await window.requestForm(tr('Change role','تغيير الدور'),[{name:'role',label:tr('Role','الدور'),value:u.role,options:['admin','support','finance','customer']}]);const role=picked?.role;if(!role)return;await api('/api/admin/users/'+u.id+'/role',{method:'PUT',body:JSON.stringify({role})});await open('roles',true)})]:[])]);box.append(node('p',tr('Only an owner can assign roles. Finance can manage platform payment methods through its authorized API. Support currently has account-only access.','المالك وحده يعيّن الأدوار. دور المالية يتيح إدارة وسائل المنصة عبر واجهته المصرح بها. الدعم يمتلك حاليًا صلاحيات الحساب الشخصي فقط.')))}
-  async function logs(body,platform=false,securityOnly=false){const box=section(body,tr(platform?'Audit log':securityOnly?'Login / security activity':'Account activity',platform?'سجل الإجراءات':securityOnly?'نشاط الدخول والأمان':'نشاط الحساب'));if(securityOnly)box.append(node('p',tr('Recorded password and session security actions. Login event tracking is not available yet.','إجراءات كلمة المرور والجلسات المسجلة. تتبع أحداث تسجيل الدخول غير متاح بعد.')));let before;async function load(){const items=await api((platform?'/api/admin/logs':'/api/account/logs')+(before?'?before='+before:''));for(const r of items.filter(r=>platform||(/^(password|session|auth|security|role)\./.test(r.action)===securityOnly)))row(box,r.action,new Date(r.created_at).toLocaleString());before=items.at(-1)?.id;more.hidden=items.length<100}const more=button(tr('Older records','سجلات أقدم'),load);body.append(more);await load()}
+  async function logs(body,platform=false,securityOnly=false){const box=section(body,tr(platform?'Audit log':securityOnly?'Login / security activity':'Account activity',platform?'سجل الإجراءات':securityOnly?'نشاط الدخول والأمان':'نشاط الحساب'));if(securityOnly)box.append(node('p',tr('Recorded password and session security actions. Login event tracking is not available yet.','إجراءات كلمة المرور والجلسات المسجلة. تتبع أحداث تسجيل الدخول غير متاح بعد.')));let before;async function load(){const items=await api((platform?'/api/admin/logs':'/api/account/logs')+(before?'?before='+before:''));for(const r of items.filter(r=>platform||(/^(password|session|auth|security|role)\./.test(r.action)===securityOnly)))row(box,r.action,new Date(r.created_at).toLocaleString(lang==='ar'?'ar-u-nu-latn':'en-GB',{dateStyle:'medium',timeStyle:'short'}));before=items.at(-1)?.id;more.hidden=items.length<100}const more=button(tr('Older records','سجلات أقدم'),load);body.append(more);await load()}
   async function locations(body,platform=false){const box=section(body,tr('Locations','المواقع'));let kind='countries',editing=null;const picker=select(box,tr('Type','النوع'),'type',[['countries',tr('Countries','الدول')],['regions',tr('Regions','المناطق')],['cities',tr('Cities','المدن')]]),list=node('div');box.append(list);const editor=section(body,tr('Location details','بيانات الموقع'));let parent;
     const f=form(editor,f=>{input(f,tr('Name','الاسم'),'name').required=true;input(f,tr('Country code','رمز الدولة'),'code');parent=select(f,tr('Parent location','الموقع الأب'),'parent_id',[]);select(f,tr('Enabled','مفعّل'),'enabled',[['true',tr('Yes','نعم')],['false',tr('No','لا')]])},tr('Save','حفظ'),async values=>{values.enabled=values.enabled==='true';values.parent_id=values.parent_id?Number(values.parent_id):null;values.code=values.code||null;await api('/api/admin/locations/'+kind+(editing?'/'+editing:''),{method:editing?'PUT':'POST',body:JSON.stringify(values)});await refresh()});
     async function refresh(){editing=null;f.reset();list.replaceChildren();parent.replaceChildren(new Option('—',''));if(kind!=='countries')for(const p of await api('/api/admin/locations/'+(kind==='regions'?'countries':'regions')))parent.add(new Option(p.name,p.id));for(const r of await api('/api/admin/locations/'+kind))row(list,r.name,r.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل'),[button(tr('Edit','تعديل'),()=>{editing=r.id;for(const [k,v] of Object.entries({...r,parent_id:r.country_id||r.region_id||'',enabled:String(r.enabled)}))if(f.elements.namedItem(k))f.elements.namedItem(k).value=v;f.openDialog()}),button(tr('Disable','تعطيل'),async()=>{await api('/api/admin/locations/'+kind+'/'+r.id,{method:'DELETE'});await refresh()})])}
@@ -407,7 +460,7 @@
     }
     recovery.append(button(tr('Back to login','رجوع للدخول'),()=>closeRecovery().catch(error=>toast(error.message))));window.scrollTo(0,0);
   }
-  const forgot=$('#authPage .auth-form .text-link');if(forgot){forgot.disabled=false;forgot.textContent=tr('Forgot password?','نسيت كلمة المرور؟');forgot.onclick=()=>recover()}
+  const forgot=$('#authPage .auth-form .text-link');if(forgot){forgot.disabled=false;forgot.dataset.managementEn='Forgot password?';forgot.dataset.managementAr='نسيت كلمة المرور؟';forgot.textContent=tr('Forgot password?','نسيت كلمة المرور؟');forgot.onclick=()=>recover()}
   window.renderManagement=render;
   window.openManagement=open;
   if(resetToken)recover(true).catch(error=>toast(error.message));

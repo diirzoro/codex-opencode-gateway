@@ -49,7 +49,7 @@ def sync_sessions(db, workspace, live):
 def public_snapshot(service, workspace, db):
     started = time.monotonic()
     live = service.snapshot()
-    live = {**live, "provider_data": providers.overlay_account_connections(db, workspace.user_id, providers.client_catalog(db, workspace, live["provider_data"]))}
+    live = {**live, "provider_data": providers.client_catalog(db, workspace, live["provider_data"])}
     policy_row = policy.load(db)
     catalog = None
     if live["provider_data"] is not None:
@@ -70,7 +70,7 @@ def public_snapshot(service, workspace, db):
 
 def public_provider_lookup(service, workspace, db, *, name=None, query=None):
     live = service.snapshot()
-    live = {**live, "provider_data": providers.overlay_account_connections(db, workspace.user_id, providers.client_catalog(db, workspace, live["provider_data"]))}
+    live = {**live, "provider_data": providers.client_catalog(db, workspace, live["provider_data"])}
     if live["provider_data"] is None:
         error = live["errors"]["provider_data"]
         raise HTTPException(error["status"], error["detail"])
@@ -92,7 +92,7 @@ def public_provider_lookup(service, workspace, db, *, name=None, query=None):
 
 def public_models(service, workspace, provider_id, db):
     live = service.snapshot()
-    live = {**live, "provider_data": providers.overlay_account_connections(db, workspace.user_id, providers.client_catalog(db, workspace, live["provider_data"]))}
+    live = {**live, "provider_data": providers.client_catalog(db, workspace, live["provider_data"])}
     if live["provider_data"] is None:
         error = live["errors"]["provider_data"]
         raise HTTPException(error["status"], error["detail"])

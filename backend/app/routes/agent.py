@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
 from ..models import User, Workspace, WorkspaceSession, ExecutionEvent, ProviderCredential, AccountAudit
@@ -284,9 +284,8 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
                 raise HTTPException(422, 'The selected OpenCode model does not support this attachment type; select a compatible model')
         costs=model.get('cost') or {}
         free_model=costs.get('input')==0 and costs.get('output')==0
-        own_key=db.scalar(select(ProviderCredential.id).where(ProviderCredential.user_id==workspace.user_id,
-                         ProviderCredential.provider_id==data.provider_id,
-                         or_(ProviderCredential.workspace_id==workspace.id,ProviderCredential.workspace_id.is_(None)))) is not None
+        own_key=db.scalar(select(ProviderCredential.id).where(ProviderCredential.workspace_id==workspace.id,
+                         ProviderCredential.provider_id==data.provider_id)) is not None
         # OAuth has no Gateway API-key row; reuse its durable connection intent.
         client_binding=db.scalar(select(AccountAudit.id).where(AccountAudit.subject_id==user.id,
             AccountAudit.action=='provider-on:'+providers._binding(workspace,data.provider_id)).limit(1)) is not None

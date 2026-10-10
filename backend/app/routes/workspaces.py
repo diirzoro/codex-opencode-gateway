@@ -402,15 +402,93 @@ def agent_choices(service):
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/credentials")
 def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKeyCredential,user: User=Depends(require_user),db: Session=Depends(get_db)):
     require_advanced(db,user)
+    if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
+    if not credentials.available():
+        raise HTTPException(503,'Encrypted credential storage must be configured first')
     workspace,service=_workspace_service(db,user,workspace_id)
-    return providers.install_api_credential(db,user=user,workspace=workspace,service=service,provider_id=provider_id,
-        api_key=data.api_key,model_id=data.model_id,method=data.method,inputs=data.inputs,account_level=False)
+    with opencode.workspace_lock(workspace),service.state_lock:
+        session_lifecycle.lock_workspace(db,workspace)
+        live=service.snapshot()
+        if live["provider_data"] is None:
+            raise HTTPException(502,"OpenCode provider discovery must succeed before connecting")
+        entry=providers.resolve_provider(live["provider_data"],provider_id)
+        if entry["id"] != provider_id:
+            raise HTTPException(422,"Use the provider ID reported by OpenCode")
+        methods=providers.connection_methods(service,provider_id)
+        api_methods=[i for i,method in enumerate(methods) if method.get("type") in {"api","key"}]
+        method=data.method if data.method is not None else (api_methods[0] if len(api_methods)==1 else None)
+        if method is None or method >= len(methods) or methods[method].get("type") not in {"api","key"}:
+            raise HTTPException(422,"Select an API key authentication method reported by OpenCode; OAuth-only providers require their OAuth flow")
+        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
+        if row is None and providers.is_connected(service,provider_id) and not providers.is_locally_disconnected(db,workspace,provider_id):
+            raise HTTPException(409,"Disconnect the existing runtime connection before replacing its authentication")
+        service.ensure_auth_idle()
+        old_ciphertext=row.ciphertext if row is not None else None
+        stage="credential installation"
+        try:
+            providers.set_api_key(service,provider_id,data.api_key,data.inputs)
+            stage="workspace authentication refresh"
+            service.refresh_auth()
+            stage="model validation"
+            validated_model=providers.validate_model(service,provider_id,data.model_id,policy.load(db))
+            stage="encrypted credential storage"
+            encrypted=credentials.encrypt(json.dumps({"type":"api","key":data.api_key,"metadata":data.inputs or {}}))
+            require_advanced(db,user,start=True)
+            if row is None:
+                row=ProviderCredential(workspace_id=workspace.id,user_id=user.id,provider_id=provider_id,ciphertext="",last4="")
+                db.add(row)
+            row.ciphertext=encrypted
+            row.last4=data.api_key[-4:]
+            providers.record_connection(db,workspace,provider_id,connected=True)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            rollback_confirmed=True
+            try:
+                providers.remove(service,provider_id)
+                if old_ciphertext:
+                    providers.restore_credential(service,provider_id,credentials.decrypt(old_ciphertext))
+                    service.refresh_auth()
+            except Exception:
+                rollback_confirmed=False
+            if old_ciphertext is None or not rollback_confirmed:
+                # Failed/new credentials must not become composer connections
+                # even when runtime auth cleanup refuses deletion.
+                try:
+                    providers.record_connection(db,workspace,provider_id,connected=False)
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    logger.warning("Failed provider connection could not persist its disconnect state for workspace %s",workspace.id)
+            detail=f"Provider connection failed during {stage}"
+            if isinstance(exc,HTTPException): detail+=" — "+str(exc.detail)
+            detail+=". No new key was persisted."
+            if not rollback_confirmed: detail+=" Runtime credential cleanup could not be confirmed; disconnect before retrying."
+            raise HTTPException(exc.status_code if isinstance(exc,HTTPException) else 502,detail) from None
+        return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],"persisted":True,"validated_model":validated_model}
 
 @router.delete("/workspaces/{workspace_id}/providers/{provider_id}",status_code=204)
 def remove_provider_credential(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
     workspace=manager.owned(db,Workspace,workspace_id,user.id)
-    providers.remove_credential(db,user=user,workspace=workspace,provider_id=provider_id,account_level=False)
-
+    with opencode.workspace_lock(workspace):
+        session_lifecycle.lock_workspace(db,workspace)
+        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,
+            ProviderCredential.user_id==user.id,ProviderCredential.provider_id==provider_id))
+        if row is not None:
+            db.delete(row)
+        providers.record_connection(db,workspace,provider_id,connected=False)
+        db.commit()  # Client cleanup survives absent/unhealthy runtimes and auth DELETE failures.
+        service=None
+        try:
+            service=opencode.for_workspace(workspace,start=False)
+            with service.state_lock:
+                providers.remove(service,provider_id)
+        except Exception:
+            # Never include runtime exception bodies; they may contain credentials.
+            logger.warning("Runtime auth cleanup could not be confirmed for workspace %s; Gateway provider disconnect persisted",workspace.id)
+        finally:
+            if service is not None:
+                service.invalidate()
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/test")
 def test_provider(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):

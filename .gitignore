@@ -50,3 +50,6 @@ receipts/
 
 # Local audit artifacts (never commit)
 .audit/
+
+# Local agent sandbox (prototypes/experiments only; never commit)
+agent-test/
