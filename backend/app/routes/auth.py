@@ -49,9 +49,12 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
     username, email = data.username.strip().lower(), data.email.lower()
     if db.scalar(select(User).where(or_(func.lower(User.username) == username, func.lower(User.email) == email))):
         raise HTTPException(409, "Username or email already exists")
-    validate_locations(db, data.country_id, data.region_id, data.city_id)
+    if data.country_id is not None:
+        validate_locations(db, data.country_id, data.region_id, data.city_id)
+    elif data.region_id is not None or data.city_id is not None:
+        raise HTTPException(422, "Select a country before choosing a region or city")
     now = datetime.now(timezone.utc)
-    user = User(username=username, email=email, password_hash=hash_password(data.password), phone=data.phone.strip(), postal_code=data.postal_code.strip(), country_id=data.country_id, region_id=data.region_id, city_id=data.city_id, trial_started_at=now, trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS), last_login_at=now)
+    user = User(username=username, email=email, password_hash=hash_password(data.password), phone=data.phone.strip(), postal_code=data.postal_code.strip() if data.postal_code else None, country_id=data.country_id, region_id=data.region_id, city_id=data.city_id, trial_started_at=now, trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS), last_login_at=now)
     pending = request.cookies.get(social_login.SIGNUP_COOKIE)
     if pending:
         identity = social_login.unseal(pending, 'signup')

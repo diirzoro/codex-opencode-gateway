@@ -6,7 +6,7 @@ from sqlalchemy import select
 from ..models import User, Subscription
 
 CORE_TRIAL_DAYS = 30
-ADVANCED_TRIAL_DAYS = 10
+ADVANCED_TRIAL_DAYS = 30
 ACCOUNT_RETENTION_DAYS = 90
 
 def aware(value):

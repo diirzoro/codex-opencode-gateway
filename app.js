@@ -144,9 +144,7 @@ async function savePrefs(){applyPrefs();if(currentUser)try{await api('/api/profi
 $$('#langBtn,.lang-mirror').forEach(el=>el.onclick=()=>{lang=lang==='ar'?'en':'ar';savePrefs()});$$('#themeBtn,.theme-mirror,.workspace-theme').forEach(el=>el.onclick=()=>{dark=!dark;savePrefs()});
 $$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));$$('[data-start]').forEach(el=>el.onclick=()=>page(currentUser?'onboarding':'authPage'));$$('[data-demo]').forEach(el=>el.onclick=()=>page('onboarding'));$$('[data-scroll]').forEach(el=>el.onclick=()=>$('#'+el.dataset.scroll).scrollIntoView({behavior:'smooth'}));
 $$('[data-auth-tab]').forEach(el=>el.onclick=()=>{$$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-auth-form]').forEach(f=>f.classList.toggle('active',f.dataset.authForm===el.dataset.authTab))});
-$('#registerCountry').onchange=async()=>{try{await fillSelect('registerRegion',value('registerCountry')?`/api/locations/countries/${value('registerCountry')}/regions`:null,'Optional');await fillSelect('registerCity',null,'Optional')}catch(error){toast(error.message)}};
-$('#registerRegion').onchange=async()=>{try{await fillSelect('registerCity',value('registerRegion')?`/api/locations/regions/${value('registerRegion')}/cities`:null,'Optional')}catch(error){toast(error.message)}};
-$('#registerForm').onsubmit=async event=>{event.preventDefault();if($('#registerSubmit').disabled||!event.currentTarget.reportValidity())return;if(value('registerUsername').length<6){apiMessage('registerMessage',t('usernameHint'),true);return}const password=$('#registerPassword').value;if(password.length<8||!/[0-9]/.test(password)||![...password].some(c=>passwordSymbols.includes(c))){apiMessage('registerMessage',t('passwordHint'),true);return}const button=$('#registerSubmit');button.disabled=true;try{const prefs={preferred_language:lang,preferred_theme:dark?'dark':'light'};await api('/api/auth/register',{method:'POST',body:JSON.stringify({username:value('registerUsername'),email:value('registerEmail'),password:$('#registerPassword').value,phone:value('registerPhone'),postal_code:value('registerPostal'),country_id:Number(value('registerCountry')),region_id:value('registerRegion')?Number(value('registerRegion')):null,city_id:value('registerCity')?Number(value('registerCity')):null})});renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));$('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('registerMessage',error.message,true)}finally{button.disabled=false}};
+$('#registerForm').onsubmit=async event=>{event.preventDefault();if($('#registerSubmit').disabled||!event.currentTarget.reportValidity())return;if(value('registerUsername').length<6){apiMessage('registerMessage',t('usernameHint'),true);return}const password=$('#registerPassword').value;if(password.length<8||!/[0-9]/.test(password)||![...password].some(c=>passwordSymbols.includes(c))){apiMessage('registerMessage',t('passwordHint'),true);return}const button=$('#registerSubmit');button.disabled=true;try{const prefs={preferred_language:lang,preferred_theme:dark?'dark':'light'};await api('/api/auth/register',{method:'POST',body:JSON.stringify({username:value('registerUsername'),email:value('registerEmail'),password:$('#registerPassword').value,phone:value('registerPhone')})});renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));$('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('registerMessage',error.message,true)}finally{button.disabled=false}};
 $('#loginForm').onsubmit=async event=>{event.preventDefault();if($('#loginSubmit').disabled||!event.currentTarget.reportValidity())return;const button=$('#loginSubmit');button.disabled=true;try{renderProfile(await api('/api/auth/login',{method:'POST',body:JSON.stringify({identity:value('loginIdentity'),password:$('#loginPassword').value})}));$('#loginPassword').value='';try{if($('#rememberIdentity').checked)localStorage.setItem('og-login-identity',value('loginIdentity'));else localStorage.removeItem('og-login-identity');}catch(error){}await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
 $('#logoutButton').onclick=()=>window.logoutSession().catch(error=>toast(error.message));
 
@@ -230,10 +228,6 @@ const authReady=(async()=>{
   }else if(currentUser)toast(error.message);
  }
 })();
-let registrationCountries=null;
-function ensureRegistrationCountries(){if(!registrationCountries)registrationCountries=fillSelect('registerCountry','/api/locations/countries','Select country').catch(error=>{registrationCountries=null;apiMessage('registerMessage',error.message,true)});return registrationCountries;}
-document.addEventListener('click',event=>{if(event.target.closest('[data-auth-tab="register"]'))ensureRegistrationCountries();});
-$('#registerCountry').addEventListener('focus',ensureRegistrationCountries);
 async function restoreWorkspaceContext(){
  let workspaceId='';try{workspaceId=localStorage.getItem('og-workspace')||'';}catch(error){}
  if(!workspaceId)return null;
@@ -290,10 +284,10 @@ Object.assign(copy.en,{usernameHint:"At least 6 characters",passwordHint:"8+ cha
 Object.assign(copy.ar,{usernameHint:"6 أحرف على الأقل",passwordHint:"8 أحرف على الأقل، تتضمن رقمًا ورمزًا مثل ! أو @"});
 Object.assign(copy.en,{showPassword:"Show password",hidePassword:"Hide password"});
 Object.assign(copy.ar,{showPassword:"إظهار كلمة المرور",hidePassword:"إخفاء كلمة المرور"});
-function refreshPasswordToggles(){$$('.pw-toggle').forEach(btn=>{const input=document.getElementById(btn.dataset.pw);if(!input)return;const hidden=input.type==='password';btn.textContent=hidden?t('showPassword'):t('hidePassword');btn.setAttribute('aria-label',btn.textContent);btn.setAttribute('aria-pressed',String(!hidden))})}
-for(const id of ['loginPassword','registerPassword']){const input=document.getElementById(id);if(!input||input.parentElement.querySelector('.pw-toggle'))continue;const btn=document.createElement('button');btn.type='button';btn.className='pw-toggle';btn.dataset.pw=id;btn.onclick=()=>{input.type=input.type==='password'?'text':'password';refreshPasswordToggles();input.focus()};input.after(btn)}
-const prevPrefsPw=applyPrefs;applyPrefs=function(){prevPrefsPw();refreshPasswordToggles()};
-refreshPasswordToggles();
+function refreshPasswordReveals(){$$('[data-reveal]').forEach(btn=>{const input=document.getElementById(btn.dataset.reveal);if(!input)return;const hidden=input.type==='password';btn.setAttribute('aria-label',hidden?t('showPassword'):t('hidePassword'));btn.setAttribute('aria-pressed',String(!hidden))})}
+$$('[data-reveal]').forEach(btn=>{const input=document.getElementById(btn.dataset.reveal);if(!input)return;btn.onclick=()=>{input.type=input.type==='password'?'text':'password';refreshPasswordReveals();input.focus()}});
+const prevPrefsPw=applyPrefs;applyPrefs=function(){prevPrefsPw();refreshPasswordReveals()};
+refreshPasswordReveals();
 applyPrefs();
 
 
@@ -335,7 +329,7 @@ applyPrefs();
   window.requestInput=async(title,value='',type='text')=>{const result=await window.requestForm(title,[{name:'value',label:title,value,type}],tr('Continue','متابعة'));return result?.value??null;};
   window.editProfileForm=()=>window.requestForm(tr('Edit profile','تعديل الملف'),[
     {name:'phone',label:tr('Phone','الهاتف'),type:'tel',value:currentUser?.phone||'',required:true},
-    {name:'postal_code',label:tr('Postal code','الرمز البريدي'),value:currentUser?.postal_code||'',required:true}
+    {name:'postal_code',label:tr('Postal code','الرمز البريدي'),value:currentUser?.postal_code||'',required:false}
   ]);
   const basePage=page;page=async function(...args){document.querySelectorAll('dialog[data-form-dialog][open]').forEach(dialog=>dialog.close());return basePage(...args);};
   document.addEventListener('DOMContentLoaded',()=>{
@@ -355,8 +349,7 @@ applyPrefs();
     }
     const authPage=document.getElementById('authPage'),card=authPage.querySelector('.auth-card');
     const authDialog=element('dialog','','action-form-dialog auth-action-dialog');authDialog.id='authDialog';authDialog.setAttribute('aria-label',tr('Account access','الدخول للحساب'));
-    const head=element('header','','action-dialog-head'),heading=element('h2',tr('Start your free 30-day core trial','ابدأ تجربة الأساس المجانية لمدة 30 يومًا')),close=element('button','×','icon');close.type='button';close.setAttribute('aria-label',tr('Close','إغلاق'));close.onclick=()=>authDialog.close();head.append(heading,close);
-    const body=element('div','','action-dialog-body');const trialNote=element('p',tr('30 days of core access with 50 MB per local project. Advanced integrations receive 10 days from first use, capped by the core trial. Signing in does not restart trials.','30 يومًا للوصول الأساسي و50 MB لكل مشروع محلي. تجربة التكاملات المتقدمة 10 أيام من أول استخدام، ولا تتجاوز نهاية تجربة الأساس. تسجيل الدخول لا يعيد بدء التجارب.'),'trial-entry-note');body.append(trialNote,card);authDialog.append(head,body);authPage.append(authDialog);
+    const columns=element('div','','auth-dialog-columns');const workflow=authPage.querySelector('.auth-workflow');columns.append(workflow,card);authDialog.append(columns);authPage.append(authDialog);const closeBtn=card.querySelector('.close');if(closeBtn){closeBtn.type='button';closeBtn.setAttribute('aria-label',tr('Close','إغلاق'));closeBtn.onclick=()=>authDialog.close();}
     const syncAuth=()=>{if(authPage.classList.contains('active')&&!window.passwordRecoveryActive){if(!authDialog.open)authDialog.showModal();}else if(authDialog.open)authDialog.close();};
     authDialog.addEventListener('close',()=>{if(authPage.classList.contains('active')&&!currentUser&&!window.passwordRecoveryActive)page('landing');});
     new MutationObserver(syncAuth).observe(authPage,{attributes:true,attributeFilter:['class']});syncAuth();
@@ -369,8 +362,8 @@ applyPrefs();
  const handles='.action-dialog-head,.grid-modal-head,dialog>h2';
  const clamp=dialog=>{const rect=dialog.getBoundingClientRect(),gap=8;dialog.style.left=Math.max(gap,Math.min(rect.left,innerWidth-rect.width-gap))+'px';dialog.style.top=Math.max(gap,Math.min(rect.top,innerHeight-rect.height-gap))+'px';};
  document.addEventListener('pointerdown',event=>{
-  const header=event.target.closest(handles),dialog=header?.closest('dialog[open]');
-  if(!dialog||event.button!==0||event.target.closest('button,a,input,select,textarea')||!matchMedia('(min-width: 769px) and (pointer: fine)').matches)return;
+   const header=event.target.closest(handles),dialog=header?.closest('dialog[open]');
+   if(!dialog||dialog.id==='authDialog'||event.button!==0||event.target.closest('button,a,input,select,textarea')||!matchMedia('(min-width: 769px) and (pointer: fine)').matches)return;
   const rect=dialog.getBoundingClientRect(),x=event.clientX,y=event.clientY;
   Object.assign(dialog.style,{position:'fixed',inset:'auto',margin:'0',left:rect.left+'px',top:rect.top+'px'});dialog.dataset.dragged='';
   header.setPointerCapture(event.pointerId);event.preventDefault();
@@ -384,6 +377,10 @@ applyPrefs();
 /* Password managers own passwords; Remember stores identity text only. */
 Object.assign(copy.en,{rememberIdentity:'Remember email / username only',socialGithub:'Continue with GitHub',socialGoogle:'Continue with Google'});
 Object.assign(copy.ar,{rememberIdentity:'تذكّر البريد / اسم المستخدم فقط',socialGithub:'المتابعة باستخدام GitHub',socialGoogle:'المتابعة باستخدام Google'});
+Object.assign(copy.en,{benefitsTitle:'Everything for your project',b1t:'Use OpenCode online',b1d:'Work with your coding workspace directly from the browser.',b2t:'Connect your GitHub project',b2d:'Link your repository and keep working with your existing source.',b3t:'Secure provider connections',b3d:'Connect supported AI providers while credentials stay server-side.',b4t:'30-day Core trial',b4d:'Full core access with 50 MB per local project.',b5t:'30-day Advanced trial',b5d:'Advanced integrations activate from your first real use.',b6t:'One workspace for your project',b6d:'Keep files, sessions and reviews in a single place.'});
+Object.assign(copy.ar,{benefitsTitle:'كل ما يحتاجه مشروعك',b1t:'استخدم OpenCode عبر الإنترنت',b1d:'اعمل في مساحة الترميز مباشرة من المتصفح.',b2t:'اربط مشروع GitHub',b2d:'اربط مستودعك وتابع العمل بمصدرك الحالي.',b3t:'اتصالات مزوّدين آمنة',b3d:'اربط مزوّدي الذكاء الاصطناعي المدعومين وتبقى بيانات الاعتماد على الخادم.',b4t:'تجربة الأساس 30 يومًا',b4d:'وصول أساسي كامل مع 50 MB لكل مشروع محلي.',b5t:'التجربة المتقدمة 30 يومًا',b5d:'تتفعّل التكاملات المتقدمة من أول استخدام فعلي.',b6t:'مساحة عمل واحدة لمشروعك',b6d:'اجمع الملفات والجلسات والمراجعات في مكان واحد.'});
+Object.assign(copy.en,{authHeadline:'Start your 30-day Core trial',authSubhead:'Sign in to continue your projects. Advanced integrations add 30 days from first use.',brandName:'OpenCode Gateway'});
+Object.assign(copy.ar,{authHeadline:'ابدأ تجربة الأساس المجانية لمدة 30 يومًا',authSubhead:'سجّل الدخول لمتابعة مشاريعك. التكاملات المتقدمة تضيف 30 يومًا من أول استخدام.',brandName:'OpenCode Gateway'});
 try{const remembered=localStorage.getItem('og-login-identity');if(remembered){$('#loginIdentity').value=remembered;$('#rememberIdentity').checked=true;}}catch(error){}
 let socialOptions;
 async function loadSocialOptions(){
