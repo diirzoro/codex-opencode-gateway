@@ -290,8 +290,12 @@ Object.assign(copy.en,{usernameHint:"At least 6 characters",passwordHint:"8+ cha
 Object.assign(copy.ar,{usernameHint:"6 أحرف على الأقل",passwordHint:"8 أحرف على الأقل، تتضمن رقمًا ورمزًا مثل ! أو @"});
 Object.assign(copy.en,{showPassword:"Show password",hidePassword:"Hide password"});
 Object.assign(copy.ar,{showPassword:"إظهار كلمة المرور",hidePassword:"إخفاء كلمة المرور"});
-function refreshPasswordToggles(){$$('.pw-toggle').forEach(btn=>{const input=document.getElementById(btn.dataset.pw);if(!input)return;const hidden=input.type==='password';btn.textContent=hidden?t('showPassword'):t('hidePassword');btn.setAttribute('aria-label',btn.textContent);btn.setAttribute('aria-pressed',String(!hidden))})}
-for(const id of ['loginPassword','registerPassword']){const input=document.getElementById(id);if(!input||input.parentElement.querySelector('.pw-toggle'))continue;const btn=document.createElement('button');btn.type='button';btn.className='pw-toggle';btn.dataset.pw=id;btn.onclick=()=>{input.type=input.type==='password'?'text':'password';refreshPasswordToggles();input.focus()};input.after(btn)}
+function refreshPasswordToggles(){
+  $('.pw-toggle').forEach(btn=>{const input=document.getElementById(btn.dataset.pw);if(!input)return;const hidden=input.type==='password';btn.textContent=hidden?t('showPassword'):t('hidePassword');btn.setAttribute('aria-label',btn.textContent);btn.setAttribute('aria-pressed',String(!hidden))});
+  $('[data-reveal]').forEach(btn=>{const input=document.getElementById(btn.dataset.reveal);if(!input)return;const hidden=input.type==='password';btn.setAttribute('aria-label',hidden?t('showPassword'):t('hidePassword'));btn.setAttribute('aria-pressed',String(!hidden))});
+}
+for(const id of ['loginPassword','registerPassword']){const input=document.getElementById(id);if(!input||input.parentElement.querySelector('.pw-toggle')||input.parentElement.querySelector('[data-reveal]'))continue;const btn=document.createElement('button');btn.type='button';btn.className='pw-toggle';btn.dataset.pw=id;btn.onclick=()=>{input.type=input.type==='password'?'text':'password';refreshPasswordToggles();input.focus()};input.after(btn)}
+$('[data-reveal]').forEach(btn=>{const input=document.getElementById(btn.dataset.reveal);if(!input)return;btn.onclick=()=>{input.type=input.type==='password'?'text':'password';refreshPasswordToggles();input.focus()}});
 const prevPrefsPw=applyPrefs;applyPrefs=function(){prevPrefsPw();refreshPasswordToggles()};
 refreshPasswordToggles();
 applyPrefs();
@@ -355,8 +359,8 @@ applyPrefs();
     }
     const authPage=document.getElementById('authPage'),card=authPage.querySelector('.auth-card');
     const authDialog=element('dialog','','action-form-dialog auth-action-dialog');authDialog.id='authDialog';authDialog.setAttribute('aria-label',tr('Account access','الدخول للحساب'));
-    const head=element('header','','action-dialog-head'),heading=element('h2',tr('Start your free 30-day core trial','ابدأ تجربة الأساس المجانية لمدة 30 يومًا')),close=element('button','×','icon');close.type='button';close.setAttribute('aria-label',tr('Close','إغلاق'));close.onclick=()=>authDialog.close();head.append(heading,close);
-    const body=element('div','','action-dialog-body');const trialNote=element('p',tr('30 days of core access with 50 MB per local project. Advanced integrations receive 10 days from first use, capped by the core trial. Signing in does not restart trials.','30 يومًا للوصول الأساسي و50 MB لكل مشروع محلي. تجربة التكاملات المتقدمة 10 أيام من أول استخدام، ولا تتجاوز نهاية تجربة الأساس. تسجيل الدخول لا يعيد بدء التجارب.'),'trial-entry-note');body.append(trialNote,card);authDialog.append(head,body);authPage.append(authDialog);
+    const columns=element('div','','auth-dialog-columns'),workflow=authPage.querySelector('.auth-workflow');if(workflow)columns.append(workflow);columns.append(card);authDialog.append(columns);authPage.append(authDialog);
+    const closeBtn=card.querySelector('.close');if(closeBtn){closeBtn.type='button';closeBtn.setAttribute('aria-label',tr('Close','إغلاق'));closeBtn.onclick=()=>authDialog.close();}
     const syncAuth=()=>{if(authPage.classList.contains('active')&&!window.passwordRecoveryActive){if(!authDialog.open)authDialog.showModal();}else if(authDialog.open)authDialog.close();};
     authDialog.addEventListener('close',()=>{if(authPage.classList.contains('active')&&!currentUser&&!window.passwordRecoveryActive)page('landing');});
     new MutationObserver(syncAuth).observe(authPage,{attributes:true,attributeFilter:['class']});syncAuth();

@@ -1381,4 +1381,269 @@
   ADMIN_LOADERS.account=async function(){await adminAccountLoader();await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="account"]'),'adminAccountActivity'),'logs');};
   window.openClientView=async function(name){clientView=name;await page('clientPage');};
   window.openAdminView=async function(name){if(['admin','owner'].includes(currentUser?.role))adminView=name;await page('adminPage');};
+
+  /* ===== Homepage Content: Landing carousel + Admin "Homepage Content" ===== */
+    Object.assign(copy.en,{adminHomepage:'Homepage Content',adminHomepageLead:'Manage the Landing carousel: offers, announcements, partner promotions and platform messages.'});
+    Object.assign(copy.ar,{adminHomepage:'محتوى الصفحة الرئيسية',adminHomepageLead:'أدر شريط الصفحة الرئيسية: العروض والإعلانات وترويج الشركاء ورسائل المنصة.'});
+  
+    var HOME_TYPE_LABEL = { platform:['Platform Information','معلومات المنصة'], announcement:['Announcement','إعلان'], offer:['Offer','عرض'], update:['Update / News','تحديث / خبر'], partner:['Partner Promotion','ترويج شريك'], advertisement:['Advertisement','إعلان مدفوع'] };
+    var HOME_BADGE_LABEL = { new:['New','جديد'], offer:['Offer','عرض'], important:['Important','مهم'], update:['Update','تحديث'] };
+    var HOME_ICONS = ['icon-opencode','icon-github','icon-grid','icon-file','icon-folder','icon-clock','icon-diff','icon-home','icon-chat','icon-commit','icon-shield','icon-settings','icon-search','icon-link','icon-user','icon-terminal'];
+    var home = { host:null, track:null, viewport:null, dots:null, prev:null, next:null, play:null, items:[], index:0, timer:null, autoEnabled:true, hovered:false, focused:false, built:false, editing:null };
+    var homeReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  
+    function homeLabel(map, key) { var row = map[key]; return row ? (lang === 'ar' ? row[1] : row[0]) : ''; }
+    function homeSvg(id) { return '<svg class="ui-icon" aria-hidden="true"><use href="#' + id + '"/></svg>'; }
+    function homeControlSvg(kind) { return '<svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + (kind === 'pause' ? '<path d="M9 5v14M15 5v14"/>' : '<path d="m9 5 9 7-9 7Z"/>') + '</svg>'; }
+    function homeLocalized(target, value) {
+      target.replaceChildren();
+      String(value || '').split(/(OpenCode|GitHub|50 MB)/g).forEach(function (part) {
+        if (!part) return;
+        if (/^(OpenCode|GitHub|50 MB)$/.test(part)) { var b = document.createElement('bdi'); b.dir = 'ltr'; b.textContent = part; target.append(b); }
+        else target.append(document.createTextNode(part));
+      });
+    }
+    function homeVisible() { var v = home.host ? parseInt(getComputedStyle(home.host).getPropertyValue('--cards'), 10) : 3; return v > 0 ? v : 3; }
+    function homeMax() { return Math.max(0, home.items.length - homeVisible()); }
+    function homeRtl() { return (document.documentElement.dir || 'ltr') === 'rtl'; }
+  
+    function homeBuildShell() {
+      var host = home.host; host.replaceChildren(); home.built = true;
+      var viewport = el('div', 'home-viewport'); var track = el('div', 'home-track'); viewport.append(track);
+      var nav = el('div', 'home-nav');
+      var prev = el('button', 'home-arrow home-prev'); prev.type = 'button'; prev.innerHTML = homeSvg('icon-back');
+      var dots = el('div', 'home-dots');
+      var next = el('button', 'home-arrow home-next'); next.type = 'button'; next.innerHTML = homeSvg('icon-back');
+      var play = el('button', 'home-arrow home-play'); play.type = 'button';
+      nav.append(prev, dots, next, play); host.append(viewport, nav);
+      home.viewport = viewport; home.track = track; home.dots = dots; home.prev = prev; home.next = next; home.play = play;
+      prev.addEventListener('click', function (e) { homeGo(home.index - 1); if (e.detail > 0) prev.blur(); });
+      next.addEventListener('click', function (e) { homeGo(home.index + 1); if (e.detail > 0) next.blur(); });
+      play.addEventListener('click', function (e) { home.autoEnabled = !home.autoEnabled; homeUpdate(); homeSchedule(); if (e.detail > 0) play.blur(); });
+      host.addEventListener('pointerenter', function (e) { if (e.pointerType === 'mouse') { home.hovered = true; homeSchedule(); } });
+      host.addEventListener('pointerleave', function () { home.hovered = false; homeSchedule(); });
+      host.addEventListener('focusin', function () { home.focused = true; homeSchedule(); });
+      host.addEventListener('focusout', function () { home.focused = false; homeSchedule(); });
+      host.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); homeGo(home.index + (((e.key === 'ArrowRight') !== homeRtl()) ? 1 : -1)); }
+        else if (e.key === 'Home') { e.preventDefault(); homeGo(0); }
+        else if (e.key === 'End') { e.preventDefault(); homeGo(homeMax()); }
+      });
+      var start = null;
+      viewport.addEventListener('pointerdown', function (e) { if (e.pointerType !== 'mouse') start = { x: e.clientX, y: e.clientY }; });
+      viewport.addEventListener('pointerup', function (e) {
+        if (!start) return; var dx = e.clientX - start.x, dy = e.clientY - start.y; start = null;
+        if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.3) homeGo(home.index + (((dx < 0) !== homeRtl()) ? 1 : -1));
+      });
+      document.addEventListener('visibilitychange', homeSchedule);
+      if (homeReduced.addEventListener) homeReduced.addEventListener('change', function () { home.autoEnabled = !homeReduced.matches; homeUpdate(); homeSchedule(); });
+      if (window.ResizeObserver) new ResizeObserver(function () { homeUpdate(); }).observe(viewport);
+    }
+  
+    function homeRenderCards() {
+      if (!home.track) return;
+      var ar = lang === 'ar'; home.track.replaceChildren();
+      home.items.forEach(function (item) {
+        var card = el('article', 'home-card');
+        card.setAttribute('data-type', item.item_type || '');
+        card.setAttribute('data-media', item.media_kind || 'none');
+        if (item.media_kind !== 'none') {
+          var media = el('div', 'home-media');
+          if (item.media_kind === 'image' && item.image_url) {
+            var img = document.createElement('img'); img.src = item.image_url; img.alt = '';
+            img.onerror = function () { media.innerHTML = homeSvg(item.icon || 'icon-grid'); };
+            media.append(img);
+          }
+          else media.innerHTML = homeSvg(item.icon || 'icon-grid');
+          card.append(media);
+        }
+        if (item.badge && HOME_BADGE_LABEL[item.badge]) { var badge = el('span', 'home-badge', homeLabel(HOME_BADGE_LABEL, item.badge)); badge.setAttribute('data-badge', item.badge); card.append(badge); }
+        var title = el('h3', 'home-title'); homeLocalized(title, ar ? item.title_ar : item.title_en); card.append(title);
+        var body = el('p', 'home-text'); homeLocalized(body, ar ? item.body_ar : item.body_en); card.append(body);
+        var ctaLabel = ar ? item.cta_label_ar : item.cta_label_en;
+        if (ctaLabel && item.cta_url) { var link = el('a', 'home-cta'); link.href = item.cta_url; homeLocalized(link, ctaLabel); card.append(link); }
+        home.track.append(card);
+      });
+    }
+  
+    function homeRenderDots() {
+      if (!home.dots) return;
+      var total = homeMax() + 1;
+      if (home.dots.children.length !== total) {
+        home.dots.replaceChildren();
+        for (var i = 0; i < total; i++) (function (n) {
+          var dot = el('button', 'home-dot'); dot.type = 'button';
+          dot.addEventListener('click', function (e) { homeGo(n); if (e.detail > 0) dot.blur(); });
+          home.dots.append(dot);
+        })(i);
+      }
+    }
+  
+    function homeUpdate() {
+      if (!home.track || !home.items.length) return;
+      if (home.index > homeMax()) home.index = 0;
+      homeRenderDots();
+      var cards = home.track.children;
+      var gap = parseFloat(getComputedStyle(home.track).gap || '0') || 20;
+      var cw = cards[0] ? cards[0].getBoundingClientRect().width : 0;
+      var offset = home.index * (cw + gap);
+      home.track.style.transform = homeRtl() ? ('translateX(' + offset + 'px)') : ('translateX(-' + offset + 'px)');
+      var vis = homeVisible();
+      for (var i = 0; i < cards.length; i++) { var shown = i >= home.index && i < home.index + vis; cards[i].setAttribute('aria-hidden', String(!shown)); cards[i].inert = !shown; }
+      var dots = home.dots.children;
+      for (var j = 0; j < dots.length; j++) dots[j].setAttribute('aria-current', String(j === home.index));
+      if (home.play) { home.play.innerHTML = homeControlSvg(home.autoEnabled ? 'pause' : 'play'); home.play.setAttribute('aria-label', home.autoEnabled ? tr('Pause automatic rotation', 'إيقاف الدوران التلقائي') : tr('Resume automatic rotation', 'استئناف الدوران التلقائي')); }
+    }
+  
+    function homeSchedule() {
+      if (home.timer) { clearTimeout(home.timer); home.timer = null; }
+      var playing = home.autoEnabled && !home.hovered && !home.focused && !document.hidden && !homeReduced.matches;
+      if (home.host) home.host.setAttribute('data-playing', playing ? 'true' : 'false');
+      if (playing) home.timer = setTimeout(function () { homeGo(home.index + 1); }, 6500);
+    }
+  
+    function homeGo(next) { var max = homeMax(); home.index = next > max ? 0 : (next < 0 ? max : next); homeUpdate(); homeSchedule(); }
+  
+    async function renderHomeCarousel() {
+      var host = document.getElementById('homeCarousel');
+      if (!host) return;
+      home.host = host;
+      var items;
+      try { items = await api('/api/homepage', { cache: 'no-store', allowAnonymous: true }); }
+      catch (error) { return; }
+      home.items = Array.isArray(items) ? items : [];
+      if (!home.items.length) { host.replaceChildren(); return; }
+      if (!home.built || !home.track) homeBuildShell();
+      homeRenderCards(); homeUpdate(); homeSchedule();
+    }
+    window.renderHomeCarousel = renderHomeCarousel;
+  
+    function homeField(id, labelText, tag, attrs) { var wrap = el('label'); wrap.append(el('span', '', labelText)); var input = document.createElement(tag); input.id = id; if (attrs) for (var k in attrs) input.setAttribute(k, attrs[k]); wrap.append(input); return wrap; }
+    function homeOptions(select, pairs) { select.replaceChildren(); pairs.forEach(function (pair) { var o = document.createElement('option'); o.value = pair[0]; o.textContent = pair[1]; select.append(o); }); }
+  
+    function adminHomepageRow(item, position, rows) {
+      var row = document.createElement('tr');
+      row.append(el('td', '', item.title_en + ' / ' + item.title_ar));
+      row.append(el('td', '', homeLabel(HOME_TYPE_LABEL, item.item_type)));
+      row.append(el('td', '', item.badge ? homeLabel(HOME_BADGE_LABEL, item.badge) : '—'));
+      var orderTd = el('td');
+      var up = el('button', 'button ghost small', '↑'); up.type = 'button'; up.disabled = position === 0; up.title = tr('Move up','تحريك لأعلى');
+      up.onclick = function () { homeMove(item, rows[position - 1]); };
+      var down = el('button', 'button ghost small', '↓'); down.type = 'button'; down.disabled = position === rows.length - 1; down.title = tr('Move down','تحريك لأسفل');
+      down.onclick = function () { homeMove(item, rows[position + 1]); };
+      orderTd.append(up, down, document.createTextNode(' ' + item.sort_order)); row.append(orderTd);
+      var pinTd = el('td'); var pinBtn = el('button', 'button ghost small', item.pinned ? '★' : '☆'); pinBtn.type = 'button';
+      pinBtn.onclick = function () { homePatch(item.id, { pinned: !item.pinned }); }; pinTd.append(pinBtn); row.append(pinTd);
+      var enTd = el('td'); var enBtn = el('button', 'button ghost small', item.enabled ? tr('Disable','تعطيل') : tr('Enable','تفعيل')); enBtn.type = 'button';
+      enBtn.onclick = function () { homePatch(item.id, { enabled: !item.enabled }); }; enTd.append(enBtn); row.append(enTd);
+      row.append(el('td', '', (item.starts_at ? String(item.starts_at).slice(0,10) : '—') + ' → ' + (item.ends_at ? String(item.ends_at).slice(0,10) : '—')));
+      var mediaTd = el('td');
+      mediaTd.append(el('span', '', item.media_kind === 'image' ? tr('image','صورة') : (item.icon || '—')));
+      var upload = document.createElement('input'); upload.type = 'file'; upload.accept = 'image/png,image/jpeg,image/webp';
+      upload.onchange = async function () { if (!upload.files[0]) return; var fd = new FormData(); fd.append('file', upload.files[0]); try { await api('/api/admin/homepage/' + item.id + '/image', { method: 'POST', body: fd }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } };
+      mediaTd.append(upload);
+      if (item.has_image) { var rm = el('button', 'button ghost small', tr('Remove image','إزالة الصورة')); rm.type = 'button'; rm.onclick = async function () { try { await api('/api/admin/homepage/' + item.id + '/image', { method: 'DELETE' }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } }; mediaTd.append(rm); }
+      row.append(mediaTd);
+      var actTd = el('td');
+      var edit = el('button', 'button ghost small', tr('Edit','تعديل')); edit.type = 'button'; edit.onclick = function () { homeEditItem(item); };
+      var del = el('button', 'button ghost small', tr('Delete','حذف')); del.type = 'button';
+      del.onclick = async function () { if (!await window.confirmAction(tr('Delete this homepage item?','حذف هذا العنصر؟'))) return; try { await api('/api/admin/homepage/' + item.id, { method: 'DELETE' }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } };
+      actTd.append(edit, del); row.append(actTd);
+      return row;
+    }
+  
+    async function homePatch(id, payload) { try { await api('/api/admin/homepage/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } }
+    async function homeMove(item, neighbour) { if (!neighbour) return; try { await api('/api/admin/homepage/' + item.id, { method: 'PATCH', body: JSON.stringify({ sort_order: neighbour.sort_order }) }); await api('/api/admin/homepage/' + neighbour.id, { method: 'PATCH', body: JSON.stringify({ sort_order: item.sort_order }) }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } }
+  
+    function homeEditItem(item) {
+      var set = function (id, v) { var node = document.getElementById(id); if (node) node.value = v == null ? '' : v; };
+      set('homeTitleEn', item.title_en); set('homeTitleAr', item.title_ar);
+      set('homeBodyEn', item.body_en); set('homeBodyAr', item.body_ar);
+      set('homeType', item.item_type); set('homeBadge', item.badge || ''); set('homeIcon', item.icon || HOME_ICONS[0]);
+      set('homeCtaEn', item.cta_label_en); set('homeCtaAr', item.cta_label_ar); set('homeCtaUrl', item.cta_url);
+      set('homeSort', item.sort_order);
+      set('homeStart', item.starts_at ? String(item.starts_at).slice(0,10) : ''); set('homeEnd', item.ends_at ? String(item.ends_at).slice(0,10) : '');
+      var pin = document.getElementById('homePinned'); if (pin) pin.checked = !!item.pinned;
+      home.editing = item.id;
+      var submit = document.getElementById('homeSubmit'); if (submit) submit.textContent = tr('Save changes','حفظ التغييرات');
+      var cancel = document.getElementById('homeCancel'); if (cancel) cancel.hidden = false;
+      var form = document.getElementById('adminHomepageForm'); if (form) form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  
+    function buildAdminHomepage(panel, rows) {
+      panel.replaceChildren();
+      var msg = el('div', 'api-message'); msg.id = 'adminHomepageMessage'; panel.append(msg);
+      var wrap = el('div', 'table-wrap');
+      var table = document.createElement('table'); var thead = document.createElement('thead'); var htr = document.createElement('tr');
+      ['Title','Type','Badge','Order','Pinned','Enabled','Starts / Ends','Media','Actions'].forEach(function (t) { htr.append(el('th', '', t)); });
+      thead.append(htr); table.append(thead);
+      var body = document.createElement('tbody'); body.id = 'adminHomepageBody'; table.append(body);
+      rows.forEach(function (item, index) { body.append(adminHomepageRow(item, index, rows)); });
+      wrap.append(table); panel.append(wrap);
+  
+      var form = document.createElement('form'); form.className = 'manage-form'; form.id = 'adminHomepageForm';
+      form.append(homeField('homeTitleEn', tr('Title (EN)','العنوان (إنجليزي)'), 'input', { required: 'required', maxlength: '200' }));
+      form.append(homeField('homeTitleAr', tr('Title (AR)','العنوان (عربي)'), 'input', { required: 'required', maxlength: '200' }));
+      form.append(homeField('homeBodyEn', tr('Description (EN)','الوصف (إنجليزي)'), 'input', { maxlength: '1000' }));
+      form.append(homeField('homeBodyAr', tr('Description (AR)','الوصف (عربي)'), 'input', { maxlength: '1000' }));
+      var typeField = homeField('homeType', tr('Content type','نوع المحتوى'), 'select'); homeOptions(typeField.querySelector('select'), Object.keys(HOME_TYPE_LABEL).map(function (k) { return [k, homeLabel(HOME_TYPE_LABEL, k)]; })); form.append(typeField);
+      var badgeField = homeField('homeBadge', tr('Badge','الشارة'), 'select'); homeOptions(badgeField.querySelector('select'), [['', tr('None','بدون')]].concat(Object.keys(HOME_BADGE_LABEL).map(function (k) { return [k, homeLabel(HOME_BADGE_LABEL, k)]; }))); form.append(badgeField);
+      var iconField = homeField('homeIcon', tr('Icon','الأيقونة'), 'select'); homeOptions(iconField.querySelector('select'), HOME_ICONS.map(function (i) { return [i, i.replace('icon-', '')]; })); form.append(iconField);
+      form.append(homeField('homeCtaEn', tr('CTA label (EN)','نص الزر (إنجليزي)'), 'input', { maxlength: '80' }));
+      form.append(homeField('homeCtaAr', tr('CTA label (AR)','نص الزر (عربي)'), 'input', { maxlength: '80' }));
+      form.append(homeField('homeCtaUrl', tr('CTA URL','رابط الزر'), 'input', { maxlength: '500', placeholder: 'https://… or /path' }));
+      form.append(homeField('homeSort', tr('Order','الترتيب'), 'input', { type: 'number', min: '0', max: '100000' }));
+      form.append(homeField('homeStart', tr('Starts on','يبدأ في'), 'input', { type: 'date' }));
+      form.append(homeField('homeEnd', tr('Ends on','ينتهي في'), 'input', { type: 'date' }));
+      form.append(homeField('homeImage', tr('Image (optional, ≤3 MB)','صورة (اختياري، ≤3 ميجابايت)'), 'input', { type: 'file', accept: 'image/png,image/jpeg,image/webp' }));
+      var pinRow = el('label', 'checkbox-row'); var pin = document.createElement('input'); pin.type = 'checkbox'; pin.id = 'homePinned'; pinRow.append(pin, el('span', '', tr('Pinned / featured','مثبّت / مميّز'))); form.append(pinRow);
+      var actions = el('div', 'admin-actions');
+      var submit = el('button', 'button', tr('Add item','إضافة عنصر')); submit.type = 'submit'; submit.id = 'homeSubmit';
+      var cancel = el('button', 'button ghost', tr('Cancel edit','إلغاء التعديل')); cancel.type = 'button'; cancel.id = 'homeCancel'; cancel.hidden = true;
+      actions.append(submit, cancel); form.append(actions);
+      panel.append(form);
+  
+      home.editing = null;
+      cancel.onclick = function () { home.editing = null; form.reset(); submit.textContent = tr('Add item', 'إضافة عنصر'); cancel.hidden = true; };
+      form.onsubmit = async function (event) {
+        event.preventDefault();
+        var payload = {
+          item_type: value('homeType'), badge: value('homeBadge') || null,
+          title_en: value('homeTitleEn'), title_ar: value('homeTitleAr'),
+          body_en: value('homeBodyEn'), body_ar: value('homeBodyAr'),
+          cta_label_en: value('homeCtaEn') || null, cta_label_ar: value('homeCtaAr') || null,
+          cta_url: value('homeCtaUrl') || null, icon: value('homeIcon') || null,
+          pinned: pin.checked,
+          starts_at: value('homeStart') || null, ends_at: value('homeEnd') || null
+        };
+        var sort = value('homeSort'); if (sort !== '') payload.sort_order = Number(sort);
+        submit.disabled = true;
+        try {
+          var saved = home.editing ? await api('/api/admin/homepage/' + home.editing, { method: 'PATCH', body: JSON.stringify(payload) }) : await api('/api/admin/homepage', { method: 'POST', body: JSON.stringify(payload) });
+          var fileInput = document.getElementById('homeImage');
+          if (fileInput && fileInput.files && fileInput.files[0]) { var fd = new FormData(); fd.append('file', fileInput.files[0]); await api('/api/admin/homepage/' + saved.id + '/image', { method: 'POST', body: fd }); }
+          apiMessage('adminHomepageMessage', home.editing ? tr('Item updated','تم تحديث العنصر') : tr('Item added','تمت إضافة العنصر'));
+          await loadAdminHomepage(); await renderHomeCarousel();
+        } catch (error) { apiMessage('adminHomepageMessage', error.message, true); }
+        finally { submit.disabled = false; }
+      };
+    }
+  
+    async function loadAdminHomepage() {
+      var panel = document.getElementById('adminHomepagePanel');
+      if (!panel) return;
+      try { var rows = await api('/api/admin/homepage', { cache: 'no-store' }); buildAdminHomepage(panel, rows); }
+      catch (error) { panel.replaceChildren(textElement('p', error.message)); }
+    }
+    ADMIN_LOADERS.homepage = loadAdminHomepage;
+  
+    var prevHomePrefs = applyPrefs;
+    applyPrefs = function () { prevHomePrefs(); if (home.items.length) { homeRenderCards(); homeUpdate(); } };
+  
+    function homeKick() { renderHomeCarousel().catch(function () {}); }
+    if (document.readyState === 'complete') homeKick(); else window.addEventListener('load', homeKick, { once: true });
+    window.setTimeout(homeKick, 900);
+    window.setTimeout(homeKick, 2600);
+    document.addEventListener('visibilitychange', function () { if (document.getElementById('landing')?.classList.contains('active')) homeKick(); });
+    window.addEventListener('focus', homeKick);
 })();

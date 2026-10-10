@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
-from .routes import workspaces, agent, github, dashboard, plans, billing, management
+from .routes import workspaces, agent, github, dashboard, plans, billing, management, homepage
 from .services import workspace_cache, customer_lifecycle
 
 async def retention_maintenance():
@@ -48,6 +48,7 @@ app.include_router(dashboard.router)
 app.include_router(plans.router)
 app.include_router(billing.router)
 app.include_router(management.router)
+app.include_router(homepage.router)
 @app.get("/api/health")
 def health(): return {"status": "ok"}
 frontend = Path(__file__).resolve().parents[2]

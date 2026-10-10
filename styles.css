@@ -302,3 +302,88 @@ dialog .session-idle-warning{position:sticky;inset:auto;margin:12px;flex:none;ma
 #workspacePage #workspaceAccessState{flex-shrink:0;margin:6px 16px;padding:8px 12px;font-size:13px;line-height:1.6}
 @media(max-width:600px){#workspacePage .workspace-first .composer-context .workspace-days{font-size:11px}#workspacePage #workspaceAccessState{margin-inline:10px;gap:8px}}
 .project-retention-warning{display:block;padding-inline-start:8px;border-inline-start:3px solid #ba8a30;color:var(--text);line-height:1.6;overflow-wrap:anywhere}
+
+/* ==== Selectively ported login dialog UI ==== */
+#authDialog{width:min(840px,calc(100vw - 40px));max-width:calc(100vw - 40px);max-height:calc(100dvh - 40px);padding:0;border:0;border-radius:20px;background:var(--panel);box-shadow:0 1px 2px rgba(15,23,42,.04),0 14px 34px -16px rgba(15,23,42,.22);overflow:hidden}
+#authDialog[open]{display:block}
+#authDialog .auth-dialog-columns{display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,1.05fr);align-items:stretch;border:0;overflow:hidden;max-height:calc(100dvh - 40px)}
+#authDialog .auth-card{position:relative;display:flex;flex-direction:column;gap:15px;padding:30px 34px 26px;max-height:calc(100dvh - 40px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;background:var(--panel);border:0;box-shadow:none;margin:0;max-width:none;width:100%}
+#authDialog .auth-card .close{position:absolute;top:14px;inset-inline-end:14px;display:grid;place-items:center;width:32px;height:32px;background:transparent;border:0;border-radius:8px;color:var(--muted);cursor:pointer;z-index:3}
+#authDialog .auth-card .close:hover{background:var(--panel2);color:var(--text)}
+#authDialog .auth-card .close .ui-icon{width:20px;height:20px}
+#authDialog .auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;background:var(--panel2);border-radius:11px;border:0;margin:0}
+#authDialog .auth-tabs button.tab{border:0;background:transparent;color:var(--muted);font-weight:600;font-size:14px;padding:9px 12px;border-radius:8px;cursor:pointer}
+#authDialog .auth-tabs button.tab.active{background:var(--panel);color:var(--text);box-shadow:0 1px 3px rgba(15,23,42,.08)}
+#authDialog .auth-form.active{display:flex;flex-direction:column;gap:14px}
+#authDialog .field{display:flex;flex-direction:column;gap:7px;margin:0}
+#authDialog .field-label{font-size:13px;font-weight:600;color:var(--text)}
+#authDialog .field-control{position:relative;display:flex;align-items:center}
+#authDialog .field-icon{position:absolute;inset-inline-start:14px;width:17px;height:17px;color:var(--muted);pointer-events:none;z-index:1}
+#authDialog .field-control input{height:46px;padding-inline-start:44px;padding-inline-end:44px;font-size:15px}
+#authDialog .row-between{display:flex;align-items:center;justify-content:space-between;gap:12px}
+#authDialog .remember-identity.check{display:inline-flex;align-items:center;gap:9px;margin:0;font-size:13.5px;font-weight:400;color:var(--text);cursor:pointer}
+#authDialog .remember-identity.check input{position:absolute;opacity:0;width:0;height:0}
+#authDialog .check .box{width:18px;height:18px;flex:0 0 auto;border:1.5px solid var(--line);border-radius:5px;background:var(--panel);display:inline-grid;place-items:center;transition:background .14s,border-color .14s}
+#authDialog .check .box::after{content:"";width:10px;height:6px;border:2px solid #fff;border-top:0;border-right:0;transform:rotate(-45deg) scale(0);opacity:0;transition:transform .14s,opacity .14s}
+#authDialog .check input:checked+.box{background:var(--primary);border-color:var(--primary)}
+#authDialog .check input:checked+.box::after{transform:rotate(-45deg) scale(1);opacity:1}
+#authDialog .text-link.link{font-size:13.5px;font-weight:600;color:var(--primary);margin:0}
+#authDialog .button.wide{width:100%;height:46px;font-size:15px;font-weight:600;border-radius:11px;margin:0}
+#authDialog .auth-divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:0}
+#authDialog .auth-divider::before,#authDialog .auth-divider::after{content:"";flex:1;height:1px;background:var(--line)}
+#authDialog .auth-social{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0}
+#authDialog .github-button{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;height:44px;padding:0 12px;margin:0;box-sizing:border-box;border-radius:11px;font-size:13.5px;font-weight:600;border:1px solid}
+#authDialog .github-button+.github-button{margin-top:0}
+#authDialog .github-button .inline-icon{width:18px;height:18px;flex:none;margin:0}
+#authDialog .github-button[data-social-login="github"]{background:#24292f;color:#fff;border-color:#24292f}
+#authDialog .github-button[data-social-login="google"]{background:var(--panel);color:var(--text);border-color:var(--line)}
+#authDialog .social-login-note{margin:0;font-size:12px;color:var(--muted)}
+#authDialog .auth-workflow{display:flex;flex-direction:column;justify-content:center;align-items:stretch;padding:32px;background:var(--sidebar);border:0;overflow:hidden}
+#authDialog .field-control .reveal{position:absolute;inset-inline-end:6px;display:grid;place-items:center;width:34px;height:34px;border:0;background:transparent;color:var(--muted);border-radius:8px;cursor:pointer;z-index:2}
+#authDialog .field-control .reveal:hover{color:var(--text)}
+#authDialog .field-control .reveal svg{width:19px;height:19px;pointer-events:none}
+#authDialog .field-control .reveal .eye-closed{display:none}
+#authDialog .field-control .reveal[aria-pressed="true"] .eye-open{display:none}
+#authDialog .field-control .reveal[aria-pressed="true"] .eye-closed{display:block}
+@media(max-width:820px){#authDialog{width:calc(100vw - 28px)}#authDialog .auth-dialog-columns{grid-template-columns:1fr}#authDialog .auth-workflow{display:none}#authDialog .auth-card{padding:24px 20px}}
+@media(max-width:520px){#authDialog .auth-social{grid-template-columns:1fr}#authDialog .row-between{align-items:flex-start;flex-direction:column}}
+
+/* ==== Landing homepage carousel (Admin "Homepage Content") ==== */
+.feature-carousel{--cards:3;--home-gap:20px;position:relative;margin:0}
+.feature-carousel .home-viewport{overflow:hidden;padding:4px;margin:-4px}
+.feature-carousel .home-track{display:flex;flex-wrap:nowrap;align-items:stretch;gap:var(--home-gap);transition:transform .5s cubic-bezier(.22,.61,.36,1);will-change:transform}
+.feature-carousel .home-card{flex:0 0 calc((100% - (var(--cards) - 1) * var(--home-gap)) / var(--cards));min-width:0;box-sizing:border-box;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--card-shadow);padding:20px}
+.feature-carousel .home-card:hover{border-color:color-mix(in srgb,var(--primary) 35%,var(--line))}
+.feature-carousel .home-media{height:112px;margin-bottom:16px;border-radius:12px;background:linear-gradient(180deg,var(--panel2) 0%,var(--control-fill,var(--panel2)) 100%);border:1px solid var(--line);display:grid;place-items:center;overflow:hidden;color:var(--primary);padding:14px}
+.feature-carousel .home-media img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block;border-radius:8px}
+.feature-carousel .home-media .ui-icon{width:40px;height:40px;display:block}
+.feature-carousel .home-card[data-media="none"] .home-media{display:none}
+.feature-carousel .home-badge{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:3px 9px;border-radius:999px;margin:0 0 10px;background:var(--soft);color:var(--primary);border:1px solid color-mix(in srgb,var(--primary) 24%,var(--line))}
+.feature-carousel .home-badge[data-badge="offer"]{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 30%,var(--line))}
+.feature-carousel .home-badge[data-badge="important"]{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 30%,var(--line))}
+.feature-carousel .home-badge[data-badge="update"]{color:var(--muted);border-color:var(--line)}
+.feature-carousel .home-title{margin:0 0 8px;font-size:16px;line-height:1.4;font-weight:700;letter-spacing:-.2px;color:var(--text)}
+.feature-carousel .home-text{margin:0;font-size:14px;line-height:1.65;color:var(--muted);overflow-wrap:anywhere}
+.feature-carousel .home-cta{margin-top:auto;padding-top:14px;font-size:13.5px;font-weight:600;color:var(--primary);text-decoration:none;text-underline-offset:4px}
+.feature-carousel .home-cta:hover{text-decoration:underline}
+.feature-carousel .home-nav{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:14px}
+.feature-carousel .home-arrow{flex:0 0 auto;display:grid;place-items:center;width:34px;height:34px;padding:0;border:1px solid var(--line);border-radius:50%;background:var(--panel);color:var(--text);cursor:pointer;transition:background .18s,border-color .18s,color .18s,transform .18s}
+.feature-carousel .home-arrow .ui-icon{width:18px;height:18px}
+.feature-carousel .home-arrow:hover{background:var(--panel2);border-color:var(--primary);color:var(--primary)}
+.feature-carousel .home-arrow:active{transform:scale(.94)}
+.feature-carousel .home-next .ui-icon{transform:rotate(180deg)}
+[dir="rtl"] .feature-carousel .home-prev .ui-icon{transform:rotate(180deg)}
+[dir="rtl"] .feature-carousel .home-next .ui-icon{transform:none}
+.feature-carousel .home-dots{display:flex;align-items:center;gap:6px}
+.feature-carousel .home-dot{width:7px;height:7px;padding:0;border:0;border-radius:50%;background:var(--line);cursor:pointer;transition:width .2s,background .2s}
+.feature-carousel .home-dot[aria-current="true"]{width:18px;border-radius:4px;background:var(--primary)}
+.feature-carousel .home-play{width:28px;height:28px;border-color:transparent;background:transparent;color:var(--muted)}
+.feature-carousel .home-play:hover{background:var(--panel2);border-color:var(--line);color:var(--text)}
+.feature-carousel .home-play .ui-icon{width:15px;height:15px}
+.feature-carousel :is(.home-arrow,.home-dot,.home-cta):focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+#adminHomepagePanel .manage-form{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+#adminHomepagePanel table td .button{margin-inline-end:4px}
+#adminHomepagePanel input[type=file]{max-width:180px;font-size:12px}
+@media(max-width:1024px){.feature-carousel{--cards:2}}
+@media(max-width:640px){.feature-carousel{--cards:1}.feature-carousel .home-media{height:132px}}
+@media(prefers-reduced-motion:reduce){.feature-carousel .home-track{transition:none}}
