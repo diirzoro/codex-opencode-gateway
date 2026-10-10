@@ -117,7 +117,10 @@
   const previousShow=showPage;showPage=function(id){if(id==='adminPage'&&!admin()){toast('Administrator access required');id=currentUser?'workspaceHomePage':'authPage';}if(admin()&&['workspaceHomePage','connectionsPage','workspacePage'].includes(id))id='adminPage';q('sessionSidebar').classList.remove('open');overlay(false);try{if(currentUser)localStorage.setItem('og-page',id);}catch(error){}previousShow(id);syncWorkspacePolling();q('clientWorkspaceHome').classList.toggle('active',['workspaceHomePage','workspacePage'].includes(id));q('clientConnections').classList.toggle('active',id==='connectionsPage');if(['workspaceHomePage','workspacePage','connectionsPage'].includes(id))q('clientNav').querySelectorAll('[data-client-view]').forEach(n=>n.classList.remove('active'));};
   openWorkspace=async function(project,workspace,options={}){
     if(options.navigate===false&&!workspaceInitialized){
-      if(activeWorkspace?.id!==workspace.id)clearAttachments();stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;
+      // Composer attachment state does not exist until initializeWorkspace() runs.
+      // Do not call clearAttachments() during lightweight workspace restoration;
+      // doing so aborts restore/settings with "clearAttachments is not defined".
+      stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;
       try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}return;
     }
     initializeWorkspace();return openWorkspace(project,workspace,options);
