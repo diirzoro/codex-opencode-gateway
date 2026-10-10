@@ -387,3 +387,29 @@ dialog .session-idle-warning{position:sticky;inset:auto;margin:12px;flex:none;ma
 @media(max-width:1024px){.feature-carousel{--cards:2}}
 @media(max-width:640px){.feature-carousel{--cards:1}.feature-carousel .home-media{height:132px}}
 @media(prefers-reduced-motion:reduce){.feature-carousel .home-track{transition:none}}
+
+
+/* ==== MouseSpark selective UI integration ==== */
+:root select option{color:#16181b;background:#ffffff}
+:root.dark select option{color:#e9eaf0;background:#202328}
+.auth-card-tools{position:absolute;top:14px;inset-inline-start:14px;display:flex;gap:6px;z-index:3}
+.auth-card-tools .icon{width:32px;height:32px;font-size:12px;color:#64748b}
+.auth-card-tools .icon:hover{background:#f1f5f9;color:#0f172a}
+.auth-card-tools .icon .ui-icon{width:20px;height:20px}
+.account-sign-ins .button{margin-inline-end:8px;margin-bottom:8px}
+#authDialog .form-head{margin:0;padding-inline-end:40px}
+#authDialog .form-head h1{margin:0 0 4px;font-size:20px;font-weight:700;letter-spacing:-.3px;color:var(--text)}
+#authDialog .form-head p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.55}
+#authDialog .auth-workflow{display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;padding:32px;background:linear-gradient(180deg,#eef3ff 0%,#f4f2ff 55%,#edf8fc 100%);border:0;overflow:hidden}
+#authDialog .benefits-brand{display:flex;align-items:center;gap:11px;margin:0 0 24px}
+#authDialog .benefits-logo{flex:0 0 auto;width:42px;height:42px;display:grid;place-items:center;background:linear-gradient(135deg,#4f46e5,#4338ca);color:#fff;border-radius:12px}
+#authDialog .benefits-logo .ui-icon{width:22px;height:22px}
+#authDialog .benefits-name{font-size:16px;font-weight:700;color:#0f172a;letter-spacing:-.2px}
+#authDialog .benefits-title{font-size:18px;font-weight:600;letter-spacing:-.2px;margin:0 0 20px;color:#0f172a}
+#authDialog .benefit-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:18px}
+#authDialog .benefit{display:flex;gap:13px;align-items:flex-start}
+#authDialog .benefit-icon{flex:0 0 auto;width:34px;height:34px;display:grid;place-items:center;background:#eef2ff;color:#4f46e5;border-radius:10px}
+#authDialog .benefit-icon .ui-icon{width:18px;height:18px}
+#authDialog .benefit strong{display:block;font-size:14px;font-weight:600;margin-bottom:2px;color:#0f172a}
+#authDialog .benefit div>span{display:block;font-size:12.5px;line-height:1.45;color:#64748b}
+@media(max-width:820px){#authDialog .auth-workflow{display:none}}
