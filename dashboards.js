@@ -83,10 +83,10 @@
     const label=(access.kind==='trial'?tr('Core trial · ','تجربة الأساس · '):tr('Subscription · ','الاشتراك · '))+days+tr(' days left',' يومًا متبقيًا');
     homeAccess.replaceChildren(textElement('span',workAccess?label:tr('Your access has expired. Subscribe to continue.','انتهت مدة الوصول. اشترك للمتابعة.')));
     const advanced=access.advanced_trial;
-    homeAccess.append(textElement('span',advanced.state==='not_started'?tr(' · Advanced trial: 10 days from first use',' · المتقدمة: 10 أيام من أول استخدام'):tr(' · Advanced trial: ',' · التجربة المتقدمة: ')+advanced.remaining_days+tr(' days remaining',' يوم متبقٍ')));
+    homeAccess.append(textElement('span',advanced.state==='not_started'?tr(' · Advanced trial: 10 days from first use',' · المتقدمة: 10 أيام من أول استخدام'):tr(' · Advanced trial · ',' · التجربة المتقدمة · ')+advanced.remaining_days+tr(' days remaining',' يوم متبقٍ')));
     workspaceDays.hidden=false;
     workspaceDays.textContent=workAccess?label:tr('Access expired','انتهت مدة الوصول');
-    workspaceDays.title=access.ends_at?tr('Expires: ','تنتهي: ')+new Date(access.ends_at).toLocaleString(lang):'';
+    workspaceDays.title=access.ends_at?tr('Expires: ','تنتهي: ')+new Date(access.ends_at).toLocaleString(lang==='ar'?'ar-u-nu-latn':'en-GB',{dateStyle:'medium',timeStyle:'short'}):'';
     const urgent=workAccess&&(days===2||days===1);
     workspaceDays.dataset.urgency=!workAccess?'expired':urgent?String(days):'';
     workspaceAccess.replaceChildren();workspaceAccess.hidden=true;workspaceAccess.dataset.urgency='';
