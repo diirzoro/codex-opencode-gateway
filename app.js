@@ -291,11 +291,11 @@ Object.assign(copy.ar,{usernameHint:"6 أحرف على الأقل",passwordHint:
 Object.assign(copy.en,{showPassword:"Show password",hidePassword:"Hide password"});
 Object.assign(copy.ar,{showPassword:"إظهار كلمة المرور",hidePassword:"إخفاء كلمة المرور"});
 function refreshPasswordToggles(){
-  $('.pw-toggle').forEach(btn=>{const input=document.getElementById(btn.dataset.pw);if(!input)return;const hidden=input.type==='password';btn.textContent=hidden?t('showPassword'):t('hidePassword');btn.setAttribute('aria-label',btn.textContent);btn.setAttribute('aria-pressed',String(!hidden))});
-  $('[data-reveal]').forEach(btn=>{const input=document.getElementById(btn.dataset.reveal);if(!input)return;const hidden=input.type==='password';btn.setAttribute('aria-label',hidden?t('showPassword'):t('hidePassword'));btn.setAttribute('aria-pressed',String(!hidden))});
+  $$('.pw-toggle').forEach(btn=>{const input=document.getElementById(btn.dataset.pw);if(!input)return;const hidden=input.type==='password';btn.textContent=hidden?t('showPassword'):t('hidePassword');btn.setAttribute('aria-label',btn.textContent);btn.setAttribute('aria-pressed',String(!hidden))});
+  $$('[data-reveal]').forEach(btn=>{const input=document.getElementById(btn.dataset.reveal);if(!input)return;const hidden=input.type==='password';btn.setAttribute('aria-label',hidden?t('showPassword'):t('hidePassword'));btn.setAttribute('aria-pressed',String(!hidden))});
 }
 for(const id of ['loginPassword','registerPassword']){const input=document.getElementById(id);if(!input||input.parentElement.querySelector('.pw-toggle')||input.parentElement.querySelector('[data-reveal]'))continue;const btn=document.createElement('button');btn.type='button';btn.className='pw-toggle';btn.dataset.pw=id;btn.onclick=()=>{input.type=input.type==='password'?'text':'password';refreshPasswordToggles();input.focus()};input.after(btn)}
-$('[data-reveal]').forEach(btn=>{const input=document.getElementById(btn.dataset.reveal);if(!input)return;btn.onclick=()=>{input.type=input.type==='password'?'text':'password';refreshPasswordToggles();input.focus()}});
+$$('[data-reveal]').forEach(btn=>{const input=document.getElementById(btn.dataset.reveal);if(!input)return;btn.onclick=()=>{input.type=input.type==='password'?'text':'password';refreshPasswordToggles();input.focus()}});
 const prevPrefsPw=applyPrefs;applyPrefs=function(){prevPrefsPw();refreshPasswordToggles()};
 refreshPasswordToggles();
 applyPrefs();
@@ -388,6 +388,8 @@ applyPrefs();
 /* Password managers own passwords; Remember stores identity text only. */
 Object.assign(copy.en,{rememberIdentity:'Remember email / username only',socialGithub:'Continue with GitHub',socialGoogle:'Continue with Google'});
 Object.assign(copy.ar,{rememberIdentity:'تذكّر البريد / اسم المستخدم فقط',socialGithub:'المتابعة باستخدام GitHub',socialGoogle:'المتابعة باستخدام Google'});
+Object.assign(copy.en,{benefitsTitle:'Everything for your project',b1t:'Use OpenCode online',b1d:'Work with your coding workspace directly from the browser.',b2t:'Connect your GitHub project',b2d:'Link your repository and keep working with your existing source.',b3t:'Secure provider connections',b3d:'Connect supported AI providers while credentials stay server-side.',b4t:'30-day Core trial',b4d:'Full core access with 50 MB per local project.',b5t:'10-day Advanced trial',b5d:'Advanced integrations activate from your first real use.',b6t:'One workspace for your project',b6d:'Keep files, sessions and reviews in a single place.',authHeadline:'Start your 30-day Core trial',authSubhead:'Sign in to continue your projects. Advanced integrations add 10 days from first use.',brandName:'OpenCode Gateway'});
+Object.assign(copy.ar,{benefitsTitle:'كل ما يحتاجه مشروعك',b1t:'استخدم OpenCode عبر الإنترنت',b1d:'اعمل في مساحة الترميز مباشرة من المتصفح.',b2t:'اربط مشروع GitHub',b2d:'اربط مستودعك وتابع العمل بمصدرك الحالي.',b3t:'اتصالات مزوّدين آمنة',b3d:'اربط مزوّدي الذكاء الاصطناعي المدعومين وتبقى بيانات الاعتماد على الخادم.',b4t:'تجربة الأساس 30 يومًا',b4d:'وصول أساسي كامل مع 50 MB لكل مشروع محلي.',b5t:'التجربة المتقدمة 10 أيام',b5d:'تتفعّل التكاملات المتقدمة من أول استخدام فعلي.',b6t:'مساحة عمل واحدة لمشروعك',b6d:'اجمع الملفات والجلسات والمراجعات في مكان واحد.',authHeadline:'ابدأ تجربة الأساس المجانية لمدة 30 يومًا',authSubhead:'سجّل الدخول لمتابعة مشاريعك. التكاملات المتقدمة تضيف 10 أيام من أول استخدام.',brandName:'OpenCode Gateway'});
 try{const remembered=localStorage.getItem('og-login-identity');if(remembered){$('#loginIdentity').value=remembered;$('#rememberIdentity').checked=true;}}catch(error){}
 let socialOptions;
 async function loadSocialOptions(){
