@@ -1,7 +1,7 @@
 """Allow registration without geographic fields; preserve existing user locations."""
 from alembic import op
 import sqlalchemy as sa
-revision = "0015_optional_registration_location"
+revision = "0015_optional_registration"
 down_revision = "0014_homepage_content"
 branch_labels = None
 depends_on = None
