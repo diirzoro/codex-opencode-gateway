@@ -35,7 +35,7 @@ class User(Base):
     google_subject: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     phone: Mapped[str] = mapped_column(String(30))
     postal_code: Mapped[str] = mapped_column(String(24))
-    country_id: Mapped[int] = mapped_column(ForeignKey("countries.id"))
+    country_id: Mapped[int | None] = mapped_column(ForeignKey("countries.id"), nullable=True)
     region_id: Mapped[int | None] = mapped_column(ForeignKey("regions.id"), nullable=True)
     city_id: Mapped[int | None] = mapped_column(ForeignKey("cities.id"), nullable=True)
     plan_id: Mapped[int | None] = mapped_column(ForeignKey("plans.id"), nullable=True)
