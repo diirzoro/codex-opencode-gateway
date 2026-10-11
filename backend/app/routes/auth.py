@@ -34,6 +34,10 @@ def set_session(response: Response, db: Session, user: User):
     response.headers["X-Session-Idle-Expires-At"] = idle_expires_at(session).isoformat()
 
 def validate_locations(db, country_id, region_id, city_id):
+    if country_id is None:
+        if region_id is not None or city_id is not None:
+            raise HTTPException(422, "Choose a country before region or city")
+        return
     country = db.scalar(select(Country).where(Country.id == country_id, Country.enabled.is_(True)))
     if not country: raise HTTPException(422, "Invalid country")
     region = None
@@ -46,7 +50,8 @@ def validate_locations(db, country_id, region_id, city_id):
 
 @router.post("/register", response_model=UserOut, status_code=201)
 def register(data: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
-    username, email = data.username.strip().lower(), data.email.lower()
+    email = data.email.lower()
+    username = data.username.strip().lower() if data.username else "user_" + uuid.uuid4().hex[:24]
     if db.scalar(select(User).where(or_(func.lower(User.username) == username, func.lower(User.email) == email))):
         raise HTTPException(409, "Username or email already exists")
     validate_locations(db, data.country_id, data.region_id, data.city_id)

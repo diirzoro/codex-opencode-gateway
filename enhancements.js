@@ -615,13 +615,13 @@
   };
   $('#registerForm').onsubmit = async function (event) {
     event.preventDefault();if($('#registerSubmit').disabled||!event.currentTarget.reportValidity())return;
-    if (value('registerUsername').length < 6) { apiMessage('registerMessage', t('usernameHint'), true); return; }
+    if (value('registerUsername') && value('registerUsername').length < 6) { apiMessage('registerMessage', t('usernameHint'), true); return; }
     const password = $('#registerPassword').value;
     if (password.length < 8 || !/[0-9]/.test(password) || ![...password].some(function (c) { return passwordSymbols.includes(c); })) { apiMessage('registerMessage', t('passwordHint'), true); return; }
     const button = $('#registerSubmit'); button.disabled = true;
     try {
       const prefs = { preferred_language: lang, preferred_theme: dark ? 'dark' : 'light' };
-      await api('/api/auth/register', { method: 'POST', body: JSON.stringify({ username: value('registerUsername'), email: value('registerEmail'), password: $('#registerPassword').value, phone: value('registerPhone'), postal_code: value('registerPostal'), country_id: Number(value('registerCountry')), region_id: value('registerRegion') ? Number(value('registerRegion')) : null, city_id: value('registerCity') ? Number(value('registerCity')) : null }) });
+      await api('/api/auth/register', { method: 'POST', body: JSON.stringify(registrationPayload()) });
       renderProfile(await api('/api/profile', { method: 'PATCH', body: JSON.stringify(prefs) }));
       $('#registerPassword').value = '';
       if (pendingIdea) { $('#projectName').value = pendingIdea.slice(0, 120); pendingIdea = ''; }

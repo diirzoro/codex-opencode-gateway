@@ -9,7 +9,7 @@ def user_payload(user) -> dict:
     return {
         "id": str(user.id), "username": user.username, "email": user.email,
         "phone": user.phone, "postal_code": user.postal_code,
-        "country": user.country.name, "region": user.region.name if user.region else None,
+        "country": user.country.name if user.country else None, "region": user.region.name if user.region else None,
         "city": user.city.name if user.city else None, "role": user.role, "status": user.status,
         "preferred_language": user.preferred_language, "preferred_theme": user.preferred_theme,
         "trial_started_at": user.trial_started_at, "trial_ends_at": user.trial_ends_at,
