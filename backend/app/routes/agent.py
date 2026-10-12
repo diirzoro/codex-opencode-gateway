@@ -196,7 +196,7 @@ async def execute(session_id,service,runtime_id,data,message_id):
             if item['mime'] in {'text/plain','application/pdf','image/png','image/jpeg','image/webp','image/gif'}:
                 payload['parts'].append({'type':'file','url':path.as_uri(),'filename':item['name'],'mime':item['mime']})
             else:
-                payload['parts'].append({'type':'text','text':'Attached workspace file: '+json.dumps(item['path'])})
+                payload['parts'].append({'type':'text','text':'Attached workspace file: '+json.dumps(item['path'])+'\nUse the selected agent’s available tools or skills to read this file. Verify that its contents can be extracted before answering about them. If no available tool can read this format, immediately explain that limitation and request a supported format. Do not infer contents from the filename or claim to have read an unreadable file.'})
         if data.agent_id: payload["agent"]=data.agent_id
         request_task=asyncio.create_task(asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),payload,600))
         observer=asyncio.create_task(monitor_activity(session_id,service,runtime_id,message_id,workspace,data.request_id,request_task))

@@ -511,6 +511,7 @@ dialog .session-idle-warning{position:sticky;inset:auto;margin:12px;flex:none;ma
 /* Distinguish agent replies while preserving the customer's plain message style. */
 :root #workspacePage #agentFeed .agent-response{background:#edf5ff;border-radius:14px;padding:18px 20px}
 :root.dark #workspacePage #agentFeed .agent-response{background:#1b2c45}
+#workspacePage .sending-preview-status{display:block;margin-top:8px;color:var(--muted);font-size:12px}
 
 /* Integrated Auth concept: presentation only, retaining all existing controls. */
 #authDialog{--auth-bg:var(--panel);--auth-soft:#f1f6ff;--auth-ink:var(--text);--auth-muted:#536783;--auth-edge:#d9e5f5;--auth-blue:#1e40af;--auth-fill:#dbeafe;--auth-icon-face:#eff5ff;--auth-icon-edge:#ceddf3;--auth-logo-face:#1e40af;--auth-logo-ink:#fff;--auth-shadow:#1e40af15;width:min(900px,calc(100vw - 32px));border:1px solid var(--auth-edge);border-radius:24px;background:var(--auth-bg);color:var(--auth-ink);box-shadow:0 18px 55px -22px var(--auth-shadow)}
