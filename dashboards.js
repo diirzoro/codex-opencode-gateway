@@ -22,6 +22,8 @@
   Object.assign(copy.ar,{workspaceHome:'مساحة العمل / الرئيسية',connectionsSettings:'الإعدادات / الاتصالات'});
   Object.assign(copy.en,{ui51:'Local project · 50 MB',ui53:'GitHub-backed project',githubHintText:'Choose a repository and branch authorized by your GitHub App connection.'});
   Object.assign(copy.ar,{ui51:'مشروع محلي · 50 MB',ui53:'مشروع مرتبط بـGitHub',githubHintText:'اختر مستودعًا وفرعًا مصرحًا بهما عبر اتصال GitHub App الخاص بك.'});
+  Object.assign(copy.en,{accountPageTitle:'My account & profile',accountPageLead:'Your details and preferences, clearly organized.',accountReturnWorkspace:'Return to workspace',accountProfileTab:'My profile',accountSecurityTab:'Security & sign-in',accountDetailsTitle:'My details & preferences',accountDetailsLead:'Contact details and display settings.',accountLanguage:'Language',accountAppearance:'Appearance',accountLight:'Light',accountDark:'Dark',accountAdditional:'Sign-in methods, storage and data policies'});
+  Object.assign(copy.ar,{accountPageTitle:'حسابي وملفي الشخصي',accountPageLead:'بياناتك وتفضيلاتك، في مكان واضح وبسيط.',accountReturnWorkspace:'العودة لمساحة العمل',accountProfileTab:'ملفي الشخصي',accountSecurityTab:'الأمان والدخول',accountDetailsTitle:'بياناتي وتفضيلاتي',accountDetailsLead:'معلومات التواصل وإعدادات العرض.',accountLanguage:'اللغة',accountAppearance:'المظهر',accountLight:'فاتح',accountDark:'داكن',accountAdditional:'طرق الدخول والتخزين وسياسات البيانات'});
   Object.assign(copy.en,{subscriptionNoRefund:'Subscription payments are non-refundable.',clientAccountLead:'Personal details and preferences.'});
   Object.assign(copy.ar,{subscriptionNoRefund:'الاشتراكات غير قابلة لاسترداد المبلغ.',clientAccountLead:'البيانات الشخصية والتفضيلات.'});
   function navButton(id,key,icon,action){const node=document.createElement('button');node.id=id;node.dataset.go=action;node.innerHTML='<svg class="nav-icon"><use href="'+icon+'"/></svg><span data-i18n="'+key+'">'+t(key)+'</span>';node.onclick=()=>page(action);return node;}
@@ -45,6 +47,27 @@
   }
   async function openConnections(focus){await page('connectionsPage');if(focus)q(focus==='github'?'connectionsGithub':'connectionsProviders').scrollIntoView({block:'start',behavior:'smooth'});}
   window.openConnections=openConnections;
+  // Resume actual coding after authentication, without creating projects or tasks.
+  window.openClientWorkspace=async function(){
+    if(!currentUser)return page('authPage');
+    if(admin())return page('adminPage');
+    const owner=currentUser.id;
+    let context=activeWorkspace&&activeProject?{workspace:activeWorkspace,project:activeProject}:await restoreWorkspaceContext();
+    let recent=null;
+    if(currentUser?.id!==owner)return;
+    if(!context){
+      let data;try{data=await api('/api/dashboard');}catch(error){if(currentUser?.id===owner){toast(error.message);await page('workspaceHomePage');}return;}
+      if(currentUser?.id!==owner)return;
+      for(const session of data.recent_sessions||[]){
+        const project=data.projects.find(p=>p.workspaces.some(w=>w.id===session.workspace_id));
+        const workspace=project?.workspaces.find(w=>w.id===session.workspace_id);
+        if(workspace){context={project,workspace};recent=session;break;}
+      }
+      if(!context){const project=data.projects.find(p=>p.workspaces.length);if(project)context={project,workspace:project.workspaces[0]};}
+    }
+    if(context){await openWorkspace(context.project,context.workspace);if(recent&&currentUser?.id===owner&&activeWorkspace?.id===context.workspace.id){try{await selectSession(recent);}catch(error){if(currentUser?.id===owner)toast(error.message);}}}
+    else await page('workspaceHomePage');
+  };
   async function loadConnections(){
     const root=q('connectionsProviders'),query=root.querySelector('input[role=combobox]')?.value;
     if(query)root.dataset.providerQuery=query;
@@ -201,12 +224,23 @@
   q('providerSelect').setAttribute('aria-label','Provider');q('modelSelect').setAttribute('aria-label','Model');
   const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Attach a file to this workspace','أرفق ملفًا في مساحة العمل');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);controls.insertBefore(newTask,agent);
   const attachmentList=textElement('div','','composer-attachments');attachmentList.id='composerAttachments';attachmentList.setAttribute('aria-live','polite');q('promptInput').before(attachmentList);
-  let attachments=[];let attachmentRevision=0;
+  let attachments=[];let attachmentRevision=0;let attachmentModels=[];
+  function attachmentSupport(item){
+    const type=item.type||item.mime||'',name=item.name.toLowerCase();
+    const category=type.startsWith('image/')||/\.(png|jpe?g|webp|gif)$/.test(name)?'image':type==='application/pdf'||name.endsWith('.pdf')?'pdf':null;
+    const model=attachmentModels.find(row=>row.id===q('modelSelect').value);
+    const supported=category?(model?.capabilities?.input||{})[category]:undefined;
+    if(supported===false)return {blocked:true,message:tr('The selected model cannot receive this '+category+' attachment. Select a compatible model.','النموذج المحدد لا يدعم هذا المرفق ('+category+'). اختر نموذجًا متوافقًا.')};
+    if(supported===true)return {blocked:false,message:''};
+    if(category||/\.(docx?|xlsx?|pptx?|odt|ods|odp)$/.test(name))return {blocked:false,message:tr('Support is not confirmed for the selected agent/model; reading may require an available tool or skill.','دعم الملف غير مؤكد للوكيل/النموذج المحدد؛ قد تتطلب قراءته أداة أو مهارة متاحة.')};
+    return {blocked:false,message:''};
+  }
   const clearAttachments=()=>{attachmentRevision++;for(const item of attachments)if(item.preview)URL.revokeObjectURL(item.preview);attachments=[];attachmentList.replaceChildren();};
   const renderAttachments=()=>{
     attachmentList.replaceChildren();for(const item of attachments){const card=textElement('div','','composer-attachment');
       if(item.preview){const image=document.createElement('img');image.src=item.preview;image.alt='';card.append(image);}
       const label=textElement('span',item.name);label.dir='auto';label.append(textElement('small',item.error|| (item.path?item.type+' · '+Math.ceil(item.size/1024)+' KB':tr('Uploading…','جارٍ الرفع…'))));
+      const support=attachmentSupport(item);if(support.message)label.append(textElement('small',support.message));
       const remove=textElement('button','×');remove.type='button';remove.disabled=sending||Boolean(pendingSubmission);remove.setAttribute('aria-label',tr('Remove attachment; keep workspace file','إزالة المرفق مع إبقاء ملف مساحة العمل'));remove.onclick=()=>{if(sending||pendingSubmission)return;attachments=attachments.filter(a=>a!==item);if(item.preview)URL.revokeObjectURL(item.preview);renderAttachments();};card.append(label,remove);attachmentList.append(card);
     }
   };
@@ -220,6 +254,7 @@
       if(files.length+attachments.length>10){toast(tr('Attach up to 10 files per message.','أرفق حتى 10 ملفات لكل رسالة.'));return;}
       for(const file of files){
         if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)break;
+        const support=attachmentSupport(file);if(support.blocked){toast(support.message);continue;}
         // The existing upload endpoint writes by name; reject duplicate draft names.
         if(attachments.some(a=>a.name===file.name)){toast(tr('This filename is already attached.','اسم الملف مرفق بالفعل.'));continue;}
         const item={name:file.name,size:file.size,type:file.type||tr('File','ملف'),preview:['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)?URL.createObjectURL(file):null};attachments.push(item);renderAttachments();
@@ -366,6 +401,7 @@
     q('providerSelect').disabled=!workAccess||!providers.some(p=>(p.connected||p.id==='opencode')&&p.allowed!==false);
     q('modelSelect').disabled=!workAccess||!modelsReady||!selected?.connected||selected.allowed===false||q('modelSelect').options.length<2;
     const busy=['submitted','waiting_approval'].includes(activeSession?.execution_status);
+    renderAttachments();
     attach.disabled=!workAccess||sending||Boolean(pendingSubmission)||busy;attachmentList.querySelectorAll('button').forEach(button=>button.disabled=sending||Boolean(pendingSubmission));
     q('sendMessage').disabled=sending||Boolean(pendingSubmission)||busy||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     const hasActive=activeSession?.lifecycle==='active'||sessionRows.some(s=>s.lifecycle==='active');
@@ -458,8 +494,9 @@
   async function models(){
     const stamp=++modelRequest,workspaceId=activeWorkspace?.id,selected=providers.find(p=>p.id===q('providerSelect').value);
     const current=()=>stamp===modelRequest&&activeWorkspace?.id===workspaceId&&q('providerSelect').value===selected?.id;
-    modelsReady=false;retryModels.hidden=true;
+    modelsReady=false;attachmentModels=[];retryModels.hidden=true;
     const render=rows=>{
+      attachmentModels=rows;
       q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));
       for(const model of rows){const option=new Option(model.name||model.id,model.id);option.disabled=model.allowed===false;q('modelSelect').add(option);}
       const preferred=chosenModel||selected?.default_model||'';
@@ -537,6 +574,26 @@
   }
   newSessionButton.onclick=()=>createSession().catch(error=>toast(error.message));
   const submissionCurrent=p=>currentUser?.id===p.owner&&activeWorkspace?.id===p.workspaceId&&activeSession?.id===p.sessionId;
+  let sendingPreview=null;
+  function clearSendingPreview(){const preview=sendingPreview;sendingPreview=null;preview?.node.remove();}
+  function keepSendingPreview(){
+    if(!sendingPreview)return;
+    if(currentUser?.id!==sendingPreview.owner||activeWorkspace?.id!==sendingPreview.workspaceId||(sendingPreview.sessionId&&activeSession?.id!==sendingPreview.sessionId)){clearSendingPreview();return;}
+    const delivered=[...q('agentFeed').querySelectorAll('.user-bubble[data-message-id]')].some(node=>!sendingPreview.existingIds.has(node.dataset.messageId)&&node.querySelector('.message-content')?.textContent===sendingPreview.text);
+    if(delivered){clearSendingPreview();return;}
+    if(!sendingPreview.node.isConnected){q('agentFeed').append(sendingPreview.node);sendingPreview.node.scrollIntoView({block:'nearest'});}
+  }
+  function showSendingPreview(prompt){
+    clearSendingPreview();
+    const node=textElement('article','','user-bubble sending-preview');node.dir='auto';
+    node.append(textElement('div',prompt,'message-content'));
+    const status=textElement('small',tr('Sending…','جارٍ الإرسال…'),'sending-preview-status');status.setAttribute('role','status');node.append(status);
+    sendingPreview={node,text:prompt,owner:currentUser.id,workspaceId:activeWorkspace.id,existingIds:new Set([...q('agentFeed').querySelectorAll('[data-message-id]')].map(row=>row.dataset.messageId))};keepSendingPreview();
+  }
+  // Session creation and SSE refreshes rebuild the feed while a POST is pending.
+  // Keep one clearly unconfirmed preview without affecting request IDs/retries.
+  new MutationObserver(keepSendingPreview).observe(q('agentFeed'),{childList:true});
+  window.addEventListener('authentication-cleared',clearSendingPreview);
   async function submitPending(){
     if(!pendingSubmission||sending)return;
     sending=true;updateSend();const pending=pendingSubmission;
@@ -553,21 +610,22 @@
   }
   window.workspaceSubmissionBlocked=()=>sending||Boolean(pendingSubmission)||['submitted','waiting_approval'].includes(activeSession?.execution_status);
   q('promptForm').onsubmit=async event=>{
-    event.preventDefault();if(window.workspaceSubmissionBlocked()||!activeWorkspace)return;if(attachments.some(a=>!a.path||a.error)){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
+    event.preventDefault();if(window.workspaceSubmissionBlocked()||!activeWorkspace)return;const unsupported=attachments.map(attachmentSupport).find(item=>item.blocked);if(unsupported){submissionStatus.textContent=unsupported.message;return;}if(attachments.some(a=>!a.path||a.error)){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
     const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     // Synchronous lock precedes entitlement, creation, runtime and network waits.
-    sending=true;cancelRequested=false;updateSend();submissionStatus.textContent=tr('Submitting…','جارٍ الإرسال…');
+    sending=true;cancelRequested=false;updateSend();submissionStatus.textContent=tr('Submitting…','جارٍ الإرسال…');showSendingPreview(prompt);
     try{
       await refreshEntitlement();if(!workAccess||cancelRequested||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
       if(!activeSession)await createSession({checked:true});
       if(!activeSession||cancelRequested||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
-      const requestId=crypto.randomUUID(),sessionId=activeSession.id;
+      const requestId=crypto.randomUUID(),sessionId=activeSession.id;if(sendingPreview)sendingPreview.sessionId=sessionId;
       const payload={request_id:requestId,text:prompt,provider_id:provider,model_id:model,attachments:attachments.map(a=>({path:a.path})),...(selectedAgent?{agent_id:selectedAgent}:{})};
       const pending={request_id:requestId,sessionId,workspaceId,owner,payload};pendingSubmission=pending;
       try{sessionStorage.setItem('og-submit:'+owner+':'+sessionId,JSON.stringify({request_id:requestId}));}catch(error){}
       const result=await api('/api/sessions/'+sessionId+'/messages',{method:'POST',body:JSON.stringify(payload)});
       if(!submissionCurrent(pending))return;
+      clearSendingPreview();
       sentAttachments(payload);pendingSubmission=null;retrySubmission.hidden=true;activeSession.execution_status=result.status;updateSend();
       if(q('promptInput').value.trim()===prompt)q('promptInput').value='';submissionStatus.textContent=tr('Submission confirmed.','تم تأكيد الطلب.');
       await refreshSessionStatus();await refreshMessages();
@@ -584,7 +642,7 @@
         if(pendingSubmission){retrySubmission.hidden=false;submissionStatus.textContent=tr('Submission result is uncertain. Check or retry this same request.','نتيجة الإرسال غير مؤكدة. تحقق أو أعد هذا الطلب نفسه.');}
         else submissionStatus.textContent=error.message;toast(error.message);
       }
-    }finally{sending=false;cancelRequested=false;updateSend();}
+    }finally{clearSendingPreview();sending=false;cancelRequested=false;updateSend();}
   };
   q('stopAgent').onclick=async()=>{
     if(cancelRequested)return;cancelRequested=true;updateSend();
@@ -634,7 +692,7 @@
   if(activeProject){q('workspaceRepo').textContent=activeProject.name;q('workspaceBranch').textContent=activeProject.branch||'—';}
   }
   const refundPolicy=text('p','Subscription payments are non-refundable.','الاشتراكات غير قابلة لاسترداد المبلغ.','refund-policy');refundPolicy.id='subscriptionRefundPolicy';document.querySelector('#landing .pricing').append(refundPolicy);
-  const prefs=applyPrefs;applyPrefs=()=>{prefs();for(const [node,en,ar] of texts){if(!node.firstChild)node.textContent=tr(en,ar);else if(node.firstChild.nodeType===3)node.firstChild.textContent=tr(en,ar);}q('homeSessionSearch').placeholder=tr('Search recent sessions…','ابحث في الجلسات الأخيرة…');renderEntitlement();renderStorage();};
+  const prefs=applyPrefs;applyPrefs=()=>{prefs();for(const [node,en,ar] of texts){if(!node.firstChild)node.textContent=tr(en,ar);else if(node.firstChild.nodeType===3)node.firstChild.textContent=tr(en,ar);}q('homeSessionSearch').placeholder=tr('Search recent sessions…','ابحث في الجلسات الأخيرة…');renderEntitlement();renderStorage();if(q('accountLanguage'))q('accountLanguage').value=lang;if(q('accountAppearance'))q('accountAppearance').value=dark?'dark':'light';document.querySelectorAll('[data-account-en]').forEach(node=>node.textContent=lang==='ar'?node.dataset.accountAr:node.dataset.accountEn);};
   // The wordmark is a landing-page navigation control for every role.
   const brand=document.querySelector('#app-header .header-brand');if(brand){brand.setAttribute('role','button');brand.tabIndex=0;brand.setAttribute('aria-label','OpenCode Gateway — Home');brand.style.cursor='pointer';brand.onclick=()=>page('landing');brand.onkeydown=event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();page('landing');}};}
   const paymentOrders=document.createElement('section');paymentOrders.id='clientPaymentOrders';document.querySelector('[data-client-panel=billing]').append(paymentOrders);

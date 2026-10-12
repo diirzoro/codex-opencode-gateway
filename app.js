@@ -252,6 +252,7 @@ const navigationReady=authReady.then(async()=>{
  window.__navRestored=true;
  if(['admin','owner'].includes(currentUser.role)){await page('adminPage');return;}
  let target='';try{target=localStorage.getItem('og-page')||'';}catch(error){}
+ if(window.openClientWorkspace&&(!target||target==='workspaceHomePage'||location.hash==='#social=success')){await window.openClientWorkspace();return;}
  if(!['workspaceHomePage','clientPage','connectionsPage','workspacePage'].includes(target))target='workspaceHomePage';
  window.workspaceRestoring=['workspacePage','connectionsPage'].includes(target);
  showPage(target);const navigation=navigationRevision;
