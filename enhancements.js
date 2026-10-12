@@ -445,10 +445,10 @@
   wireChatControls();
   // Landing pricing is loaded when that page becomes visible, after auth routing.
 
-  // --- Routing: after auth, customer -> Client Dashboard; admin/owner -> Admin Console ---
+  // --- Routing: after auth, customer -> workspace; admin/owner -> Admin Console ---
   protectedPages.add('clientPage');
   function homeFor(user) { return (user && (user.role === 'admin' || user.role === 'owner')) ? 'adminPage' : 'workspaceHomePage'; }
-  async function routeHome() { clientView='dashboard'; adminView='overview'; await page(homeFor(currentUser));if(!['admin','owner'].includes(currentUser?.role)&&window.pendingCheckoutPlan){const plan=window.pendingCheckoutPlan;window.pendingCheckoutPlan=null;await window.openClientView('billing');await window.beginCheckout(plan);} }
+  async function routeHome() { clientView='dashboard'; adminView='overview'; if(!['admin','owner'].includes(currentUser?.role)&&window.openClientWorkspace)await window.openClientWorkspace();else await page(homeFor(currentUser));if(!['admin','owner'].includes(currentUser?.role)&&window.pendingCheckoutPlan){const plan=window.pendingCheckoutPlan;window.pendingCheckoutPlan=null;await window.openClientView('billing');await window.beginCheckout(plan);} }
   var _pageImpl = page;
   page = async function (id) {
     if (['admin','owner'].includes(currentUser?.role) && ['workspaceHomePage','connectionsPage','clientPage','accountPage','billingPage','workspacePage','onboarding'].includes(id)) id='adminPage';

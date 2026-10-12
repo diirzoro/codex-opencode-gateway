@@ -45,6 +45,27 @@
   }
   async function openConnections(focus){await page('connectionsPage');if(focus)q(focus==='github'?'connectionsGithub':'connectionsProviders').scrollIntoView({block:'start',behavior:'smooth'});}
   window.openConnections=openConnections;
+  // Resume actual coding after authentication, without creating projects or tasks.
+  window.openClientWorkspace=async function(){
+    if(!currentUser)return page('authPage');
+    if(admin())return page('adminPage');
+    const owner=currentUser.id;
+    let context=activeWorkspace&&activeProject?{workspace:activeWorkspace,project:activeProject}:await restoreWorkspaceContext();
+    let recent=null;
+    if(currentUser?.id!==owner)return;
+    if(!context){
+      let data;try{data=await api('/api/dashboard');}catch(error){if(currentUser?.id===owner){toast(error.message);await page('workspaceHomePage');}return;}
+      if(currentUser?.id!==owner)return;
+      for(const session of data.recent_sessions||[]){
+        const project=data.projects.find(p=>p.workspaces.some(w=>w.id===session.workspace_id));
+        const workspace=project?.workspaces.find(w=>w.id===session.workspace_id);
+        if(workspace){context={project,workspace};recent=session;break;}
+      }
+      if(!context){const project=data.projects.find(p=>p.workspaces.length);if(project)context={project,workspace:project.workspaces[0]};}
+    }
+    if(context){await openWorkspace(context.project,context.workspace);if(recent&&currentUser?.id===owner&&activeWorkspace?.id===context.workspace.id){try{await selectSession(recent);}catch(error){if(currentUser?.id===owner)toast(error.message);}}}
+    else await page('workspaceHomePage');
+  };
   async function loadConnections(){
     const root=q('connectionsProviders'),query=root.querySelector('input[role=combobox]')?.value;
     if(query)root.dataset.providerQuery=query;
