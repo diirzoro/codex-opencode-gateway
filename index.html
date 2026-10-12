@@ -7,7 +7,7 @@
     try { var savedPage=localStorage.getItem('og-page'); if(['workspacePage','connectionsPage','workspaceHomePage','clientPage','adminPage'].includes(savedPage))document.documentElement.dataset.restorePage=savedPage; } catch(error) {}
   </script>
   <meta name="theme-color" content="#ffffff"><meta name="description" content="Your projects, conversations, and reviewed code changes in one OpenCode workspace."><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 20'%3E%3Cpath fill='%2324272d' d='M12 4H4V16H12V4ZM16 20H0V0H16V20Z'/%3E%3C/svg%3E"><title>OpenCode Gateway — Hosted OpenCode</title>
-  <link rel="stylesheet" href="styles.css?v=20261011-auth-fix">
+  <link rel="stylesheet" href="styles.css?v=20261012-workspace-polish">
   <style>
     html.bootstrapping .page { display:none!important }
     html.bootstrapping .page.active { display:block!important }
@@ -293,7 +293,7 @@
 
 #workspacePage .project-bar{min-height:58px;padding:10px 16px;flex-wrap:wrap}
 #workspacePage #openSessions,#workspacePage #closeSessions{display:inline-grid}
-#workspacePage .agent-feed{flex:1;min-height:80px;overflow:auto;padding:20px}
+
 #workspacePage .workspace-empty{margin:30px auto;max-width:460px}
 
 
@@ -321,7 +321,7 @@
 
 
  #workspacePage .agent-column{height:100%}
- #workspacePage .prompt-box{margin:10px;max-width:calc(100% - 20px)}
+
  .app-main .portal-content{padding:24px 18px}
 }
 @media(max-width:600px){#billingPlans{grid-template-columns:1fr}}
@@ -333,16 +333,16 @@
 #workspacePage .workspace-first .agent-column{grid-column:1}
 #workspacePage .workspace-first .session-sidebar{grid-column:2;border-inline-start:1px solid var(--line);border-inline-end:0}
 #workspacePage .workspace-first .project-bar{min-height:46px}
-#workspacePage .workspace-first .prompt-box{order:10;margin:12px 24px 24px;flex:none;max-width:none;border-radius:18px}
-#workspacePage .workspace-first .composer-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px;justify-content:flex-start}
-#workspacePage .workspace-first .composer-controls select{max-width:230px;width:auto;min-width:100px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);font-size:13px;color:var(--text)}
+
+
+
 #workspacePage .workspace-first .composer-context{display:flex;align-items:center;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-bottom:10px}
 #workspacePage .workspace-first .composer-context b{color:var(--text);font-size:13px}
-#workspacePage .workspace-first .prompt-box textarea{min-height:34px;max-height:220px;font-size:15px}
+
 #workspacePage .workspace-first .workspace-empty{margin:clamp(40px,12vh,140px) auto;max-width:520px}
-#workspacePage .workspace-first .agent-feed{font-size:15px}
+
 #workspacePage .workspace-first .workspace-activity h2{font-size:15px;margin:18px 0 12px}
-#workspacePage .workspace-first .prompt-box{width:min(920px,calc(100% - 48px));margin-inline:auto}
+
 #workspacePage .workspace-first #approvalBox{order:9}
 
 
@@ -359,7 +359,7 @@
 .connections-content{max-width:none!important}.connections-heading{margin-bottom:24px}.connections-heading h1{font-size:30px}.connections-content>div:not(.connections-heading){margin:24px 0}.connections-content h2{font-size:19px}
 .workspace-repository-dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:16px;padding:24px;width:min(560px,calc(100% - 32px));max-height:85vh;overflow:auto}.workspace-repository-dialog::backdrop{background:#0008}.workspace-repository-dialog form{display:grid;gap:16px;margin-top:18px}.workspace-repository-dialog select,.workspace-repository-dialog input{width:100%;padding:12px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px}
 .checkout-dialog{position:fixed;padding:28px;width:min(580px,calc(100% - 32px))}.checkout-dialog h2{font-size:24px;margin:0 0 20px}.checkout-dialog #checkoutClose{position:absolute;inset-inline-end:22px;top:22px}.checkout-summary{display:grid;grid-template-columns:1fr auto;gap:10px;padding:20px;border:1px solid var(--line);border-radius:12px;margin-top:24px}.checkout-summary b{font-size:24px}.checkout-summary span{color:var(--muted);font-size:14px}.checkout-lead{font-size:14px;color:var(--muted);line-height:1.8}.checkout-dialog #createPaymentOrder{width:100%;margin:16px 0}.checkout-dialog #checkoutMethod{width:100%;min-height:46px;background:var(--bg);color:var(--text);padding:10px;border:1px solid var(--line);border-radius:9px}.checkout-dialog form .button{width:100%}.checkout-dialog p{overflow-wrap:anywhere}.connections-content .manage-card{box-shadow:none}
-@media(max-width:1100px){#workspacePage .workspace-first .agent-column{grid-column:1}#workspacePage .workspace-first .session-sidebar{inset-inline-end:0;inset-inline-start:auto}#workspacePage .workspace-first .prompt-box{margin:10px 12px 16px}#workspacePage .workspace-first .composer-controls select{max-width:calc(50% - 8px)}.work-home-heading h1{font-size:28px!important}.home-project-row small{width:100%}}
+@media(max-width:1100px){#workspacePage .workspace-first .agent-column{grid-column:1}#workspacePage .workspace-first .session-sidebar{inset-inline-end:0;inset-inline-start:auto}.work-home-heading h1{font-size:28px!important}.home-project-row small{width:100%}}
 </style>
 <style>
 .checkout-dialog .checkout-details{display:grid;grid-template-columns:minmax(100px,.75fr) minmax(0,1fr);gap:8px 16px;margin:14px 0;font-size:14px;line-height:1.5}
@@ -389,7 +389,7 @@
 :root :is(.price-card,.project-card,.summary-card,.list-card,.manage-card,.auth-card,.onboard-panel,.settings-list,.admin-section,.billing-section,.subscription-card,.feature-cards article,.account-grid article,.stat-grid article,.checkout-summary,.checkout-dialog,.workspace-repository-dialog){border:1.5px solid var(--line)}
 :root :is(.price-card,.feature-cards article):hover{border-color:var(--line)}
 :root hr{border-color:var(--line);opacity:1}
-:root .prompt-box{border:0!important;box-shadow:none}:root .prompt-box textarea{border:0!important;background:transparent;box-shadow:none}:root .prompt-box textarea:focus-visible{outline:none;box-shadow:none}:root .prompt-box:focus-within{box-shadow:0 0 0 1.5px var(--line)}
+
 </style>
 <style id="soft-shell-surfaces">
 /* Tint separates navigation from content without hard divider lines. */
@@ -433,7 +433,7 @@
 :root :is(.page-head h1,.work-home-heading h1,.connections-heading h1){font-weight:750;letter-spacing:-.6px}
 :root .checkout-summary{background:var(--control-fill);border:1px solid var(--control-edge);border-radius:14px}
 :root .checkout-dialog{box-shadow:0 24px 80px rgba(15,35,75,.28);border:1px solid var(--surface-edge);border-radius:22px}
-:root .prompt-box,:root .welcome-composer{box-shadow:0 8px 32px -14px rgba(37,99,235,.3);border-color:var(--control-edge)}
+:root .welcome-composer{box-shadow:0 8px 32px -14px rgba(37,99,235,.3);border-color:var(--control-edge)}
 :root .welcome-composer{padding:20px;border-radius:20px;background:var(--panel)}
 :root .welcome-composer textarea{padding:12px 14px;line-height:1.7;border:0;background:var(--control-fill);border-radius:12px;box-shadow:none}
 :root .welcome-composer textarea:focus-visible{box-shadow:0 0 0 3px rgba(37,99,235,.14)}
@@ -767,11 +767,11 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   #workspacePage .workspace-session-picker .new-session{padding:6px;margin:6px 0;font-size:12px}
   #workspacePage .agent-column{position:relative;min-width:0}
   </style>
-  <script defer src="app.js?v=20261011-auth-fix"></script>
+  <script defer src="app.js?v=20261012-workspace-polish"></script>
   <script defer src="enhancements.js?v=20261011-auth-fix"></script>
   <script type="application/json" id="managementAsset" data-src="management.js?v=20261011-auth-fix"></script>
   <script defer src="runtime-client.js?v=20261008-phase2"></script>
-  <script defer src="dashboards.js?v=20261008-phase2"></script>
+  <script defer src="dashboards.js?v=20261012-workspace-polish"></script>
   <script>
   // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
   document.addEventListener('DOMContentLoaded',function(){
