@@ -404,9 +404,26 @@
       'marketing.opt_in':['Marketing messages enabled','تم تفعيل الرسائل التسويقية'],
       'marketing.opt_out':['Marketing messages disabled','تم إيقاف الرسائل التسويقية']
     };
-    return tr(...(labels[String(action).split(':')[0]]||['Account activity recorded','تم تسجيل نشاط متعلق بالحساب']));
+    return tr(...(labels[String(action).split(':')[0]]||(String(action).startsWith('provider')?['Provider connection activity','نشاط اتصال بأحد المزوّدات']:['Account activity recorded','تم تسجيل نشاط متعلق بالحساب'])));
   }
-  async function logs(body,platform=false,securityOnly=false){const box=section(body,tr(platform?'Audit log':securityOnly?'Login / security activity':'Account activity',platform?'سجل الإجراءات':securityOnly?'نشاط الدخول والأمان':'نشاط الحساب'));if(securityOnly)box.append(node('p',tr('Recorded password and session security actions. Login event tracking is not available yet.','إجراءات كلمة المرور والجلسات المسجلة. تتبع أحداث تسجيل الدخول غير متاح بعد.')));let before;async function load(){const items=await api((platform?'/api/admin/logs':'/api/account/logs')+(before?'?before='+before:''));for(const r of items.filter(r=>platform||(/^(password|session|auth|security|role)\./.test(r.action)===securityOnly)))row(box,platform?r.action:clientActivityLabel(r.action),new Date(r.created_at).toLocaleString());before=items.at(-1)?.id;more.hidden=items.length<100}const more=button(tr('Older records','سجلات أقدم'),load);body.append(more);await load()}
+  async function logs(body,platform=false,securityOnly=false){
+    const box=section(body,tr(platform?'Audit log':securityOnly?'Login / security activity':'Account activity',platform?'سجل الإجراءات':securityOnly?'نشاط الدخول والأمان':'نشاط الحساب'));
+    const timeline=!platform&&!securityOnly&&Boolean(body.closest('[data-client-panel="account"]'));
+    if(securityOnly)box.append(node('p',tr('Recorded password and session security actions. Login event tracking is not available yet.','إجراءات كلمة المرور والجلسات المسجلة. تتبع أحداث تسجيل الدخول غير متاح بعد.')));
+    const list=timeline?node('ol','','account-activity-list'):null;if(list)box.append(list);
+    let before;
+    async function load(){
+      const items=await api((platform?'/api/admin/logs':'/api/account/logs')+(before?'?before='+before:''));
+      for(const r of items.filter(r=>platform||(/^(password|session|auth|security|role)\./.test(r.action)===securityOnly))){
+        if(list){const item=node('li'),icon=node('span','','account-activity-icon');icon.append(gridIcon(String(r.action).startsWith('billing')?'icon-file':'icon-clock'));const text=node('div'),date=node('time',new Date(r.created_at).toLocaleString(lang==='ar'?'ar-u-nu-latn':'en'));date.dateTime=r.created_at;text.append(node('strong',clientActivityLabel(r.action)),date);item.append(icon,text);list.append(item);}
+        else row(box,platform?r.action:clientActivityLabel(r.action),new Date(r.created_at).toLocaleString());
+      }
+      if(list&&!list.children.length&&!box.querySelector('.account-activity-empty'))box.append(node('p',tr('No account activity yet.','لا يوجد نشاط للحساب بعد.'),'account-activity-empty'));
+      before=items.at(-1)?.id;more.hidden=items.length<100;
+    }
+    const more=button(tr('Older records','سجلات أقدم'),load);body.append(more);await load();
+  }
+
   async function locations(body,platform=false){const box=section(body,tr('Locations','المواقع'));let kind='countries',editing=null;const picker=select(box,tr('Type','النوع'),'type',[['countries',tr('Countries','الدول')],['regions',tr('Regions','المناطق')],['cities',tr('Cities','المدن')]]),list=node('div');box.append(list);const editor=section(body,tr('Location details','بيانات الموقع'));let parent;
     const f=form(editor,f=>{input(f,tr('Name','الاسم'),'name').required=true;input(f,tr('Country code','رمز الدولة'),'code');parent=select(f,tr('Parent location','الموقع الأب'),'parent_id',[]);select(f,tr('Enabled','مفعّل'),'enabled',[['true',tr('Yes','نعم')],['false',tr('No','لا')]])},tr('Save','حفظ'),async values=>{values.enabled=values.enabled==='true';values.parent_id=values.parent_id?Number(values.parent_id):null;values.code=values.code||null;await api('/api/admin/locations/'+kind+(editing?'/'+editing:''),{method:editing?'PUT':'POST',body:JSON.stringify(values)});await refresh()});
     async function refresh(){editing=null;f.reset();list.replaceChildren();parent.replaceChildren(new Option('—',''));if(kind!=='countries')for(const p of await api('/api/admin/locations/'+(kind==='regions'?'countries':'regions')))parent.add(new Option(p.name,p.id));for(const r of await api('/api/admin/locations/'+kind))row(list,r.name,r.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل'),[button(tr('Edit','تعديل'),()=>{editing=r.id;for(const [k,v] of Object.entries({...r,parent_id:r.country_id||r.region_id||'',enabled:String(r.enabled)}))if(f.elements.namedItem(k))f.elements.namedItem(k).value=v;f.openDialog()}),button(tr('Disable','تعطيل'),async()=>{await api('/api/admin/locations/'+kind+'/'+r.id,{method:'DELETE'});await refresh()})])}
