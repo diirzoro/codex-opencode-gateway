@@ -7,7 +7,7 @@
     try { var savedPage=localStorage.getItem('og-page'); if(['workspacePage','connectionsPage','workspaceHomePage','clientPage','adminPage'].includes(savedPage))document.documentElement.dataset.restorePage=savedPage; } catch(error) {}
   </script>
   <meta name="theme-color" content="#ffffff"><meta name="description" content="Your projects, conversations, and reviewed code changes in one OpenCode workspace."><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 20'%3E%3Cpath fill='%2324272d' d='M12 4H4V16H12V4ZM16 20H0V0H16V20Z'/%3E%3C/svg%3E"><title>OpenCode Gateway — Hosted OpenCode</title>
-  <link rel="stylesheet" href="styles.css?v=20261013-compact-chat">
+  <link rel="stylesheet" href="styles.css?v=20261013-conversation-list">
   <style>
     html.bootstrapping .page { display:none!important }
     html.bootstrapping .page.active { display:block!important }
@@ -767,11 +767,11 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   #workspacePage .workspace-session-picker .new-session{padding:6px;margin:6px 0;font-size:12px}
   #workspacePage .agent-column{position:relative;min-width:0}
   </style>
-  <script defer src="app.js?v=20261013-compact-chat"></script>
+  <script defer src="app.js?v=20261013-conversation-list"></script>
   <script defer src="enhancements.js?v=20261011-auth-fix"></script>
   <script type="application/json" id="managementAsset" data-src="management.js?v=20261011-auth-fix"></script>
   <script defer src="runtime-client.js?v=20261008-phase2"></script>
-  <script defer src="dashboards.js?v=20261013-compact-chat"></script>
+  <script defer src="dashboards.js?v=20261013-conversation-list"></script>
   <script>
   // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
   document.addEventListener('DOMContentLoaded',function(){
