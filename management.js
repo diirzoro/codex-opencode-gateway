@@ -259,7 +259,8 @@
     }
     async function disconnect(p){
       if(!alive()||activeWorkspace?.id!==workspaceId||!view.ready)return;
-      await api(base+encodeURIComponent(p.id),{method:'DELETE'});
+      await api(workspaceId?base+encodeURIComponent(p.id):
+        '/api/opencode/connections/'+encodeURIComponent(p.id),{method:'DELETE'});
       if(!alive()||activeWorkspace?.id!==workspaceId)return;
       view.ready=false;
       snapshot={...snapshot,providers:snapshot.providers.map(row=>row.id===p.id?{...row,connected:false}:row)};
@@ -338,7 +339,7 @@
           const catalog=await api('/api/opencode/catalog/providers',{signal:controller.signal});
           if(!alive()||workspaceId)return;
           if(!Array.isArray(catalog))throw new Error('Invalid account provider catalog');
-          snapshot={providers:catalog};renderOptions();renderConnected();
+          snapshot={providers:catalog};view.ready=true;renderOptions();renderConnected();
           message(tr('Account providers ready','مزوّدات الحساب جاهزة')+' · '+catalog.length);
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
@@ -401,7 +402,7 @@
           // Connect dialog still requires a workspace until account auth lands.
           const catalog=await api('/api/opencode/catalog/providers',{signal:controller.signal});
           if(!alive())return;
-          snapshot={providers:catalog};
+          snapshot={providers:catalog};view.ready=true;
           renderOptions();renderConnected();
           message(tr('Account providers ready','مزوّدات الحساب جاهزة')+' · '+catalog.length);
           return;
