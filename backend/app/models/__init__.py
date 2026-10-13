@@ -6,13 +6,14 @@ from .workspace import (
     GithubConnection,
     Project,
     ProviderCredential,
+    UserProviderCredential,
     Workspace,
     WorkspaceSession,
 )
 __all__ = [
     "AuthSession", "City", "Country", "Region", "User", "Plan", "PlatformPolicy", "Subscription", "HomepageItem",
     "ExecutionEvent", "GithubAuthState", "GithubConnection", "Project",
-    "ProviderCredential", "Workspace", "WorkspaceSession",
+    "ProviderCredential", "UserProviderCredential", "Workspace", "WorkspaceSession",
 ]
 
 from .management import BillingMethod, AccountAudit, PasswordReset
