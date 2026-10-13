@@ -204,6 +204,9 @@ def account_oauth_authorize(provider_id: str,data: OAuthAuthorize,
     if not 0 < len(provider_id) <= 120 or not policy.provider_allowed(policy.load(db),provider_id):
         raise HTTPException(403,"Provider OAuth is restricted")
     reject_account_key_oauth_conflict(db,user.id,provider_id)
+    for owned in db.scalars(select(Workspace).where(Workspace.user_id==user.id)):
+        if providers.is_locally_connected(db,owned,provider_id):
+            raise HTTPException(409,"This provider is already connected in a workspace")
     account,service=opencode.for_account(user.id)
     with opencode.workspace_lock(account),service.state_lock:
         return providers.oauth_authorize(service,provider_id,data.method,data.inputs)
@@ -218,6 +221,9 @@ def account_oauth_callback(provider_id: str,data: OAuthCallback,
         raise HTTPException(403,"Provider OAuth is restricted")
     db.scalar(select(User).where(User.id==user.id).with_for_update())
     reject_account_key_oauth_conflict(db,user.id,provider_id)
+    for owned in db.scalars(select(Workspace).where(Workspace.user_id==user.id)):
+        if providers.is_locally_connected(db,owned,provider_id):
+            raise HTTPException(409,"This provider is already connected in a workspace")
     account,service=opencode.for_account(user.id)
     with opencode.workspace_lock(account),service.state_lock:
         accepted=providers.oauth_callback(service,provider_id,data.method,data.code)
