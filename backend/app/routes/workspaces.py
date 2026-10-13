@@ -520,7 +520,18 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
             detail+=". No new key was persisted."
             if not rollback_confirmed: detail+=" Runtime credential cleanup could not be confirmed; disconnect before retrying."
             raise HTTPException(exc.status_code if isinstance(exc,HTTPException) else 502,detail) from None
+        _refresh_other_user_runtimes(db, user.id, workspace.id)
         return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],"persisted":True,"validated_model":validated_model}
+
+def _refresh_other_user_runtimes(db, user_id, current_workspace_id):
+    """Ensure other running projects reload account credentials on next use."""
+    for owned in db.scalars(select(Workspace).where(
+            Workspace.user_id == user_id, Workspace.id != current_workspace_id)):
+        try:
+            opencode.stop_workspace(owned)
+        except Exception:
+            logger.warning("Failed to stop stale provider runtime for workspace %s", owned.id)
+
 
 def _remove_account_api_provider(db, user, provider_id):
     """Remove one user's API key from all workspace stores and running runtimes."""
