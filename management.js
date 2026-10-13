@@ -227,7 +227,7 @@
               dlg.close();toast(tr('Provider connected. It is now available in the workspace composer.','تم ربط المزوّد. أصبح متاحًا الآن في محرر مساحة العمل.'));await reload();
             }else{
               setFeedback(feedback,tr('Starting OpenCode authorization…','جارٍ بدء تفويض OpenCode…'));
-              const authorization=await api(base+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values})});
+              const authorization=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values})});
               if(!currentForm())return;
               if(!authorization||!['auto','code'].includes(authorization.method))throw new Error(tr('OpenCode did not return a supported OAuth authorization flow.','لم يُرجع OpenCode مسار تفويض OAuth مدعومًا.'));
               let url;if(authorization.url){url=new URL(authorization.url);if(url.protocol!=='https:'||['localhost','127.0.0.1','::1'].includes(url.hostname))throw new Error(tr('OpenCode returned an unsupported authorization URL','أعاد OpenCode رابط تفويض غير مدعوم'));}
@@ -238,8 +238,8 @@
                 if(!currentDialog()||!view.ready)return;
                 setFeedback(feedback,tr('Completing OpenCode authorization…','جارٍ إكمال تفويض OpenCode…'));
                 try{
-                  const result=await api(base+encodeURIComponent(p.id)+'/oauth/callback',{method:'POST',body:JSON.stringify({method:index,...(code?{code:code.value}:{})})});
-                  if(!alive()||activeWorkspace?.id!==workspaceId)return;
+                  const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/callback',{method:'POST',body:JSON.stringify({method:index,...(code?{code:code.value}:{})})});
+                  if(!alive()||(activeWorkspace?.id||'')!==workspaceId)return;
                   if(result.connected!==true)throw new Error(tr('OpenCode did not confirm the OAuth connection.','لم يؤكد OpenCode اتصال OAuth.'));
                   if(code)code.value='';dlg.close();toast(tr('Provider connected.','تم ربط المزوّد.'));await reload();
                 }catch(error){if(currentDialog())setFeedback(feedback,error.message,'error');}
