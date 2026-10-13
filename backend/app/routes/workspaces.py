@@ -574,13 +574,25 @@ def _remove_account_api_provider(db, user, provider_id):
         for workspace in workspaces:
             providers.record_connection(db, workspace, provider_id, connected=False)
         db.commit()
-        # Terminate live runtime processes so decrypted auth cannot remain in
-        # memory after revocation. Existing project files remain untouched.
+        # Revoke authentication in place when safe, preserving active sessions.
+        # If the live runtime refuses removal, stop it: never leave a revoked
+        # credential available for execution after the database commit.
         for workspace in workspaces:
             try:
-                opencode.stop_workspace(workspace)
+                try:
+                    service = opencode.for_workspace(workspace, start=False)
+                except HTTPException as exc:
+                    if exc.status_code == 409:
+                        continue
+                    raise
+                with service.state_lock:
+                    providers.remove(service, provider_id)
             except Exception:
-                logger.warning("Runtime restart required after provider revocation for workspace %s", workspace.id)
+                try:
+                    opencode.stop_workspace(workspace)
+                except Exception:
+                    logger.error("Provider revocation could not clear workspace runtime %s", workspace.id)
+                    raise HTTPException(503, "Provider was revoked in storage but runtime cleanup could not be confirmed") from None
 
 
 @router.delete("/opencode/connections/{provider_id}",status_code=204)
