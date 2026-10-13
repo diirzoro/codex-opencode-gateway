@@ -101,6 +101,7 @@ def account_agent_catalog(user: User=Depends(require_user)):
 @router.get("/opencode/connections")
 def account_provider_connections(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Account-scoped connection metadata, without keys or project dependencies."""
+    user_provider_credentials.require_schema(db)
     return [{"provider_id":row.provider_id,"last4":row.last4}
             for row in user_provider_credentials.list_owned(db,user.id)]
 
