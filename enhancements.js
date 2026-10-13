@@ -593,9 +593,9 @@
   }
   // Reuse the existing billing cards/plans without establishing normal login.
   window.loadReactivationBilling=loadClientBilling;
-  var billingCancel = document.getElementById('billingCancel');
+  var billingCancel = document.getElementById('billingCancel');if(billingCancel)billingCancel.hidden=true;
   if (billingCancel) billingCancel.onclick = async function () { try { await api('/api/billing/subscription/cancel', { method: 'POST' }); apiMessage('billingMessage', 'Subscription cancelled'); await loadClientBilling(); } catch (error) { apiMessage('billingMessage', error.message, true); } };
-  var billingReactivate = document.getElementById('billingReactivate');
+  var billingReactivate = document.getElementById('billingReactivate');if(billingReactivate)billingReactivate.hidden=true;
   if (billingReactivate) billingReactivate.onclick = async function () { try { await api('/api/billing/subscription/reactivate', { method: 'POST' }); apiMessage('billingMessage', 'Reactivated into pending payment'); await loadClientBilling(); } catch (error) { apiMessage('billingMessage', error.message, true); } };
   var billingRenew = document.getElementById('billingRenew');
   if (billingRenew) billingRenew.onclick = async function () { try { const state=await api('/api/billing/subscription');const plan=state.plan||state.selected_plan;if(plan)await window.beginCheckout(plan.id);else document.getElementById('billingPlans').scrollIntoView({block:'center',behavior:'smooth'}); } catch (error) { apiMessage('billingMessage', error.message, true); } };

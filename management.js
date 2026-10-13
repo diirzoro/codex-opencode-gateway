@@ -436,7 +436,7 @@
   const billingPanel=document.querySelector('[data-client-panel=billing]'),billingParent=billingPanel.parentNode,billingNext=billingPanel.nextSibling;
   function restoreBilling(){
     if(billingPanel.parentNode!==billingParent)billingParent.insertBefore(billingPanel,billingNext?.parentNode===billingParent?billingNext:null);
-    billingPanel.classList.remove('active');$('#billingCancel').hidden=false;
+    billingPanel.classList.remove('active');$('#billingCancel').hidden=true;
   }
   function resetRecovery(){restoreBilling();window.passwordRecoveryActive=false;recovery.hidden=true;$('#authPage .auth-shell').hidden=false;}
   async function closeRecovery(){
