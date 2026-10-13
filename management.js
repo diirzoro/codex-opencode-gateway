@@ -384,7 +384,16 @@
         }
         workspaceId=selected?.id||'';view.workspaceId=workspaceId;picker.value=workspaceId;picker.disabled=false;
         base='/api/workspaces/'+workspaceId+'/providers/';
-        if(!workspaceId){snapshot=null;renderOptions();message(tr('Select a workspace to load its OpenCode providers.','اختر مساحة عمل لتحميل مزوّدي OpenCode الخاصين بها.'));return;}
+        if(!workspaceId){
+          // Account catalog is available before a project exists. The legacy
+          // Connect dialog still requires a workspace until account auth lands.
+          const catalog=await api('/api/opencode/catalog/providers',{signal:controller.signal});
+          if(!alive())return;
+          snapshot={providers:catalog};
+          renderOptions();renderConnected();
+          message(tr('Your providers are listed. Connecting a new provider without a project is being enabled.','تظهر مزوّدات حسابك. يجري تجهيز الربط الجديد دون الحاجة إلى مشروع.'));
+          return;
+        }
         snapshot=window.workspaceRuntime.peek(workspaceId);renderOptions();await refresh();
       }catch(error){if(alive())message(error.message,true);}
     }
