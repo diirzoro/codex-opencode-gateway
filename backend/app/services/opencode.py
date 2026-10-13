@@ -340,7 +340,9 @@ def _initialize(service, workspace):
             ProviderCredential.user_id == workspace.user_id)))
         account_ids = {row.provider_id for row in account_rows}
         for row in [*account_rows, *(r for r in legacy_rows if r.provider_id not in account_ids)]:
-            if providers.is_locally_disconnected(db, workspace, row.provider_id):
+            # Account keys supersede workspace-local disconnect records.
+            if row.provider_id not in account_ids and providers.is_locally_disconnected(
+                    db, workspace, row.provider_id):
                 continue
             try:
                 providers.restore_credential(service, row.provider_id, credentials.decrypt(row.ciphertext))
