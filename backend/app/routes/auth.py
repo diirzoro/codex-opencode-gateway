@@ -92,6 +92,40 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     return RedirectResponse("/#email=verified", status_code=303)
 
 
+class ResendEmailVerification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: str
+    password: str
+
+
+@router.post("/resend-verification")
+def resend_verification(data: ResendEmailVerification, db: Session = Depends(get_db)):
+    # Ownership of a pending registration is established by its password.
+    identity = data.identity.strip().lower()
+    user = db.scalar(select(User).where(or_(func.lower(User.email) == identity,
+        func.lower(User.username) == identity)).with_for_update())
+    if not user or not verify_password(data.password, user.password_hash):
+        raise HTTPException(401, "Invalid credentials")
+    if user.status != "pending_email":
+        raise HTTPException(409, "Account is not awaiting email verification")
+    if not email_verification.smtp_ready():
+        raise HTTPException(503, "Email verification delivery is unavailable")
+    now = datetime.now(timezone.utc)
+    recent = db.scalar(select(EmailVerification).where(
+        EmailVerification.user_id == user.id).order_by(
+        EmailVerification.created_at.desc()).limit(1))
+    if recent and recent.created_at and (now - (recent.created_at if recent.created_at.tzinfo else recent.created_at.replace(tzinfo=timezone.utc))).total_seconds() < 120:
+        raise HTTPException(429, "Try again after two minutes")
+    for record in db.scalars(select(EmailVerification).where(
+        EmailVerification.user_id == user.id, EmailVerification.used_at.is_(None))):
+        record.used_at = now
+    raw = email_verification.create_pending(db, user)
+    db.flush()
+    email_verification.send_link(user.email, raw)
+    db.commit()
+    return {"sent": True}
+
+
 @router.post("/login", response_model=UserOut)
 def login(data: LoginRequest, response: Response, db: Session = Depends(get_db)):
     identity = data.identity.strip().lower()
