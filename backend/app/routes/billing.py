@@ -14,6 +14,7 @@ from ..database import get_db
 from ..models import Plan, Subscription, User, PaymentOrder,BillingMethod,AccountAudit,Country,Region,City
 from .dependencies import require_user,require_admin,require_billing_user,access_payload
 from ..services import paypal
+from ..services.location_validation import validate_locations
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 PAYMENT_MESSAGE = "Payment integration not available yet"
@@ -182,7 +183,6 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
         raise HTTPException(503,'This payment method needs its hosted checkout link and matching plan configured by administration. No payment was made.')
     if details['details'].get('currency')!=plan.currency: raise HTTPException(422,'Payment method currency does not match this plan')
     if details['details'].get('plan_id') not in (None,plan.id):raise HTTPException(422,'Payment link belongs to another plan')
-    from .auth import validate_locations
     validate_locations(db,data.country_id,data.region_id,data.city_id)
     country=db.get(Country,data.country_id) if data.country_id else None
     region=db.get(Region,data.region_id) if data.region_id else None
