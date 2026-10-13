@@ -16,6 +16,7 @@ from ..security.sessions import (hash_session_token, new_session_token, idle_exp
     normal_access_ready, reactivation_cookie_name)
 from ..services.accounts import user_payload
 from ..services.location_validation import validate_locations
+from ..services.disposable_email import require_permanent_email
 from ..services.entitlements import CORE_TRIAL_DAYS
 from .dependencies import require_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -37,6 +38,7 @@ def set_session(response: Response, db: Session, user: User):
 @router.post("/register", response_model=UserOut, status_code=201)
 def register(data: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     email = data.email.lower()
+    require_permanent_email(email)
     username = data.username.strip().lower() if data.username else "user_" + uuid.uuid4().hex[:24]
     if db.scalar(select(User).where(or_(func.lower(User.username) == username, func.lower(User.email) == email))):
         raise HTTPException(409, "Username or email already exists")
