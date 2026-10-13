@@ -511,12 +511,13 @@ def provider_oauth_callback(workspace_id: uuid.UUID,provider_id: str,data: OAuth
     with opencode.workspace_lock(workspace),service.state_lock:
         session_lifecycle.lock_workspace(db,workspace)
         accepted=providers.oauth_callback(service,provider_id,data.method,data.code)
-        # OAuth state belongs to OpenCode. Retire any old Gateway API-key binding.
-        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace_id,ProviderCredential.user_id==user.id,ProviderCredential.provider_id==provider_id))
-        if row is not None:
-            db.delete(row)
+        # OAuth state belongs to OpenCode. Keep the previous encrypted API key
+        # unless the new OAuth connection has actually been accepted.
         if accepted:
             require_advanced(db,user,start=True)
+            row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace_id,ProviderCredential.user_id==user.id,ProviderCredential.provider_id==provider_id))
+            if row is not None:
+                db.delete(row)
             providers.record_connection(db,workspace,provider_id,connected=True)
         db.commit()
         return {"connected":bool(accepted)}
