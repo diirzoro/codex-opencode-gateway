@@ -117,6 +117,7 @@ def account_provider_connections(user: User=Depends(require_user),db: Session=De
 @router.get("/opencode/connections/{provider_id}/options")
 def account_provider_options(provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Real OpenCode authentication choices from a temporary isolated process."""
+    require_advanced(db,user)
     if not 0 < len(provider_id) <= 120:
         raise HTTPException(422, "Invalid provider identifier")
     if not policy.provider_allowed(policy.load(db), provider_id):
