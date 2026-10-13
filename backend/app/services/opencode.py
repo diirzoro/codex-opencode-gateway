@@ -13,6 +13,8 @@ import socket
 import subprocess
 import threading
 import time
+import uuid
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -370,7 +372,11 @@ def for_workspace(workspace, *, start=True):
         binary = shutil.which(settings.opencode_binary)
         if not binary:
             raise HTTPException(503, "OpenCode executable is not installed")
-        repo = root_for(workspace)
+        if getattr(workspace, "is_account_runtime", False):
+            repo = settings.runtime_root / str(workspace.user_id) / "account-workdir"
+            repo.mkdir(parents=True, exist_ok=True)
+        else:
+            repo = root_for(workspace)
         if not repo.is_dir():
             raise HTTPException(409, "Workspace files are missing")
         context = settings.runtime_root / str(workspace.user_id) / key
@@ -438,6 +444,17 @@ def for_workspace(workspace, *, start=True):
         except Exception:
             stop_workspace(workspace)
             raise
+
+
+def account_workspace(user_id):
+    """Synthetic workspace identifier for a user's dedicated auth-only runtime."""
+    key = uuid.uuid5(uuid.NAMESPACE_URL, "opencode-gateway-account:" + str(user_id))
+    return SimpleNamespace(id=key, user_id=user_id, is_account_runtime=True)
+
+
+def for_account(user_id, *, start=True):
+    account = account_workspace(user_id)
+    return account, for_workspace(account, start=start)
 
 
 def stop_workspace(workspace):
