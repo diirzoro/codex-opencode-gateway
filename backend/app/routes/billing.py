@@ -407,4 +407,4 @@ def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_billing_user),db
 
 @router.get('/paypal/status')
 def paypal_status(user:User=Depends(require_billing_user)):
-    return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','client_id':paypal.settings.paypal_client_id if paypal.configured() else None}
+    return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','sdk_available':bool(paypal.settings.paypal_client_id),'client_id':paypal.settings.paypal_client_id}
