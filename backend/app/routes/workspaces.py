@@ -472,6 +472,13 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
                 db.add(row)
             row.ciphertext=encrypted
             row.last4=data.api_key[-4:]
+            # Expand-only compatibility: validated keys become account-owned if
+            # migration 0017 exists; legacy workspace record remains intact.
+            # Both records commit atomically in the same DB transaction.
+            from sqlalchemy import inspect
+            if inspect(db.get_bind()).has_table("user_provider_credentials"):
+                user_provider_credentials.save_encrypted(
+                    db, user.id, provider_id, encrypted, data.api_key[-4:])
             providers.record_connection(db,workspace,provider_id,connected=True)
             db.commit()
         except Exception as exc:
