@@ -15,6 +15,7 @@ from ..database import get_db
 from ..models import ExecutionEvent, Project, ProviderCredential, User, Workspace, WorkspaceSession
 from ..services import credentials, github, opencode, opencode_catalog, policy, providers, runtime_snapshot, preview, session_lifecycle
 from ..services import workspaces as manager
+from ..services import user_provider_credentials
 from ..services.entitlements import access_payload, require_advanced
 from .dependencies import require_user, require_workspace_entitlement
 
@@ -95,6 +96,13 @@ def account_agent_catalog(user: User=Depends(require_user)):
             for row in data if isinstance(row,dict)
             and isinstance(row.get("name"),str) and 0<len(row["name"])<=120
             and not row.get("hidden") and row.get("mode") in {"primary","all"}]
+
+
+@router.get("/opencode/connections")
+def account_provider_connections(user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Account-scoped connection metadata, without keys or project dependencies."""
+    return [{"provider_id":row.provider_id,"last4":row.last4}
+            for row in user_provider_credentials.list_owned(db,user.id)]
 
 
 @router.get("/opencode/status")
