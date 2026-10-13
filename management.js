@@ -330,7 +330,19 @@
       dlg.addEventListener('close',()=>host.remove(),{once:true});f.openDialog();
     });customButton.disabled=true;box.append(customButton);
     async function refresh(force=false){
-      if(!workspaceId||!alive())return;
+      if(!alive())return;
+      if(!workspaceId){
+        view.ready=false;
+        message(tr('Loading account providers…','جارٍ تحميل مزوّدات الحساب…'));
+        try{
+          const catalog=await api('/api/opencode/catalog/providers',{signal:controller.signal});
+          if(!alive()||workspaceId)return;
+          if(!Array.isArray(catalog))throw new Error('Invalid account provider catalog');
+          snapshot={providers:catalog};renderOptions();renderConnected();
+          message(tr('Account providers ready','مزوّدات الحساب جاهزة')+' · '+catalog.length);
+        }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
+        return;
+      }
       view.ready=false;customButton.disabled=true;
       status.querySelectorAll('button').forEach(button=>button.disabled=true);
       renderConnected();
@@ -391,7 +403,7 @@
           if(!alive())return;
           snapshot={providers:catalog};
           renderOptions();renderConnected();
-          message(tr('Your providers are listed. Connecting a new provider without a project is being enabled.','تظهر مزوّدات حسابك. يجري تجهيز الربط الجديد دون الحاجة إلى مشروع.'));
+          message(tr('Account providers ready','مزوّدات الحساب جاهزة')+' · '+catalog.length);
           return;
         }
         snapshot=window.workspaceRuntime.peek(workspaceId);renderOptions();await refresh();
