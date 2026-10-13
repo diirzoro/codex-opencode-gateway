@@ -31,7 +31,7 @@ def list_owned(db: Session, user_id):
 
 def save_encrypted(db: Session, user_id, provider_id: str, ciphertext: str, last4: str):
     """Stage the upsert; transaction ownership stays with the calling route."""
-    if not isinstance(provider_id, str) or not provider_id or len(provider_id) > 200:
+    if not isinstance(provider_id, str) or not provider_id or len(provider_id) > 120:
         raise ValueError("Invalid provider identifier")
     if not isinstance(ciphertext, str) or not ciphertext:
         raise ValueError("Encrypted credential is required")
