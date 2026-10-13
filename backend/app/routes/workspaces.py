@@ -416,7 +416,8 @@ def available_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db
     return agent_choices(opencode.for_workspace(row))
 
 def agent_choices(service):
-    rows=service.request("GET","/agent")
+    # Reuse the validated runtime catalog already shared by agent discovery.
+    rows=service._core_value("agents", "/agent")
     if not isinstance(rows,list): raise HTTPException(502,"Runtime returned an invalid agent list")
     return [{**providers.public_metadata(r),"id":r["name"],"name":r["name"]} for r in rows
             if isinstance(r,dict) and isinstance(r.get("name"),str) and 0<len(r["name"])<=120
