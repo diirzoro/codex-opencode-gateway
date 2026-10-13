@@ -348,7 +348,18 @@
         if(window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
       }catch(error){if(alive()){message(error.message,true);renderOptions();}}
     }
-    async function reload(){return refresh(true);}
+    function invalidateOwnedWorkspaceProviders(){
+      // Account connections are shared across all of this user's workspaces.
+      // Clear stale composer snapshots without changing active project/session.
+      for(const workspace of workspaces){
+        if(workspace?.id)window.workspaceRuntime.invalidate(workspace.id);
+      }
+    }
+    async function reload(){
+      invalidateOwnedWorkspaceProviders();
+      if(window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
+      return refresh(true);
+    }
     view.refresh=refresh;
     combo.addEventListener('input',()=>{body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
     combo.addEventListener('focus',()=>{optionsOpen=true;scheduleSearch();});
