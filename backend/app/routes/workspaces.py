@@ -128,7 +128,19 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
         if entry["id"] != provider_id:
             raise HTTPException(422, "Use the exact OpenCode provider ID")
         methods = providers.connection_methods(service, provider_id)
-        return {"provider_id": provider_id, "auth_methods": providers.public_metadata(methods),
+        return {"provider_id": provider_id,
+                "auth_methods": [{
+                    "type": method.get("type"), "label": str(method.get("label") or "")[:120],
+                    "prompts": [{
+                        "key": str(prompt.get("key") or "")[:120],
+                        "message": str(prompt.get("message") or "")[:240],
+                        "type": prompt.get("type"),
+                        "placeholder": str(prompt.get("placeholder") or "")[:160],
+                        "when": prompt.get("when"),
+                        "options": [{"value": opt.get("value"), "label": opt.get("label")}
+                                    for opt in prompt.get("options", []) if isinstance(opt,dict)]
+                    } for prompt in method.get("prompts", []) if isinstance(prompt,dict)]
+                } for method in methods if isinstance(method,dict)],
                 "models": providers.model_details(data, provider_id, policy.load(db))["models"]}
 
 
