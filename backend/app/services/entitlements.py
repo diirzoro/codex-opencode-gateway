@@ -23,13 +23,18 @@ def access_payload(db, user, *, now=None):
     reason = "administration" if admin else "subscription" if paid else "trial" if core else "subscription_required"
     # First verified payment permanently supersedes the one-time 30-day trial.
     # An expired paid subscription never reactivates the original trial.
-    paid_history = bool(row and row.plan_id and row.started_at and
-        row.status in {"active", "expired", "cancelled"} and row.current_period_end)
+    # Paid history is authoritative even if a later checkout changes status.
+    # Subscription periods from an unverified plan selection are not proof of
+    # payment; the paid PaymentOrder record supplies that proof.
+    from ..models import PaymentOrder
+    paid_history = bool(db.scalar(select(PaymentOrder.id).where(
+        PaymentOrder.user_id == user.id,
+        PaymentOrder.status == "paid").limit(1)))
     if paid_history and not paid:
         core = admin
         advanced = admin
         reason = "administration" if admin else "subscription_required"
-    end = aware(row.current_period_end) if paid_history else core_end
+    end = aware(row.current_period_end) if paid_history and row and row.current_period_end else core_end
     # Account retention is independent of workspace-file/cache lifetimes. This
     # marks archival rather than deletion of customer/billing relationships.
     from .customer_lifecycle import archive_deadline
@@ -57,5 +62,5 @@ def require_advanced(db, user, *, start=False):
     # Lock the existing account only for actual use; discovery never starts a timer.
     access = access_payload(db, user)
     if not access["advanced_integrations"]:
-        raise HTTPException(402, "Advanced integrations trial ended. An active paid subscription is required; existing data and disconnect remain available.")
+        raise HTTPException(402, "The trial or subscription has ended. An active paid subscription is required; existing data and disconnect remain available.")
     return access
