@@ -47,26 +47,31 @@
   }
   async function openConnections(focus){await page('connectionsPage');if(focus)q(focus==='github'?'connectionsGithub':'connectionsProviders').scrollIntoView({block:'start',behavior:'smooth'});}
   window.openConnections=openConnections;
-  // Resume actual coding after authentication, without creating projects or tasks.
+  // Customer entry is project-neutral. A project is selected only by an explicit user action.
   window.openClientWorkspace=async function(){
     if(!currentUser)return page('authPage');
     if(admin())return page('adminPage');
-    const owner=currentUser.id;
-    let context=activeWorkspace&&activeProject?{workspace:activeWorkspace,project:activeProject}:await restoreWorkspaceContext();
-    let recent=null;
-    if(currentUser?.id!==owner)return;
-    if(!context){
-      let data;try{data=await api('/api/dashboard');}catch(error){if(currentUser?.id===owner){toast(error.message);await page('workspaceHomePage');}return;}
-      if(currentUser?.id!==owner)return;
-      for(const session of data.recent_sessions||[]){
-        const project=data.projects.find(p=>p.workspaces.some(w=>w.id===session.workspace_id));
-        const workspace=project?.workspaces.find(w=>w.id===session.workspace_id);
-        if(workspace){context={project,workspace};recent=session;break;}
-      }
-      if(!context){const project=data.projects.find(p=>p.workspaces.length);if(project)context={project,workspace:project.workspaces[0]};}
-    }
-    if(context){await openWorkspace(context.project,context.workspace);if(recent&&currentUser?.id===owner&&activeWorkspace?.id===context.workspace.id){try{await selectSession(recent);}catch(error){if(currentUser?.id===owner)toast(error.message);}}}
-    else await page('workspaceHomePage');
+    stopEvents();workspaceSelectionRevision++;sessionSelectionRevision++;
+    activeProject=activeWorkspace=activeSession=null;
+    try{localStorage.removeItem('og-workspace');}catch(error){}
+    initializeWorkspace();
+    q('workspaceRepo').textContent=tr('No project selected','لم يتم اختيار مشروع');
+    q('workspaceBranch').textContent='—';
+    q('runtimeStatus').textContent=tr('OpenCode available · choose a project to start coding','OpenCode متاح · اختر مشروعًا لبدء البرمجة');
+    q('sessionList').replaceChildren();
+    q('gitSummary').textContent='—';
+    const empty=textElement('section','','workspace-empty');
+    empty.append(
+      textElement('h1',tr('Choose what you want to work on','اختر ما تريد العمل عليه')),
+      textElement('p',tr('OpenCode agents and providers are available independently. Create a new project or open an existing project when you are ready to work with files.','وكلاء OpenCode والمزوّدون متاحون بشكل مستقل. أنشئ مشروعًا جديدًا أو افتح مشروعًا موجودًا عندما تريد العمل على الملفات.'))
+    );
+    const actions=textElement('div','','quick-actions');
+    actions.append(
+      btn('neutralNewProject','New project','مشروع جديد',()=>page('onboarding')),
+      btn('neutralOpenProject','Open project','فتح مشروع',()=>window.openClientView('projects'))
+    );
+    empty.append(actions);q('agentFeed').replaceChildren(empty);
+    await page('workspacePage');
   };
   async function loadConnections(){
     const root=q('connectionsProviders'),query=root.querySelector('input[role=combobox]')?.value;
@@ -136,7 +141,7 @@
     if(!workAccess){q('sendMessage').disabled=true;q('commitButton').disabled=true;q('pushButton').disabled=true;}
   }
   async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/profile/access');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();}
-  const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(id==='workspacePage'&&currentUser&&!admin())initializeWorkspace();await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage','onboarding'].includes(id))refreshEntitlement().then(()=>updateSend()).catch(error=>toast(error.message));if(!admin()&&id==='workspacePage'&&activeWorkspace){refreshChoices().catch(error=>toast(error.message));loadWorkspaceDetails();}if(admin()){if(q('adminPage').classList.contains('active')&&document.querySelector('[data-admin-panel=billing].active'))await loadPaymentOrders(true);return;}if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')loadHome().catch(error=>toast(error.message));if(id==='connectionsPage')loadConnections().catch(error=>toast(error.message));}};
+  const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(id==='workspacePage'&&currentUser&&!admin())initializeWorkspace();await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage','onboarding'].includes(id))refreshEntitlement().then(()=>updateSend()).catch(error=>toast(error.message));if(!admin()&&id==='workspacePage'){refreshChoices().catch(error=>toast(error.message));if(activeWorkspace)loadWorkspaceDetails();}if(admin()){if(q('adminPage').classList.contains('active')&&document.querySelector('[data-admin-panel=billing].active'))await loadPaymentOrders(true);return;}if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')loadHome().catch(error=>toast(error.message));if(id==='connectionsPage')loadConnections().catch(error=>toast(error.message));}};
   const previousShow=showPage;showPage=function(id){if(id==='adminPage'&&!admin()){toast('Administrator access required');id=currentUser?'workspaceHomePage':'authPage';}if(admin()&&['workspaceHomePage','connectionsPage','workspacePage'].includes(id))id='adminPage';q('sessionSidebar').classList.remove('open');overlay(false);try{if(currentUser)localStorage.setItem('og-page',id);}catch(error){}previousShow(id);syncWorkspacePolling();q('clientWorkspaceHome').classList.toggle('active',['workspaceHomePage','workspacePage'].includes(id));q('clientConnections').classList.toggle('active',id==='connectionsPage');if(['workspaceHomePage','workspacePage','connectionsPage'].includes(id))q('clientNav').querySelectorAll('[data-client-view]').forEach(n=>n.classList.remove('active'));};
   openWorkspace=async function(project,workspace,options={}){
     if(options.navigate===false&&!workspaceInitialized){
@@ -508,7 +513,7 @@
     const busy=['submitted','waiting_approval'].includes(activeSession?.execution_status);
     renderAttachments();
     attach.disabled=!workAccess||sending||Boolean(pendingSubmission)||busy;attachmentList.querySelectorAll('button').forEach(button=>button.disabled=sending||Boolean(pendingSubmission));
-    q('sendMessage').disabled=sending||Boolean(pendingSubmission)||busy||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
+    q('sendMessage').disabled=sending||Boolean(pendingSubmission)||busy||!activeWorkspace||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     const hasActive=activeSession?.lifecycle==='active'||sessionRows.some(s=>s.lifecycle==='active');
     newSessionButton.disabled=newTask.disabled=!workAccess||hasActive||sending||Boolean(sessionCreating)||Boolean(pendingSubmission);
     closeSessionButton.disabled=!activeSession||sending||Boolean(pendingSubmission);
@@ -577,10 +582,27 @@
     q('providerSelect').onchange=()=>{chosenProvider=q('providerSelect').value;chosenModel='';models();};q('modelSelect').onchange=()=>{chosenModel=q('modelSelect').value;updateSend();};models();
   }
   refreshChoices=async function(preferredProvider='',force=false){
-    if(!activeWorkspace||admin())return;
-    const workspaceId=activeWorkspace.id,stamp=++discovery,started=performance.now();
-    const current=()=>stamp===discovery&&activeWorkspace?.id===workspaceId;
+    if(admin())return;
+    const workspaceId=activeWorkspace?.id||null,stamp=++discovery,started=performance.now();
+    const current=()=>stamp===discovery&&(activeWorkspace?.id||null)===workspaceId;
     runtimeReady=false;updateSend();
+    if(!workspaceId){
+      q('runtimeStatus').textContent=tr('Connecting to OpenCode…','جارٍ الاتصال بـ OpenCode…');
+      const [healthResult,agentsResult,providersResult]=await Promise.allSettled([
+        api('/api/opencode/status',{cache:'no-store'}),
+        api('/api/opencode/agents',{cache:'no-store'}),
+        api('/api/opencode/providers',{cache:'no-store'})
+      ]);
+      if(!current())return;
+      if(agentsResult.status==='fulfilled')renderAgents({agents:agentsResult.value,default_agent:null,errors:{}});
+      else{agentsReady=false;agent.title=agentsResult.reason.message;}
+      if(providersResult.status==='fulfilled')renderProviders({providers:providersResult.value,config:{},errors:{}},preferredProvider);
+      else{providers=[];q('providerSelect').replaceChildren(new Option(tr('Provider unavailable','المزوّد غير متاح'),''));}
+      const health=healthResult.status==='fulfilled'?healthResult.value:null;
+      runtimeReady=Boolean(health?.healthy)&&providersResult.status==='fulfilled';
+      q('runtimeStatus').textContent=health?.healthy?('OpenCode '+(health.version||'')+' · '+tr('Ready','جاهز')):tr('OpenCode unavailable','OpenCode غير متاح');
+      updateSend();return;
+    }
     const cached=window.workspaceRuntime.peek(workspaceId),cachedAgents=window.workspaceRuntime.peekAgents(workspaceId);
     if(cached)renderProviders(cached,preferredProvider);if(cachedAgents)renderAgents(cachedAgents);
     q('runtimeStatus').textContent=cached?tr('Refreshing OpenCode…','جارٍ تحديث OpenCode…'):tr('Starting OpenCode…','جارٍ بدء OpenCode…');
@@ -613,7 +635,7 @@
     if(!runtimeReady||!selected?.connected||selected.allowed===false)return;
     if(q('modelSelect').options.length===1)q('modelSelect').options[0].textContent=tr('Loading models…','جارٍ تحميل النماذج…');
     try{
-      const data=await window.workspaceRuntime.loadModels(workspaceId,selected.id);
+      const data=workspaceId?await window.workspaceRuntime.loadModels(workspaceId,selected.id):await api('/api/opencode/providers/'+encodeURIComponent(selected.id)+'/models',{cache:'no-store'});
       if(!current())return;render(data.models);modelsReady=data.allowed!==false&&data.connected===true;
       chosenModel=q('modelSelect').value;q('modelSelect').title=tr('Model','النموذج');updateSend();
     }catch(error){if(current()){q('modelSelect').title=error.message;q('modelSelect').options[0].textContent=tr('Could not load models','تعذر تحميل النماذج');retryModels.hidden=false;updateSend();toast(error.message);}}
@@ -905,8 +927,16 @@
         const host=textElement('div');host.id='paypalButtonHost';host.setAttribute('aria-label','PayPal');body.append(host);
         (async()=>{try{const status=await api('/api/billing/paypal/status');if(!body.contains(host))return;if(!status.client_id){host.append(text('p','The official PayPal form could not load because payment setup is incomplete.','تعذر تحميل نموذج PayPal الرسمي لأن إعداد الدفع غير مكتمل.','checkout-lead'));return;}
           const pp=await new Promise((resolve,reject)=>{if(window.paypal)return resolve(window.paypal);const script=document.createElement('script');script.src='https://www.paypal.com/sdk/js?client-id='+encodeURIComponent(status.client_id)+'&currency='+encodeURIComponent(plan.currency)+'&intent=capture&components=buttons&enable-funding=card';script.onload=()=>window.paypal?resolve(window.paypal):reject(new Error('paypal-sdk'));script.onerror=()=>reject(new Error('paypal-sdk'));document.head.append(script);});if(!body.contains(host))return;
-          await pp.Buttons({style:{layout:'vertical'},onClick:(data,actions)=>{if(!validPayer())return actions.reject();if(!method.available||!status.configured){showError(new Error(tr('Could not connect to PayPal. No payment was made.','تعذر الربط مع PayPal. لم يتم خصم أي مبلغ.')));return actions.reject();}return actions.resolve();},createOrder:async()=>{try{const result=await createProviderOrder();if(!result.automatic_processing||!result.order?.provider_order_id)throw new Error(tr('PayPal order is unavailable.','طلب PayPal غير متاح.'));return result.order.provider_order_id;}catch(error){showError(error);throw error;}},onApprove:async data=>{try{await confirmOrder(data.orderID);}catch(error){showError(error);}},onCancel:async()=>{if(!latestOrder?.id)return;try{await api('/api/billing/orders/'+latestOrder.id+'/cancel',{method:'POST'});await loadPaymentOrders();toast(tr('Unaccepted payment request cancelled.','تم إلغاء طلب الدفع قبل قبوله.'));}catch(error){showError(error);}},onError:()=>{if(!body.querySelector('.checkout-error'))showError(new Error(tr('PayPal could not complete this payment. No subscription activated.','تعذر إتمام الدفع عبر PayPal دون تفعيل الاشتراك.')));}}).render(host);go2.hidden=true;
-        }catch(error){host.replaceChildren();go2.hidden=false;body.append(text('p','PayPal buttons could not load. Continue through the official payment page.','تعذر تحميل أزرار PayPal. يمكنك المتابعة إلى صفحة الدفع الرسمية.','checkout-lead'));}})();
+          const buttons=pp.Buttons({style:{layout:'vertical'},onClick:(data,actions)=>{if(!validPayer())return actions.reject();if(!method.available||!status.configured){showError(new Error(tr('Could not connect to PayPal. No payment was made.','تعذر الربط مع PayPal. لم يتم خصم أي مبلغ.')));return actions.reject();}return actions.resolve();},createOrder:async()=>{try{const result=await createProviderOrder();if(!result.automatic_processing||!result.order?.provider_order_id)throw new Error(tr('PayPal order is unavailable.','طلب PayPal غير متاح.'));return result.order.provider_order_id;}catch(error){showError(error);throw error;}},onApprove:async data=>{try{await confirmOrder(data.orderID);}catch(error){showError(error);}},onCancel:async()=>{if(!latestOrder?.id)return;try{await api('/api/billing/orders/'+latestOrder.id+'/cancel',{method:'POST'});await loadPaymentOrders();toast(tr('Unaccepted payment request cancelled.','تم إلغاء طلب الدفع قبل قبوله.'));}catch(error){showError(error);}},onError:()=>{if(!body.querySelector('.checkout-error'))showError(new Error(tr('PayPal could not complete this payment. No subscription activated.','تعذر إتمام الدفع عبر PayPal دون تفعيل الاشتراك.')));}});
+          if(typeof buttons.isEligible==='function'&&!buttons.isEligible())throw new Error('paypal-ineligible');
+          await buttons.render(host);go2.hidden=true;
+          let paypalRendered=true;
+          const fallback=()=>{if(!dialog.open||!body.contains(host))return;go2.hidden=false;host.replaceChildren(text('p','PayPal checkout is still available. Continue securely on the official PayPal page.','لا يزال دفع PayPal متاحًا. تابع بأمان عبر صفحة PayPal الرسمية.','checkout-lead'));};
+          const observer=new MutationObserver(()=>{if(paypalRendered&&dialog.open&&body.contains(host)&&host.childElementCount===0){paypalRendered=false;observer.disconnect();fallback();}});
+          observer.observe(host,{childList:true});
+          dialog.addEventListener('close',()=>observer.disconnect(),{once:true});
+          setTimeout(()=>{if(dialog.open&&body.contains(host)&&host.childElementCount===0){paypalRendered=false;observer.disconnect();fallback();}},1200);
+        }catch(error){host.replaceChildren();go2.hidden=false;host.append(text('p','PayPal buttons could not stay loaded. Continue through the official PayPal page.','تعذر إبقاء أزرار PayPal ظاهرة. تابع عبر صفحة PayPal الرسمية.','checkout-lead'));}})();
       }
     };
     const renderManualForm=method=>{
