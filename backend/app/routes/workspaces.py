@@ -517,9 +517,46 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
             raise HTTPException(exc.status_code if isinstance(exc,HTTPException) else 502,detail) from None
         return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],"persisted":True,"validated_model":validated_model}
 
+def _remove_account_api_provider(db, user, provider_id):
+    """Remove one user's API key from all workspace stores and running runtimes."""
+    from contextlib import ExitStack
+    user_provider_credentials.require_schema(db)
+    workspaces = list(db.scalars(select(Workspace).where(
+        Workspace.user_id == user.id).order_by(Workspace.id)))
+    # Stable lock ordering avoids inconsistent mixed workspace auth states.
+    with ExitStack() as locks:
+        for workspace in workspaces:
+            locks.enter_context(opencode.workspace_lock(workspace))
+        user_provider_credentials.delete_owned(db, user.id, provider_id)
+        for row in list(db.scalars(select(ProviderCredential).where(
+                ProviderCredential.user_id == user.id,
+                ProviderCredential.provider_id == provider_id))):
+            db.delete(row)
+        for workspace in workspaces:
+            providers.record_connection(db, workspace, provider_id, connected=False)
+        db.commit()
+        # Terminate live runtime processes so decrypted auth cannot remain in
+        # memory after revocation. Existing project files remain untouched.
+        for workspace in workspaces:
+            try:
+                opencode.stop_workspace(workspace)
+            except Exception:
+                logger.warning("Runtime restart required after provider revocation for workspace %s", workspace.id)
+
+
+@router.delete("/opencode/connections/{provider_id}",status_code=204)
+def remove_account_provider_connection(provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if not provider_id or len(provider_id)>120:
+        raise HTTPException(422,"Invalid provider identifier")
+    _remove_account_api_provider(db,user,provider_id)
+
+
 @router.delete("/workspaces/{workspace_id}/providers/{provider_id}",status_code=204)
 def remove_provider_credential(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
     workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    if user_provider_credentials_schema_ready(db) and user_provider_credentials.find(db,user.id,provider_id):
+        _remove_account_api_provider(db,user,provider_id)
+        return
     with opencode.workspace_lock(workspace):
         session_lifecycle.lock_workspace(db,workspace)
         row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,
