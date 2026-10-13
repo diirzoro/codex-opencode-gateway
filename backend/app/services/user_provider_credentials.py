@@ -3,10 +3,17 @@
 This repository does not mutate legacy workspace credentials. Runtime installation
 and OAuth are separate operations and must be authorized before use.
 """
-from sqlalchemy import select
+from fastapi import HTTPException
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from ..models import UserProviderCredential
+
+
+def require_schema(db: Session):
+    """Fail clearly before account connection reads if migration 0017 is absent."""
+    if not inspect(db.get_bind()).has_table("user_provider_credentials"):
+        raise HTTPException(503, "Account provider connections require database migration 0017")
 
 
 def find(db: Session, user_id, provider_id: str):
