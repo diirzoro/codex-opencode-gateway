@@ -269,6 +269,15 @@ def restore_credential(service, provider_id, plaintext):
         saved = None
     if isinstance(saved, dict) and saved.get("type") == "api" and isinstance(saved.get("key"), str):
         return set_api_key(service, provider_id, saved["key"], saved.get("metadata"))
+    if isinstance(saved, dict) and saved.get("type") == "oauth":
+        if not isinstance(saved.get("access"),str) or not isinstance(saved.get("refresh"),str) or not isinstance(saved.get("expires"),int):
+            raise HTTPException(422, "Invalid encrypted OAuth credential")
+        payload = {field: saved[field] for field in ("type","access","refresh","expires","accountId","enterpriseUrl")
+                   if field in saved}
+        if service.request("PUT", "/auth/" + quote(provider_id, safe=""), payload) is not True:
+            raise HTTPException(502, "OpenCode did not accept OAuth credential restoration")
+        service.invalidate()
+        return True
     return set_api_key(service, provider_id, plaintext)
 
 
