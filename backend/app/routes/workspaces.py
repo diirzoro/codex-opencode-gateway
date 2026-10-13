@@ -75,17 +75,24 @@ def _workspace_and_project(db,user,workspace_id):
 def health(user: User=Depends(require_user)):
     return opencode.shared_health()
 
+def _account_catalog_state(db, user, data):
+    """Show only this user's saved connections; shared daemon auth is never trusted."""
+    user_provider_credentials.require_schema(db)
+    connected = {row.provider_id for row in user_provider_credentials.list_owned(db, user.id)}
+    return {**data, "connected": sorted(connected), "gateway_disconnected": []}
+
+
 @router.get("/opencode/catalog/providers")
 def account_provider_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Project-independent definitions only; never expose global connected state."""
-    return providers.catalog_index(opencode_catalog.public_catalog("/provider"), policy.load(db))
+    return providers.catalog_index(_account_catalog_state(db, user, opencode_catalog.public_catalog("/provider")), policy.load(db))
 
 
 @router.get("/opencode/catalog/providers/search")
 def account_provider_search(query: str=Query(min_length=2,max_length=200),
                             user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Search OpenCode definitions independently of a project; no auth status."""
-    return providers.search_index(opencode_catalog.public_catalog("/provider"), query, policy.load(db))
+    return providers.search_index(_account_catalog_state(db, user, opencode_catalog.public_catalog("/provider")), query, policy.load(db))
 
 
 @router.get("/opencode/catalog/agents")
