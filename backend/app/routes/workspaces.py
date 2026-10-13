@@ -520,7 +520,8 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
             detail+=". No new key was persisted."
             if not rollback_confirmed: detail+=" Runtime credential cleanup could not be confirmed; disconnect before retrying."
             raise HTTPException(exc.status_code if isinstance(exc,HTTPException) else 502,detail) from None
-        _refresh_other_user_runtimes(db, user.id, workspace.id)
+        if user_provider_credentials_schema_ready(db):
+            _refresh_other_user_runtimes(db, user.id, workspace.id)
         return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],"persisted":True,"validated_model":validated_model}
 
 def _refresh_other_user_runtimes(db, user_id, current_workspace_id):
