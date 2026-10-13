@@ -21,6 +21,8 @@ def public_catalog(path, *, agents=False):
     """Read one native OpenCode catalog with a bounded loopback HTTP client."""
     if path not in {"/provider", "/agent"}:
         raise ValueError("Unsupported public catalog path")
+    if agents != (path == "/agent"):
+        raise ValueError("Catalog type must match the requested OpenCode endpoint")
     with _catalog_lock:
         cached = _catalog_cache.get(path)
         if cached and time.monotonic() - cached[0] < CATALOG_TTL_SECONDS:
