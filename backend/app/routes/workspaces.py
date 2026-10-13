@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import ExecutionEvent, Project, ProviderCredential, User, Workspace, WorkspaceSession
-from ..services import credentials, github, opencode, policy, providers, runtime_snapshot, preview, session_lifecycle
+from ..services import credentials, github, opencode, opencode_catalog, policy, providers, runtime_snapshot, preview, session_lifecycle
 from ..services import workspaces as manager
 from ..services.entitlements import access_payload, require_advanced
 from .dependencies import require_user, require_workspace_entitlement
@@ -74,38 +74,23 @@ def _workspace_and_project(db,user,workspace_id):
 def health(user: User=Depends(require_user)):
     return opencode.shared_health()
 
-def _public_opencode_catalog(path, *, agents=False):
-    """Read definitions from the local OpenCode service without project auth state."""
-    service = opencode.OpenCodeService(settings.opencode_url)
-    try:
-        data = service.request("GET", path)
-        if agents:
-            if not isinstance(data, list):
-                raise HTTPException(502, "OpenCode returned an invalid agent catalog")
-        elif not isinstance(data, dict) or not isinstance(data.get("all"), list):
-            raise HTTPException(502, "OpenCode returned an invalid provider catalog")
-        return data if agents else {**data, "connected": [], "gateway_disconnected": []}
-    finally:
-        service.close()
-
-
 @router.get("/opencode/catalog/providers")
 def account_provider_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Project-independent definitions only; never expose global connected state."""
-    return providers.catalog_index(_public_opencode_catalog("/provider"), policy.load(db))
+    return providers.catalog_index(opencode_catalog.public_catalog("/provider"), policy.load(db))
 
 
 @router.get("/opencode/catalog/providers/search")
 def account_provider_search(query: str=Query(min_length=2,max_length=200),
                             user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Search OpenCode definitions independently of a project; no auth status."""
-    return providers.search_index(_public_opencode_catalog("/provider"), query, policy.load(db))
+    return providers.search_index(opencode_catalog.public_catalog("/provider"), query, policy.load(db))
 
 
 @router.get("/opencode/catalog/agents")
 def account_agent_catalog(user: User=Depends(require_user)):
     """List only public agent choices without workspace or private agent configuration."""
-    data = _public_opencode_catalog("/agent", agents=True)
+    data = opencode_catalog.public_catalog("/agent", agents=True)
     return [{"id":row["name"],"name":row["name"],"mode":row.get("mode")}
             for row in data if isinstance(row,dict)
             and isinstance(row.get("name"),str) and 0<len(row["name"])<=120
