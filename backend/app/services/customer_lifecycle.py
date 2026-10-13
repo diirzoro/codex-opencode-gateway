@@ -2,7 +2,7 @@
 import logging
 import shutil
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import delete, inspect, select
+from sqlalchemy import delete, func, inspect, select
 from ..config import settings
 from ..database import SessionLocal
 from ..models import (AccountAudit, AuthSession, ExecutionEvent, GithubAuthState,
@@ -62,8 +62,8 @@ def archive_due(*, now=None):
     count = 0
     with SessionLocal() as db:
         ids = list(db.scalars(select(User.id).outerjoin(Subscription, Subscription.user_id == User.id)
-            .where(User.status == "active", User.role == "customer", User.trial_ends_at <= cutoff,
-                (Subscription.current_period_end.is_(None) | (Subscription.current_period_end <= cutoff)))
+            .where(User.status == "active", User.role == "customer",
+                func.coalesce(Subscription.current_period_end, User.trial_ends_at) <= cutoff)
             .order_by(User.trial_ends_at).limit(100)))
     for identifier in ids:
         locks = []
