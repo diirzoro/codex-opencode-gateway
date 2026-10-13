@@ -24,7 +24,6 @@ def upgrade():
                   server_default=sa.func.now()),
     )
     op.create_index("ix_email_verifications_user_id", "email_verifications", ["user_id"])
-    op.create_index("ix_email_verifications_token_hash", "email_verifications", ["token_hash"], unique=True)
 
 
 def downgrade():
