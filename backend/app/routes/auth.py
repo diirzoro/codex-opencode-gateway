@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
-from ..models import AuthSession, City, Country, Region, User
+from ..models import AuthSession, City, Country, Region, User, EmailVerification
 from ..schemas import LoginRequest, RegisterRequest, UserOut
 from ..security.passwords import hash_password, verify_password
 from ..security.sessions import (hash_session_token, new_session_token, idle_expires_at,
@@ -17,6 +17,7 @@ from ..security.sessions import (hash_session_token, new_session_token, idle_exp
 from ..services.accounts import user_payload
 from ..services.location_validation import validate_locations
 from ..services.disposable_email import require_permanent_email
+from ..services import email_verification
 from ..services.entitlements import CORE_TRIAL_DAYS
 from .dependencies import require_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -44,12 +45,16 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
         raise HTTPException(409, "Username or email already exists")
     validate_locations(db, data.country_id, data.region_id, data.city_id)
     now = datetime.now(timezone.utc)
-    user = User(username=username, email=email, password_hash=hash_password(data.password), phone=data.phone.strip(), postal_code=data.postal_code.strip(), country_id=data.country_id, region_id=data.region_id, city_id=data.city_id, trial_started_at=now, trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS), last_login_at=now)
+    verified_social = False
+    user = User(username=username, email=email, password_hash=hash_password(data.password), phone=data.phone.strip(), postal_code=data.postal_code.strip(), country_id=data.country_id, region_id=data.region_id, city_id=data.city_id, trial_started_at=now, trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS), last_login_at=None, status="pending_email")
     pending = request.cookies.get(social_login.SIGNUP_COOKIE)
     if pending:
         identity = social_login.unseal(pending, 'signup')
         if email != identity['email']: raise HTTPException(422, 'Use the verified sign-in email to complete registration')
         setattr(user, identity['provider'] + '_subject', identity['subject'])
+        verified_social = True
+        user.status = 'active'
+        user.last_login_at = now
         response.delete_cookie(social_login.SIGNUP_COOKIE, path='/api/auth', secure=settings.cookie_secure, httponly=True, samesite='strict')
     db.add(user)
     try:
@@ -57,8 +62,32 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "Username or email already exists")
-    db.refresh(user); set_session(response, db, user)
+    db.refresh(user)
+    if verified_social:
+        set_session(response, db, user)
+    else:
+        token = email_verification.create_pending(db, user)
+        try:
+            email_verification.send_link(email, token)
+            db.commit()
+        except HTTPException:
+            db.rollback()
+            raise
     return user_payload(user)
+
+@router.get("/verify-email")
+def verify_email(token: str, db: Session = Depends(get_db)):
+    verification, now = email_verification.verify(db, token)
+    user = db.scalar(select(User).where(User.id == verification.user_id).with_for_update())
+    if user is None or user.status != "pending_email":
+        raise HTTPException(400, "Email verification is no longer available")
+    user.status = "active"
+    user.trial_started_at = now
+    user.trial_ends_at = now + timedelta(days=CORE_TRIAL_DAYS)
+    verification.used_at = now
+    db.commit()
+    return RedirectResponse("/#email=verified", status_code=303)
+
 
 @router.post("/login", response_model=UserOut)
 def login(data: LoginRequest, response: Response, db: Session = Depends(get_db)):
