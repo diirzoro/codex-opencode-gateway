@@ -202,13 +202,17 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
     if row is None:
         row=PaymentOrder(user_id=user.id,plan_id=plan.id,method_id=method.id,plan_name=plan.name,method_label=method.label,amount_cents=plan.price_cents,currency=plan.currency,duration_days=plan.duration_days,provider_environment=paypal.settings.paypal_environment if details['details'].get('checkout_mode')=='paypal' else None,billing_note=data.billing_note or None,payer_name=data.payer_name or user.username,payer_email=data.payer_email or user.email,payer_country=country.name if country else data.payer_country or None,payer_region=region.name if region else None,payer_city=city.name if city else None)
         db.add(row);db.commit();db.refresh(row)
+    elif row.status=='awaiting_payment' and not row.provider_order_id:
+        row.payer_name=data.payer_name or user.username;row.payer_email=data.payer_email or user.email
+        row.payer_country=country.name if country else data.payer_country or None;row.payer_region=region.name if region else None;row.payer_city=city.name if city else None
+        db.commit()
     if row.archived_at is not None:
         row.archived_at=None;db.commit()
     if details['details'].get('checkout_mode')=='paypal':
         row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==row.id).with_for_update())
         if row.provider_order_id:
             payload=paypal.show_order(row)
-            if payload.get('status')=='COMPLETED':return {'order':order_payload(row),'method':details,'automatic_processing':True,'approval_url':None,'message':'Payment is awaiting server verification. Confirm it to reconcile.'}
+            if payload.get('status') in {'APPROVED','COMPLETED'}:return {'order':order_payload(row),'method':details,'automatic_processing':True,'approval_url':None,'message':'Payment is awaiting server verification. Confirm it to reconcile.'}
         else:
             payload=paypal.create_order(row)
             provider_id=payload.get('id','')
