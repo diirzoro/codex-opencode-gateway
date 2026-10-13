@@ -36,9 +36,23 @@ def _connection_events(db, workspace):
 
 
 def connection_revision(db, workspace):
-    from ..models import AccountAudit
+    from sqlalchemy import inspect, select
+    from ..models import AccountAudit, UserProviderCredential
     latest = db.scalar(_connection_events(db, workspace).order_by(AccountAudit.id.desc()).limit(1))
-    return latest.id if latest else 0
+    legacy_revision = latest.id if latest else 0
+    # A credential added/deleted from the user's dashboard changes every
+    # workspace's catalog identity, even if its runtime has not restarted yet.
+    if not inspect(db.get_bind()).has_table("user_provider_credentials"):
+        return str(legacy_revision)
+    rows = db.execute(select(UserProviderCredential.provider_id, UserProviderCredential.updated_at).where(
+        UserProviderCredential.user_id == workspace.user_id).order_by(UserProviderCredential.provider_id))
+    revision = hashlib.sha256()
+    for provider_id, updated_at in rows:
+        revision.update(provider_id.encode())
+        revision.update(b":")
+        revision.update(str(updated_at).encode())
+        revision.update(b";")
+    return str(legacy_revision) + ":" + revision.hexdigest()[:16]
 
 
 def is_locally_disconnected(db, workspace, provider_id):
