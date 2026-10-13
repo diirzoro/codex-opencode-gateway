@@ -419,7 +419,7 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
         method=data.method if data.method is not None else (api_methods[0] if len(api_methods)==1 else None)
         if method is None or method >= len(methods) or methods[method].get("type") not in {"api","key"}:
             raise HTTPException(422,"Select an API key authentication method reported by OpenCode; OAuth-only providers require their OAuth flow")
-        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
+        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.user_id==user.id,ProviderCredential.provider_id==provider_id))
         if row is None and providers.is_connected(service,provider_id) and not providers.is_locally_disconnected(db,workspace,provider_id):
             raise HTTPException(409,"Disconnect the existing runtime connection before replacing its authentication")
         service.ensure_auth_idle()
@@ -512,7 +512,7 @@ def provider_oauth_callback(workspace_id: uuid.UUID,provider_id: str,data: OAuth
         session_lifecycle.lock_workspace(db,workspace)
         accepted=providers.oauth_callback(service,provider_id,data.method,data.code)
         # OAuth state belongs to OpenCode. Retire any old Gateway API-key binding.
-        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace_id,ProviderCredential.provider_id==provider_id))
+        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace_id,ProviderCredential.user_id==user.id,ProviderCredential.provider_id==provider_id))
         if row is not None:
             db.delete(row)
         if accepted:
