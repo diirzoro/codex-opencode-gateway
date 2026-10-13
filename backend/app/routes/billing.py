@@ -48,6 +48,11 @@ def subscription_payload(db, user) -> dict:
     if end is not None and end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
     remaining = max(0, ceil((end - now).total_seconds() / 86400)) if end else 0
+    paid_end = row.current_period_end
+    if paid_end is not None and paid_end.tzinfo is None:
+        paid_end = paid_end.replace(tzinfo=timezone.utc)
+    paid_active = bool(row.status == 'active' and row.plan_id and paid_end and paid_end > now)
+    paid_remaining = max(0, ceil((paid_end - now).total_seconds() / 86400)) if paid_end else 0
     plans = [plan_payload(p) for p in db.scalars(select(Plan).where(Plan.active.is_(True)).order_by(Plan.sort_order, Plan.id))]
     return {
         "plan": plan_payload(user.plan),
@@ -55,6 +60,9 @@ def subscription_payload(db, user) -> dict:
         "trial": {"started_at": user.trial_started_at, "ends_at": user.trial_ends_at, "remaining_days": remaining, "active": remaining > 0},
         "subscription": {"status": row.status, "started_at": row.started_at, "current_period_end": row.current_period_end, "cancelled_at": row.cancelled_at, "auto_renew": bool(row.auto_renew)},
         "plans": plans,
+        "paid_entitlement": {"active": paid_active, "ends_at": paid_end,
+                             "remaining_days": paid_remaining if paid_active else 0,
+                             "plan_id": row.plan_id if paid_active else None},
         "payment": {"available": bool(db.scalar(select(BillingMethod.id).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)).limit(1))), "message": "Choose checkout; activation requires verified payment" if db.scalar(select(BillingMethod.id).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)).limit(1)) else PAYMENT_MESSAGE},
         "access": access_payload(db,user),
     }
