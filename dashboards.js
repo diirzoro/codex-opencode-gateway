@@ -287,15 +287,15 @@
     };document.body.append(picker);picker.click();
   }
   q('openTools').onclick=()=>window.openConnections('providers');q('openTools').title=tr('Open OpenCode provider and workspace setup','\u0641\u062a\u062d \u0625\u0639\u062f\u0627\u062f \u0645\u0632\u0648\u062f OpenCode \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644');q('chatGithub').onclick=()=>openConnections('github');
-  // Option 2 layout: Sessions and project files are sections of the right workspace panel.
-  const sessionsSection=document.createElement('details');sessionsSection.className='workspace-side-section workspace-sessions';sessionsSection.open=false;
-  const sessionsSummary=text('summary','Sessions','الجلسات'),sessionsCount=textElement('small','','sidebar-count');sessionsSummary.append(sessionsCount);sessionsSection.append(sessionsSummary);
+  // Project, conversations and preview have independent panel tabs.
+  const sessionsSection=document.createElement('section');sessionsSection.className='workspace-conversations';sessionsSection.hidden=true;
+  const sessionsSummary=text('h3','Conversations','المحادثات'),sessionsCount=textElement('small','','sidebar-count');sessionsSummary.append(sessionsCount);sessionsSection.append(sessionsSummary);
   const sessionsBody=textElement('div','','section-body');
   const newSessionButton=pane.querySelector('.new-session');
   const search=document.createElement('input');search.type='search';search.id='workspaceSessionSearch';search.placeholder=tr('Search sessions','ابحث في الجلسات');search.setAttribute('aria-label','Search sessions');
   search.oninput=()=>renderRuntimeSessions(sessionRows);
-  const sessionTabs=textElement('div','','session-filters');let sessionFilter='active',sessionRows=[],sessionListPending=null,sessionCreating=null,sending=false,pendingSubmission=null,cancelRequested=false,statusPending=null;
-  for(const [value,en,ar] of [['active','Active','نشطة'],['closed','Previous / Closed','سابقة / مغلقة'],['archived','Archived','مؤرشفة']]){const tab=btn('sessions-'+value,en,ar,()=>{sessionFilter=value;for(const b of sessionTabs.children)b.setAttribute('aria-pressed',String(b===tab));renderRuntimeSessions(sessionRows);});tab.setAttribute('aria-pressed',String(value===sessionFilter));sessionTabs.append(tab);}
+  const sessionTabs=textElement('div','','session-filters');let sessionFilter='all',sessionRows=[],sessionListPending=null,sessionCreating=null,sending=false,pendingSubmission=null,cancelRequested=false,statusPending=null;
+  for(const [value,en,ar] of [['all','All','الكل'],['active','Active','نشطة'],['closed','Previous / Closed','سابقة / مغلقة'],['archived','Archived','مؤرشفة']]){const tab=btn('sessions-'+value,en,ar,()=>{sessionFilter=value;for(const b of sessionTabs.children)b.setAttribute('aria-pressed',String(b===tab));renderRuntimeSessions(sessionRows);});tab.setAttribute('aria-pressed',String(value===sessionFilter));sessionTabs.append(tab);}
   const closeSessionButton=btn('closeActiveSession','Close / Disconnect','إغلاق / فصل',()=>sessionAction(activeSession,'close'));
   const submissionStatus=textElement('p','','muted-small');submissionStatus.setAttribute('role','status');q('promptForm').before(submissionStatus);
   const retrySubmission=btn('retrySubmission','Check / retry same submission','تحقق / أعد نفس الطلب',()=>submitPending());retrySubmission.hidden=true;q('promptForm').before(retrySubmission);
@@ -338,8 +338,9 @@
   }
   const modes=textElement('nav','','workspace-panel-modes');modes.setAttribute('aria-label',tr('Workspace panel','لوحة مساحة العمل'));
   const changesMode=btn('workspaceChanges','Project','المشروع',()=>setPanel('changes'));
+  const conversationsMode=btn('workspaceConversations','Conversations','المحادثات',()=>setPanel('conversations'));
   const previewMode=btn('workspacePreview','Preview','المعاينة',()=>setPanel('preview'));
-  modes.append(changesMode,previewMode);
+  modes.append(changesMode,conversationsMode,previewMode);
   const close=q('closeSessions');modes.append(close);
   const changesPanel=textElement('section','','workspace-changes'),previewPanel=textElement('section','','workspace-preview');
   changesPanel.id='workspaceChangesPanel';previewPanel.id='workspacePreviewPanel';
@@ -435,7 +436,19 @@
   const changesSection=document.createElement('details');changesSection.className='workspace-side-section workspace-change-group';changesSection.open=false;changesSection.append(text('summary','Project changes','تغييرات المشروع'),changesPanel);
   projectRoot.append(filesSection,changesSection);
   function updateProjectIdentity(){projectName.textContent=activeProject?.repository||activeProject?.name||tr('Project','المشروع');projectKind.textContent=activeProject?.source_type==='github'?tr('GitHub repository','مستودع GitHub'):tr('Local project','مشروع محلي');projectBranch.textContent=tr('Branch: ','الفرع: ')+(activeProject?.branch||'—');projectBranch.hidden=!activeProject?.branch;}
-  updateProjectIdentity();pane.replaceChildren(modes,projectRoot,sessionsSection,previewPanel);
+  const projectGroups=textElement('div','','workspace-project-groups'),projectBuckets=new Map();
+  for(const [kind,en,ar] of [['local','Local test files','ملفات التجربة المحلية'],['github','GitHub files','ملفات GitHub']]){const group=document.createElement('details');group.className='project-source-group';group.open=true;group.dataset.source=kind;const list=textElement('div','','project-source-list');group.append(text('summary',en,ar),list);projectGroups.append(group);projectBuckets.set(kind,{group,list});}
+  let projectListRevision=0;
+  function placeCurrentProject(){const kind=activeProject?.source_type==='github'?'github':'local';projectBuckets.get(kind).list.prepend(projectRoot);updateProjectIdentity();}
+  async function loadProjectGroups(){
+    const id=activeWorkspace?.id,owner=currentUser?.id,revision=++projectListRevision;if(!id)return;placeCurrentProject();
+    try{const data=await api('/api/dashboard');if(activeWorkspace?.id!==id||currentUser?.id!==owner||revision!==projectListRevision)return;
+      for(const {list} of projectBuckets.values())list.replaceChildren();placeCurrentProject();
+      for(const project of data.projects||[]){if(project.id===activeProject?.id)continue;const workspace=project.workspaces?.find(w=>w.status==='ready')||project.workspaces?.[0];if(!workspace)continue;const name=project.repository||project.name;const link=btn('project-folder-'+project.id,name,name,()=>openWorkspace(project,workspace));link.className='project-folder-link';link.title=name;projectBuckets.get(project.source_type==='github'?'github':'local').list.append(link);}
+      for(const {list} of projectBuckets.values())if(!list.children.length)list.append(textElement('p',tr('No projects in this section.','لا توجد مشاريع في هذا القسم.'),'muted-small'));
+    }catch(error){if(activeWorkspace?.id===id&&revision===projectListRevision)placeCurrentProject();}
+  }
+  placeCurrentProject();pane.replaceChildren(modes,projectGroups,sessionsSection,previewPanel);
   pane.append(paneResizer);
   let panelMode='changes',changesStamp=0;
   async function loadChanges(){
@@ -452,7 +465,7 @@
       diffView.textContent=names.size?tr('Select a changed file to review its diff.','اختر ملفًا متغيرًا لمراجعة الفرق.'):tr('No changes in this workspace.','لا توجد تغييرات في مساحة العمل.');
     }catch(error){if(stamp===changesStamp)diffView.textContent=error.message;}
   }
-  async function setPanel(mode){panelMode=mode;projectRoot.hidden=sessionsSection.hidden=mode!=='changes';previewPanel.hidden=mode!=='preview';changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));if(mode==='changes')await loadChanges();}
+  async function setPanel(mode){panelMode=mode;projectGroups.hidden=mode!=='changes';sessionsSection.hidden=mode!=='conversations';previewPanel.hidden=mode!=='preview';changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));conversationsMode.setAttribute('aria-pressed',String(mode==='conversations'));if(mode==='changes')await Promise.all([loadChanges(),loadProjectGroups()]);if(mode==='conversations')await refreshSessions();}
   function drawer(){return matchMedia('(max-width:1100px)').matches;}
   function closePane(){paneDragEnd();pane.classList.remove('open');shell.classList.remove('panel-docked');shell.classList.add('sessions-collapsed');shell.style.gridTemplateColumns='';overlay(false);}
   function togglePane(){const opening=shell.classList.contains('sessions-collapsed')||(drawer()&&!pane.classList.contains('open'));shell.classList.toggle('sessions-collapsed',!opening);pane.classList.toggle('open',opening);shell.classList.toggle('panel-docked',drawer()&&opening);shell.style.gridTemplateColumns='';overlay(false);if(opening){setPanelWidth(panelWidth);if(panelMode==='changes')loadChanges();}}
@@ -506,15 +519,17 @@
   const renderAccess=renderEntitlement;renderEntitlement=function(){renderAccess();updateSend();};
   function renderRuntimeSessions(rows){
     if(!rows)return;sessionsCount.textContent=String(rows.length);sessionRows=[...rows].sort((a,b)=>Number(b.id===activeSession?.id)-Number(a.id===activeSession?.id)||(Date.parse(b.created_at)||0)-(Date.parse(a.created_at)||0));const list=q('sessionList');list.replaceChildren();
-    const shown=sessionRows.filter(row=>(row.lifecycle||'closed')===sessionFilter&&row.title.toLowerCase().includes(search.value.toLowerCase()));
+    const shown=sessionRows.filter(row=>(sessionFilter==='all'?row.lifecycle!=='archived':(row.lifecycle||'closed')===sessionFilter)&&row.title.toLowerCase().includes(search.value.toLowerCase()));
     if(!shown.length)list.append(textElement('p',tr('No sessions in this category.','لا توجد جلسات في هذا القسم.'),'muted-small'));
-    const names={idle:tr('Ready','جاهزة'),ready:tr('Ready','جاهزة'),submitted:tr('Working','قيد التنفيذ'),waiting_approval:tr('Waiting for approval','بانتظار الموافقة'),cancelled:tr('Stopped','متوقفة'),active:tr('Active','نشطة'),running:tr('Running','قيد التنفيذ'),closed:tr('Closed','مغلقة'),archived:tr('Archived','مؤرشفة'),completed:tr('Completed','مكتملة'),failed:tr('Failed','فشلت')};
-    for(const row of shown){const card=textElement('div','','session'+(row.id===activeSession?.id?' current':'')),label=textElement('div');label.append(textElement('strong',row.title),textElement('small',names[row.status]||row.status));const actions=textElement('div','','session-actions');
+    for(const row of shown){
+      const current=row.id===activeSession?.id,item=textElement('div','','conversation-row'+(current?' current':''));
+      const name=btn('conversation-'+row.id,row.title,row.title,()=>{if(row.id===activeSession?.id)return;if(row.lifecycle==='archived')return sessionAction(row,'restore');return selectSession(row);});name.className='conversation-name';name.title=row.title;if(current)name.setAttribute('aria-current','true');
+      const menu=document.createElement('details');menu.className='conversation-menu';const more=textElement('summary','⋯');more.setAttribute('aria-label',tr('Conversation actions: ','خيارات المحادثة: ')+row.title);menu.append(more);const actions=textElement('div','','session-actions');
       if(row.lifecycle==='active')actions.append(btn('close-session-'+row.id,'Close / Disconnect','إغلاق / فصل',()=>sessionAction(row,'close')));
       else if(row.lifecycle==='archived')actions.append(btn('restore-session-'+row.id,'Restore','استعادة',()=>sessionAction(row,'restore')));
-      else actions.append(btn('open-session-'+row.id,'Open','فتح',()=>selectSession(row)),btn('archive-session-'+row.id,'Archive','أرشفة',()=>sessionAction(row,'archive')));
+      else actions.append(btn('archive-session-'+row.id,'Archive','أرشفة',()=>sessionAction(row,'archive')));
       if(row.lifecycle!=='active')actions.append(btn('delete-session-'+row.id,'Delete from history','حذف من السجل',()=>sessionAction(row,'delete')));
-      card.append(label,actions);list.append(card);
+      menu.append(actions);item.append(name,menu);list.append(item);
     }
     updateSend();
   }
@@ -778,6 +793,7 @@
     detailLoads.set(workspace.id,Date.now());
     loadStorage().catch(()=>{});
     loadFiles().catch(()=>{});
+    loadProjectGroups().catch(()=>{});
     refreshSessions().catch(error=>toast(error.message));
     refreshGit().catch(error=>toast(error.message));
   };
