@@ -76,15 +76,24 @@
   async function loadConnections(){
     const root=q('connectionsProviders'),query=root.querySelector('input[role=combobox]')?.value;
     if(query)root.dataset.providerQuery=query;
-    const providersJob=window.renderManagement(root,'providers').catch(error=>{
+    const providersJob=(async()=>{
+      if(activeWorkspace)return window.renderManagement(root,'providers');
+      root.replaceChildren(title('OpenCode providers','مزوّدو OpenCode'),text('p','Provider and agent discovery comes directly from the OpenCode server and does not require a project. A project is only required when you start working with files.','يتم اكتشاف المزوّدين والوكلاء مباشرة من خادم OpenCode ولا يتطلب مشروعًا. يلزم المشروع فقط عند بدء العمل على الملفات.','lead'));
+      const list=await api('/api/opencode/providers',{cache:'no-store'});
+      const available=list.filter(provider=>provider.allowed!==false);
+      for(const provider of available.slice(0,30)){
+        const row=textElement('div','','list-card');row.append(textElement('strong',provider.name||provider.id),textElement('small',provider.connected?tr('Connected in OpenCode','متصل في OpenCode'):tr('Available in OpenCode','متاح في OpenCode')));root.append(row);
+      }
+      if(!available.length)root.append(text('p','No OpenCode providers are available.','لا توجد مزوّدات OpenCode متاحة.'));
+    })().catch(error=>{
       const status=root.querySelector('[role=status]');if(status)status.textContent=error.message;
       root.append(btn('retrySettings','Retry','إعادة المحاولة',()=>loadConnections()));
     });
     const githubJob=loadConnectionsGithub();
-    const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Selected workspace runtime','وقت تشغيل مساحة العمل المختارة'),text('p','Loading workspace state…','جارٍ تحميل حالة مساحة العمل…'));
+    const runtime=q('connectionsRuntime');runtime.replaceChildren(title('OpenCode runtime','وقت تشغيل OpenCode'),text('p','Loading OpenCode state…','جارٍ تحميل حالة OpenCode…'));
     const runtimeJob=(async()=>{
       await (window.workspaceContextReady||Promise.resolve());
-      if(!activeWorkspace){runtime.lastElementChild.textContent=tr('Select a workspace to inspect its runtime.','اختر مساحة عمل لفحص وقت تشغيلها.');return;}
+      if(!activeWorkspace){const state=await api('/api/opencode/status',{cache:'no-store'});runtime.lastElementChild.textContent='OpenCode '+(state.version||'')+' · '+(state.healthy?tr('Ready','جاهز'):tr('Unavailable','غير متاح'));return;}
       const workspaceId=activeWorkspace.id,state=await window.workspaceRuntime.loadAgents(workspaceId);
       if(activeWorkspace?.id===workspaceId)runtime.lastElementChild.textContent='OpenCode '+(state.health?.version||'')+' · '+(state.health?.healthy?tr('Ready','جاهز'):tr('Unavailable','غير متاح'));
     })();
