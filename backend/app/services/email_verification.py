@@ -57,6 +57,7 @@ def verify(db, raw):
     token = db.scalar(select(EmailVerification).where(
         EmailVerification.token_hash == digest).with_for_update())
     now = datetime.now(timezone.utc)
-    if token is None or token.used_at is not None or token.expires_at <= now:
+    expires = token.expires_at.replace(tzinfo=timezone.utc) if token and token.expires_at and token.expires_at.tzinfo is None else (token.expires_at if token else None)
+    if token is None or token.used_at is not None or expires is None or expires <= now:
         raise HTTPException(400, "Verification link is expired or has already been used")
     return token, now
