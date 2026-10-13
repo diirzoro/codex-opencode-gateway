@@ -5,6 +5,7 @@ connection state. Provider policy must be applied by the requesting route.
 """
 import threading
 import time
+from copy import deepcopy
 
 from fastapi import HTTPException
 
@@ -26,7 +27,7 @@ def public_catalog(path, *, agents=False):
     with _catalog_lock:
         cached = _catalog_cache.get(path)
         if cached and time.monotonic() - cached[0] < CATALOG_TTL_SECONDS:
-            return cached[1]
+            return deepcopy(cached[1])
         service = OpenCodeService(settings.opencode_url)
         try:
             data = service.request("GET", path)
@@ -50,6 +51,6 @@ def public_catalog(path, *, agents=False):
                           "connected": [], "gateway_disconnected": [],
                           "default": data.get("default", {})}
             _catalog_cache[path] = (time.monotonic(), public)
-            return public
+            return deepcopy(public)
         finally:
             service.close()
