@@ -38,15 +38,13 @@ def save_encrypted(db: Session, user_id, provider_id: str, ciphertext: str, last
     if not isinstance(last4, str) or len(last4) > 4:
         raise ValueError("Invalid credential fingerprint")
     row = find(db, user_id, provider_id)
-    if row is None:
-        row = UserProviderCredential(
-            user_id=user_id, provider_id=provider_id,
-            ciphertext=ciphertext, last4=last4,
-        )
-        db.add(row)
-    else:
-        row.ciphertext = ciphertext
-        row.last4 = last4
+    if row is not None:
+        raise HTTPException(409, "This provider is already connected to your account")
+    row = UserProviderCredential(
+        user_id=user_id, provider_id=provider_id,
+        ciphertext=ciphertext, last4=last4,
+    )
+    db.add(row)
     return row
 
 
