@@ -554,10 +554,17 @@ def test_provider(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(re
     row,service=_workspace_service(db,user,workspace_id)
     return {"connected":not providers.is_locally_disconnected(db,row,provider_id) and providers.is_connected(service,provider_id)}
 
+def reject_account_key_oauth_conflict(db, user_id, provider_id):
+    """OAuth must not coexist with a restorable account API key for the same provider."""
+    if user_provider_credentials_schema_ready(db) and user_provider_credentials.find(db, user_id, provider_id):
+        raise HTTPException(409, "Account-wide API key exists for this provider; OAuth cannot replace it implicitly")
+
+
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/authorize")
 def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAuthAuthorize,user: User=Depends(require_user),db: Session=Depends(get_db)):
     require_advanced(db,user)
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
+    reject_account_key_oauth_conflict(db,user.id,provider_id)
     _,service=_workspace_service(db,user,workspace_id)
     with service.state_lock:
         return providers.oauth_authorize(service,provider_id,data.method,data.inputs)
@@ -566,6 +573,7 @@ def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAut
 def provider_oauth_callback(workspace_id: uuid.UUID,provider_id: str,data: OAuthCallback,user: User=Depends(require_user),db: Session=Depends(get_db)):
     require_advanced(db,user)
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
+    reject_account_key_oauth_conflict(db,user.id,provider_id)
     workspace,service=_workspace_service(db,user,workspace_id)
     with opencode.workspace_lock(workspace),service.state_lock:
         session_lifecycle.lock_workspace(db,workspace)
