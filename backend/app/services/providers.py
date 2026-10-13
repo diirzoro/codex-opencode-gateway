@@ -68,17 +68,27 @@ def is_locally_disconnected(db, workspace, provider_id):
 def client_catalog(db, workspace, data):
     if data is None:
         return None
-    from ..models import AccountAudit
+    from sqlalchemy import inspect, select
+    from ..models import AccountAudit, UserProviderCredential
     disconnected = set()
     for row in db.scalars(_connection_events(db, workspace).order_by(AccountAudit.id)):
         kind, binding = row.action.split(":", 1)
-        if kind == "provider-off": disconnected.add(binding)
-        else: disconnected.discard(binding)
-    # Overlay only connected state; OpenCode still owns definitions/auth/models.
-    return {**data, "connected": [identifier for identifier in data.get("connected", [])
-                                  if _binding(workspace, identifier) not in disconnected],
+        if kind == "provider-off":
+            disconnected.add(binding)
+        else:
+            disconnected.discard(binding)
+    account_ids = set()
+    if inspect(db.get_bind()).has_table("user_provider_credentials"):
+        account_ids = set(db.scalars(select(UserProviderCredential.provider_id).where(
+            UserProviderCredential.user_id == workspace.user_id)))
+    # A single account credential is usable in all owned workspaces. Legacy
+    # per-workspace disconnect events must not mask an active account key.
+    connected = [identifier for identifier in data.get("connected", [])
+                 if identifier in account_ids or _binding(workspace, identifier) not in disconnected]
+    # Only claim connected when this isolated runtime reports the provider.
+    return {**data, "connected": connected,
             "gateway_disconnected": [entry["id"] for entry in data.get("all", [])
-                                     if _binding(workspace, entry["id"]) in disconnected]}
+                if entry["id"] not in account_ids and _binding(workspace, entry["id"]) in disconnected]}
 
 
 def public_metadata(value):
