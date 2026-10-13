@@ -15,6 +15,7 @@ from ..models import Plan, Subscription, User, PaymentOrder,BillingMethod,Accoun
 from .dependencies import require_user,require_admin,require_billing_user,access_payload
 from ..services import paypal
 from ..services.location_validation import validate_locations
+from ..services.billing_methods import method_payload
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 PAYMENT_MESSAGE = "Payment integration not available yet"
@@ -177,7 +178,6 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
     plan=db.get(Plan,data.plan_id);method=db.get(BillingMethod,data.method_id)
     if not plan or not plan.active: raise HTTPException(422,'Unknown or inactive plan')
     if not method or method.user_id is not None or not method.enabled: raise HTTPException(422,'Payment method is unavailable')
-    from .management import method_payload
     details=method_payload(method)
     if details['details'].get('checkout_mode')=='link' and (not details['details'].get('payment_url') or not details['details'].get('plan_id')):
         raise HTTPException(503,'This payment method needs its hosted checkout link and matching plan configured by administration. No payment was made.')
