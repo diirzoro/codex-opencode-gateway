@@ -74,47 +74,43 @@ def _workspace_and_project(db,user,workspace_id):
 def health(user: User=Depends(require_user)):
     return opencode.shared_health()
 
+def _public_opencode_catalog(path, *, agents=False):
+    """Read definitions from the local OpenCode service without project auth state."""
+    service = opencode.OpenCodeService(settings.opencode_url)
+    try:
+        data = service.request("GET", path)
+        if agents:
+            if not isinstance(data, list):
+                raise HTTPException(502, "OpenCode returned an invalid agent catalog")
+        elif not isinstance(data, dict) or not isinstance(data.get("all"), list):
+            raise HTTPException(502, "OpenCode returned an invalid provider catalog")
+        return data if agents else {**data, "connected": [], "gateway_disconnected": []}
+    finally:
+        service.close()
+
+
 @router.get("/opencode/catalog/providers")
 def account_provider_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Project-independent definitions only; never expose global connected state."""
-    service=opencode.OpenCodeService(settings.opencode_url)
-    try:
-        data=service.request("GET","/provider")
-        if not isinstance(data,dict) or not isinstance(data.get("all"),list):
-            raise HTTPException(502,"OpenCode returned an invalid provider catalog")
-        safe={**data,"connected":[],"gateway_disconnected":[]}
-        return providers.catalog_index(safe,policy.load(db))
-    finally:
-        service.close()
+    return providers.catalog_index(_public_opencode_catalog("/provider"), policy.load(db))
+
 
 @router.get("/opencode/catalog/providers/search")
 def account_provider_search(query: str=Query(min_length=2,max_length=200),
                             user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Search OpenCode definitions independently of a project; no auth status."""
-    service=opencode.OpenCodeService(settings.opencode_url)
-    try:
-        data=service.request("GET","/provider")
-        if not isinstance(data,dict) or not isinstance(data.get("all"),list):
-            raise HTTPException(502,"OpenCode returned an invalid provider catalog")
-        safe={**data,"connected":[],"gateway_disconnected":[]}
-        return providers.search_index(safe,query,policy.load(db))
-    finally:
-        service.close()
+    return providers.search_index(_public_opencode_catalog("/provider"), query, policy.load(db))
+
 
 @router.get("/opencode/catalog/agents")
 def account_agent_catalog(user: User=Depends(require_user)):
     """List only public agent choices without workspace or private agent configuration."""
-    service=opencode.OpenCodeService(settings.opencode_url)
-    try:
-        data=service.request("GET","/agent")
-        if not isinstance(data,list):
-            raise HTTPException(502,"OpenCode returned an invalid agent catalog")
-        return [{"id":row["name"],"name":row["name"],"mode":row.get("mode")}
-                for row in data if isinstance(row,dict)
-                and isinstance(row.get("name"),str) and 0<len(row["name"])<=120
-                and not row.get("hidden") and row.get("mode") in {"primary","all"}]
-    finally:
-        service.close()
+    data = _public_opencode_catalog("/agent", agents=True)
+    return [{"id":row["name"],"name":row["name"],"mode":row.get("mode")}
+            for row in data if isinstance(row,dict)
+            and isinstance(row.get("name"),str) and 0<len(row["name"])<=120
+            and not row.get("hidden") and row.get("mode") in {"primary","all"}]
+
 
 @router.get("/opencode/status")
 def runtime_status(user: User=Depends(require_user)):
