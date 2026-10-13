@@ -119,6 +119,13 @@
     const searchState=node('p','','provider-search-status');searchState.setAttribute('role','status');comboWrap.after(searchState);
     const sameCatalog=data=>data.workspace_id===workspaceId&&data.generation===snapshot?.generation&&data.revision===snapshot?.revision&&data.policy_revision===snapshot?.policy_revision;
     async function lookup(kind,value,signal){
+      if(!workspaceId){
+        const url=kind==='search'?'/api/opencode/catalog/providers/search?query='+encodeURIComponent(value):
+          '/api/opencode/catalog/providers/search?query='+encodeURIComponent(value);
+        const rows=await api(url,{signal});
+        if(!alive()||(activeWorkspace?.id||'')!==workspaceId)throw new DOMException('Workspace changed','AbortError');
+        return kind==='resolve'?rows.filter(row=>row.id===value):rows;
+      }
       const data=await api(base+kind+'?'+(kind==='search'?'query':'name')+'='+encodeURIComponent(value),{signal});
       if(!alive()||activeWorkspace?.id!==workspaceId)throw new DOMException('Workspace changed','AbortError');
       if(!sameCatalog(data)){
@@ -136,7 +143,7 @@
     };
     const showError=(f,error)=>{let st=f.querySelector('.provider-feedback');if(!st){st=node('p','','provider-feedback');f.append(st)}setFeedback(st,error.message,'error')};
     const openAuthDialog=async(p,resolved=false)=>{
-      if(!view.ready||!alive()||activeWorkspace?.id!==workspaceId||view.connecting)return;
+      if(!view.ready||!alive()||(activeWorkspace?.id||"")!==workspaceId||view.connecting)return;
       view.connecting=true;
       const host=node('div');document.body.append(host);
       const dlg=document.createElement('dialog');dlg.className='action-form-dialog provider-auth-dialog';dlg.dataset.formDialog='';
@@ -152,15 +159,16 @@
       dlg.append(head,body,foot);host.append(dlg);
       const discovery=new AbortController(),onAbort=()=>dlg.close();controller.signal.addEventListener('abort',onAbort,{once:true});
       dlg.addEventListener('close',()=>{discovery.abort();controller.signal.removeEventListener('abort',onAbort);for(const input of dlg.querySelectorAll('input[type=password]'))input.value='';view.connecting=false;host.remove();},{once:true});
-      const currentDialog=()=>alive()&&activeWorkspace?.id===workspaceId&&dlg.open;
+      const currentDialog=()=>alive()&&(activeWorkspace?.id||"")===workspaceId&&dlg.open;
       body.append(node('p',tr('API keys are stored encrypted on the server only after OpenCode validates them. Advanced integrations have a 10-day first-use trial within your core trial.','تُحفظ مفاتيح API مشفّرة على الخادم بعد تحقق OpenCode منها. للتكاملات المتقدمة تجربة 10 أيام من أول استخدام ضمن تجربة الأساس.')));
       dlg.showModal();setFeedback(feedback,tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
-      let choices;
+      let choices,accountOptions=null;
       try{
-        if(!resolved)p=(await lookup('resolve',p.id,discovery.signal))[0];
+        if(!workspaceId){accountOptions=await api("/api/opencode/connections/"+encodeURIComponent(p.id)+"/options",{signal:discovery.signal});}
+        else if(!resolved)p=(await lookup('resolve',p.id,discovery.signal))[0];
         if(!currentDialog())return;
         if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
-        choices=p.auth_methods;
+        choices=accountOptions?accountOptions.auth_methods:p.auth_methods;
         if(!Array.isArray(choices)||!choices.length)throw new Error(tr('No authentication methods reported by OpenCode.','لم يعلن OpenCode عن طرق مصادقة.'));
         setFeedback(feedback,'');
       }catch(error){if(currentDialog()&&error.name!=='AbortError')setFeedback(feedback,error.message,'error');return;}
@@ -193,7 +201,7 @@
           async function loadModels(){
             validationModelsReady=false;submit.disabled=true;validationModel.disabled=true;retryModels.hidden=true;setFeedback(feedback,tr('Loading provider models…','جارٍ تحميل نماذج المزوّد…'));
             try{
-              const data=await window.workspaceRuntime.loadModels(workspaceId,p.id);
+              const data=workspaceId?await window.workspaceRuntime.loadModels(workspaceId,p.id):{models:accountOptions.models,allowed:true,default_model:null};
               if(!currentForm())return;
               const rows=data.models.filter(m=>data.allowed!==false&&m.allowed!==false&&(!m.modalities?.output||m.modalities.output.includes('text')));
               validationModel.replaceChildren(new Option(tr('Select validation model','اختر نموذج التحقق'),''));
@@ -213,8 +221,8 @@
           try{
             if(keyMethod){
               setFeedback(feedback,tr('Installing the credential and validating a real OpenCode model request…','جارٍ تثبيت المفتاح والتحقق منه بطلب نموذج فعلي عبر OpenCode…'));
-              const result=await api(base+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
-              f.reset();if(!alive()||activeWorkspace?.id!==workspaceId)return;
+              const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
+              f.reset();if(!alive()||(activeWorkspace?.id||"")!==workspaceId)return;
               if(result.connected!==true||result.persisted!==true)throw new Error(tr('OpenCode connection and credential storage were not confirmed.','لم يتم تأكيد اتصال OpenCode وحفظ المفتاح.'));
               dlg.close();toast(tr('Provider connected. It is now available in the workspace composer.','تم ربط المزوّد. أصبح متاحًا الآن في محرر مساحة العمل.'));await reload();
             }else{
@@ -300,7 +308,7 @@
     function stopSearch(){searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}
     function scheduleSearch(){
       stopSearch();renderOptions();const query=combo.value.trim().toLowerCase();
-      if(query.length<2||!workspaceId||!view.ready)return;
+      if(query.length<2||!view.ready)return;
       const sequence=searchSequence;searchTimer=setTimeout(async()=>{
         searchAbort=new AbortController();searchState.textContent=tr('Searching OpenCode providers…','جارٍ البحث في مزوّدي OpenCode…');
         try{
