@@ -265,18 +265,12 @@ const navigationReady=authReady.then(async()=>{
  window.__navRestored=true;
  if(['admin','owner'].includes(currentUser.role)){await page('adminPage');return;}
  let target='';try{target=localStorage.getItem('og-page')||'';}catch(error){}
- if(window.openClientWorkspace&&(!target||target==='workspaceHomePage'||location.hash==='#social=success')){await window.openClientWorkspace();return;}
- if(!['workspaceHomePage','clientPage','connectionsPage','workspacePage'].includes(target))target='workspaceHomePage';
- window.workspaceRestoring=['workspacePage','connectionsPage'].includes(target);
- showPage(target);const navigation=navigationRevision;
- window.workspaceContextReady=window.workspaceRestoring?restoreWorkspaceContext():Promise.resolve(null);
- if(target==='workspacePage'){
-  const context=await window.workspaceContextReady;window.workspaceRestoring=false;
-  if(navigation!==navigationRevision){if(context&&document.querySelector('#workspacePage.active'))await openWorkspace(context.project,context.workspace);return;}
-  if(context)await openWorkspace(context.project,context.workspace);else await page('workspaceHomePage');return;
- }
+ if(window.openClientWorkspace&&(!target||target==='workspaceHomePage'||target==='workspacePage'||target==='connectionsPage'||location.hash==='#social=success')){await window.openClientWorkspace();return;}
+ if(!['workspaceHomePage','clientPage'].includes(target))target='workspaceHomePage';
+ window.workspaceRestoring=false;
+ window.workspaceContextReady=Promise.resolve(null);
  if(target==='clientPage'){let view='';try{view=localStorage.getItem('og-clientview')||'';}catch(error){}if(view&&window.openClientView){await window.openClientView(view);return;}}
- await page(target);window.workspaceRestoring=false;
+ await page(target);
 }).catch(error=>{document.documentElement.classList.remove('bootstrapping');toast(error.message)});
 // GitHub authorization/repository metadata loads only when its UI is opened.
 window.bootstrapGithubStatus=Promise.resolve(null);
