@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
@@ -522,6 +523,10 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
                 except Exception:
                     db.rollback()
                     logger.warning("Failed provider connection could not persist its disconnect state for workspace %s",workspace.id)
+            # Unique(user_id, provider_id) also protects simultaneous requests
+            # from two different workspaces. Do not leak database error details.
+            if isinstance(exc, IntegrityError):
+                raise HTTPException(409, "This provider is already connected to your account") from None
             detail=f"Provider connection failed during {stage}"
             if isinstance(exc,HTTPException): detail+=" — "+str(exc.detail)
             detail+=". No new key was persisted."
