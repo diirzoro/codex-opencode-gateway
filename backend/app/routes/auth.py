@@ -15,6 +15,7 @@ from ..security.passwords import hash_password, verify_password
 from ..security.sessions import (hash_session_token, new_session_token, idle_expires_at,
     normal_access_ready, reactivation_cookie_name)
 from ..services.accounts import user_payload
+from ..services.location_validation import validate_locations
 from ..services.entitlements import CORE_TRIAL_DAYS
 from .dependencies import require_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -32,21 +33,6 @@ def set_session(response: Response, db: Session, user: User):
     response.set_cookie(settings.session_cookie_name, raw, httponly=True, secure=settings.cookie_secure, samesite="strict", path="/")
     response.delete_cookie(reactivation_cookie_name(), path="/api", secure=settings.cookie_secure, httponly=True, samesite="strict")
     response.headers["X-Session-Idle-Expires-At"] = idle_expires_at(session).isoformat()
-
-def validate_locations(db, country_id, region_id, city_id):
-    if country_id is None:
-        if region_id is not None or city_id is not None:
-            raise HTTPException(422, "Choose a country before region or city")
-        return
-    country = db.scalar(select(Country).where(Country.id == country_id, Country.enabled.is_(True)))
-    if not country: raise HTTPException(422, "Invalid country")
-    region = None
-    if region_id is not None:
-        region = db.scalar(select(Region).where(Region.id == region_id, Region.country_id == country_id, Region.enabled.is_(True)))
-        if not region: raise HTTPException(422, "Invalid region")
-    if city_id is not None:
-        if region is None or not db.scalar(select(City).where(City.id == city_id, City.region_id == region.id, City.enabled.is_(True))):
-            raise HTTPException(422, "Invalid city")
 
 @router.post("/register", response_model=UserOut, status_code=201)
 def register(data: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
