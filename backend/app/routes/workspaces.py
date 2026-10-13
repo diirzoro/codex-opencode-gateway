@@ -687,6 +687,7 @@ def _refresh_other_user_runtimes(db, user_id, current_workspace_id, provider_id,
                     service = opencode.for_workspace(owned, start=False)
                 except HTTPException as exc:
                     if exc.status_code == 409:
+                        _scrub_runtime_provider(user.id,workspace.id,provider_id)
                         continue
                     raise
                 with service.state_lock:
@@ -695,6 +696,32 @@ def _refresh_other_user_runtimes(db, user_id, current_workspace_id, provider_id,
                     service.refresh_auth()
         except Exception:
             logger.warning("Provider refresh deferred for workspace %s", owned.id)
+
+
+def _scrub_runtime_provider(user_id, runtime_id, provider_id):
+    """Erase a revoked provider from a private OpenCode auth file atomically."""
+    from os import chmod, replace
+    from tempfile import NamedTemporaryFile
+    path=settings.runtime_root / str(user_id) / str(runtime_id) / "data" / "opencode" / "auth.json"
+    if path.is_symlink():
+        raise HTTPException(503,"Unsafe credential file path")
+    if not path.exists():
+        return
+    try:
+        values=json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(values,dict):
+            raise ValueError("Invalid authentication file")
+        if provider_id not in values:
+            return
+        del values[provider_id]
+        with NamedTemporaryFile(mode="w",encoding="utf-8",
+                                dir=path.parent,delete=False) as output:
+            temp=output.name
+            json.dump(values,output)
+        chmod(temp,0o600)
+        replace(temp,path)
+    except Exception:
+        raise HTTPException(503,"Provider revoked in database; persisted runtime cleanup requires attention") from None
 
 
 def _remove_account_api_provider(db, user, provider_id):
@@ -733,26 +760,7 @@ def _remove_account_api_provider(db, user, provider_id):
                     # A stopped account runtime will reload only remaining
                     # encrypted credentials, but its old persisted auth file may
                     # still contain the revoked provider. Remove it explicitly.
-        account_auth = (settings.runtime_root / str(user.id) / str(account.id) /
-                        "data" / "opencode" / "auth.json")
-        if account_auth.exists():
-            try:
-                if account_auth.is_symlink():
-                    raise ValueError("Unsafe account authentication path")
-                auth_data = json.loads(account_auth.read_text(encoding="utf-8"))
-                if isinstance(auth_data,dict) and provider_id in auth_data:
-                    del auth_data[provider_id]
-                    from os import replace
-                    from tempfile import NamedTemporaryFile
-                    with NamedTemporaryFile(mode="w", encoding="utf-8",
-                                            dir=account_auth.parent, delete=False) as out:
-                        temp_path = out.name
-                        json.dump(auth_data,out)
-                    from os import chmod
-                    chmod(temp_path,0o600)
-                    replace(temp_path,account_auth)
-            except Exception:
-                raise HTTPException(503,"Account credential was revoked but persisted runtime cleanup failed") from None
+        _scrub_runtime_provider(user.id,account.id,provider_id)
         # Revoke authentication in place when safe, preserving active sessions.
         # If the live runtime refuses removal, stop it: never leave a revoked
         # credential available for execution after the database commit.
@@ -766,9 +774,11 @@ def _remove_account_api_provider(db, user, provider_id):
                     raise
                 with service.state_lock:
                     providers.remove(service, provider_id)
+                _scrub_runtime_provider(user.id,workspace.id,provider_id)
             except Exception:
                 try:
                     opencode.stop_workspace(workspace)
+                    _scrub_runtime_provider(user.id,workspace.id,provider_id)
                 except Exception:
                     logger.error("Provider revocation could not clear workspace runtime %s", workspace.id)
                     raise HTTPException(503, "Provider was revoked in storage but runtime cleanup could not be confirmed") from None
