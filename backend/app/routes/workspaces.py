@@ -87,6 +87,20 @@ def account_provider_catalog(user: User=Depends(require_user),db: Session=Depend
     finally:
         service.close()
 
+@router.get("/opencode/catalog/providers/search")
+def account_provider_search(query: str=Query(min_length=2,max_length=200),
+                            user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Search OpenCode definitions independently of a project; no auth status."""
+    service=opencode.OpenCodeService(settings.opencode_url)
+    try:
+        data=service.request("GET","/provider")
+        if not isinstance(data,dict) or not isinstance(data.get("all"),list):
+            raise HTTPException(502,"OpenCode returned an invalid provider catalog")
+        safe={**data,"connected":[],"gateway_disconnected":[]}
+        return providers.search_index(safe,query,policy.load(db))
+    finally:
+        service.close()
+
 @router.get("/opencode/catalog/agents")
 def account_agent_catalog(user: User=Depends(require_user)):
     """List only public agent choices without workspace or private agent configuration."""
