@@ -134,7 +134,7 @@ class MessageRequest(BaseModel):
     agent_id: str|None=Field(default=None,min_length=1,max_length=120)
 
 class Approval(BaseModel):
-    reply: str=Field(pattern="^(once|reject)$")
+    reply: str=Field(pattern="^(once|similar|reject)$")
 
 def context(db,user,session_id):
     session=workspaces.owned(db,WorkspaceSession,session_id,user.id)
@@ -332,8 +332,26 @@ def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=
         seen.add(identifier)
         if info.get('role')=='user': text=submitted_text.get(identifier,text)
         output.append({"id":identifier,"role":info.get("role"),"text":_sanitize(text,workspace),
-                       "attachments":attachments.get(identifier,[]),"activity":safe_tool_activity(item.get('parts',[]),workspace)})
+                       "attachments":attachments.get(identifier,[]),"activity":safe_tool_activity(item.get('parts',[]),workspace),
+                       "state":"failed" if info.get("error") else "completed" if info.get("time",{}).get("completed") else "working"})
     return output
+
+@router.get("/{session_id}/todos")
+def session_todos(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    service=opencode.for_workspace(workspace)
+    try: rows=service.request('GET',service.session_path(session.opencode_session_id,'/todo'))
+    except HTTPException as error:
+        if error.status_code in {404,405}: return {'supported':False,'items':[]}
+        raise
+    if not isinstance(rows,list): raise HTTPException(502,'Runtime returned an invalid task list')
+    items=[]
+    for row in rows[:100]:
+        if not isinstance(row,dict) or not isinstance(row.get('content'),str): continue
+        status=row.get('status')
+        if status not in {'pending','in_progress','completed','cancelled'}: continue
+        items.append({'content':_sanitize(row['content'][:2000],workspace),'status':status})
+    return {'supported':True,'items':items}
 
 @router.get("/{session_id}/diff")
 def session_diff(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -436,10 +454,135 @@ def hide_message(session_id: uuid.UUID,message_id: str,user: User=Depends(requir
         db.add(ExecutionEvent(session_id=session.id,kind="client_message_hidden",data=json.dumps({"message_id":message_id})))
     db.commit()
 
+class QuestionReply(BaseModel):
+    answers: list[list[str]] = Field(default_factory=list,max_length=20)
+    reject: bool = False
+
+@router.get("/{session_id}/questions")
+def session_questions(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    try: rows=opencode.for_workspace(workspace).request('GET','/question')
+    except HTTPException as error:
+        if error.status_code in {404,405}: return {'supported':False,'requests':[]}
+        raise
+    output=[]
+    for row in rows:
+        if row.get('sessionID')!=session.opencode_session_id: continue
+        questions=[]
+        for q in row.get('questions',[])[:20]:
+            questions.append({'header':_sanitize(str(q.get('header',''))[:200],workspace),
+                'question':_sanitize(str(q.get('question',''))[:8000],workspace),
+                'multiple':bool(q.get('multiple')),'custom':q.get('custom') is not False,
+                'options':[{'label':_sanitize(str(o.get('label',''))[:2000],workspace),
+                    'description':_sanitize(str(o.get('description',''))[:2000],workspace)} for o in q.get('options',[])[:50]]})
+        output.append({'id':row['id'],'questions':questions})
+    return {'supported':True,'requests':output}
+
+@router.post("/{session_id}/questions/{question_id}")
+def answer_question(session_id: uuid.UUID,question_id: str,data: QuestionReply,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id);service=opencode.for_workspace(workspace)
+    rows=service.request('GET','/question')
+    pending=next((r for r in rows if r.get('sessionID')==session.opencode_session_id and r.get('id')==question_id),None)
+    if pending is None: raise HTTPException(404,'Question not found in this conversation')
+    from urllib.parse import quote
+    path='/question/'+quote(question_id,safe='')
+    if data.reject: result=service.request('POST',path+'/reject')
+    else:
+        questions=pending.get('questions',[])
+        if len(data.answers)!=len(questions) or not questions: raise HTTPException(422,'Answer every question')
+        answers=[]
+        for q,values in zip(questions,data.answers):
+            if not values or len(values)>20 or (not q.get('multiple') and len(values)!=1) or any(not v.strip() or len(v)>2000 for v in values):
+                raise HTTPException(422,'Invalid answer')
+            labels={_sanitize(str(o.get('label',''))[:2000],workspace):o.get('label') for o in q.get('options',[])}
+            if q.get('custom') is False and any(v not in labels for v in values): raise HTTPException(422,'Select one of the offered answers')
+            answers.append([labels.get(v,v) for v in values])
+        result=service.request('POST',path+'/reply',{'answers':answers})
+    if result is not True: raise HTTPException(502,'Runtime did not confirm the answer')
+    event(db,session.id,'question_decision',{'rejected':data.reject})
+    return {'accepted':True}
+
+class RoutineApproval(BaseModel):
+    enabled: bool
+
+def routine_enabled(db, session_id):
+    record=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,
+        ExecutionEvent.kind=='routine_approval').order_by(ExecutionEvent.id.desc()).limit(1))
+    if record is None: return True
+    try: return json.loads(record.data).get('enabled') is True
+    except (ValueError,TypeError): return False
+
+@router.get("/{session_id}/permissions/routine")
+def routine_permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,_=context(db,user,session_id)
+    return {'enabled':routine_enabled(db,session.id)}
+
+@router.put("/{session_id}/permissions/routine")
+def set_routine_permissions(session_id: uuid.UUID,data: RoutineApproval,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id);session_lifecycle.lock_workspace(db,workspace)
+    event(db,session.id,'routine_approval',{'enabled':data.enabled})
+    return {'enabled':data.enabled}
+
+def permission_tool_part(service, session, pending):
+    reference=pending.get('tool') or {}
+    if not reference.get('messageID') or not reference.get('callID'): return None
+    rows=service.request('GET',service.session_path(session.opencode_session_id,'/message'))
+    part=next((p for row in rows if row.get('info',{}).get('id')==reference['messageID']
+        for p in row.get('parts',[]) if p.get('type')=='tool' and p.get('callID')==reference['callID']),None)
+    return part
+
+def routine_request(workspace, part):
+    if not part or part.get('tool') not in {'read','list','glob','grep','write','edit','todowrite','todoread'}: return False
+    if part['tool'] in {'todowrite','todoread'}: return True
+    inp=(part.get('state') or {}).get('input') or {}
+    raw=inp.get('filePath') or inp.get('path')
+    if raw is None and part['tool'] in {'list','glob','grep'}: raw=''
+    if not isinstance(raw,str): return False
+    try:
+        path=Path(raw);root=workspaces.root_for(workspace).resolve()
+        if path.is_absolute():
+            if not path.is_relative_to(root): return False
+            raw=path.relative_to(root).as_posix()
+        if any(p.startswith('.env') or p.lower().endswith(('.pem','.key')) for p in Path(raw).parts): return False
+        workspaces.safe_path(workspace,raw)
+    except (HTTPException,ValueError): return False
+    return True
+
+def approval_fingerprint(permission, patterns, tool=None):
+    return hashlib.sha256(json.dumps([permission, tool, sorted(patterns)], ensure_ascii=False).encode()).hexdigest()
+
+def remembered_approvals(db, session_id):
+    approved=set()
+    records=db.scalars(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,
+        ExecutionEvent.kind.in_(['approval_rule','approval_rules_cleared'])).order_by(ExecutionEvent.id))
+    for record in records:
+        if record.kind=='approval_rules_cleared': approved.clear(); continue
+        if record.kind!='approval_rule': continue
+        try:
+            value=json.loads(record.data).get('fingerprint')
+            if isinstance(value,str) and re.fullmatch(r'[a-f0-9]{64}',value): approved.add(value)
+        except (ValueError,TypeError): pass
+    return approved
+
+@router.get("/{session_id}/permissions/remembered")
+def remembered_permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,_=context(db,user,session_id)
+    return {'count':len(remembered_approvals(db,session.id))}
+
+@router.delete("/{session_id}/permissions/remembered")
+def clear_remembered_permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace)
+    event(db,session.id,'approval_rules_cleared')
+    return {'cleared':True}
+
 @router.get("/{session_id}/permissions")
 def permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    rows=opencode.for_workspace(workspace).request("GET","/permission")
+    service=opencode.for_workspace(workspace)
+    rows=service.request("GET","/permission")
+    remembered=remembered_approvals(db,session.id)
+    _,_,allowed_tools=policy.provider_sets(policy.load(db))
     owned=[]
     for pending in rows:
         if pending.get("sessionID")!=session.opencode_session_id:
@@ -448,8 +591,42 @@ def permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Sessi
         reviewable=isinstance(patterns,list) and 0<len(patterns)<=20 and all(isinstance(p,str) and 0<len(p)<=4000 for p in patterns)
         # Never offer blind approval or approve a truncated command/pattern.
         details=[p.replace(str(workspaces.root_for(workspace)),"[workspace]") for p in patterns] if reviewable else []
-        owned.append({"id":pending["id"],"permission":pending.get("permission"),"patterns":details,"reviewable":reviewable})
-    if owned and session.status=="submitted":
+        permission=pending.get('permission')
+        allowed=isinstance(permission,str) and permission!='external_directory' and (not allowed_tools or permission in allowed_tools)
+        part=None
+        if allowed and reviewable:
+            try: part=permission_tool_part(service,session,pending)
+            except HTTPException: pass
+        tool=part.get('tool') if part else permission if permission in {'bash','read','glob','grep','list','todowrite','todoread'} else None
+        rememberable=reviewable and allowed and bool(tool) and all(p not in {'*','**'} for p in patterns)
+        fingerprint=approval_fingerprint(permission,patterns,tool) if rememberable else None
+        routine=False
+        if allowed and reviewable and routine_enabled(db,session.id):
+            try: routine=routine_request(workspace,part)
+            except HTTPException: routine=False
+        if fingerprint in remembered or routine:
+            # Exact reviewed requests only, scoped to this owned conversation.
+            # Recheck current platform policy on every repeat; never use runtime "always".
+            from urllib.parse import quote
+            session_lifecycle.lock_workspace(db,workspace)
+            _,_,current_tools=policy.provider_sets(policy.load(db))
+            current_allowed=permission!='external_directory' and (not current_tools or permission in current_tools)
+            if not current_allowed or (fingerprint not in remembered_approvals(db,session.id) and not (routine and routine_enabled(db,session.id))):
+                db.rollback()
+            else:
+                try: result=service.request('POST','/permission/'+quote(pending['id'],safe='')+'/reply',{'reply':'once'})
+                except HTTPException as error:
+                    db.rollback()
+                    if error.status_code==404: continue
+                    raise
+                if result is not True: raise HTTPException(502,'Runtime did not confirm the repeated approval')
+                db.execute(update(WorkspaceSession).where(WorkspaceSession.id==session.id,
+                    WorkspaceSession.status=='waiting_approval').values(status='submitted').execution_options(synchronize_session=False))
+                event(db,session.id,'approval_decision',{'reply':'routine' if routine else 'similar','automatic':True,'fingerprint':fingerprint})
+                continue
+        owned.append({'id':pending['id'],'permission':permission,'patterns':details,'reviewable':reviewable,
+                      'rememberable':rememberable,'fingerprint':fingerprint})
+    if owned and session.status in {"submitted","waiting_approval"}:
         changed=db.execute(update(WorkspaceSession).where(WorkspaceSession.id==session.id,
             WorkspaceSession.status=="submitted").values(status="waiting_approval").execution_options(synchronize_session=False)).rowcount
         if changed: event(db,session.id,"waiting_approval")
@@ -461,16 +638,20 @@ def approve(session_id: uuid.UUID,permission_id: str,data: Approval,user: User=D
     session,workspace=context(db,user,session_id)
     pending=permissions(session_id,user,db)
     if permission_id not in {p["id"] for p in pending}: raise HTTPException(404,"Permission request not found")
-    if data.reply=="once" and not next(p["reviewable"] for p in pending if p["id"]==permission_id):
+    if data.reply in {"once","similar"} and not next(p["reviewable"] for p in pending if p["id"]==permission_id):
         raise HTTPException(409,"Permission details cannot be fully reviewed; deny this request")
     requested=next(p for p in pending if p["id"]==permission_id)
     _,_,allowed_tools=policy.provider_sets(policy.load(db))
-    if data.reply=="once" and (requested["permission"]=="external_directory" or
+    if data.reply in {"once","similar"} and (requested["permission"]=="external_directory" or
                                (allowed_tools and requested["permission"] not in allowed_tools)):
         raise HTTPException(403,"This permission is disabled by platform policy")
+    if data.reply=='similar' and not requested.get('rememberable'):
+        raise HTTPException(409,'This request cannot be remembered; approve once or reject')
     from urllib.parse import quote
-    result=opencode.for_workspace(workspace).request("POST","/permission/"+quote(permission_id,safe="")+"/reply",{"reply":data.reply})
+    result=opencode.for_workspace(workspace).request("POST","/permission/"+quote(permission_id,safe="")+"/reply",{"reply":"once" if data.reply=="similar" else data.reply})
     if result is not True: raise HTTPException(502,"Runtime did not confirm the decision")
+    if data.reply=='similar':
+        db.add(ExecutionEvent(session_id=session.id,kind='approval_rule',data=json.dumps({'fingerprint':requested['fingerprint']})))
     db.execute(update(WorkspaceSession).where(WorkspaceSession.id==session.id,
         WorkspaceSession.status=="waiting_approval").values(status="submitted").execution_options(synchronize_session=False))
     event(db,session.id,"approval_decision",{"reply":data.reply})

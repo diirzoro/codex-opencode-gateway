@@ -178,7 +178,22 @@
   const activityStage=textElement('p','','activity-stage');activityStage.setAttribute('role','status');
   const activitySummary=textElement('div','','activity-summary');
   const capabilityView=document.createElement('details');capabilityView.className='agent-capabilities';capabilityView.append(text('summary','Tools & skills','الأدوات والمهارات'));
-  const capabilityBody=textElement('div');capabilityView.append(capabilityBody);workspaceDetails.append(capabilityView);activity.append(activityStage,activitySummary);q('agentFeed').before(activity);
+  const capabilityBody=textElement('div');capabilityView.append(capabilityBody);workspaceDetails.append(capabilityView);activity.append(activityStage,activitySummary);
+  const todoView=textElement('section','','chat-todos');todoView.hidden=true;activity.append(todoView);
+  let activitySession=null,todosPending=false;
+  function keepChatActivity(){const feed=q('agentFeed');if(!activeSession)return;
+    if(activitySession!==activeSession.id){activitySession=activeSession.id;activityStage.textContent=activitySummary.textContent='';todoView.hidden=true;todoView.replaceChildren();}
+    const host=[...feed.querySelectorAll(':scope>.agent-response')].at(-1)||feed;
+    if(activity.parentElement!==host)host.append(activity);
+  }
+  new MutationObserver(keepChatActivity).observe(q('agentFeed'),{childList:true});
+  window.refreshWorkspaceTodos=async()=>{if(!activeSession||todosPending)return;const sessionId=activeSession.id,owner=currentUser?.id;todosPending=true;
+    try{const result=await api('/api/sessions/'+sessionId+'/todos');if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;
+      keepChatActivity();todoView.replaceChildren();todoView.hidden=!result.supported||!result.items?.length;if(todoView.hidden)return;
+      todoView.append(textElement('strong',tr('Task list','قائمة المهام')));const list=document.createElement('ol');
+      for(const item of result.items){const row=document.createElement('li');row.dataset.status=item.status;const labels={pending:['Pending','بانتظار التنفيذ'],in_progress:['In progress','قيد التنفيذ'],completed:['Completed','مكتمل'],cancelled:['Cancelled','أُلغي']};row.append(textElement('span',item.status==='completed'?'✓':item.status==='in_progress'?'◉':'○','todo-state'),textElement('span',item.content),textElement('small',tr(...labels[item.status])));list.append(row);}todoView.append(list);
+    }catch(error){}finally{todosPending=false;}
+  };
   let capabilityWorkspace='',capabilityPending=false;
   capabilityView.addEventListener('toggle',async()=>{
     if(!capabilityView.open||!activeWorkspace||capabilityPending||capabilityWorkspace===activeWorkspace.id)return;
@@ -197,27 +212,32 @@
     finally{capabilityPending=false;}
   });
   const stages={submitted:['Request accepted','تم قبول الطلب'],analyzing:['Analyzing project','تحليل المشروع'],tool_activity:['Tool activity','نشاط أداة'],reading_files:['Reading files','قراءة الملفات'],editing:['Editing file','تعديل ملف'],running_command:['Running command','تشغيل أمر'],running_tests:['Running validation','تشغيل الفحص'],waiting_approval:['Waiting for approval','بانتظار الموافقة'],completed:['Completed','اكتمل'],failed:['Failed','فشل'],cancelled:['Cancelled','أُلغي التنفيذ']};
+  const toolNames={read:['Read files','قراءة الملفات'],list:['List files','عرض الملفات'],glob:['Search files','البحث عن الملفات'],grep:['Search content','البحث في المحتوى'],write:['Write files','كتابة الملفات'],edit:['Edit files','تعديل الملفات'],apply_patch:['Apply changes','تطبيق التغييرات'],bash:['Run command','تشغيل أمر'],question:['Ask a question','طلب توضيح'],todowrite:['Update task list','تحديث قائمة المهام'],todoread:['Read task list','قراءة قائمة المهام'],webfetch:['Read web page','قراءة صفحة ويب'],websearch:['Search the web','البحث في الويب']};
+  const toolName=tool=>tr(...(toolNames[tool]||['Run tool','تشغيل أداة']));
   const statuses={pending:['Waiting','بانتظار التنفيذ'],running:['Running','قيد التشغيل'],completed:['Completed','اكتمل'],error:['Failed','فشل']};
   const operations={inspected:['Inspected','تم فحصه'],changed:['Changed','تم تغييره'],created:['Created','تم إنشاؤه'],deleted:['Deleted','تم حذفه'],moved:['Moved','تم نقله']};
   const activityLabel=(map,value)=>tr(...(map[value]||['Reported','مُعلن']));
+  const workLabel=row=>(row.status==='running'?tr('In progress: ','جارٍ '):row.status==='completed'?tr('Completed: ','اكتمل: '):row.status==='error'?tr('Failed: ','تعذّر: '):tr('Waiting: ','بانتظار: '))+toolName(row.tool);
   window.renderWorkspaceEventLine=(kind,data={})=>{
-    if(kind==='activity')activityStage.textContent=activityLabel(stages,data.stage)+' · '+data.tool+' · '+activityLabel(statuses,data.status);
+    keepChatActivity();
+    if(kind==='activity')activityStage.textContent=workLabel(data);
     else if(stages[kind])activityStage.textContent=activityLabel(stages,kind);
   };
   window.renderMessageActivity=(host,rows)=>{
     if(!rows.length)return;
-    const details=document.createElement('details');details.className='message-activity';details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')));const list=document.createElement('ul');
-    for(const row of rows){const item=textElement('li',row.tool+' · '+activityLabel(statuses,row.status)+(row.command?' · '+row.command:''));
+    const details=document.createElement('details');details.className='message-activity';details.open=!host.querySelector('.message-content')?.textContent.trim();details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')));const list=document.createElement('ul');
+    for(const row of rows){const item=textElement('li',workLabel(row)+(row.command?' · '+row.command:''));
       for(const file of row.files||[])item.append(textElement('div',file.path+' · '+(row.status==='completed'?activityLabel(operations,file.operation):tr('Requested','مطلوب'))));list.append(item);
     }details.append(list);host.append(details);
   };
   window.renderActivitySummary=rows=>{
     const files=new Set(),inspected=new Set(),tools=new Set();
-    for(const row of rows)for(const entry of row.activity||[]){tools.add(entry.tool);if(entry.status==='completed')for(const file of entry.files||[])(file.operation==='inspected'?inspected:files).add(file.path);}
+    const currentRows=rows.slice(rows.findLastIndex(row=>row.role==='user')+1);
+    for(const row of currentRows)for(const entry of row.activity||[]){tools.add(entry.tool);if(entry.status==='completed')for(const file of entry.files||[])(file.operation==='inspected'?inspected:files).add(file.path);}
     const changed=files.size?tr('Reported file changes: ','تغييرات الملفات المُعلنة: ')+[...files].slice(0,20).join(', '):'';
     const read=inspected.size?tr('Files inspected: ','الملفات التي فُحصت: ')+[...inspected].slice(0,20).join(', '):'';
-    const used=tools.size?tr('Tools used: ','الأدوات المستخدمة: ')+[...tools].join(', '):'';
-    activitySummary.textContent=[changed,read,used].filter(Boolean).join(' · ');
+    const used=tools.size?tr('Work summary: ','ملخّص العمل: ')+[...tools].map(toolName).join(', '):'';
+    keepChatActivity();activitySummary.textContent=[changed,read,used].filter(Boolean).join(' · ');window.refreshWorkspaceTodos?.();
   };
   const agent=q('agentSelect');agent.title=tr('Agent','الوكيل');controls.insertBefore(agent,q('providerSelect'));
   const newTask=textElement('button','','icon-btn');newTask.id='composerNewTask';newTask.type='button';newTask.title=tr('New task','مهمة جديدة');newTask.setAttribute('aria-label',tr('New task','مهمة جديدة'));newTask.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>';newTask.onclick=async()=>{if(!activeWorkspace){toast(tr('Open a workspace first.','افتح مساحة عمل أولاً.'));return;}try{await createSession();toast(tr('New task started in this workspace.','بدأت مهمة جديدة في مساحة العمل.'));}catch(error){toast(error.message)}};
@@ -326,14 +346,64 @@
   const approvalsPanel=textElement('section','','workspace-approvals');approvalsPanel.id='workspaceApprovalsPanel';approvalsPanel.hidden=true;
   const approvalsList=textElement('div','','approvals-list');approvalsPanel.append(text('h3','Approvals','الموافقات'),text('p','Sensitive commands require your approval. Approve once or deny each request.','الأوامر الحساسة تتطلب موافقتك. وافق مرة واحدة أو ارفض كل طلب.'),approvalsList);
   function setApprovalsBadge(count){approvalsMode.textContent=tr('Approvals','الموافقات')+(count?' · '+count:'');}
-  function renderApprovals(rows,sessionId){
-    if(!activeSession||activeSession.id!==sessionId){approvalsList.replaceChildren(text('p','Open a session to see approval requests.','افتح جلسة لعرض طلبات الموافقة.'));setApprovalsBadge(0);return;}
-    approvalsList.replaceChildren();setApprovalsBadge(rows.length);
-    if(!rows.length){approvalsList.append(text('p','No pending approval requests.','لا توجد طلبات موافقة معلّقة.'));return;}
-    for(const request of rows){const card=textElement('div','','approval-card');card.append(textElement('strong',request.permission||'permission'),textElement('pre',(request.patterns||[]).join('\n')));const allow=btn('approve-'+request.id,'Allow once','مرة واحدة',async()=>{await api('/api/sessions/'+sessionId+'/permissions/'+request.id,{method:'POST',body:JSON.stringify({reply:'once'})});await loadApprovals();});allow.disabled=!request.reviewable;const deny=btn('deny-'+request.id,'Deny','رفض',async()=>{await api('/api/sessions/'+sessionId+'/permissions/'+request.id,{method:'POST',body:JSON.stringify({reply:'reject'})});await loadApprovals();});card.append(allow,deny);approvalsList.append(card);}
+  const questionView=textElement('section','','chat-questions');questionView.hidden=true;let questionSession=null,questionOwner=null,questionSignature='',questionSending=false;
+  function keepQuestions(){if(!questionView.hidden&&activeSession?.id===questionSession&&currentUser?.id===questionOwner&&!questionView.isConnected)q('agentFeed').append(questionView);}
+  new MutationObserver(keepQuestions).observe(q('agentFeed'),{childList:true});
+  window.refreshWorkspaceQuestions=async()=>{if(!activeSession||questionSending)return;const sessionId=activeSession.id,owner=currentUser?.id;
+    try{const data=await api('/api/sessions/'+sessionId+'/questions');if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;const signature=lang+JSON.stringify(data.requests||[]);
+      if(questionSession===sessionId&&questionOwner===owner&&signature===questionSignature){keepQuestions();return;}
+      questionSession=sessionId;questionOwner=owner;questionSignature=signature;questionView.replaceChildren();questionView.hidden=!data.requests?.length;
+      for(const request of data.requests||[]){const form=document.createElement('form');form.className='chat-approval';form.append(textElement('strong',tr('The agent needs your answer','الوكيل ينتظر إجابتك')));const groups=[];
+        for(const [index,question] of request.questions.entries()){const fieldset=document.createElement('fieldset');fieldset.append(textElement('legend',question.question));const inputs=[];
+          for(const option of question.options){const label=document.createElement('label'),input=document.createElement('input');input.type=question.multiple?'checkbox':'radio';input.name='q'+index;input.value=option.label;label.append(input,textElement('span',option.label));if(option.description)label.append(textElement('small',option.description));fieldset.append(label);inputs.push(input);}
+          let custom=null;if(question.custom){custom=document.createElement('input');custom.type='text';custom.maxLength=2000;custom.placeholder=tr('Your answer…','اكتب إجابتك…');custom.setAttribute('aria-label',custom.placeholder);fieldset.append(custom);}groups.push({inputs,custom,multiple:question.multiple});form.append(fieldset);
+        }
+        const actions=textElement('div','','chat-approval-actions'),submit=textElement('button',tr('Send answer','إرسال الإجابة'),'button ghost small'),reject=textElement('button',tr('Cancel question','إلغاء السؤال'),'button ghost small');submit.type='submit';reject.type='button';actions.append(submit,reject);form.append(actions);
+        async function send(rejected){if(questionSending||activeSession?.id!==sessionId||currentUser?.id!==owner)return;const answers=groups.map(g=>g.custom?.value.trim()?[g.custom.value.trim()]:g.inputs.filter(i=>i.checked).map(i=>i.value));if(!rejected&&answers.some(a=>!a.length)){toast(tr('Answer every question.','أجب عن كل سؤال.'));return;}
+          questionSending=true;form.querySelectorAll('input,button').forEach(n=>n.disabled=true);
+          try{await api('/api/sessions/'+sessionId+'/questions/'+encodeURIComponent(request.id),{method:'POST',body:JSON.stringify({reject:rejected,answers:rejected?[]:answers})});questionSignature='';if(activeSession?.id===sessionId&&currentUser?.id===owner){await refreshSessionStatus();await refreshMessages();}}
+          catch(error){toast(error.message);form.querySelectorAll('input,button').forEach(n=>n.disabled=false);}finally{questionSending=false;await window.refreshWorkspaceQuestions();}
+        }
+        form.onsubmit=event=>{event.preventDefault();send(false);};reject.onclick=()=>send(true);questionView.append(form);
+      }if(!questionView.hidden)q('agentFeed').append(questionView);
+    }catch(error){}
+  };
+  const approvalBusy=new Set();let approvalOwner=null,approvalSession=null;
+  const inlineApprovals=q('approvalBox');inlineApprovals.classList.add('chat-approvals');inlineApprovals.hidden=true;
+  function keepInlineApprovals(){if(!inlineApprovals.hidden&&approvalOwner===currentUser?.id&&approvalSession===activeSession?.id&&!inlineApprovals.isConnected)q('agentFeed').append(inlineApprovals);}
+  new MutationObserver(keepInlineApprovals).observe(q('agentFeed'),{childList:true});
+  async function renderApprovals(rows,sessionId){
+    const owner=currentUser?.id;approvalOwner=owner;approvalSession=sessionId;
+    inlineApprovals.replaceChildren();approvalsList.replaceChildren();setApprovalsBadge(rows.length);
+    if(!activeSession||activeSession.id!==sessionId){inlineApprovals.hidden=true;return;}
+    try{const routine=await api('/api/sessions/'+sessionId+'/permissions/routine');if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;
+      const label=document.createElement('label');label.className='routine-permissions';const toggle=document.createElement('input');toggle.type='checkbox';toggle.checked=routine.enabled===true;
+      toggle.onchange=async()=>{toggle.disabled=true;try{await api('/api/sessions/'+sessionId+'/permissions/routine',{method:'PUT',body:JSON.stringify({enabled:toggle.checked})});await loadApprovals();}catch(error){toggle.checked=!toggle.checked;toast(error.message);}finally{toggle.disabled=false;}};
+      label.append(toggle,textElement('span',tr('Allow routine project-file work; ask for commands and patches','السماح بأعمال ملفات المشروع المعتادة؛ الموافقة للأوامر والباتشات')));approvalsList.append(label);
+    }catch(error){}
+    approvalsList.append(textElement('p',tr('Review permission requests directly in the conversation.','راجع طلبات الموافقة مباشرة داخل الدردشة.')));
+    for(const request of rows){const key=owner+':'+sessionId+':'+request.id;
+      const section=textElement('section','','chat-approval');section.append(textElement('strong',tr('Permission requested: ','طلب موافقة: ')+(request.permission||'permission')),textElement('pre',(request.patterns||[]).join('\n')));
+      if(!request.reviewable)section.append(textElement('p',tr('Full details are unavailable. Reject this request.','التفاصيل الكاملة غير متاحة. ارفض هذا الطلب.')));
+      const buttons=textElement('div','','chat-approval-actions');
+      for(const [reply,en,ar,icon] of [['reject','Reject','رفض','×'],['once','Allow once','موافقة مرة واحدة','✓'],['similar','Allow matching repeats','موافقة على الكل المماثل','✓✓']]){
+        const button=textElement('button','','button ghost small');button.type='button';button.dataset.reply=reply;
+        const mark=textElement('span','','approval-symbol');mark.innerHTML={"reject":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/></svg>","once":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M20 6 9 17l-5-5\"/></svg>","similar":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M18 6 7 17l-5-5\"/><path d=\"m22 10-7.5 7.5L13 16\"/></svg>"}[reply];button.append(mark,textElement('span',tr(en,ar)));button.disabled=approvalBusy.has(key)||(reply!=='reject'&&!request.reviewable)||(reply==='similar'&&!request.rememberable);
+        button.onclick=async()=>{if(approvalBusy.has(key)||activeSession?.id!==sessionId||currentUser?.id!==owner)return;approvalBusy.add(key);buttons.querySelectorAll('button').forEach(b=>b.disabled=true);
+          try{await api('/api/sessions/'+sessionId+'/permissions/'+encodeURIComponent(request.id),{method:'POST',body:JSON.stringify({reply})});if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;await refreshSessionStatus();await refreshMessages();}
+          catch(error){if(currentUser?.id===owner)toast(error.message);}finally{approvalBusy.delete(key);if(activeSession?.id===sessionId&&currentUser?.id===owner)await loadApprovals().catch(()=>{});}
+        };buttons.append(button);
+      }
+      section.append(buttons,textElement('small',tr('Matching repeats applies only to the same reviewed request in this conversation.','موافقة الكل المماثل تخص الطلب نفسه الذي راجعته في هذه المحادثة فقط.')));inlineApprovals.append(section);
+    }
+    inlineApprovals.hidden=rows.length===0;if(rows.length)q('agentFeed').append(inlineApprovals);
+    try{const remembered=await api('/api/sessions/'+sessionId+'/permissions/remembered');if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;
+      if(remembered.count){const note=textElement('div','','remembered-approvals');note.append(textElement('span',tr('Matching repeats approved in this conversation.','تم السماح بالطلبات المماثلة في هذه المحادثة.')));
+        const clear=btn('clearRememberedApprovals','Clear remembered approvals','إلغاء الموافقات المحفوظة',async()=>{if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;await api('/api/sessions/'+sessionId+'/permissions/remembered',{method:'DELETE'});await loadApprovals();});note.append(clear);inlineApprovals.append(note);inlineApprovals.hidden=false;q('agentFeed').append(inlineApprovals);}
+    }catch(error){}
   }
   window.renderWorkspaceApprovals=renderApprovals;
-  async function loadApprovals(){if(!activeSession){renderApprovals([],null);return;}return refreshPermissions();}
+  async function loadApprovals(){if(!activeSession){await renderApprovals([],null);return;}return refreshPermissions();}
   const paneResizer=document.createElement('div');paneResizer.className='pane-resizer';paneResizer.title=tr('Drag to resize','اسحب لتغيير الحجم');paneResizer.setAttribute('role','separator');paneResizer.setAttribute('aria-label',paneResizer.title);paneResizer.setAttribute('aria-orientation','vertical');paneResizer.tabIndex=0;
   let paneDragging=false;let panelWidth=320;
   function panelBounds(){const width=shell.getBoundingClientRect().width||innerWidth,min=drawer()?Math.min(250,Math.max(180,width-120)):250;return {min,max:Math.max(min,Math.min(width*.7,width-(drawer()?120:360)))};}
@@ -353,12 +423,18 @@
   const frame=document.createElement('iframe');frame.title=tr('Project preview','معاينة المشروع');frame.setAttribute('sandbox','allow-scripts');frame.setAttribute('referrerpolicy','no-referrer');frame.hidden=true;
   async function startPreview(){if(!activeWorkspace)return;const id=activeWorkspace.id;previewStatus.textContent=tr('Loading preview…','جارٍ تحميل المعاينة…');try{const result=await api('/api/workspaces/'+id+'/preview?path='+encodeURIComponent(previewPath.value));if(activeWorkspace?.id!==id)return;frame.srcdoc=result.html;frame.hidden=false;previewStatus.textContent=tr('Static preview · ','معاينة ثابتة · ')+result.path+' · '+tr('Network, backend servers and browser automation are unavailable here.','الشبكة والخوادم وأتمتة المتصفح غير متاحة هنا.');}catch(error){frame.hidden=true;previewStatus.textContent=error.message;}}
   const previewActions=textElement('div','','preview-actions');
-  previewActions.append(btn('startWorkspacePreview','Start preview','ابدأ المعاينة',startPreview),btn('refreshWorkspacePreview','Refresh preview','حدّث المعاينة',startPreview));
+  const fullPreview=btn('expandWorkspacePreview','Full screen','تكبير للشاشة',async()=>{if(frame.hidden){toast(tr('Start the preview first.','ابدأ المعاينة أولًا.'));return;}await frame.requestFullscreen();});
+  const newTabPreview=btn('openWorkspacePreviewTab','Open in new tab','فتح في تبويب جديد',()=>{if(frame.hidden){toast(tr('Start the preview first.','ابدأ المعاينة أولًا.'));return;}
+    const encoded=frame.srcdoc.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const html='<!doctype html><html><head><meta charset="utf-8"><title>Project preview</title><meta name="referrer" content="no-referrer"></head><body style="margin:0;height:100vh"><iframe title="Project preview" sandbox="allow-scripts" referrerpolicy="no-referrer" style="width:100%;height:100%;border:0" srcdoc="'+encoded+'"></iframe></body></html>';
+    const url=URL.createObjectURL(new Blob([html],{type:'text/html'})),link=document.createElement('a');link.href=url;link.target='_blank';link.rel='noopener noreferrer';link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);
+  });
+  previewActions.append(btn('startWorkspacePreview','Start preview','ابدأ المعاينة',startPreview),btn('refreshWorkspacePreview','Refresh preview','حدّث المعاينة',startPreview),fullPreview,newTabPreview);
   previewPanel.append(text('h3','Static Preview','معاينة ثابتة'),previewPath,previewActions,previewStatus,frame);
   const sideBrand=pane.querySelector('.side-brand'),sideSpacer=pane.querySelector('.side-spacer'),sideLinks=[...pane.querySelectorAll('.side-link')];
   pane.replaceChildren(modes,sessionsSection,filesSection,changesPanel,previewPanel,approvalsPanel);
   if(sideBrand)pane.prepend(sideBrand);
-  pane.append(...(sideSpacer?[sideSpacer]:[]),...sideLinks,paneResizer);
+  pane.append(paneResizer);
   let panelMode='changes',changesStamp=0;
   async function loadChanges(){
     if(!activeWorkspace)return;const id=activeWorkspace.id,stamp=++changesStamp;diffView.textContent=tr('Loading changes…','جارٍ تحميل التغييرات…');
@@ -392,7 +468,11 @@
   for(const [id,markup] of Object.entries(composerIcons))q(id).innerHTML=markup;
   const picks=textElement('div','','composer-picks'),utilities=textElement('div','','composer-utilities'),actions=textElement('div','','composer-actions');
   picks.append(agent,q('providerSelect'),q('modelSelect'));utilities.append(attach,newTask,q('chatGithub'),q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
-  controls.replaceChildren(picks,utilities,actions,retryModels);
+  const choices=textElement('button','+','icon-btn composer-choice-toggle');choices.type='button';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
+  choices.onclick=()=>{const open=picks.classList.toggle('open');choices.setAttribute('aria-expanded',String(open));};
+  controls.replaceChildren(utilities,choices,picks,actions,retryModels);
+  document.addEventListener('click',event=>{if(!picks.contains(event.target)&&event.target!==choices){picks.classList.remove('open');choices.setAttribute('aria-expanded','false');}});
+  controls.addEventListener('keydown',event=>{if(event.key==='Escape'){picks.classList.remove('open');choices.setAttribute('aria-expanded','false');choices.focus();}});
   window.addEventListener('workspace-provider-disconnected',event=>{
     if(activeWorkspace?.id!==event.detail.workspaceId)return;
     const id=event.detail.providerId;providers=providers.filter(p=>p.id!==id);runtimeReady=false;
@@ -460,8 +540,8 @@
     renderRuntimeSessions(sessionRows);
   });
   function renderAgents(snapshot){
-    agent.title=snapshot.errors?.agents?.detail||tr('Agent','الوكيل');agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode')+(snapshot.default_agent?' · '+snapshot.default_agent:''),''));
-    for(const a of snapshot.agents||[]){const option=new Option(a.name+(a.mode==='subagent'?tr(' · Subagent',' · وكيل فرعي'):''),a.name);option.disabled=Boolean(a.hidden)||!['primary','all'].includes(a.mode);agent.add(option);}
+    agent.title=snapshot.errors?.agents?.detail||tr('Agent','الوكيل');agent.hidden=false;agent.replaceChildren(new Option((snapshot.default_agent==='build'?'Code':snapshot.default_agent==='plan'?'Plan':tr('Agent','الوكيل')),''));
+    for(const a of snapshot.agents||[]){const option=new Option((a.name==='build'?'Code':a.name==='plan'?'Plan':a.name)+(a.mode==='subagent'?tr(' · Subagent',' · وكيل فرعي'):''),a.name);option.disabled=Boolean(a.hidden)||!['primary','all'].includes(a.mode);agent.add(option);}
     agentsReady=snapshot.agents!==null;
     agent.value=(snapshot.agents||[]).some(a=>a.name===chosenAgent&&!a.hidden&&['primary','all'].includes(a.mode))?chosenAgent:'';
     chosenAgent=agent.value;agent.onchange=()=>{chosenAgent=agent.value;updateSend();};updateSend();
@@ -541,6 +621,7 @@
       sessionRows=sessionRows.map(s=>s.id===row.id?{...s,...row}:s);renderRuntimeSessions(sessionRows);updateSend();return row;
     })();statusPending={sessionId,promise};try{return await promise;}finally{if(statusPending?.promise===promise)statusPending=null;}
   }
+  window.refreshWorkspaceSessionStatus=refreshSessionStatus;
   let eventRefreshTimer=null;
   window.addEventListener('authentication-cleared',()=>{
     clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
@@ -694,6 +775,7 @@
     refreshSessions().catch(error=>toast(error.message));
     refreshGit().catch(error=>toast(error.message));
   };
+  let workspaceLanguage=lang;const workspacePrefs=applyPrefs;applyPrefs=()=>{workspacePrefs();if(workspaceLanguage!==lang&&activeSession){refreshMessages().catch(()=>{});loadApprovals().catch(()=>{});}workspaceLanguage=lang;};
   createWorkspaceSession=createSession;
   if(activeProject){q('workspaceRepo').textContent=activeProject.name;q('workspaceBranch').textContent=activeProject.branch||'—';}
   }

@@ -6,7 +6,7 @@ const copy={
 };
 function applyPrefs(){document.documentElement.lang=lang;document.documentElement.dir=lang==='ar'?'rtl':'ltr';document.documentElement.classList.toggle('dark',dark);$$('[data-i18n]').forEach(el=>{if(copy[lang][el.dataset.i18n])el.textContent=copy[lang][el.dataset.i18n]});$$('[data-i18n-placeholder]').forEach(el=>el.placeholder=copy[lang][el.dataset.i18nPlaceholder]||'');$$('#langBtn,.lang-mirror').forEach(el=>el.textContent=lang==='ar'?'EN':'AR');localStorage.setItem('og-lang',lang);localStorage.setItem('og-theme',dark?'dark':'light')}
 let currentUser=null, activeWorkspace=null, activeSession=null, activeProject=null, eventStream=null, permissionTimer=null;
-let navigationRevision=0,workspaceSelectionRevision=0,permissionPending=null,sessionSelectionRevision=0,messageRenderRevision=0;
+let navigationRevision=0,workspaceSelectionRevision=0,permissionPending=null,permissionProgressPending=false,sessionSelectionRevision=0,messageRenderRevision=0;
 const eventCursors=new Map();
 let authenticationRevision=0;
 const authenticatedRequests=new Set();
@@ -126,7 +126,11 @@ function stopEvents(){eventStream?.close();eventStream=null;if(permissionTimer)c
 function syncPermissionPolling(){
  const needed=Boolean(currentUser&&activeSession&&!document.hidden&&$('#workspacePage')?.classList.contains('active'));
  if(!needed){if(permissionTimer)clearInterval(permissionTimer);permissionTimer=null;return;}
- if(!permissionTimer)permissionTimer=setInterval(()=>refreshPermissions().catch(()=>{}),4000);
+ if(!permissionTimer)permissionTimer=setInterval(async()=>{
+  if(permissionProgressPending)return;permissionProgressPending=true;const id=activeSession?.id;
+  try{await refreshPermissions();if(activeSession?.id===id&&['submitted','waiting_approval'].includes(activeSession?.execution_status)){await window.refreshWorkspaceSessionStatus?.();if(activeSession?.id===id)await refreshMessages();}}
+  catch(error){}finally{permissionProgressPending=false;}
+ },4000);
 }
 document.addEventListener('visibilitychange',syncPermissionPolling);
 function apiMessage(id,text,error=false){const el=$('#'+id);el.textContent=text;el.className='api-message show'+(error?' error':'')}
@@ -170,13 +174,22 @@ async function refreshMessages(){
   const rows=await api(`/api/sessions/${sessionId}/messages`);
   if(revision!==messageRenderRevision||activeSession?.id!==sessionId||currentUser?.id!==owner)return;
   const feed=$('#agentFeed');feed.replaceChildren();const seen=new Set();let previousPrompt='',previousAttachments=[];
+  const latestAssistant=rows.filter(row=>row.role==='assistant').at(-1);
   for(const row of rows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
    if(row.role==='user'){previousPrompt=row.text;previousAttachments=row.attachments||[];}
-   const node=document.createElement('article');node.className=row.role==='user'?'user-bubble':'agent-response';node.dir='auto';
+   const node=document.createElement('article');node.className=row.role==='user'?'user-bubble':'agent-response';node.dir='auto';node.tabIndex=0;
    if(row.id)node.dataset.messageId=row.id;
-   const content=textElement('div',row.text,'message-content');node.append(content);if(row.role==='user'&&row.attachments?.length){const attached=textElement('div','','message-attachments');for(const file of row.attachments){const label=textElement('span',file.name+' · '+Math.ceil(file.size/1024)+' KB');label.dir='auto';label.title=file.path;attached.append(label);}node.append(attached);}
+   const hasText=Boolean(row.text?.trim());
+   const content=textElement('div',row.text||'','message-content');node.append(content);
+   if(row.role==='assistant'&&!hasText){const latest=row===latestAssistant,status=latest?activeSession.execution_status:null;
+    const state=status==='waiting_approval'?'waiting_approval':status==='failed'||row.state==='failed'?'failed':status==='cancelled'?'cancelled':status==='submitted'?'working':row.state==='working'&&latest?'working':'completed';
+    const labels={waiting_approval:['Waiting for your approval…','بانتظار موافقتك…'],failed:['The agent could not finish this request. Review the activity below before retrying.','تعذر على الوكيل إكمال الطلب. راجع النشاط أدناه قبل إعادة المحاولة.'],cancelled:['Execution stopped.','تم إيقاف التنفيذ.'],working:['The agent is working…','الوكيل يعمل الآن…'],completed:['Tool step completed.','اكتملت خطوة الأدوات.']};
+    if(latest&&state==='completed')labels.completed=['The agent finished without a text reply. Review the tool results below.','انتهى الوكيل دون رد نصي. راجع نتائج الأدوات أدناه.'];
+    const feedback=textElement('p',labels[state][lang==='ar'?1:0],'agent-progress-note');feedback.setAttribute('role','status');node.append(feedback);
+   }if(row.role==='user'&&row.attachments?.length){const attached=textElement('div','','message-attachments');for(const file of row.attachments){const label=textElement('span',file.name+' · '+Math.ceil(file.size/1024)+' KB');label.dir='auto';label.title=file.path;attached.append(label);}node.append(attached);}
    window.renderMessageActivity?.(node,row.activity||[]);
+   if(row.role==='assistant'&&!hasText){feed.append(node);continue;}
    const bar=document.createElement('div');bar.className='feed-actions';bar.setAttribute('role','group');bar.setAttribute('aria-label',lang==='ar'?'إجراءات الرسالة':'Message actions');
    if(row.role==='user')bar.append(feedAction('repeat',row.text,row.attachments),feedAction('edit',row.text,row.attachments));
    else if(previousPrompt){const regenerate=feedAction('regenerate',previousPrompt,previousAttachments);regenerate.disabled=window.workspaceSubmissionBlocked?.()||false;bar.append(regenerate);}
@@ -202,7 +215,7 @@ async function refreshPermissions(){
  const promise=(async()=>{try{
   const requests=await api(`/api/sessions/${sessionId}/permissions`);
   if(activeSession?.id!==sessionId)return [];
-  if(window.renderWorkspaceApprovals){window.renderWorkspaceApprovals(requests,sessionId);return requests;}
+  if(window.renderWorkspaceApprovals){await window.renderWorkspaceApprovals(requests,sessionId);await window.refreshWorkspaceQuestions?.();return requests;}
   const box=$('#approvalBox');box.replaceChildren();
   for(const request of requests){const row=textElement('div',`${t('approval')}: ${request.permission} `);row.append(textElement('pre',(request.patterns||[]).join('\n')));for(const [label,reply] of [[t('allowOnce'),'once'],[t('deny'),'reject']]){const button=textElement('button',label);button.disabled=reply==='once'&&!request.reviewable;button.onclick=async()=>{try{await api(`/api/sessions/${sessionId}/permissions/${request.id}`,{method:'POST',body:JSON.stringify({reply})});await refreshPermissions()}catch(error){toast(error.message)}};row.append(button)}box.append(row)}return requests;
  }catch(error){if(activeSession?.id===sessionId){stopEvents();toast(error.message);}throw error;}})();

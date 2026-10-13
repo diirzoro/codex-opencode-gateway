@@ -592,20 +592,20 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
 :root #workspacePage #agentFeed .agent-response+.user-bubble{margin-top:32px}
 :root #workspacePage .message-content{font-size:16px;font-weight:400;line-height:1.65;letter-spacing:normal;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:2}
 :root #workspacePage #agentFeed p{margin:0 0 .75em}
-:root #workspacePage #agentFeed .feed-actions{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:8px;white-space:normal;opacity:.65;transition:opacity .15s}
-:root #workspacePage #agentFeed article:is(:hover,:focus-within) .feed-actions{opacity:1}
+:root #workspacePage #agentFeed .feed-actions{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:8px;white-space:normal;opacity:0;pointer-events:none;transition:opacity .15s}
+:root #workspacePage #agentFeed article:is(:hover,:focus-within) .feed-actions{opacity:1;pointer-events:auto}
 :root #workspacePage #agentFeed .feed-actions .icon-btn{display:inline-grid;place-items:center;width:32px;min-width:32px;height:32px;padding:0;border:0;border-radius:8px;background:transparent;box-shadow:none;color:var(--muted)}
 :root #workspacePage #agentFeed .feed-actions .icon-btn:hover{background:var(--panel2);color:var(--text)}
 :root #workspacePage #agentFeed .feed-actions svg{display:block;width:18px;height:18px;stroke-width:1.8}
 :root #workspacePage .prompt-box{order:10;flex:none;min-width:0;width:calc(100% - 40px);max-width:var(--chat-width);margin:8px auto 18px!important;padding:14px 16px 12px!important;border:1px solid var(--surface-edge)!important;border-radius:22px;background:var(--panel);box-shadow:0 4px 20px rgba(15,23,42,.06);transition:border-color .15s,box-shadow .15s}
 :root #workspacePage .prompt-box:focus-within{border-color:var(--primary)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 9%,transparent)}
-:root #workspacePage .prompt-box textarea{display:block;width:100%;min-height:56px;max-height:180px;padding:4px 2px 10px;border:0;border-radius:0;background:transparent;color:var(--text);font-size:16px;line-height:1.55;resize:none;overflow-y:auto;outline:none;box-shadow:none}
+:root #workspacePage .prompt-box textarea{display:block;width:100%;min-height:38px;height:48px;max-height:180px;padding:2px 2px 8px;border:0;border-radius:0;background:transparent;color:var(--text);font-size:16px;line-height:1.55;resize:none;overflow-y:auto;outline:none;box-shadow:none}
 :root #workspacePage .prompt-box textarea::placeholder{color:var(--muted);opacity:1}
-:root #workspacePage .composer-controls{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;margin:0}
-:root #workspacePage .composer-picks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-column:1/-1;gap:8px;min-width:0;padding-bottom:10px;border-bottom:1px solid var(--line)}
-:root #workspacePage .composer-picks select{display:block;min-width:0;width:100%;max-width:none;height:36px;min-height:36px;margin:0;padding:5px 8px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);color:var(--text);box-shadow:none;font-size:12px;text-overflow:ellipsis}
+:root #workspacePage .composer-controls{display:flex;position:relative;align-items:center;gap:8px;margin:0;flex-wrap:nowrap}
+:root #workspacePage .composer-picks{display:flex;gap:4px;min-width:0;padding:0;border:0}
+:root #workspacePage .composer-picks select{display:block;min-width:0;width:auto;max-width:140px;height:32px;min-height:32px;margin:0;padding:4px 5px;border:0;border-radius:8px;background:transparent;color:var(--text);box-shadow:none;font-size:12px;text-overflow:ellipsis}
 :root #workspacePage :is(.composer-utilities,.composer-actions){display:flex;align-items:center;gap:6px;min-width:0}
-:root #workspacePage .composer-actions{justify-content:flex-end}
+:root #workspacePage .composer-actions{justify-content:flex-end;margin-inline-start:auto}
 :root #workspacePage .composer-controls :is(.composer-utilities,.composer-actions)>button{display:inline-grid;place-items:center;flex:none;width:36px;min-width:36px;height:36px;min-height:36px;margin:0;padding:0;border:0;border-radius:10px;background:transparent;color:var(--muted);box-shadow:none;font-size:14px;line-height:1;cursor:pointer}
 :root #workspacePage .composer-controls button svg{display:block;width:20px;height:20px;flex:none;stroke-width:1.8}
 :root #workspacePage .composer-controls button:hover:not(:disabled){background:var(--panel2);color:var(--text)}
@@ -615,8 +615,49 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
 :root #workspacePage .composer-actions #sendMessage:disabled{background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
 :root #workspacePage .composer-actions #stopAgent{color:var(--danger);background:var(--panel2);border:1px solid var(--line)}
 :root #workspacePage .composer-actions #stopAgent:disabled{display:none}
-:root #workspacePage .composer-controls #retryWorkspaceModels{grid-column:1/-1;justify-self:start;min-height:32px;width:auto;border:1px solid var(--line);padding:4px 10px;font-size:12px}
+:root #workspacePage .composer-controls #retryWorkspaceModels{position:absolute;bottom:100%;justify-self:start;min-height:32px;width:auto;border:1px solid var(--line);padding:4px 10px;font-size:12px}
 :root #workspacePage .composer-controls [hidden]{display:none!important}
 :root #workspacePage :is(.composer-controls button,.feed-actions button,.composer-picks select):focus-visible{outline:2px solid var(--primary);outline-offset:3px}
 :root #workspacePage .workspace-activity{max-width:var(--chat-width);margin:6px auto 0}
-@media(max-width:600px){body:has(#workspacePage.active) .app-header{padding-inline:10px;gap:6px}body:has(#workspacePage.active) #logoutButton>span{display:none}body:has(#workspacePage.active) #logoutButton{width:32px;height:32px;display:inline-grid;place-items:center;padding:0}:root #workspacePage #agentFeed{padding:16px 12px 8px}:root #workspacePage #agentFeed>article{margin-bottom:16px}:root #workspacePage #agentFeed .agent-response{padding:4px 2px 8px}:root #workspacePage .prompt-box{width:calc(100% - 20px);margin-bottom:12px!important;padding:12px!important;border-radius:18px}:root #workspacePage .composer-picks{gap:6px}:root #workspacePage .composer-picks select{font-size:11px;padding-inline:5px}:root #workspacePage .composer-controls{gap:8px}:root #workspacePage .composer-utilities{gap:4px}:root #workspacePage .prompt-box textarea{min-height:48px}}
+@media(max-width:600px){body:has(#workspacePage.active) .app-header{padding-inline:10px;gap:6px}body:has(#workspacePage.active) #logoutButton>span{display:none}body:has(#workspacePage.active) #logoutButton{width:32px;height:32px;display:inline-grid;place-items:center;padding:0}:root #workspacePage #agentFeed{padding:16px 12px 8px}:root #workspacePage #agentFeed>article{margin-bottom:16px}:root #workspacePage #agentFeed .agent-response{padding:4px 2px 8px}:root #workspacePage .prompt-box{width:calc(100% - 20px);margin-bottom:12px!important;padding:12px!important;border-radius:18px}:root #workspacePage .composer-controls{gap:6px}:root #workspacePage .composer-utilities{gap:4px}:root #workspacePage .prompt-box textarea{min-height:38px}}
+
+:root #workspacePage .composer-choice-toggle{display:none}
+:root #workspacePage .chat-approvals{width:100%;max-width:var(--chat-width);padding:0;margin:12px auto;font-size:14px;line-height:1.6}
+:root #workspacePage .chat-approval{padding:14px 0;border-block-start:1px solid var(--line);background:transparent}
+:root #workspacePage .chat-approval strong{font-size:15px;font-weight:600}
+:root #workspacePage .chat-approval pre{direction:ltr;text-align:left;unicode-bidi:plaintext;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;padding:10px 12px;margin:10px 0;background:var(--panel2);border-radius:8px;max-height:240px;overflow:auto}
+:root #workspacePage .chat-approval-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+:root #workspacePage .chat-approval-actions button{display:inline-flex;align-items:center;gap:7px;font-size:14px;min-height:36px;border:1px solid var(--line);padding:6px 11px;background:var(--panel);color:var(--text)}
+:root #workspacePage .approval-symbol svg{width:17px;height:17px;display:block}
+:root #workspacePage .chat-approval small{font-size:12px;color:var(--muted)}
+:root #workspacePage .remembered-approvals{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 0;color:var(--muted);font-size:12px}
+:root #workspacePage .agent-progress-note{font-size:14px;line-height:1.6;color:var(--muted);margin:0 0 8px}
+:root #workspacePage .message-activity{font-size:14px;line-height:1.6;margin-top:8px}
+:root #workspacePage .message-activity li{margin-block:5px}
+@media(max-width:700px){
+ :root #workspacePage .composer-choice-toggle{display:inline-grid;place-items:center;width:32px;height:32px;min-width:32px;flex:none;padding:0;background:transparent;color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:22px}
+ :root #workspacePage .composer-picks{display:none;position:absolute;bottom:calc(100% + 8px);inset-inline:0;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px #0002;z-index:10;flex-direction:column}
+ :root #workspacePage .composer-picks.open{display:flex}
+ :root #workspacePage .composer-picks select{max-width:none;width:100%;height:36px;min-height:36px;font-size:13px;border:1px solid var(--line);background:var(--panel2)}
+ :root #workspacePage .composer-utilities #composerNewTask{display:none}
+ :root #workspacePage .composer-controls :is(.composer-utilities,.composer-actions)>button{width:32px;min-width:32px;height:32px;min-height:32px}
+ :root #workspacePage .composer-actions #sendMessage{width:36px;min-width:36px;height:36px}
+}
+:root #workspacePage #agentFeed .workspace-activity{width:100%;max-width:none;margin:8px 0 0;max-height:none;overflow:visible;font-size:13px}
+:root #workspacePage #agentFeed .workspace-activity p{font-size:13px;margin:4px 0}
+:root #workspacePage .chat-todos{margin:12px 0;font-size:14px;line-height:1.6}
+:root #workspacePage .chat-todos ol{list-style:none;display:grid;gap:7px;padding:0;margin:8px 0}
+:root #workspacePage .chat-todos li{display:flex;gap:8px;align-items:start}
+:root #workspacePage .chat-todos li small{margin-inline-start:auto;color:var(--muted);font-size:12px;white-space:nowrap}
+:root #workspacePage .chat-todos [data-status=completed]{color:var(--muted)}
+:root #workspacePage .todo-state{width:18px;flex:none;color:var(--primary)}
+:root #workspacePage .chat-questions{width:100%;max-width:var(--chat-width);margin:12px auto;font-size:14px;line-height:1.6}
+:root #workspacePage .chat-questions fieldset{border:0;padding:0;margin:12px 0;min-width:0}
+:root #workspacePage .chat-questions legend{font-size:14px;margin-bottom:8px}
+:root #workspacePage .chat-questions label{display:flex;align-items:center;gap:8px;margin:7px 0;flex-wrap:wrap}
+:root #workspacePage .chat-questions label small{color:var(--muted)}
+:root #workspacePage .chat-questions input[type=text]{width:100%;font-size:14px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text)}
+:root #workspacePage .preview-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+:root #workspacePage .preview-actions button{min-width:0;font-size:13px;padding:8px 10px;white-space:normal}
+:root #workspacePage .workspace-preview iframe{width:100%;min-height:360px;height:60vh;resize:vertical;border:1px solid var(--line);border-radius:10px;background:white}
+:root #workspacePage .workspace-preview iframe:fullscreen{width:100vw;height:100vh;border:0;border-radius:0;background:white}
