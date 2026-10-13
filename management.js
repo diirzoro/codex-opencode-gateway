@@ -258,10 +258,10 @@
       status.append(act);
     }
     async function disconnect(p){
-      if(!alive()||activeWorkspace?.id!==workspaceId||!view.ready)return;
+      if(!alive()||(activeWorkspace?.id||'')!==workspaceId||!view.ready)return;
       await api(workspaceId?base+encodeURIComponent(p.id):
         '/api/opencode/connections/'+encodeURIComponent(p.id),{method:'DELETE'});
-      if(!alive()||activeWorkspace?.id!==workspaceId)return;
+      if(!alive()||(activeWorkspace?.id||'')!==workspaceId)return;
       view.ready=false;
       snapshot={...snapshot,providers:snapshot.providers.map(row=>row.id===p.id?{...row,connected:false}:row)};
       searchRows=searchRows.map(row=>row.id===p.id?{...row,connected:false}:row);
