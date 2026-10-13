@@ -528,17 +528,32 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
             if not rollback_confirmed: detail+=" Runtime credential cleanup could not be confirmed; disconnect before retrying."
             raise HTTPException(exc.status_code if isinstance(exc,HTTPException) else 502,detail) from None
         if user_provider_credentials_schema_ready(db):
-            _refresh_other_user_runtimes(db, user.id, workspace.id)
+            _refresh_other_user_runtimes(db, user.id, workspace.id, provider_id, encrypted)
         return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],"persisted":True,"validated_model":validated_model}
 
-def _refresh_other_user_runtimes(db, user_id, current_workspace_id):
-    """Ensure other running projects reload account credentials on next use."""
+def _refresh_other_user_runtimes(db, user_id, current_workspace_id, provider_id, ciphertext):
+    """Install a saved account key in active owned runtimes without stopping sessions.
+
+    Stopped runtimes receive this credential from _initialize on next start.
+    An unavailable or busy running runtime is left unchanged and logged rather
+    than forcibly terminating another active session.
+    """
     for owned in db.scalars(select(Workspace).where(
             Workspace.user_id == user_id, Workspace.id != current_workspace_id)):
         try:
-            opencode.stop_workspace(owned)
+            with opencode.workspace_lock(owned):
+                try:
+                    service = opencode.for_workspace(owned, start=False)
+                except HTTPException as exc:
+                    if exc.status_code == 409:
+                        continue
+                    raise
+                with service.state_lock:
+                    service.ensure_auth_idle()
+                    providers.restore_credential(service, provider_id, credentials.decrypt(ciphertext))
+                    service.refresh_auth()
         except Exception:
-            logger.warning("Failed to stop stale provider runtime for workspace %s", owned.id)
+            logger.warning("Provider refresh deferred for workspace %s", owned.id)
 
 
 def _remove_account_api_provider(db, user, provider_id):
