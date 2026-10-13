@@ -322,19 +322,25 @@ def shared_health():
 
 
 def _initialize(service, workspace):
-    """One restoration pass per generation, regardless of which route starts it."""
-    from sqlalchemy import select
+    """Restore user-owned keys with legacy workspace fallback per provider."""
+    from sqlalchemy import inspect, select
     from ..database import SessionLocal
-    from ..models import ProviderCredential
+    from ..models import ProviderCredential, UserProviderCredential
     from . import credentials, providers
     started = time.monotonic()
     service.restore_passes += 1
     with SessionLocal() as db:
-        rows = db.scalars(select(ProviderCredential).where(
+        # Migration 0017 is optional until rollout; older databases keep working.
+        account_rows = []
+        if inspect(db.get_bind()).has_table("user_provider_credentials"):
+            account_rows = list(db.scalars(select(UserProviderCredential).where(
+                UserProviderCredential.user_id == workspace.user_id)))
+        legacy_rows = list(db.scalars(select(ProviderCredential).where(
             ProviderCredential.workspace_id == workspace.id,
-            ProviderCredential.user_id == workspace.user_id))
-        for row in rows:
-            if providers.is_locally_disconnected(db,workspace,row.provider_id):
+            ProviderCredential.user_id == workspace.user_id)))
+        account_ids = {row.provider_id for row in account_rows}
+        for row in [*account_rows, *(r for r in legacy_rows if r.provider_id not in account_ids)]:
+            if providers.is_locally_disconnected(db, workspace, row.provider_id):
                 continue
             try:
                 providers.restore_credential(service, row.provider_id, credentials.decrypt(row.ciphertext))
@@ -343,7 +349,6 @@ def _initialize(service, workspace):
                 service.restore_errors.append({"provider_id": row.provider_id,
                                                 "detail": "Stored credential could not be restored"})
     service.timings["credential_restore_ms"] = round((time.monotonic() - started) * 1000, 2)
-
 
 def for_workspace(workspace, *, start=True):
     if settings.runtime_mode != "local":
