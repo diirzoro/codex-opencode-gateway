@@ -432,6 +432,11 @@ def agent_choices(service):
             if isinstance(r,dict) and isinstance(r.get("name"),str) and 0<len(r["name"])<=120
             and not r.get("hidden") and r.get("mode") in {"primary","all"}]
 
+def user_provider_credentials_schema_ready(db):
+    from sqlalchemy import inspect
+    return inspect(db.get_bind()).has_table("user_provider_credentials")
+
+
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/credentials")
 def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKeyCredential,user: User=Depends(require_user),db: Session=Depends(get_db)):
     require_advanced(db,user)
@@ -455,6 +460,20 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
         row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.user_id==user.id,ProviderCredential.provider_id==provider_id))
         if row is None and providers.is_connected(service,provider_id) and not providers.is_locally_disconnected(db,workspace,provider_id):
             raise HTTPException(409,"Disconnect the existing runtime connection before replacing its authentication")
+        # Do not silently replace a different account-wide key that is already
+        # in use by another workspace. This decision precedes runtime mutation.
+        if user_provider_credentials_schema_ready(db):
+            account_key = user_provider_credentials.find(db, user.id, provider_id)
+            if account_key is not None:
+                from hmac import compare_digest
+                try:
+                    stored = json.loads(credentials.decrypt(account_key.ciphertext))
+                    same_key = isinstance(stored, dict) and compare_digest(
+                        str(stored.get("key", "")), data.api_key)
+                except Exception:
+                    raise HTTPException(409, "Existing account credential cannot be verified; no key was changed")
+                if not same_key:
+                    raise HTTPException(409, "A different account-wide provider key already exists; disconnect it explicitly before replacing")
         service.ensure_auth_idle()
         old_ciphertext=row.ciphertext if row is not None else None
         stage="credential installation"
