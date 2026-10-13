@@ -715,6 +715,44 @@ def _remove_account_api_provider(db, user, provider_id):
         for workspace in workspaces:
             providers.record_connection(db, workspace, provider_id, connected=False)
         db.commit()
+        # Account OAuth and API credentials also live in the user's dedicated
+        # auth runtime. Remove that copy first before touching project runtimes.
+        account = opencode.account_workspace(user.id)
+        with opencode.workspace_lock(account):
+            try:
+                account_service = opencode.for_workspace(account, start=False)
+            except HTTPException as exc:
+                if exc.status_code != 409:
+                    raise
+            else:
+                try:
+                    with account_service.state_lock:
+                        providers.remove(account_service, provider_id)
+                except Exception:
+                    opencode.stop_workspace(account)
+                    # A stopped account runtime will reload only remaining
+                    # encrypted credentials, but its old persisted auth file may
+                    # still contain the revoked provider. Remove it explicitly.
+        account_auth = (settings.runtime_root / str(user.id) / str(account.id) /
+                        "data" / "opencode" / "auth.json")
+        if account_auth.exists():
+            try:
+                if account_auth.is_symlink():
+                    raise ValueError("Unsafe account authentication path")
+                auth_data = json.loads(account_auth.read_text(encoding="utf-8"))
+                if isinstance(auth_data,dict) and provider_id in auth_data:
+                    del auth_data[provider_id]
+                    from os import replace
+                    from tempfile import NamedTemporaryFile
+                    with NamedTemporaryFile(mode="w", encoding="utf-8",
+                                            dir=account_auth.parent, delete=False) as out:
+                        temp_path = out.name
+                        json.dump(auth_data,out)
+                    from os import chmod
+                    chmod(temp_path,0o600)
+                    replace(temp_path,account_auth)
+            except Exception:
+                raise HTTPException(503,"Account credential was revoked but persisted runtime cleanup failed") from None
         # Revoke authentication in place when safe, preserving active sessions.
         # If the live runtime refuses removal, stop it: never leave a revoked
         # credential available for execution after the database commit.
