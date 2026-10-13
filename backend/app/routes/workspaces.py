@@ -408,7 +408,7 @@ def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_us
 @router.get("/workspaces/{workspace_id}/providers")
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row,service=_workspace_service(db,user,workspace_id)
-    return providers.catalog(providers.client_catalog(db,row,service.request("GET","/provider")),
+    return providers.catalog(providers.client_catalog(db,row,service._core_value("provider_data","/provider")),
                              providers.auth_methods(service),policy.load(db))
 
 @router.get("/workspaces/{workspace_id}/providers/{provider_id}/models")
