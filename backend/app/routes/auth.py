@@ -56,23 +56,26 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
         user.status = 'active'
         user.last_login_at = now
         response.delete_cookie(social_login.SIGNUP_COOKIE, path='/api/auth', secure=settings.cookie_secure, httponly=True, samesite='strict')
+    # Fail closed before writing any pending account if outbound mail is absent.
+    if not verified_social and not email_verification.smtp_ready():
+        raise HTTPException(503, "Email verification is unavailable; registration cannot proceed")
     db.add(user)
     try:
+        db.flush()
+        if not verified_social:
+            token = email_verification.create_pending(db, user)
+            db.flush()
+            email_verification.send_link(email, token)
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(409, "Username or email already exists")
+        raise HTTPException(409, "Username or email already exists") from None
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(user)
     if verified_social:
         set_session(response, db, user)
-    else:
-        token = email_verification.create_pending(db, user)
-        try:
-            email_verification.send_link(email, token)
-            db.commit()
-        except HTTPException:
-            db.rollback()
-            raise
     return user_payload(user)
 
 @router.get("/verify-email")
