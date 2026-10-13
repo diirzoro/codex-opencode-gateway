@@ -196,6 +196,60 @@ def connect_account_provider(provider_id: str,data: ApiKeyCredential,
             "persisted":True,"validated_model":validated_model}
 
 
+@router.post("/opencode/connections/{provider_id}/oauth/authorize")
+def account_oauth_authorize(provider_id: str,data: OAuthAuthorize,
+                            user: User=Depends(require_user),db: Session=Depends(get_db)):
+    user_provider_credentials.require_schema(db)
+    require_advanced(db,user)
+    if not 0 < len(provider_id) <= 120 or not policy.provider_allowed(policy.load(db),provider_id):
+        raise HTTPException(403,"Provider OAuth is restricted")
+    reject_account_key_oauth_conflict(db,user.id,provider_id)
+    account,service=opencode.for_account(user.id)
+    with opencode.workspace_lock(account),service.state_lock:
+        return providers.oauth_authorize(service,provider_id,data.method,data.inputs)
+
+
+@router.post("/opencode/connections/{provider_id}/oauth/callback")
+def account_oauth_callback(provider_id: str,data: OAuthCallback,
+                           user: User=Depends(require_user),db: Session=Depends(get_db)):
+    user_provider_credentials.require_schema(db)
+    require_advanced(db,user)
+    if not 0 < len(provider_id) <= 120 or not policy.provider_allowed(policy.load(db),provider_id):
+        raise HTTPException(403,"Provider OAuth is restricted")
+    db.scalar(select(User).where(User.id==user.id).with_for_update())
+    reject_account_key_oauth_conflict(db,user.id,provider_id)
+    account,service=opencode.for_account(user.id)
+    with opencode.workspace_lock(account),service.state_lock:
+        accepted=providers.oauth_callback(service,provider_id,data.method,data.code)
+        if not accepted:
+            raise HTTPException(502,"OpenCode did not confirm OAuth")
+        # OpenCode stores OAuth tokens in this user's isolated XDG data folder.
+        # Never read shared daemon auth, include secrets in API responses, or
+        # copy account auth files into project directories.
+        path=settings.runtime_root / str(user.id) / str(account.id) / "data" / "opencode" / "auth.json"
+        try:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("Missing isolated OpenCode credential")
+            file_data=json.loads(path.read_text(encoding="utf-8"))
+            oauth=file_data.get(provider_id) if isinstance(file_data,dict) else None
+            if not isinstance(oauth,dict) or oauth.get("type")!="oauth":
+                raise ValueError("OAuth credential was not saved")
+            if not isinstance(oauth.get("access"),str) or not isinstance(oauth.get("refresh"),str) or not isinstance(oauth.get("expires"),int):
+                raise ValueError("Incomplete OAuth credential")
+            safe={key:oauth[key] for key in ("type","access","refresh","expires","accountId","enterpriseUrl") if key in oauth}
+            encrypted=credentials.encrypt(json.dumps(safe))
+            require_advanced(db,user,start=True)
+            user_provider_credentials.save_encrypted(db,user.id,provider_id,encrypted,"")
+            db.commit()
+        except Exception:
+            db.rollback()
+            try: providers.remove(service,provider_id)
+            except Exception: logger.warning("Isolated OAuth cleanup requires attention for user %s", user.id)
+            raise HTTPException(502,"OAuth credential could not be persisted securely") from None
+    _refresh_other_user_runtimes(db,user.id,uuid.UUID(int=0),provider_id,encrypted)
+    return {"connected":True,"provider_id":provider_id,"persisted":True}
+
+
 @router.get("/opencode/status")
 def runtime_status(user: User=Depends(require_user)):
     try: health=opencode.shared_health()
