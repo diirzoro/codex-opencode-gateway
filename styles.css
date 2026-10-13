@@ -137,17 +137,17 @@ html,body{height:100%}
 .pw-toggle{margin-top:6px;padding:2px 0;background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer;align-self:flex-start}.pw-toggle:hover{color:var(--text)}
 .pay-icon{width:18px;height:18px;display:inline-flex;margin-inline-end:6px;vertical-align:middle;flex-shrink:0;color:var(--muted)}.pay-icon svg{width:100%;height:100%;display:block}.icon-btn{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--muted);border-radius:8px;cursor:pointer;padding:0;transition:background .15s ease,color .15s ease}.icon-btn svg{width:18px;height:18px;display:block}.icon-btn:hover{background:var(--line);color:var(--text)}.icon-btn:disabled{opacity:.35;cursor:default}
 .provider-combo{position:relative;max-width:620px;margin:4px 0 10px}.provider-combo input{width:100%;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font-size:13px;outline:none}.provider-combo input:focus{border-color:var(--muted)}.provider-combo-options{position:absolute;top:calc(100% + 4px);inset-inline:0;max-height:260px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px #0002;z-index:30;padding:4px;display:grid}.provider-combo-options[hidden]{display:none}.provider-combo-option{border:0;background:none;text-align:start;padding:9px 12px;border-radius:8px;font-size:13px;color:var(--text);cursor:pointer}.provider-combo-option:hover{background:var(--line)}.provider-combo-status{display:flex;align-items:center;gap:12px;min-height:24px;color:var(--muted);font-size:12px;flex-wrap:wrap}.provider-combo-status strong{color:var(--text);font-size:13px}
-#sendMessage{background:var(--primary);color:#fff;border-color:transparent;box-shadow:none}#sendMessage:hover:not(:disabled){background:var(--primary2)}#sendMessage:disabled{background:var(--panel2);color:var(--muted);border:1px dashed var(--line);box-shadow:none}.session-sidebar{position:relative}.pane-resizer{position:absolute;inset-inline-start:-8px;top:0;bottom:0;width:16px;cursor:col-resize;z-index:9;background:transparent;touch-action:none;pointer-events:auto}.pane-resizer::before{content:"";position:absolute;top:0;bottom:0;inset-inline-start:5px;width:2px;border-radius:2px;background:var(--line)}.pane-resizer:hover::before,.pane-resizer:active::before{background:var(--primary)}.workspace-approvals{padding:6px 2px}.approvals-list{display:grid;gap:10px;margin-top:10px}.approval-card{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel);display:grid;gap:8px}.approval-card pre{margin:0;white-space:pre-wrap;font-size:12px;color:var(--muted);overflow-wrap:anywhere}.approval-card .button{justify-self:start}
+#sendMessage{background:var(--primary);color:#fff;border-color:transparent;box-shadow:none}#sendMessage:hover:not(:disabled){background:var(--primary2)}#sendMessage:disabled{background:var(--panel2);color:var(--muted);border:1px dashed var(--line);box-shadow:none}.session-sidebar{position:relative}.pane-resizer{position:absolute;inset-inline-start:-8px;top:0;bottom:0;width:16px;cursor:col-resize;z-index:9;background:transparent;touch-action:none;pointer-events:auto}.pane-resizer::before{content:"";position:absolute;top:0;bottom:0;inset-inline-start:5px;width:2px;border-radius:2px;background:var(--line)}.pane-resizer:hover::before,.pane-resizer:active::before{background:var(--primary)}
 #sendMessage{width:34px;height:34px;min-width:34px;border:0;border-radius:9px;background:var(--primary);color:#fff;display:inline-grid;place-items:center;padding:0}#sendMessage svg{width:18px;height:18px;display:block}#sendMessage:hover:not(:disabled){background:var(--primary2)}#sendMessage:disabled{background:var(--panel2);color:var(--muted);border:1px dashed var(--line)}
 
 #workspacePage .workspace-shell.panel-docked{grid-template-columns:minmax(0,1fr) var(--panel-w,320px)!important}#workspacePage .workspace-shell.panel-docked .session-sidebar{position:relative!important;display:flex!important;inset:auto!important;width:auto!important;z-index:auto!important;box-shadow:none!important}
 /* Option 2 workspace panel sections (Sessions / Project files) */
 #workspacePage .workspace-side-section{border:1px solid var(--line);border-radius:12px;background:var(--panel);margin-bottom:12px;overflow:hidden}
-#workspacePage .workspace-side-section summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;padding:11px 12px;font-weight:700;font-size:13px;color:var(--text)}
-#workspacePage .workspace-side-section summary::-webkit-details-marker{display:none}
-#workspacePage .workspace-side-section summary::marker{content:""}
-#workspacePage .workspace-side-section summary::after{content:"";width:7px;height:7px;border-inline-end:1.6px solid var(--muted);border-bottom:1.6px solid var(--muted);transform:rotate(45deg);transition:transform .15s ease;margin-inline-start:auto;flex:none}
-#workspacePage .workspace-side-section[open] summary::after{transform:rotate(-135deg)}
+#workspacePage .workspace-side-section>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;padding:11px 12px;font-weight:700;font-size:13px;color:var(--text)}
+#workspacePage .workspace-side-section>summary::-webkit-details-marker{display:none}
+#workspacePage .workspace-side-section>summary::marker{content:""}
+#workspacePage .workspace-side-section>summary::after{content:"";width:7px;height:7px;border-inline-end:1.6px solid var(--muted);border-bottom:1.6px solid var(--muted);transform:rotate(45deg);transition:transform .15s ease;margin-inline-start:auto;flex:none}
+#workspacePage .workspace-side-section[open]>summary::after{transform:rotate(-135deg)}
 #workspacePage .workspace-side-section .section-body{display:grid;gap:8px;padding:0 12px 12px}
 #workspacePage .workspace-side-section #workspaceSessionSearch{margin:0;padding:8px 10px;font-size:12px}
 #workspacePage .workspace-side-section .new-session{width:100%;justify-content:center;margin:0}
@@ -166,16 +166,14 @@ html,body{height:100%}
 #workspacePage .workspace-first .project-bar .composer-context{margin-bottom:0;min-width:0}
 #workspacePage .project-bar .repo-title[hidden]{display:none}
 
+/* Workspace panel layout. */
+#workspacePage #sessionSidebar>.workspace-panel-modes,#workspacePage #sessionSidebar>.workspace-side-section,#workspacePage #sessionSidebar>.workspace-preview{flex:0 0 auto}
 
-
-/* Option 2 right panel restyle — mockup parity (no crushed sections, card borders, preview layout) */
-#workspacePage #sessionSidebar>.workspace-panel-modes,#workspacePage #sessionSidebar>.workspace-side-section,#workspacePage #sessionSidebar>.workspace-changes,#workspacePage #sessionSidebar>.workspace-preview,#workspacePage #sessionSidebar>.workspace-approvals{flex:0 0 auto}
-#workspacePage #sessionSidebar>.side-brand{margin-bottom:12px;font-size:14px}
 #workspacePage #sessionSidebar .workspace-panel-modes{gap:6px}
 #workspacePage #sessionSidebar .workspace-panel-modes button{padding:7px 12px;font-size:12px;font-weight:700;border-radius:8px}
-#workspacePage #sessionSidebar .workspace-side-section summary{background:var(--control-fill);padding:12px 14px;border-radius:11px 11px 0 0}
-#workspacePage #sessionSidebar .workspace-changes,#workspacePage #sessionSidebar .workspace-preview,#workspacePage #sessionSidebar .workspace-approvals{display:flex;flex-direction:column;gap:10px;min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px;margin-top:14px;font-size:13px}
-#workspacePage #sessionSidebar .workspace-changes>h3,#workspacePage #sessionSidebar .workspace-preview>h3,#workspacePage #sessionSidebar .workspace-approvals>h3,#workspacePage #sessionSidebar #gitSummary{margin:-14px -14px 0;padding:10px 14px;background:var(--control-fill);border-bottom:1px solid var(--line);border-radius:11px 11px 0 0;font-size:13px;font-weight:700;color:var(--text);line-height:1.4}
+#workspacePage #sessionSidebar .workspace-side-section>summary{background:var(--control-fill);padding:12px 14px;border-radius:11px 11px 0 0}
+#workspacePage #sessionSidebar .workspace-changes,#workspacePage #sessionSidebar .workspace-preview{display:flex;flex-direction:column;gap:10px;min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px;margin-top:14px;font-size:13px}
+#workspacePage #sessionSidebar .workspace-changes>h3,#workspacePage #sessionSidebar .workspace-preview>h3,#workspacePage #sessionSidebar #gitSummary{margin:-14px -14px 0;padding:10px 14px;background:var(--control-fill);border-bottom:1px solid var(--line);border-radius:11px 11px 0 0;font-size:13px;font-weight:700;color:var(--text);line-height:1.4}
 #workspacePage #sessionSidebar .session{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;margin-top:6px;border-radius:9px;background:var(--control-fill);font-size:12px}
 #workspacePage #sessionSidebar .session:hover{background:var(--panel2)}
 #workspacePage #sessionSidebar .session.current{background:var(--panel2);border-inline-start:3px solid var(--primary)}
@@ -185,26 +183,21 @@ html,body{height:100%}
 #workspacePage #sessionSidebar .file-row:hover{background:var(--panel2)}
 #workspacePage #sessionSidebar .file-row.selected{background:var(--panel2);color:var(--primary);font-weight:600}
 #workspacePage #sessionSidebar .workspace-preview input{width:100%;padding:9px 11px;font-size:12px;border-radius:8px;background:var(--control-fill);color:var(--text);border:1px solid var(--line)}
-#workspacePage #sessionSidebar .preview-actions{display:flex;gap:8px}
-#workspacePage #sessionSidebar .preview-actions .button{flex:1;min-width:0;height:36px;justify-content:center;margin:0;background:var(--control-fill);color:var(--text)}
+#workspacePage #sessionSidebar .preview-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+#workspacePage #sessionSidebar .preview-actions .button{min-width:0;min-height:36px;justify-content:center;margin:0;background:var(--control-fill);color:var(--text);font-size:13px;padding:8px 10px;white-space:normal}
 #workspacePage #sessionSidebar .preview-actions .button:first-child{background:var(--primary);color:#fff}
 #workspacePage #sessionSidebar .preview-actions .button:first-child:hover{background:var(--primary2)}
 #workspacePage #sessionSidebar .workspace-preview>p{margin:0;font-size:12px;color:var(--muted);line-height:1.6;overflow-wrap:anywhere}
-#workspacePage #sessionSidebar .workspace-preview iframe{width:100%;height:40vh;min-height:220px;border:1px solid var(--line);border-radius:10px;background:#fff}
-#workspacePage #sessionSidebar .workspace-approvals>p{margin:0;font-size:12px;color:var(--muted)}
+
 #workspacePage #sessionSidebar .workspace-changes>.button{width:100%;height:36px;justify-content:center;margin:0;background:var(--control-fill);color:var(--text)}
 #workspacePage #sessionSidebar .git-actions{display:flex;gap:8px}
-#workspacePage #sessionSidebar .git-actions .button{flex:1;min-width:0;height:36px;justify-content:center;margin:0}
+#workspacePage #sessionSidebar .git-actions .button{flex:1 1 120px;min-width:0;height:auto;min-height:36px;justify-content:center;margin:0;white-space:normal;text-decoration:none}
 #workspacePage #sessionSidebar .changed-file-list{display:flex;flex-direction:column;gap:6px;max-height:26vh;overflow:auto}
 #workspacePage #sessionSidebar .changed-file-list button{width:100%;margin:0;padding:9px 10px;text-align:start;justify-content:flex-start;white-space:normal;overflow-wrap:anywhere;font-size:12px;border-radius:8px;background:var(--control-fill);color:var(--text)}
 #workspacePage #sessionSidebar .changed-file-list button:hover{background:var(--panel2)}
 #workspacePage #sessionSidebar .workspace-diff{margin:0;padding:10px;font-size:12px;background:var(--control-fill);border:1px solid var(--line);border-radius:8px;white-space:pre-wrap;overflow:auto;max-height:30vh}
 
 /* Workspace-only session management, conversation readability and divider hit area. */
-
-
-
-
 
 #workspacePage .session-filters,#clientSessionsList .session-filters{display:flex;flex-wrap:wrap;gap:5px}#workspacePage .session-filters button[aria-pressed=true],#clientSessionsList .session-filters button[aria-pressed=true]{background:var(--primary);color:#fff}
 #workspacePage #sessionList .session{display:grid;gap:10px}#workspacePage #sessionList .session small{display:block;color:var(--muted)}
@@ -234,32 +227,13 @@ html,body{height:100%}
 #accountUsage{display:grid;gap:10px;width:100%;min-width:0;text-align:start}#accountUsage p{margin:0;line-height:1.65;overflow-wrap:anywhere}#accountUsage details{padding:12px;border:1px solid var(--surface-edge);border-radius:8px}#accountUsage button{justify-self:start}
 .workspace-repository-dialog{width:min(560px,calc(100% - 32px));max-height:calc(100dvh - 32px);overflow:auto;padding:24px;border:1px solid var(--surface-edge);border-radius:16px;text-align:start}.workspace-repository-dialog::backdrop{background:rgba(15,23,42,.16)}.workspace-repository-dialog form{display:grid;gap:16px}.workspace-repository-dialog label{display:grid;gap:6px}.workspace-repository-dialog #repositoryClose{position:sticky;top:0;margin-inline-start:auto;display:block;background:var(--panel)}.workspace-repository-dialog .api-message{white-space:pre-wrap;overflow-wrap:anywhere}
 #workspacePage .git-actions{flex-wrap:wrap}#workspacePage .git-actions>*{max-width:100%;overflow-wrap:anywhere}#workspacePage .git-actions small{flex-basis:100%;line-height:1.6}
-#workspacePage #sessionSidebar .git-actions .button{flex:1 1 120px;height:auto;min-height:36px;white-space:normal;text-decoration:none}
+
 @media(max-width:480px){:root .provider-auth-dialog{width:calc(100% - 20px);max-height:calc(100dvh - 20px)}:root .provider-auth-dialog .action-dialog-head,:root .provider-auth-dialog .action-dialog-body,:root .provider-auth-dialog>.action-form-actions{padding-inline:16px}}
 
 /* Workspace conversation refinement; the existing app header and navigation stay intact. */
 :root #workspacePage,:root #connectionsPage{--line:#e4e8ee;--surface-edge:#dce3ec;--control-edge:#c4cfde}
 :root.dark #workspacePage,:root.dark #connectionsPage{--line:#333c48;--surface-edge:#374452;--control-edge:#4a5c72}
 :root #workspacePage .agent-column{background:var(--panel)}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 :root #workspacePage .workspace-activity{flex:none;width:calc(100% - 32px);max-width:800px;margin:10px auto 0;max-height:180px;overflow:auto;font-size:12px;line-height:1.6;color:var(--muted)}
 :root #workspacePage .activity-stage{margin:0;color:var(--text)}
@@ -509,8 +483,6 @@ dialog .session-idle-warning{position:sticky;inset:auto;margin:12px;flex:none;ma
 #clientPage [data-client-panel=account] [hidden]{display:none!important}
 @media(max-width:760px){#clientPage [data-client-panel=account] .account-profile-grid{grid-template-columns:minmax(0,1fr)}#clientPage [data-client-panel=account] .account-page-head{flex-direction:column;align-items:flex-start}#clientPage [data-client-panel=account] :is(.account-personal,#accountUsage){padding:18px}#clientPage [data-client-panel=account] .account-preferences select{font-size:16px}}
 
-
-
 #workspacePage .sending-preview-status{display:block;margin-top:8px;color:var(--muted);font-size:12px}
 
 /* Integrated Auth concept: presentation only, retaining all existing controls. */
@@ -657,7 +629,28 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
 :root #workspacePage .chat-questions label{display:flex;align-items:center;gap:8px;margin:7px 0;flex-wrap:wrap}
 :root #workspacePage .chat-questions label small{color:var(--muted)}
 :root #workspacePage .chat-questions input[type=text]{width:100%;font-size:14px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text)}
-:root #workspacePage .preview-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-:root #workspacePage .preview-actions button{min-width:0;font-size:13px;padding:8px 10px;white-space:normal}
 :root #workspacePage .workspace-preview iframe{width:100%;min-height:360px;height:60vh;resize:vertical;border:1px solid var(--line);border-radius:10px;background:white}
 :root #workspacePage .workspace-preview iframe:fullscreen{width:100vw;height:100vh;border:0;border-radius:0;background:white}
+/* Each workspace shows one project/repository root with its own files and changes. */
+#workspacePage .sidebar-project-root{flex:0 0 auto;min-width:0;margin:12px 0 16px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel)}
+#workspacePage .sidebar-project-root>summary{display:flex;align-items:center;gap:10px;cursor:pointer;padding:14px 12px;list-style:none}
+#workspacePage .sidebar-project-root>summary::-webkit-details-marker{display:none}
+#workspacePage .sidebar-project-root:not([open])>:not(summary),#workspacePage .workspace-side-section:not([open])>:not(summary),#workspacePage .changed-folder:not([open])>.changed-folder-children{display:none}
+#workspacePage .sidebar-project-root>summary::after{content:'›';margin-inline-start:auto;font-size:20px;transition:transform .15s}
+#workspacePage .sidebar-project-root[open]>summary::after{transform:rotate(90deg)}
+#workspacePage .sidebar-project-icon{flex:none;color:var(--primary)}
+#workspacePage .sidebar-project-icon svg{display:block;width:22px;height:22px}
+#workspacePage .sidebar-project-identity{display:grid;gap:4px;min-width:0;overflow-wrap:anywhere}
+#workspacePage .sidebar-project-identity strong{font-size:14px;line-height:1.5;font-weight:600}
+#workspacePage .sidebar-project-identity small,#workspacePage .sidebar-project-branch{font-size:12px;color:var(--muted)}
+#workspacePage .sidebar-project-branch{display:block;margin:0 12px 12px;overflow-wrap:anywhere}
+#workspacePage .sidebar-project-root>.workspace-side-section{border:0;border-top:1px solid var(--line);border-radius:0;margin:0;box-shadow:none}
+#workspacePage #sessionSidebar .workspace-change-group>.workspace-changes{border:0;border-radius:0;padding:12px;margin:0;box-shadow:none}
+#workspacePage .sidebar-count{font-size:11px;margin-inline-start:auto;background:var(--panel2);border-radius:999px;min-width:22px;padding:2px 6px;text-align:center;color:var(--muted)}
+#workspacePage .changed-folder>summary{cursor:pointer;font-size:12px;font-weight:600;padding:8px 2px;overflow-wrap:anywhere}
+#workspacePage .changed-folder-children{padding-inline-start:12px;border-inline-start:1px solid var(--line);display:grid;gap:5px}
+#workspacePage .chat-approval-settings{font-size:12px;margin-top:12px;color:var(--muted)}
+#workspacePage .chat-approval-settings>summary{cursor:pointer;width:fit-content;padding:5px 0}
+#workspacePage .routine-permissions{display:flex;align-items:start;gap:8px;line-height:1.6;padding:8px 0;font-size:13px;color:var(--text)}
+#workspacePage .routine-permissions input{width:16px;height:16px;margin:4px 0 0;padding:0;flex:0 0 16px}
+#workspacePage .routine-permissions span{min-width:0;flex:1;overflow-wrap:break-word}
