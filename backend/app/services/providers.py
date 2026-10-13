@@ -55,6 +55,18 @@ def connection_revision(db, workspace):
     return str(legacy_revision) + ":" + revision.hexdigest()[:16]
 
 
+def is_locally_connected(db, workspace, provider_id):
+    """Conservatively detect an existing workspace OAuth/provider connection."""
+    from sqlalchemy import select
+    from ..models import AccountAudit
+    binding = _binding(workspace, provider_id)
+    latest = db.scalar(select(AccountAudit).where(
+        AccountAudit.subject_id == workspace.user_id,
+        AccountAudit.action.in_(["provider-on:" + binding, "provider-off:" + binding]))
+        .order_by(AccountAudit.id.desc()).limit(1))
+    return bool(latest and latest.action.startswith("provider-on:"))
+
+
 def is_locally_disconnected(db, workspace, provider_id):
     from sqlalchemy import select
     from ..models import AccountAudit
