@@ -30,7 +30,7 @@ def archive_deadline(user, subscription):
     # paid expiry when present, never from a superseded future trial expiry.
     paid_period = bool(subscription and subscription.plan_id and
         subscription.current_period_end and subscription.status in
-        {"active", "expired", "cancelled"})
+        {"active", "expired", "cancelled", "pending_payment"})
     ends = [aware(subscription.current_period_end)] if paid_period else [aware(user.trial_ends_at)]
     if _policy_started:
         ends.append(_policy_started)  # Existing customers receive a full grace period.
