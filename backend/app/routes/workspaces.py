@@ -165,6 +165,10 @@ def connect_account_provider(provider_id: str,data: ApiKeyCredential,
                 ProviderCredential.user_id==user.id,
                 ProviderCredential.provider_id==provider_id).limit(1)):
         raise HTTPException(409,"This provider is already connected to your account")
+    # Do not overwrite an existing OAuth connection established in a workspace.
+    for owned in db.scalars(select(Workspace).where(Workspace.user_id == user.id)):
+        if providers.is_locally_connected(db, owned, provider_id):
+            raise HTTPException(409, "This provider is already connected in a workspace; disconnect it before account setup")
     from ..services.account_provider_runtime import isolated_validation
     with isolated_validation(user.id,db) as service:
         live = service.request("GET","/provider")
