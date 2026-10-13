@@ -591,6 +591,11 @@ def reject_account_key_oauth_conflict(db, user_id, provider_id):
     """OAuth must not coexist with a restorable account API key for the same provider."""
     if user_provider_credentials_schema_ready(db) and user_provider_credentials.find(db, user_id, provider_id):
         raise HTTPException(409, "Account-wide API key exists for this provider; OAuth cannot replace it implicitly")
+    legacy = db.scalar(select(ProviderCredential).where(
+        ProviderCredential.user_id == user_id,
+        ProviderCredential.provider_id == provider_id).limit(1))
+    if legacy is not None:
+        raise HTTPException(409, "Existing API key connection must be disconnected before OAuth")
 
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/authorize")
