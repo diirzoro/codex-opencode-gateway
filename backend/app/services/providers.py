@@ -172,7 +172,9 @@ def model_details(data, provider_id, policy=None):
 
 
 def auth_methods(service):
-    return service.request("GET", "/provider/auth")
+    # Reuse the runtime's guarded discovery cache instead of repeating an upstream
+    # request for each provider lookup. Credential changes invalidate this cache.
+    return service._core_value("auth_methods", "/provider/auth")
 
 
 def connection_methods(service, provider_id):
