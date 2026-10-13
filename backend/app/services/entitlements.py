@@ -41,6 +41,11 @@ def access_payload(db, user, *, now=None):
                               "archive_at": archive_deadline(user, row) if not core else None},
         "core_access": core, "advanced_integrations": advanced,
         "byok_access": advanced, "github_access": advanced, "custom_agent_access": advanced,
+        # Purchased access is a separate clock. Selecting a plan or browsing
+        # integrations never changes trial dates or grants paid days.
+        "paid_access": {"active": paid, "ends_at": aware(row.current_period_end) if paid else None,
+                        "remaining_days": days(aware(row.current_period_end)) if paid else 0,
+                        "plan_id": row.plan_id if paid else None},
         "core_trial": {"started_at": user.trial_started_at, "ends_at": core_end, "remaining_days": days(core_end), "active": bool(core_end > now)},
         "advanced_trial": {"started_at": started, "ends_at": advanced_end,
                            "remaining_days": days(advanced_end), "duration_days": ADVANCED_TRIAL_DAYS,
