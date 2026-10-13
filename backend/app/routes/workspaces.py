@@ -114,6 +114,71 @@ def account_provider_connections(user: User=Depends(require_user),db: Session=De
             for row in user_provider_credentials.list_owned(db,user.id)]
 
 
+@router.get("/opencode/connections/{provider_id}/options")
+def account_provider_options(provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Real OpenCode authentication choices from a temporary isolated process."""
+    if not 0 < len(provider_id) <= 120:
+        raise HTTPException(422, "Invalid provider identifier")
+    if not policy.provider_allowed(policy.load(db), provider_id):
+        raise HTTPException(403, "Provider disabled by policy")
+    from ..services.account_provider_runtime import isolated_validation
+    with isolated_validation(user.id, db) as service:
+        data = service.request("GET", "/provider")
+        entry = providers.resolve_provider(data, provider_id)
+        if entry["id"] != provider_id:
+            raise HTTPException(422, "Use the exact OpenCode provider ID")
+        methods = providers.connection_methods(service, provider_id)
+        return {"provider_id": provider_id, "auth_methods": providers.public_metadata(methods),
+                "models": providers.model_details(data, provider_id, policy.load(db))["models"]}
+
+
+@router.post("/opencode/connections/{provider_id}/credentials")
+def connect_account_provider(provider_id: str,data: ApiKeyCredential,
+                             user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Validate a key without any project and store one credential per account."""
+    user_provider_credentials.require_schema(db)
+    require_advanced(db,user)
+    if not 0 < len(provider_id) <= 120:
+        raise HTTPException(422,"Invalid provider identifier")
+    current_policy = policy.load(db)
+    if not policy.provider_allowed(current_policy,provider_id):
+        raise HTTPException(403,"Provider disabled by policy")
+    if not credentials.available():
+        raise HTTPException(503,"Encrypted credential storage is unavailable")
+    # One user row serializes all provider connections from concurrent requests.
+    db.scalar(select(User).where(User.id==user.id).with_for_update())
+    if user_provider_credentials.find(db,user.id,provider_id) or db.scalar(
+            select(ProviderCredential.id).where(
+                ProviderCredential.user_id==user.id,
+                ProviderCredential.provider_id==provider_id).limit(1)):
+        raise HTTPException(409,"This provider is already connected to your account")
+    from ..services.account_provider_runtime import isolated_validation
+    with isolated_validation(user.id,db) as service:
+        live = service.request("GET","/provider")
+        entry = providers.resolve_provider(live,provider_id)
+        if entry["id"] != provider_id:
+            raise HTTPException(422,"Use the exact OpenCode provider ID")
+        methods = providers.connection_methods(service,provider_id)
+        choices = [i for i,method in enumerate(methods) if method.get("type") in {"api","key"}]
+        selected = data.method if data.method is not None else (choices[0] if len(choices)==1 else None)
+        if selected not in choices:
+            raise HTTPException(422,"Select an API key method reported by OpenCode")
+        providers.set_api_key(service,provider_id,data.api_key,data.inputs)
+        service.refresh_auth()
+        validated_model = providers.validate_model(service,provider_id,data.model_id,current_policy)
+    encrypted = credentials.encrypt(json.dumps({"type":"api","key":data.api_key,"metadata":data.inputs or {}}))
+    require_advanced(db,user,start=True)
+    user_provider_credentials.save_encrypted(db,user.id,provider_id,encrypted,data.api_key[-4:])
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409,"This provider is already connected to your account") from None
+    _refresh_other_user_runtimes(db,user.id,uuid.UUID(int=0),provider_id,encrypted)
+    return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],
+            "persisted":True,"validated_model":validated_model}
+
+
 @router.get("/opencode/status")
 def runtime_status(user: User=Depends(require_user)):
     try: health=opencode.shared_health()
