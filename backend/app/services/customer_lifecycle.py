@@ -26,9 +26,12 @@ def initialize():
 
 
 def archive_deadline(user, subscription):
-    ends = [aware(user.trial_ends_at)]
-    if subscription and subscription.current_period_end:
-        ends.append(aware(subscription.current_period_end))
+    # Paid access supersedes the one-time trial. Retention starts from the
+    # paid expiry when present, never from a superseded future trial expiry.
+    paid_period = bool(subscription and subscription.plan_id and
+        subscription.current_period_end and subscription.status in
+        {"active", "expired", "cancelled"})
+    ends = [aware(subscription.current_period_end)] if paid_period else [aware(user.trial_ends_at)]
     if _policy_started:
         ends.append(_policy_started)  # Existing customers receive a full grace period.
     return max(ends) + timedelta(days=ACCOUNT_RETENTION_DAYS)
