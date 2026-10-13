@@ -80,6 +80,33 @@ def runtime_status(user: User=Depends(require_user)):
     except HTTPException: health={"healthy":False,"version":None}
     return {**health,"runtime_mode":settings.runtime_mode,"public_multi_user_ready":False}
 
+def _shared_opencode_service():
+    return opencode.OpenCodeService(settings.opencode_url)
+
+@router.get("/opencode/agents")
+def shared_agents(user: User=Depends(require_user)):
+    service=_shared_opencode_service()
+    try:
+        return agent_choices(service)
+    finally:
+        service.close()
+
+@router.get("/opencode/providers")
+def shared_providers(user: User=Depends(require_user),db: Session=Depends(get_db)):
+    service=_shared_opencode_service()
+    try:
+        return providers.discover(service,policy.load(db))
+    finally:
+        service.close()
+
+@router.get("/opencode/providers/{provider_id}/models")
+def shared_provider_models(provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    service=_shared_opencode_service()
+    try:
+        return providers.model_details(service.request("GET","/provider"),provider_id,policy.load(db))
+    finally:
+        service.close()
+
 @router.get("/github/status")
 def github_status(user: User=Depends(require_user),db: Session=Depends(get_db)):
     return github.connection_status(db,user)
