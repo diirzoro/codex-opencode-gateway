@@ -460,11 +460,16 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
         row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.user_id==user.id,ProviderCredential.provider_id==provider_id))
         if row is None and providers.is_connected(service,provider_id) and not providers.is_locally_disconnected(db,workspace,provider_id):
             raise HTTPException(409,"Disconnect the existing runtime connection before replacing its authentication")
-        # A provider may be connected only once per account, regardless of
-        # how many workspaces the user owns. Reject before touching OpenCode.
+        # Exactly one provider connection per user, including legacy records.
+        # Reject before mutating OpenCode, even on pre-0017 deployments.
         if user_provider_credentials_schema_ready(db):
             if user_provider_credentials.find(db, user.id, provider_id) is not None:
                 raise HTTPException(409, "This provider is already connected to your account")
+        existing_legacy = db.scalar(select(ProviderCredential).where(
+            ProviderCredential.user_id == user.id,
+            ProviderCredential.provider_id == provider_id).limit(1))
+        if existing_legacy is not None:
+            raise HTTPException(409, "This provider is already connected to your account")
         service.ensure_auth_idle()
         old_ciphertext=row.ciphertext if row is not None else None
         stage="credential installation"
