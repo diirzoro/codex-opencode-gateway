@@ -224,7 +224,7 @@
               const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
               f.reset();if(!alive()||(activeWorkspace?.id||"")!==workspaceId)return;
               if(result.connected!==true||result.persisted!==true)throw new Error(tr('OpenCode connection and credential storage were not confirmed.','لم يتم تأكيد اتصال OpenCode وحفظ المفتاح.'));
-              dlg.close();toast(tr('Provider connected. It is now available in the workspace composer.','تم ربط المزوّد. أصبح متاحًا الآن في محرر مساحة العمل.'));await reload();
+              dlg.close();toast(result.deferred_workspace_count?tr('Connected, but some running workspaces need refresh.','تم الربط، لكن بعض مساحات العمل النشطة تحتاج تحديثًا.'):tr('Provider connected. It is now available in the workspace composer.','تم ربط المزوّد. أصبح متاحًا الآن في محرر مساحة العمل.'));await reload();
             }else{
               setFeedback(feedback,tr('Starting OpenCode authorization…','جارٍ بدء تفويض OpenCode…'));
               const authorization=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values})});
@@ -241,7 +241,7 @@
                   const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/callback',{method:'POST',body:JSON.stringify({method:index,...(code?{code:code.value}:{})})});
                   if(!alive()||(activeWorkspace?.id||'')!==workspaceId)return;
                   if(result.connected!==true)throw new Error(tr('OpenCode did not confirm the OAuth connection.','لم يؤكد OpenCode اتصال OAuth.'));
-                  if(code)code.value='';dlg.close();toast(tr('Provider connected.','تم ربط المزوّد.'));await reload();
+                  if(code)code.value='';dlg.close();toast(result.deferred_workspace_count?tr('Connected; refresh active workspaces to synchronize.','تم الربط؛ حدّث مساحات العمل النشطة للمزامنة.'):tr('Provider connected.','تم ربط المزوّد.'));await reload();
                 }catch(error){if(currentDialog())setFeedback(feedback,error.message,'error');}
               }));
             }
