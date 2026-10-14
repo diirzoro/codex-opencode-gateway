@@ -48,3 +48,24 @@ def test_disconnect_scrubs_all_owned_auth_files(tmp_path, monkeypatch, running):
     assert paths[-1].read_bytes() == other_before
     assert remove.call_count == (3 if running else 0)
     db.commit.assert_called_once()
+
+
+def test_revocation_rejects_parent_link_into_another_account(tmp_path,monkeypatch):
+    owner,other,runtime=uuid.uuid4(),uuid.uuid4(),uuid.uuid4()
+    otherdir=tmp_path/str(other)/str(runtime)/"data/opencode";otherdir.mkdir(parents=True)
+    path=otherdir/"auth.json";path.write_text('{"example":{"type":"api","key":"other-fixture"}}');before=path.read_bytes()
+    (tmp_path/str(owner)).mkdir();(tmp_path/str(owner)/str(runtime)).symlink_to(otherdir.parent.parent,target_is_directory=True)
+    monkeypatch.setattr(routes,"settings",SimpleNamespace(runtime_root=tmp_path))
+    with pytest.raises(HTTPException) as error:routes._scrub_runtime_provider(owner,runtime,"example")
+    assert error.value.status_code==503 and path.read_bytes()==before
+
+
+def test_failed_atomic_replace_is_not_reported_as_success(tmp_path,monkeypatch):
+    owner,runtime=uuid.uuid4(),uuid.uuid4()
+    folder=tmp_path/str(owner)/str(runtime)/"data/opencode";folder.mkdir(parents=True)
+    path=folder/"auth.json";path.write_text('{"example":{"type":"api","key":"fixture"}}');before=path.read_bytes()
+    monkeypatch.setattr(routes,"settings",SimpleNamespace(runtime_root=tmp_path))
+    monkeypatch.setattr(routes.account_provider_sync.os,"replace",Mock(side_effect=FileNotFoundError()))
+    with pytest.raises(HTTPException) as error:routes._scrub_runtime_provider(owner,runtime,"example")
+    assert error.value.status_code==503 and path.read_bytes()==before
+    assert len(list(folder.iterdir()))==1

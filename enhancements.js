@@ -415,7 +415,7 @@
     if (!feed) return;
     var line = textElement('div', '· ' + kind, 'event-line');
     feed.append(line);
-    feed.scrollTop = feed.scrollHeight;
+    // The shared chat-scroll controller owns follow-tail behavior.
   }
 
   // The base client owns the sole SSE connection and durable replay cursor.

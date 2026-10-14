@@ -357,7 +357,7 @@
           let custom=null;if(question.custom){custom=document.createElement('input');custom.type='text';custom.maxLength=2000;custom.placeholder=tr('Other — write your choice…','خيار آخر — اكتب إجابتك…');custom.setAttribute('aria-label',custom.placeholder);fieldset.append(custom);}groups.push({inputs,custom,multiple:question.multiple});form.append(fieldset);
         }
         const actions=textElement('div','','chat-approval-actions'),submit=textElement('button',tr('Send answer','إرسال الإجابة'),'button ghost small'),reject=textElement('button',tr('Cancel question','إلغاء السؤال'),'button ghost small');submit.type='submit';reject.type='button';actions.append(submit,reject);form.append(actions);
-        async function send(rejected){if(questionSending||activeSession?.id!==sessionId||currentUser?.id!==owner)return;const answers=groups.map(g=>g.custom?.value.trim()?[g.custom.value.trim()]:g.inputs.filter(i=>i.checked).map(i=>i.value));if(!rejected&&answers.some(a=>!a.length)){toast(tr('Answer every question.','أجب عن كل سؤال.'));return;}
+        async function send(rejected){if(questionSending||activeSession?.id!==sessionId||currentUser?.id!==owner)return;const answers=groups.map(g=>{const selected=g.inputs.filter(i=>i.checked).map(i=>i.value),custom=g.custom?.value.trim();return [...new Set(custom?(g.multiple?[...selected,custom]:[custom]):selected)];});if(!rejected&&answers.some(a=>!a.length)){toast(tr('Answer every question.','أجب عن كل سؤال.'));return;}
           questionSending=true;form.querySelectorAll('input,button').forEach(n=>n.disabled=true);
           try{await api('/api/sessions/'+sessionId+'/questions/'+encodeURIComponent(request.id),{method:'POST',body:JSON.stringify({reject:rejected,answers:rejected?[]:answers})});questionSignature='';if(activeSession?.id===sessionId&&currentUser?.id===owner){await refreshSessionStatus();await refreshMessages();}}
           catch(error){toast(error.message);form.querySelectorAll('input,button').forEach(n=>n.disabled=false);}finally{questionSending=false;await window.refreshWorkspaceQuestions();}
@@ -567,7 +567,7 @@
     chosenAgent=agent.value;agent.onchange=()=>{chosenAgent=agent.value;updateSend();};updateSend();
   }
   function renderProviders(snapshot,preferredProvider=''){
-    providers=(snapshot.providers||[]).filter(p=>!p.locally_disconnected&&p.allowed!==false&&(p.connected||p.id==='opencode'));q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
+    providers=(snapshot.providers||[]).filter(p=>p.auth_status!=='reauthorization_required'&&!p.locally_disconnected&&p.allowed!==false&&(p.connected||p.id==='opencode'));q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
     for(const p of providers.filter(p=>p.connected||p.id==='opencode')){const option=new Option(p.name+' · '+(p.allowed===false?tr('Restricted','مقيّد'):p.connected?tr('Connected','متصل'):tr('Default provider','المزوّد الافتراضي')),p.id);option.disabled=p.allowed===false;q('providerSelect').add(option);}
     if(preferredProvider)chosenProvider=preferredProvider;
     if(!providers.some(p=>p.id===chosenProvider)){chosenProvider='';chosenModel='';}
@@ -618,6 +618,17 @@
     }catch(error){if(current()){q('modelSelect').title=error.message;q('modelSelect').options[0].textContent=tr('Could not load models','تعذر تحميل النماذج');retryModels.hidden=false;updateSend();toast(error.message);}}
   }
   window.refreshWorkspaceChoices=async(preferredProvider='',force=true)=>{if(activeWorkspace&&force)window.workspaceRuntime.invalidate(activeWorkspace.id);return refreshChoices(preferredProvider,force);};
+  window.addEventListener('account-provider-changed',event=>{if(currentUser?.id===event.detail.owner&&activeWorkspace&&!sending&&!pendingSubmission)window.refreshWorkspaceChoices(chosenProvider,false).catch(()=>{});});
+  let providerCheckPending=false;
+  setInterval(async()=>{
+    if(providerCheckPending||document.hidden||!currentUser||!activeWorkspace||sending||pendingSubmission||!q('workspacePage').classList.contains('active'))return;
+    const id=activeWorkspace.id,owner=currentUser.id,previous=window.workspaceRuntime.peek(id);
+    providerCheckPending=true;
+    try{if(!previous){await window.refreshWorkspaceChoices(chosenProvider,true);return;}
+      const state=await api('/api/workspaces/'+encodeURIComponent(id)+'/runtime/state');
+      if(currentUser?.id===owner&&activeWorkspace?.id===id&&(state.policy_revision!==previous.policy_revision||state.revision!==previous.revision||state.generation!==previous.generation))await window.refreshWorkspaceChoices(chosenProvider,true);
+    }catch(error){}finally{providerCheckPending=false;}
+  },10000);
   openWorkspace=async function(project,workspace,{navigate=true}={}){
     if(admin()){await page('adminPage');return;}
     if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));

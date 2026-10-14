@@ -90,15 +90,20 @@ def client_catalog(db, workspace, data):
         else:
             disconnected.discard(binding)
     account_ids = set()
+    auth_status = {}
     if inspect(db.connection()).has_table("user_provider_credentials"):
-        account_ids = set(db.scalars(select(UserProviderCredential.provider_id).where(
-            UserProviderCredential.user_id == workspace.user_id)))
+        from . import account_provider_sync
+        rows = list(db.scalars(select(UserProviderCredential).where(UserProviderCredential.user_id == workspace.user_id)))
+        account_ids = {r.provider_id for r in rows}
+        services = account_provider_sync.services_for(workspace.user_id)
+        auth_status = {r.provider_id:account_provider_sync.public_status(r,services) for r in rows}
     # A single account credential is usable in all owned workspaces. Legacy
     # per-workspace disconnect events must not mask an active account key.
     connected = [identifier for identifier in data.get("connected", [])
-                 if identifier in account_ids or _binding(workspace, identifier) not in disconnected]
+                 if (identifier in account_ids or _binding(workspace, identifier) not in disconnected)
+                 and auth_status.get(identifier,{}).get("auth_status")!="reauthorization_required"]
     # Only claim connected when this isolated runtime reports the provider.
-    return {**data, "connected": connected,
+    return {**data, "connected": connected, "gateway_auth_status":auth_status,
             "gateway_disconnected": [entry["id"] for entry in data.get("all", [])
                 if entry["id"] not in account_ids and _binding(workspace, entry["id"]) in disconnected]}
 
@@ -153,6 +158,7 @@ def _catalog_entries(data):
 def provider_index(entry, data, policy=None):
     from .policy import provider_allowed
     return {"id": entry["id"], "name": entry.get("name") or entry["id"],
+            **data.get("gateway_auth_status",{}).get(entry["id"],{}),
             "connected": entry["id"] in data.get("connected", []),
             "locally_disconnected": entry["id"] in data.get("gateway_disconnected", []),
             "allowed": policy is None or provider_allowed(policy, entry["id"]),

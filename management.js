@@ -143,6 +143,7 @@
     };
     const showError=(f,error)=>{let st=f.querySelector('.provider-feedback');if(!st){st=node('p','','provider-feedback');f.append(st)}setFeedback(st,error.message,'error')};
     const openAuthDialog=async(p,resolved=false)=>{
+      const reauthorizing=!workspaceId&&p.reauthorize===true;
       if(!view.ready||!alive()||!contextCurrent()||view.connecting)return;
       view.connecting=true;
       const host=node('div');document.body.append(host);
@@ -173,6 +174,11 @@
         setFeedback(feedback,'');
       }catch(error){if(currentDialog()&&error.name!=='AbortError')setFeedback(feedback,error.message,'error');return;}
       const methodPicker=select(body,tr('OpenCode authentication method','طريقة مصادقة OpenCode'),'auth_method',choices.map((m,i)=>[String(i),m.label||(['api','key'].includes(m.type)?tr('API key','مفتاح API'):m.type)]));
+      if(reauthorizing){
+        for(const option of [...methodPicker.options])if(choices[Number(option.value)]?.type!=='oauth')option.remove();
+        if(!methodPicker.options.length){setFeedback(feedback,tr('No OAuth method is available.','لا توجد طريقة OAuth متاحة.'),'error');return;}
+        methodPicker.value=methodPicker.options[0].value;
+      }
       body.prepend(methodPicker.parentElement);
       function renderMethod(){
         methodArea.replaceChildren();setFeedback(feedback,'');const index=Number(methodPicker.value),method=choices[index];
@@ -227,7 +233,7 @@
               dlg.close();toast(result.deferred_workspace_count?tr('Connected, but some running workspaces need refresh.','تم الربط، لكن بعض مساحات العمل النشطة تحتاج تحديثًا.'):tr('Provider connected. It is now available in the workspace composer.','تم ربط المزوّد. أصبح متاحًا الآن في محرر مساحة العمل.'));await reload();
             }else{
               setFeedback(feedback,tr('Starting OpenCode authorization…','جارٍ بدء تفويض OpenCode…'));
-              const authorization=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values})});
+              const authorization=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values,...(reauthorizing?{reauthorize:true}:{})})});
               if(!currentForm())return;
               if(!authorization||!['auto','code'].includes(authorization.method))throw new Error(tr('OpenCode did not return a supported OAuth authorization flow.','لم يُرجع OpenCode مسار تفويض OAuth مدعومًا.'));
               let url;if(authorization.url){url=new URL(authorization.url);if(url.protocol!=='https:'||['localhost','127.0.0.1','::1'].includes(url.hostname))throw new Error(tr('OpenCode returned an unsupported authorization URL','أعاد OpenCode رابط تفويض غير مدعوم'));}
@@ -255,7 +261,8 @@
       methodPicker.onchange=renderMethod;renderMethod();methodPicker.focus();
     };
     function renderSelected(p){
-      const state=p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
+      const state=p.auth_status==='reauthorization_required'?tr('Authorization required','يلزم إعادة التفويض'):
+        p.auth_status==='refresh_required'?tr('Token expired · refresh or reauthorize','انتهى التوكن · جدّد أو أعد التفويض'):p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
       const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
       status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String(p.model_count||0)+' '+tr('models','نموذج')));
       if(!view.ready){status.append(node('span',tr('Refreshing workspace state…','جارٍ تحديث حالة مساحة العمل…')));return;}
@@ -263,6 +270,7 @@
       if(p.connected)act.append(button(tr('Disconnect / delete key','فصل / حذف المفتاح'),()=>disconnect(p)));
       else if(p.allowed!==false)act.append(button(tr('Connect','ربط'),()=>openAuthDialog(p)));
       else act.append(node('span',tr('Restricted by platform policy','مقيّد بسياسة المنصة')));
+      if(!workspaceId&&p.auth_type==='oauth'&&p.allowed!==false)act.append(button(tr('Reauthorize','إعادة التفويض'),()=>openAuthDialog({...p,reauthorize:true})));
       status.append(act);
     }
     async function disconnect(p){
@@ -290,13 +298,13 @@
       }
     }
     const renderOptions=()=>{
-      const query=(combo.value||'').trim().toLowerCase();options.replaceChildren();
+      const query=(combo.value||'').trim().toLowerCase();const previous=new Map([...options.children].map(n=>[n.dataset.providerId,n]));
       const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
       const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query));
       for(const p of rows){
         const state=p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
         const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
-        const o=node('button',(p.name||p.id)+' · '+state+restriction,'provider-combo-option');o.type='button';
+        const o=previous.get(p.id)||node('button','','provider-combo-option');previous.delete(p.id);o.dataset.providerId=p.id;o.textContent=(p.name||p.id)+' · '+state+restriction;o.type='button';
         o.onclick=()=>{
           if(!alive()||!contextCurrent())return;
           combo.value='';body.dataset.providerQuery='';optionsOpen=false;options.hidden=true;combo.setAttribute('aria-expanded','false');
@@ -305,6 +313,7 @@
         };
         options.append(o);
       }
+      for(const old of previous.values())old.remove();
       options.hidden=!optionsOpen||!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
     };
     function stopSearch(){searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}

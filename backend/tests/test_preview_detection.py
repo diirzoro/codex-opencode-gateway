@@ -49,3 +49,19 @@ def test_symlink_manifest_cannot_escape_owner_directory(source, tmp_path):
     (root/"package.json").symlink_to(target)
     with pytest.raises(HTTPException) as error:preview.detect(workspace)
     assert error.value.status_code == 403
+
+
+@pytest.mark.parametrize("filename,framework,family",[("package.json","node","node"),("requirements.txt","python","python"),("artisan","laravel","php"),("Cargo.toml","rust",None)])
+def test_runner_plan_is_fail_closed_and_has_no_host_execution(source,filename,framework,family):
+    from backend.app.services.preview_runner import plan
+    workspace,root=source
+    (root/filename).write_text('{"scripts":{"start":"touch MUST_NOT_EXECUTE"}}' if filename=='package.json' else '')
+    result=plan(workspace)
+    assert result['framework']==framework and result['runtime_family']==family
+    assert result['state']=='blocked' and result['execution_enabled'] is False
+    assert result['limits']['network']=='none' and result['limits']['public_ports']==[]
+    assert result['limits']['uid']!=0 and result['limits']['read_only_root']
+    assert not result['limits']['docker_socket'] and not result['limits']['host_secrets']
+    assert result['routing']['authentication_required'] and result['routing']['separate_origin_required']
+    assert str(root) not in json.dumps(result)
+    assert not (root/'MUST_NOT_EXECUTE').exists()

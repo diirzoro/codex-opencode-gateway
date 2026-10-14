@@ -88,17 +88,29 @@ class OpenCodeService:
         self.restore_puts = 0
         self.restore_errors = []
         self.oauth_pending = {}
+        self.oauth_versions = {}
         self.session_policies = {}
+        self.credential_bindings = {}
+        self.auth_failures = {}
 
     def close(self):
         self.client.close()
 
     def request(self, method, path, data=None, timeout=15, params=None):
         started = time.monotonic()
+        model = data.get("model", {}) if isinstance(data, dict) else {}
+        provider_id = model.get("providerID") if isinstance(model, dict) else None
+        binding = self.credential_bindings.get(provider_id)
         try:
             response = self.client.request(method, path, params={**self.params, **(params or {})}, json=data, timeout=timeout)
             response.raise_for_status()
-            return response.json() if response.content else None
+            result = response.json() if response.content else None
+            failure = result.get("info",{}).get("error",{}) if isinstance(result,dict) and isinstance(result.get("info"),dict) else {}
+            if binding and isinstance(failure,dict) and (failure.get("name")=="ProviderAuthError" or
+                    isinstance(failure.get("data"),dict) and failure["data"].get("statusCode") in {401,403}):
+                self.auth_failures[provider_id] = binding[1]
+                self.invalidate()
+            return result
         except httpx.TimeoutException:
             raise HTTPException(504, "OpenCode request timed out") from None
         except httpx.HTTPStatusError as exc:
@@ -115,6 +127,10 @@ class OpenCodeService:
                     error.detail += " (" + category + ")"
             except ValueError:
                 pass
+            if binding and (exc.response.status_code in {401,403} or getattr(error,"runtime_category",None) in
+                            {"ProviderAuthError","ProviderAuthOauthCallbackFailed","ProviderAuthValidationFailed"}):
+                self.auth_failures[provider_id] = binding[1]
+                self.invalidate()
             raise error from None
         except (httpx.HTTPError, ValueError):
             raise HTTPException(503, "OpenCode runtime request failed") from None
@@ -329,7 +345,7 @@ def _initialize(service, workspace, *, db=None):
     from contextlib import nullcontext
     from ..database import SessionLocal
     from ..models import ProviderCredential, UserProviderCredential
-    from . import credentials, providers
+    from . import credentials, providers, account_provider_sync
     started = time.monotonic()
     service.restore_passes += 1
     # HTTP callers already own a transaction. Never acquire a second pooled
@@ -344,13 +360,19 @@ def _initialize(service, workspace, *, db=None):
             ProviderCredential.workspace_id == workspace.id,
             ProviderCredential.user_id == workspace.user_id)))
         account_ids = {row.provider_id for row in account_rows}
+        if account_provider_sync.prune_revoked(workspace,account_rows,{r.provider_id for r in legacy_rows}):
+            service.refresh_auth()
         for row in [*account_rows, *(r for r in legacy_rows if r.provider_id not in account_ids)]:
             # Account keys supersede workspace-local disconnect records.
             if row.provider_id not in account_ids and providers.is_locally_disconnected(
                     db, workspace, row.provider_id):
                 continue
             try:
-                providers.restore_credential(service, row.provider_id, credentials.decrypt(row.ciphertext))
+                plaintext = (account_provider_sync.startup_value(workspace,row) if row.provider_id in account_ids
+                             else credentials.decrypt(row.ciphertext))
+                providers.restore_credential(service, row.provider_id, plaintext)
+                if row.provider_id in account_ids:
+                    account_provider_sync.bind(service,row)
                 service.restore_puts += 1
             except Exception:
                 service.restore_errors.append({"provider_id": row.provider_id,
@@ -405,6 +427,7 @@ def for_workspace(workspace, *, start=True, db=None):
             port = sock.getsockname()[1]
         log = open(context / "runtime.log", "a", encoding="utf-8")
         service = OpenCodeService(f"http://127.0.0.1:{port}", password, repo)
+        service.workspace_ref = workspace
         service.config_paths.extend(context / "config" / "opencode" / name for name in ("opencode.json", "opencode.jsonc"))
         owner_lock = None
         if os.name != "nt":

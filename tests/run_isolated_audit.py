@@ -18,6 +18,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--pglite-command", required=True)
 parser.add_argument("--opencode-binary")
 parser.add_argument("--run-browser", action="store_true")
+parser.add_argument("--pytest-target", action="append", help="Run only selected affected test modules/nodes")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 with socket.socket() as sock:
@@ -42,9 +43,11 @@ with tempfile.TemporaryDirectory(prefix="gateway-isolated-audit-") as directory:
             env.update(OPENCODE_RUNTIME_MODE="local", OPENCODE_BINARY=str(Path(args.opencode_binary).resolve()),
                        AUDIT_RUN_OPENCODE="1")
         for command, cwd in [(["-m", "alembic", "upgrade", "head"], root/"backend"),
-                             (["-m", "pytest", "backend/tests/test_disposable_database.py", "-q", "--tb=short"], root)]:
+                             (["-m", "pytest", *(args.pytest_target or ["backend/tests/test_disposable_database.py"]), "-q", "--tb=short"], root)]:
             result = subprocess.run([sys.executable, *command], cwd=cwd, env=env, timeout=180)
-            if result.returncode:sys.exit(result.returncode)
+            if result.returncode:
+                print("Isolated audit subprocess failed:", command[:3], "exit=",result.returncode,"database_exit=",db_process.poll(),flush=True)
+                sys.exit(result.returncode)
         if args.run_browser:
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0)); staging_port=sock.getsockname()[1]

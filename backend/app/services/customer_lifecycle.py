@@ -6,7 +6,7 @@ from sqlalchemy import delete, func, inspect, select
 from ..config import settings
 from ..database import SessionLocal
 from ..models import (AccountAudit, AuthSession, ExecutionEvent, GithubAuthState,
-    GithubConnection, PasswordReset, ProviderCredential, UserProviderCredential, Subscription, User, Workspace, WorkspaceSession)
+    GithubConnection, PasswordReset, ProviderCredential, UserProviderCredential, Subscription, User, Workspace, WorkspaceSession, EmailVerification)
 from .entitlements import ACCOUNT_RETENTION_DAYS, aware
 
 POLICY_ACTION = "account.retention_started"
@@ -99,6 +99,9 @@ def archive_due(*, now=None):
                 activity.extend(aware(r.last_activity_at) for r in rows)
                 activity.extend(aware(value) for value in db.scalars(select(AuthSession.last_seen_at).where(
                     AuthSession.user_id == identifier, AuthSession.last_seen_at.is_not(None))))
+                # The account runtime exists even when no project was created.
+                # Stop it before erasing auth files so secrets do not survive in memory.
+                opencode.stop_workspace(opencode.account_workspace(identifier))
                 for row in rows:
                     opencode.stop_workspace(row)
                 # Project files have their own inactivity policy; account
@@ -109,7 +112,7 @@ def archive_due(*, now=None):
                 if runtime.exists(): shutil.rmtree(runtime)
                 session_ids = select(WorkspaceSession.id).where(WorkspaceSession.user_id == identifier)
                 db.execute(delete(ExecutionEvent).where(ExecutionEvent.session_id.in_(session_ids)))
-                for model in (WorkspaceSession, AuthSession, ProviderCredential, GithubAuthState, GithubConnection, PasswordReset):
+                for model in (WorkspaceSession, AuthSession, ProviderCredential, GithubAuthState, GithubConnection, PasswordReset, EmailVerification):
                     db.execute(delete(model).where(model.user_id == identifier))
                 # The account-owned credential table is introduced in migration
                 # 0017; archive its secrets too, but support pre-0017 installs.

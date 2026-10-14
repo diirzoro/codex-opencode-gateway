@@ -57,7 +57,7 @@ def delete_owned(db: Session, user_id, provider_id: str):
 
 
 def replace_encrypted_if_current(db: Session, user_id, provider_id: str,
-                                 expected_ciphertext: str, new_ciphertext: str):
+                                 expected_ciphertext: str, new_ciphertext: str, *, expected_id=None):
     """Compare-and-swap for OAuth rotation; caller owns transaction/commit.
 
     A refresh that started from an older credential cannot overwrite a token
@@ -69,8 +69,8 @@ def replace_encrypted_if_current(db: Session, user_id, provider_id: str,
     row = db.scalar(select(UserProviderCredential).where(
         UserProviderCredential.user_id == user_id,
         UserProviderCredential.provider_id == provider_id,
-    ).with_for_update())
-    if row is None or row.ciphertext != expected_ciphertext:
+    ).with_for_update().execution_options(populate_existing=True))
+    if row is None or (expected_id is not None and row.id != expected_id) or row.ciphertext != expected_ciphertext:
         return False
     if new_ciphertext == expected_ciphertext:
         return True

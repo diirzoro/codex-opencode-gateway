@@ -29,15 +29,25 @@ async def retention_maintenance():
                 import logging
                 logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
 
+async def provider_maintenance():
+    from .services import account_provider_sync
+    while True:
+        await asyncio.sleep(5)
+        await asyncio.to_thread(account_provider_sync.sweep)
+
 @asynccontextmanager
 async def lifespan(app):
     cleanup = asyncio.create_task(retention_maintenance())
+    provider_sync = asyncio.create_task(provider_maintenance())
     try:
         yield
     finally:
         cleanup.cancel()
+        provider_sync.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup
+        with suppress(asyncio.CancelledError):
+            await provider_sync
 
 app = FastAPI(title="OpenCode Gateway API", version="0.1.0", lifespan=lifespan)
 app.include_router(auth.router); app.include_router(profile.router); app.include_router(locations.router); app.include_router(admin.router)
