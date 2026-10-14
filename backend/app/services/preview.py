@@ -97,9 +97,10 @@ def detect(workspace):
             try:
                 data = json.loads(target.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    dependencies = {**(data.get("dependencies") or {}),
-                                    **(data.get("devDependencies") or {})}
-                    if not isinstance(dependencies,dict): dependencies={}
+                    base_deps = data.get("dependencies")
+                    dev_deps = data.get("devDependencies")
+                    dependencies = {**(base_deps if isinstance(base_deps,dict) else {}),
+                                    **(dev_deps if isinstance(dev_deps,dict) else {})}
                     scripts = data.get("scripts") or {}
                     manifest = {"dependencies":list(dependencies)[:120],
                                 "scripts":list(scripts)[:40] if isinstance(scripts,dict) else []}
