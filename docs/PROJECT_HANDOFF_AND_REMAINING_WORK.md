@@ -146,6 +146,14 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 - Remaining Batch 2: native permission/question pause/resume persistence, actual OpenCode agent execution, streaming and blank/duplicate message checks, accessible real multi-framework previews using secure isolated runners and cleanup.
 - Batch 1 remains open for OAuth refresh persistence and active runtime synchronization. No master/production changes.
 
+### 2026-10-14 — Consolidated partial-feature follow-up
+
+- `5e2d6e76`: the actual provider-authored option description is also exposed as the recommended choice's tooltip, rather than inventing a recommendation rationale.
+- `590dc87d`: question cards now display the agent-supplied header and fall back safely if the question prompt is missing.
+- JavaScript parser checks for `dashboards.js`, `app.js`, and `management.js` PASSED. No live OpenCode/browser test was executed for these changes.
+- This DOES NOT complete the consolidated list. Remaining: live approval execution blocking and persistence; question continuation and streaming; OAuth token refresh propagation; Composer busy-runtime retry; isolated container previews; native PostgreSQL concurrency; SMTP delivery; payment sandbox; retention end-to-end; full browser QA. Keep these OPEN, and do not infer production readiness.
+- No production data, `master`, rollback, deployment workflows, or VPS changed.
+
 ## 10. Change log
 
 | Date | Commit | Change | Evidence / pending |
