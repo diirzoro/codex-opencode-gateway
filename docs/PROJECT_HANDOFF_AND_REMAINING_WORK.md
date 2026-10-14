@@ -7,6 +7,12 @@
 
 > **MANDATORY FOR EVERY CODING AGENT (Codex, OpenCode, Work, or another agent):** Read this document **before** changing code. After every coherent change, update this document **in the same branch and commit or an immediately following commit**. Never mark a task complete merely because code was written. State evidence, tests, remaining gaps, commit SHA, and any deployment impacts. Continue using the existing design and architecture; do not remove requirements silently.
 
+## CURRENT DEVELOPMENT SCOPE — owner decision 2026-10-14
+
+**Deferred until owner-authorized main-server validation:** external payment gateway tests (PayPal and bank-transfer processing, webhooks and real payment-provider credentials) and outbound confirmation email delivery (SMTP/TLS, actual verification/resend messages). These are **removed from the current repair batches**, not cancelled, deleted or marked VERIFIED. Do not touch production secrets or configure external services now. Perform these only after explicit authorization and with safe test controls; never create real charges or send unsolicited emails.
+
+**Still in current scope:** OAuth token lifecycle, provider synchronization, Workspace/Agent questions and approvals, isolated project Preview, multi-tenant security, account activation guards, trial and entitlement logic where testable without external payment/email delivery, and non-production database tests. Preserve the existing payment, email-verification, resend, anti-replay and account entitlement code. Record external payment/SMTP tests as **DEFERRED — MAIN SERVER**, separate from failed or completed tests.
+
 ## 1. Guardrails
 
 - **Only commit to `updates`.** Do not merge/push to `master`, touch `rollback-updates-2026-10-13`, edit GitHub Actions/workflows, or deploy to production without explicit owner approval.
