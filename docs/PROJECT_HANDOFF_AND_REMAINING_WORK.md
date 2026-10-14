@@ -315,7 +315,7 @@ Counts describe separate runs and must not be presented as one independent suite
 
 ## 14. 2026-10-14 — Executed repair round and 18-stage preservation checklist
 
-Started from `981fbceb90d9264a2c8b37bb40355c42e7374856`; fetched and reconciled the 20 intervening commits through `bbca5edcf698898a3d6a69342ee3002df8e5209c` before publication. The upstream question cards, header/recommendation explanation, default-OFF routine approvals, duplicate-answer rejection, scroll behavior and styled Jump to Latest are preserved. No second scrolling implementation or duplicate button was retained. Exact publication SHA is recorded in the immediately following documentation commit.
+Started from `981fbceb90d9264a2c8b37bb40355c42e7374856`; fetched and reconciled the 20 intervening commits through `bbca5edcf698898a3d6a69342ee3002df8e5209c` before publication. The upstream question cards, header/recommendation explanation, default-OFF routine approvals, duplicate-answer rejection, scroll behavior and styled Jump to Latest are preserved. No second scrolling implementation or duplicate button was retained. Published repair: `4ce9d48de00214d4dfb9648f01db7bbfcaac3a7a`, source tree `29d79b07bc7b7156e9d12c6d946e5ba4a35951b8` (identical to the reviewed local index). This immediately following documentation commit records the exact source SHA.
 
 ### Repairs and compatibility
 

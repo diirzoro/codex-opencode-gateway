@@ -38,3 +38,5 @@ See handoff section 14 and its 18-stage TODO. Latest upstream `bbca5edc` was fet
 - External payments and outbound verification delivery stay DEFERRED — MAIN SERVER. No credentials/settings or existing payment/email code changed.
 
 **Acceptance remains blocked. No merge/deploy is authorized.** Required infrastructure: a disposable native PostgreSQL service, working browser, authorized provider OAuth/model sandbox, and a dedicated isolated preview runner with authenticated separate-origin routing. Reuse successful unrelated evidence; rerun affected security cases after subsequent changes.
+
+Executed repair commit: `4ce9d48de00214d4dfb9648f01db7bbfcaac3a7a`. Final offline: **76 passed / 0 failed / 17 skipped**. Current-source OpenCode/PGlite affected integration: **3 passed / 1 failed / 0 skipped**. The failed native Agent fixture and blocked browser/container/native PostgreSQL/vendor OAuth gates prevent release approval.
