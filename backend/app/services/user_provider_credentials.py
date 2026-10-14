@@ -54,3 +54,25 @@ def delete_owned(db: Session, user_id, provider_id: str):
     if row is not None:
         db.delete(row)
     return row is not None
+
+
+def replace_encrypted_if_current(db: Session, user_id, provider_id: str,
+                                 expected_ciphertext: str, new_ciphertext: str):
+    """Compare-and-swap for OAuth rotation; caller owns transaction/commit.
+
+    A refresh that started from an older credential cannot overwrite a token
+    already updated by another runtime. Returning False requires the caller
+    to discard its stale token and re-read current account credentials.
+    """
+    if not expected_ciphertext or not new_ciphertext:
+        raise ValueError("Encrypted credentials are required")
+    row = db.scalar(select(UserProviderCredential).where(
+        UserProviderCredential.user_id == user_id,
+        UserProviderCredential.provider_id == provider_id,
+    ).with_for_update())
+    if row is None or row.ciphertext != expected_ciphertext:
+        return False
+    if new_ciphertext == expected_ciphertext:
+        return True
+    row.ciphertext = new_ciphertext
+    return True
