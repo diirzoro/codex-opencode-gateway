@@ -705,3 +705,12 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
   background:var(--panel2);color:var(--primary);
 }
 :root #workspacePage .chat-questions .chat-approval-actions{justify-content:flex-start}
+
+/* In-conversation navigation: visible only while reading older agent output. */
+:root #workspacePage .workspace-jump-latest{
+ position:fixed;inset-inline-end:clamp(20px,5vw,64px);bottom:118px;z-index:20;
+ border:1px solid var(--line);border-radius:999px;background:var(--panel);
+ color:var(--text);box-shadow:0 3px 15px rgba(0,0,0,.12);
+ font-size:13px;padding:9px 15px;cursor:pointer;
+}
+:root #workspacePage .workspace-jump-latest[hidden]{display:none!important}
