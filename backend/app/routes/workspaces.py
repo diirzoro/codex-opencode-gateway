@@ -390,6 +390,13 @@ def changes(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session
 def diff(workspace_id: uuid.UUID,path: str|None=Query(default=None,max_length=1000),user: User=Depends(require_user),db: Session=Depends(get_db)):
     return manager.diff(manager.owned(db,Workspace,workspace_id,user.id),path)
 
+@router.get("/workspaces/{workspace_id}/preview/capabilities")
+def workspace_preview_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),
+                                   db: Session=Depends(get_db)):
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    return preview.detect(workspace)
+
+
 @router.get("/workspaces/{workspace_id}/preview")
 def workspace_preview(workspace_id: uuid.UUID,path: str=Query(default="index.html",max_length=1000),user: User=Depends(require_user),db: Session=Depends(get_db)):
     return preview.render(manager.owned(db,Workspace,workspace_id,user.id),path)
