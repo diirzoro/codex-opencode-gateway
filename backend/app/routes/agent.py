@@ -509,7 +509,8 @@ class RoutineApproval(BaseModel):
 def routine_enabled(db, session_id):
     record=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,
         ExecutionEvent.kind=='routine_approval').order_by(ExecutionEvent.id.desc()).limit(1))
-    if record is None: return True
+    # Fail closed: new conversations require explicit approval until the user opts in.
+    if record is None: return False
     try: return json.loads(record.data).get('enabled') is True
     except (ValueError,TypeError): return False
 
