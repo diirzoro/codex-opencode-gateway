@@ -191,8 +191,9 @@ def connect_account_provider(provider_id: str,data: ApiKeyCredential,
     except IntegrityError:
         db.rollback()
         raise HTTPException(409,"This provider is already connected to your account") from None
-    _refresh_other_user_runtimes(db,user.id,uuid.UUID(int=0),provider_id,encrypted)
+    deferred=_refresh_other_user_runtimes(db,user.id,uuid.UUID(int=0),provider_id,encrypted)
     return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],
+            "deferred_workspace_count":len(deferred),
             "persisted":True,"validated_model":validated_model}
 
 
@@ -252,8 +253,9 @@ def account_oauth_callback(provider_id: str,data: OAuthCallback,
             try: providers.remove(service,provider_id)
             except Exception: logger.warning("Isolated OAuth cleanup requires attention for user %s", user.id)
             raise HTTPException(502,"OAuth credential could not be persisted securely") from None
-    _refresh_other_user_runtimes(db,user.id,uuid.UUID(int=0),provider_id,encrypted)
-    return {"connected":True,"provider_id":provider_id,"persisted":True}
+    deferred=_refresh_other_user_runtimes(db,user.id,uuid.UUID(int=0),provider_id,encrypted)
+    return {"connected":True,"provider_id":provider_id,"persisted":True,
+            "deferred_workspace_count":len(deferred)}
 
 
 @router.get("/opencode/status")
@@ -692,6 +694,7 @@ def _refresh_other_user_runtimes(db, user_id, current_workspace_id, provider_id,
     An unavailable or busy running runtime is left unchanged and logged rather
     than forcibly terminating another active session.
     """
+    deferred=[]
     for owned in db.scalars(select(Workspace).where(
             Workspace.user_id == user_id, Workspace.id != current_workspace_id)):
         try:
@@ -708,7 +711,9 @@ def _refresh_other_user_runtimes(db, user_id, current_workspace_id, provider_id,
                     providers.restore_credential(service, provider_id, credentials.decrypt(ciphertext))
                     service.refresh_auth()
         except Exception:
+            deferred.append(str(owned.id))
             logger.warning("Provider refresh deferred for workspace %s", owned.id)
+    return deferred
 
 
 def _scrub_runtime_provider(user_id, runtime_id, provider_id):
