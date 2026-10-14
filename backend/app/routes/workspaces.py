@@ -454,6 +454,24 @@ def workspace_preview_plan(workspace_id: uuid.UUID,user: User=Depends(require_us
     return plan(manager.owned(db,Workspace,workspace_id,user.id))
 
 
+@router.get("/workspaces/{workspace_id}/preview/status")
+def workspace_preview_status(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services.preview_runner import status
+    return status(manager.owned(db,Workspace,workspace_id,user.id))
+
+
+@router.post("/workspaces/{workspace_id}/preview/start")
+def workspace_preview_start(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services.preview_runner import start
+    return start(manager.owned(db,Workspace,workspace_id,user.id))
+
+
+@router.post("/workspaces/{workspace_id}/preview/stop")
+def workspace_preview_stop(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services.preview_runner import stop
+    return stop(manager.owned(db,Workspace,workspace_id,user.id))
+
+
 @router.get("/workspaces/{workspace_id}/preview")
 def workspace_preview(workspace_id: uuid.UUID,path: str=Query(default="index.html",max_length=1000),user: User=Depends(require_user),db: Session=Depends(get_db)):
     return preview.render(manager.owned(db,Workspace,workspace_id,user.id),path)

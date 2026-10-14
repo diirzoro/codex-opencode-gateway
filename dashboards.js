@@ -419,7 +419,33 @@
   const previewPath=document.createElement('input');previewPath.value='index.html';previewPath.setAttribute('aria-label',tr('Preview HTML entry','ملف HTML للمعاينة'));
   const previewStatus=text('p','Start a sandboxed HTML preview. Backend/browser automation preview is not configured.','ابدأ معاينة HTML معزولة. معاينة الخادم وأتمتة المتصفح غير مهيأة.');
   const frame=document.createElement('iframe');frame.title=tr('Project preview','معاينة المشروع');frame.setAttribute('sandbox','allow-scripts');frame.setAttribute('referrerpolicy','no-referrer');frame.hidden=true;
-  async function startPreview(){if(!activeWorkspace)return;const id=activeWorkspace.id;previewStatus.textContent=tr('Detecting project…','جارٍ اكتشاف نوع المشروع…');try{const capabilities=await api('/api/workspaces/'+id+'/preview/capabilities');if(activeWorkspace?.id!==id)return;if(capabilities.preview_mode!=='static'){frame.hidden=true;previewStatus.textContent=tr('Detected ','تم اكتشاف ')+capabilities.framework+' · '+tr('A secure isolated runner is required to preview this application. No code was executed.','تحتاج معاينة هذا التطبيق إلى مشغّل معزول وآمن. لم يتم تنفيذ أي كود.');return;}previewStatus.textContent=tr('Loading preview…','جارٍ تحميل المعاينة…');const result=await api('/api/workspaces/'+id+'/preview?path='+encodeURIComponent(previewPath.value));if(activeWorkspace?.id!==id)return;frame.srcdoc=result.html;frame.hidden=false;previewStatus.textContent=tr('Static preview · ','معاينة ثابتة · ')+result.path+' · '+tr('Network, backend servers and browser automation are unavailable here.','الشبكة والخوادم وأتمتة المتصفح غير متاحة هنا.');}catch(error){frame.hidden=true;previewStatus.textContent=error.message;}}
+  let previewRevision=0;
+  function clearPreview(){previewRevision++;frame.hidden=true;frame.srcdoc='';frame.removeAttribute('src');}
+  async function startPreview(){
+    if(!activeWorkspace)return;
+    clearPreview();const revision=previewRevision,id=activeWorkspace.id;
+    previewStatus.textContent=tr('Detecting project…','جارٍ اكتشاف نوع المشروع…');
+    try{
+      const state=await api('/api/workspaces/'+id+'/preview/status');
+      if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+      previewPath.hidden=state.mode!=='static';
+      if(state.mode!=='static'){
+        previewStatus.textContent=tr('Detected ','تم اكتشاف ')+state.framework+' · '+tr('A secure isolated runner is unavailable. No application was started.','المشغّل المعزول الآمن غير متاح. لم يتم تشغيل أي تطبيق.');return;
+      }
+      previewStatus.textContent=tr('Loading preview…','جارٍ تحميل المعاينة…');
+      const result=await api('/api/workspaces/'+id+'/preview?path='+encodeURIComponent(previewPath.value));
+      if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+      frame.srcdoc=result.html;frame.hidden=false;
+      previewStatus.textContent=tr('Static preview · ','معاينة ثابتة · ')+result.path+' · '+tr('Network and backend servers are unavailable here.','الشبكة وخوادم التطبيقات غير متاحة هنا.');
+    }catch(error){if(activeWorkspace?.id===id&&previewRevision===revision){clearPreview();previewStatus.textContent=error.message;}}
+  }
+  async function stopPreview(){
+    clearPreview();const revision=previewRevision,id=activeWorkspace?.id;
+    previewStatus.textContent=tr('Preview stopped.','تم إيقاف المعاينة.');
+    if(!id)return;
+    try{await api('/api/workspaces/'+id+'/preview/stop',{method:'POST'});}
+    catch(error){if(activeWorkspace?.id===id&&previewRevision===revision)previewStatus.textContent=error.message;}
+  }
   const previewActions=textElement('div','','preview-actions');
   const fullPreview=btn('expandWorkspacePreview','Full screen','تكبير للشاشة',async()=>{if(frame.hidden){toast(tr('Start the preview first.','ابدأ المعاينة أولًا.'));return;}await frame.requestFullscreen();});
   const newTabPreview=btn('openWorkspacePreviewTab','Open in new tab','فتح في تبويب جديد',()=>{if(frame.hidden){toast(tr('Start the preview first.','ابدأ المعاينة أولًا.'));return;}
@@ -427,7 +453,7 @@
     const html='<!doctype html><html><head><meta charset="utf-8"><title>Project preview</title><meta name="referrer" content="no-referrer"></head><body style="margin:0;height:100vh"><iframe title="Project preview" sandbox="allow-scripts" referrerpolicy="no-referrer" style="width:100%;height:100%;border:0" srcdoc="'+encoded+'"></iframe></body></html>';
     const url=URL.createObjectURL(new Blob([html],{type:'text/html'})),link=document.createElement('a');link.href=url;link.target='_blank';link.rel='noopener noreferrer';link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);
   });
-  previewActions.append(btn('startWorkspacePreview','Start preview','ابدأ المعاينة',startPreview),btn('refreshWorkspacePreview','Refresh preview','حدّث المعاينة',startPreview),fullPreview,newTabPreview);
+  previewActions.append(btn('startWorkspacePreview','Start preview','ابدأ المعاينة',startPreview),btn('refreshWorkspacePreview','Refresh preview','حدّث المعاينة',startPreview),btn('stopWorkspacePreview','Stop preview','إيقاف المعاينة',stopPreview),fullPreview,newTabPreview);
   previewPanel.append(text('h3','Project Preview','معاينة المشروع'),previewPath,previewActions,previewStatus,frame);
   const projectRoot=document.createElement('details');projectRoot.className='sidebar-project-root';projectRoot.open=true;
   const projectSummary=document.createElement('summary'),projectName=textElement('strong'),projectKind=textElement('small'),projectBranch=textElement('span','','sidebar-project-branch');
@@ -634,7 +660,7 @@
     if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));
     if(!await usableWorkspace(workspace)){toast(tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.'));if(navigate)await page('workspaceHomePage');return;}
     if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;sessionRows=[];retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
-    discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
+    discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
     renderWorkspaceEmpty();q('promptInput').value=pendingIdea;pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode'),''));updateSend();
     if(!navigate){syncWorkspacePolling();return;}

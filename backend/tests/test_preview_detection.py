@@ -65,3 +65,61 @@ def test_runner_plan_is_fail_closed_and_has_no_host_execution(source,filename,fr
     assert result['routing']['authentication_required'] and result['routing']['separate_origin_required']
     assert str(root) not in json.dumps(result)
     assert not (root/'MUST_NOT_EXECUTE').exists()
+
+
+def test_runner_limits_are_not_shared_mutable_api_state(source):
+    from backend.app.services.preview_runner import plan, LIMITS
+    workspace,root=source
+    first=plan(workspace)
+    first['limits']['drop_capabilities'].clear()
+    first['limits']['public_ports'].append(8080)
+    assert LIMITS['drop_capabilities']==['ALL'] and LIMITS['public_ports']==[]
+
+
+@pytest.mark.parametrize('dependency,executable',[('next','next'),('vite','vite'),('@angular/core','ng')])
+def test_launch_profiles_are_argv_only_and_never_run_package_scripts(source,dependency,executable):
+    from backend.app.services.preview_runner import launch_options
+    workspace,root=source
+    (root/'package.json').write_text(json.dumps({'dependencies':{dependency:'fixture'},'scripts':{'start':'touch MUST_NOT_EXECUTE'}}))
+    result=launch_options(workspace)
+    assert result['argv'][0]=='./node_modules/.bin/'+executable
+    assert result['internal_port']==8080 and not result['execution_enabled']
+    assert not (root/'MUST_NOT_EXECUTE').exists()
+
+
+def test_snapshot_excludes_secrets_dependencies_and_git(source):
+    import io,tarfile
+    from backend.app.services.preview_snapshot import export
+    workspace,root=source
+    (root/'main.py').write_text('print("not executed")')
+    for name in ('.env.production','secret.pem','opencode.json'):(root/name).write_text('private-fixture')
+    (root/'.git').mkdir();(root/'.git'/'config').write_text('private-fixture')
+    out=io.BytesIO();result=export(workspace,out)
+    assert result['files']==1
+    out.seek(0)
+    with tarfile.open(fileobj=out) as archive:
+        assert archive.getnames()==['main.py']
+        item=archive.getmembers()[0];assert item.mode==0o444 and item.isreg()
+        assert archive.extractfile(item).read()==b'print("not executed")'
+
+
+@pytest.mark.parametrize('kind',['symlink','hardlink','fifo'])
+def test_snapshot_rejects_links_and_special_files(source,tmp_path,kind):
+    import io
+    from backend.app.services.preview_snapshot import export
+    workspace,root=source
+    target=tmp_path/'outside';target.write_text('must-not-export')
+    if kind=='symlink':(root/'unsafe').symlink_to(target)
+    elif kind=='hardlink':os.link(target,root/'unsafe')
+    else:os.mkfifo(root/'unsafe')
+    with pytest.raises(HTTPException) as error:export(workspace,io.BytesIO())
+    assert error.value.status_code==403
+
+
+def test_snapshot_limits_actual_source_bytes(source,monkeypatch):
+    import io
+    from backend.app.services import preview_snapshot
+    workspace,root=source;(root/'large.txt').write_bytes(b'12345')
+    monkeypatch.setattr(preview_snapshot,'MAX_BYTES',4)
+    with pytest.raises(HTTPException) as error:preview_snapshot.export(workspace,io.BytesIO())
+    assert error.value.status_code==413
