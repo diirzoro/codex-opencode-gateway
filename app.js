@@ -255,6 +255,13 @@ async function restoreWorkspaceContext(){
  try{
   // The owned API validates the persisted ID before it becomes active context.
   const workspace=await api('/api/workspaces/'+encodeURIComponent(workspaceId));
+  if(workspace.files_available===false){
+   if(owner===currentUser?.id&&selection===workspaceSelectionRevision){
+    activeWorkspace=activeProject=activeSession=null;
+    try{localStorage.removeItem('og-workspace');}catch(ignored){}
+   }
+   return null;
+  }
   const project=await api('/api/projects/'+encodeURIComponent(workspace.project_id));
   if(owner!==currentUser?.id||selection!==workspaceSelectionRevision)return null;
   activeWorkspace=workspace;activeProject=project;return {workspace,project};

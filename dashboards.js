@@ -47,26 +47,22 @@
   }
   async function openConnections(focus){await page('connectionsPage');if(focus)q(focus==='github'?'connectionsGithub':'connectionsProviders').scrollIntoView({block:'start',behavior:'smooth'});}
   window.openConnections=openConnections;
-  // Resume actual coding after authentication, without creating projects or tasks.
+  async function usableWorkspace(workspace){
+    const owner=currentUser?.id;
+    let available=false;
+    try{const owned=await api('/api/workspaces/'+encodeURIComponent(workspace.id));available=owned.id===workspace.id&&owned.files_available!==false;}
+    catch(error){if(![403,404,410].includes(error.status))throw error;}
+    if(currentUser?.id!==owner)return false;
+    if(!available){
+      if(activeWorkspace?.id===workspace.id){stopEvents();workspaceSelectionRevision++;activeWorkspace=activeProject=activeSession=null;}
+      try{if(localStorage.getItem('og-workspace')===workspace.id)localStorage.removeItem('og-workspace');}catch(error){}
+    }
+    return available;
+  }
+  // Opening the workspace never creates/resumes a project implicitly.
   window.openClientWorkspace=async function(){
     if(!currentUser)return page('authPage');
-    if(admin())return page('adminPage');
-    const owner=currentUser.id;
-    let context=activeWorkspace&&activeProject?{workspace:activeWorkspace,project:activeProject}:await restoreWorkspaceContext();
-    let recent=null;
-    if(currentUser?.id!==owner)return;
-    if(!context){
-      let data;try{data=await api('/api/dashboard');}catch(error){if(currentUser?.id===owner){toast(error.message);await page('workspaceHomePage');}return;}
-      if(currentUser?.id!==owner)return;
-      for(const session of data.recent_sessions||[]){
-        const project=data.projects.find(p=>p.workspaces.some(w=>w.id===session.workspace_id));
-        const workspace=project?.workspaces.find(w=>w.id===session.workspace_id);
-        if(workspace){context={project,workspace};recent=session;break;}
-      }
-      if(!context){const project=data.projects.find(p=>p.workspaces.length);if(project)context={project,workspace:project.workspaces[0]};}
-    }
-    if(context){await openWorkspace(context.project,context.workspace);if(recent&&currentUser?.id===owner&&activeWorkspace?.id===context.workspace.id){try{await selectSession(recent);}catch(error){if(currentUser?.id===owner)toast(error.message);}}}
-    else await page('workspaceHomePage');
+    return page(admin()?'adminPage':'workspaceHomePage');
   };
   async function loadConnections(){
     const root=q('connectionsProviders'),query=root.querySelector('input[role=combobox]')?.value;
@@ -80,7 +76,9 @@
     const runtimeJob=(async()=>{
       await (window.workspaceContextReady||Promise.resolve());
       if(!activeWorkspace){runtime.lastElementChild.textContent=tr('Select a workspace to inspect its runtime.','اختر مساحة عمل لفحص وقت تشغيلها.');return;}
-      const workspaceId=activeWorkspace.id,state=await window.workspaceRuntime.loadAgents(workspaceId);
+      const selected=activeWorkspace;
+      if(!await usableWorkspace(selected)){runtime.lastElementChild.textContent=tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.');return;}
+      const workspaceId=selected.id,state=await window.workspaceRuntime.loadAgents(workspaceId);
       if(activeWorkspace?.id===workspaceId)runtime.lastElementChild.textContent='OpenCode '+(state.health?.version||'')+' · '+(state.health?.healthy?tr('Ready','جاهز'):tr('Unavailable','غير متاح'));
     })();
     const results=await Promise.allSettled([providersJob,githubJob,runtimeJob]);
@@ -140,6 +138,7 @@
   const previousShow=showPage;showPage=function(id){if(id==='adminPage'&&!admin()){toast('Administrator access required');id=currentUser?'workspaceHomePage':'authPage';}if(admin()&&['workspaceHomePage','connectionsPage','workspacePage'].includes(id))id='adminPage';q('sessionSidebar').classList.remove('open');overlay(false);try{if(currentUser)localStorage.setItem('og-page',id);}catch(error){}previousShow(id);syncWorkspacePolling();q('clientWorkspaceHome').classList.toggle('active',['workspaceHomePage','workspacePage'].includes(id));q('clientConnections').classList.toggle('active',id==='connectionsPage');if(['workspaceHomePage','workspacePage','connectionsPage'].includes(id))q('clientNav').querySelectorAll('[data-client-view]').forEach(n=>n.classList.remove('active'));};
   openWorkspace=async function(project,workspace,options={}){
     if(options.navigate===false&&!workspaceInitialized){
+      if(!await usableWorkspace(workspace))return;
       // Composer attachment state does not exist until initializeWorkspace() runs.
       // Do not call clearAttachments() during lightweight workspace restoration;
       // doing so aborts restore/settings with "clearAttachments is not defined".
@@ -622,6 +621,7 @@
   openWorkspace=async function(project,workspace,{navigate=true}={}){
     if(admin()){await page('adminPage');return;}
     if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));
+    if(!await usableWorkspace(workspace)){toast(tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.'));if(navigate)await page('workspaceHomePage');return;}
     if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;sessionRows=[];retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
     discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';

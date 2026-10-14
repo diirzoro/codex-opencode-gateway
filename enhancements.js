@@ -621,7 +621,12 @@
     const button = $('#registerSubmit'); button.disabled = true;
     try {
       const prefs = { preferred_language: lang, preferred_theme: dark ? 'dark' : 'light' };
-      await api('/api/auth/register', { method: 'POST', body: JSON.stringify(registrationPayload()) });
+      const registered = await api('/api/auth/register', { method: 'POST', body: JSON.stringify(registrationPayload()) });
+      if (registered.status === 'pending_email') {
+        $('#registerPassword').value = '';
+        apiMessage('registerMessage', tr('Check your email for the verification link, then sign in.', 'تم إرسال رابط التفعيل إلى بريدك. افتح الرسالة للتحقق ثم سجل الدخول.'));
+        return;
+      }
       renderProfile(await api('/api/profile', { method: 'PATCH', body: JSON.stringify(prefs) }));
       $('#registerPassword').value = '';
       if (pendingIdea) { $('#projectName').value = pendingIdea.slice(0, 120); pendingIdea = ''; }

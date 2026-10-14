@@ -83,23 +83,29 @@ def _account_catalog_state(db, user, data):
     return {**data, "connected": sorted(connected), "gateway_disconnected": []}
 
 
+def _account_public_catalog(user, path, *, agents=False):
+    account, service = opencode.for_account(user.id)
+    with opencode.workspace_lock(account), service.state_lock:
+        return opencode_catalog.public_catalog(path, agents=agents, service=service)
+
+
 @router.get("/opencode/catalog/providers")
 def account_provider_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Project-independent definitions only; never expose global connected state."""
-    return providers.catalog_index(_account_catalog_state(db, user, opencode_catalog.public_catalog("/provider")), policy.load(db))
+    return providers.catalog_index(_account_catalog_state(db, user, _account_public_catalog(user,"/provider")), policy.load(db))
 
 
 @router.get("/opencode/catalog/providers/search")
 def account_provider_search(query: str=Query(min_length=2,max_length=200),
                             user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Search OpenCode definitions independently of a project; no auth status."""
-    return providers.search_index(_account_catalog_state(db, user, opencode_catalog.public_catalog("/provider")), query, policy.load(db))
+    return providers.search_index(_account_catalog_state(db, user, _account_public_catalog(user,"/provider")), query, policy.load(db))
 
 
 @router.get("/opencode/catalog/agents")
 def account_agent_catalog(user: User=Depends(require_user)):
     """List only public agent choices without workspace or private agent configuration."""
-    data = opencode_catalog.public_catalog("/agent", agents=True)
+    data = _account_public_catalog(user,"/agent", agents=True)
     return [{"id":row["name"],"name":row["name"],"mode":row.get("mode")}
             for row in data if isinstance(row,dict)
             and isinstance(row.get("name"),str) and 0<len(row["name"])<=120
@@ -593,7 +599,7 @@ def agent_choices(service):
 
 def user_provider_credentials_schema_ready(db):
     from sqlalchemy import inspect
-    return inspect(db.get_bind()).has_table("user_provider_credentials")
+    return inspect(db.connection()).has_table("user_provider_credentials")
 
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/credentials")
@@ -650,7 +656,7 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
             # migration 0017 exists; legacy workspace record remains intact.
             # Both records commit atomically in the same DB transaction.
             from sqlalchemy import inspect
-            if inspect(db.get_bind()).has_table("user_provider_credentials"):
+            if inspect(db.connection()).has_table("user_provider_credentials"):
                 user_provider_credentials.save_encrypted(
                     db, user.id, provider_id, encrypted, data.api_key[-4:])
             providers.record_connection(db,workspace,provider_id,connected=True)
@@ -788,6 +794,9 @@ def _remove_account_api_provider(db, user, provider_id):
                     service = opencode.for_workspace(workspace, start=False)
                 except HTTPException as exc:
                     if exc.status_code == 409:
+                        # Revocation also applies to stopped runtimes: startup
+                        # must never discover a revoked key in the old auth file.
+                        _scrub_runtime_provider(user.id,workspace.id,provider_id)
                         continue
                     raise
                 with service.state_lock:

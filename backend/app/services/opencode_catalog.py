@@ -18,17 +18,25 @@ _catalog_cache = {}
 CATALOG_TTL_SECONDS = 30.0
 
 
-def public_catalog(path, *, agents=False):
+def public_catalog(path, *, agents=False, service=None):
     """Read one native OpenCode catalog with a bounded loopback HTTP client."""
     if path not in {"/provider", "/agent"}:
         raise ValueError("Unsupported public catalog path")
     if agents != (path == "/agent"):
         raise ValueError("Catalog type must match the requested OpenCode endpoint")
     with _catalog_lock:
-        cached = _catalog_cache.get(path)
+        # An account runtime must not depend on the shared daemon or reuse
+        # another runtime's potentially provider-specific catalog.
+        key = (path, service.generation if service is not None else None)
+        now = time.monotonic()
+        for stale in [k for k, v in _catalog_cache.items() if now-v[0] >= CATALOG_TTL_SECONDS]:
+            _catalog_cache.pop(stale, None)
+        cached = _catalog_cache.get(key)
         if cached and time.monotonic() - cached[0] < CATALOG_TTL_SECONDS:
             return deepcopy(cached[1])
-        service = OpenCodeService(settings.opencode_url)
+        own_service = service is None
+        if own_service:
+            service = OpenCodeService(settings.opencode_url)
         try:
             data = service.request("GET", path)
             if agents:
@@ -50,7 +58,8 @@ def public_catalog(path, *, agents=False):
                                   and isinstance(item.get("models", {}), dict)],
                           "connected": [], "gateway_disconnected": [],
                           "default": data.get("default", {})}
-            _catalog_cache[path] = (time.monotonic(), public)
+            _catalog_cache[key] = (time.monotonic(), public)
             return deepcopy(public)
         finally:
-            service.close()
+            if own_service:
+                service.close()

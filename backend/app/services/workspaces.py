@@ -225,7 +225,11 @@ def project_payload(row):
 
 def workspace_payload(row):
     from .workspace_cache import cache_payload
-    return {"cache":cache_payload(row),"id":str(row.id),"project_id":str(row.project_id),"status":row.status,"base_commit_sha":row.base_commit_sha,"created_at":row.created_at,"last_activity_at":row.last_activity_at}
+    try:
+        available = root_for(row).is_dir()
+    except (HTTPException, OSError):
+        available = False
+    return {"files_available":available,"cache":cache_payload(row),"id":str(row.id),"project_id":str(row.project_id),"status":row.status,"base_commit_sha":row.base_commit_sha,"created_at":row.created_at,"last_activity_at":row.last_activity_at}
 
 def files(workspace, relative=""):
     path=safe_path(workspace,relative)

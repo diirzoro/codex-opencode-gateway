@@ -334,7 +334,7 @@ def _initialize(service, workspace):
     with SessionLocal() as db:
         # Migration 0017 is optional until rollout; older databases keep working.
         account_rows = []
-        if inspect(db.get_bind()).has_table("user_provider_credentials"):
+        if inspect(db.connection()).has_table("user_provider_credentials"):
             account_rows = list(db.scalars(select(UserProviderCredential).where(
                 UserProviderCredential.user_id == workspace.user_id)))
         legacy_rows = list(db.scalars(select(ProviderCredential).where(

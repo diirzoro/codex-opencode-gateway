@@ -36,7 +36,7 @@ def setup_account(monkeypatch):
     monkeypatch.setattr(routes.providers,"connection_methods",lambda service,pid:[{"type":"key"}])
     monkeypatch.setattr(routes.providers,"set_api_key",lambda *args:True)
     monkeypatch.setattr(routes.providers,"validate_model",lambda *args:"model-1")
-    monkeypatch.setattr(routes,"_refresh_other_user_runtimes",lambda *args:None)
+    monkeypatch.setattr(routes,"_refresh_other_user_runtimes",lambda *args:[])
     service=Mock()
     service.request.return_value={"all":[{"id":"openai","models":{"model-1":{}}}],"connected":[]}
     @contextmanager
@@ -65,6 +65,31 @@ def test_duplicate_connection_rejected_before_runtime_start(setup_account,monkey
     assert exc.value.status_code==409
     saved.assert_not_called()
     service.request.assert_not_called()
+
+
+def test_connect_reports_deferred_busy_workspaces(setup_account, monkeypatch):
+    user, db, service, saved = setup_account
+    monkeypatch.setattr(routes, "_refresh_other_user_runtimes", lambda *args: ["busy-1", "busy-2"])
+    result = routes.connect_account_provider("openai",
+        routes.ApiKeyCredential(api_key="fixture1234", model_id="model-1", method=0), user, db)
+    assert result["connected"] is True
+    assert result["deferred_workspace_count"] == 2
+
+
+def test_busy_runtime_is_deferred_without_install_or_termination(monkeypatch):
+    workspace = SimpleNamespace(id="busy-workspace", user_id="owner")
+    db = Mock()
+    db.scalars.return_value = [workspace]
+    service = Mock()
+    service.state_lock = __import__("threading").RLock()
+    service.ensure_auth_idle.side_effect = HTTPException(409, "Session busy")
+    monkeypatch.setattr(routes.opencode, "for_workspace", lambda *a, **kw: service)
+    stop, restore = Mock(), Mock()
+    monkeypatch.setattr(routes.opencode, "stop_workspace", stop)
+    monkeypatch.setattr(routes.providers, "restore_credential", restore)
+    assert routes._refresh_other_user_runtimes(db, "owner", None, "example", "encrypted") == ["busy-workspace"]
+    restore.assert_not_called()
+    stop.assert_not_called()
 
 
 def test_stopped_workspaces_never_scrub_credentials_during_connect(monkeypatch):

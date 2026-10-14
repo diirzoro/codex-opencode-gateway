@@ -113,7 +113,7 @@ def archive_due(*, now=None):
                     db.execute(delete(model).where(model.user_id == identifier))
                 # The account-owned credential table is introduced in migration
                 # 0017; archive its secrets too, but support pre-0017 installs.
-                if inspect(db.get_bind()).has_table("user_provider_credentials"):
+                if inspect(db.connection()).has_table("user_provider_credentials"):
                     db.execute(delete(UserProviderCredential).where(
                         UserProviderCredential.user_id == identifier))
                 user.status = "archived"

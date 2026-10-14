@@ -42,7 +42,7 @@ def connection_revision(db, workspace):
     legacy_revision = latest.id if latest else 0
     # A credential added/deleted from the user's dashboard changes every
     # workspace's catalog identity, even if its runtime has not restarted yet.
-    if not inspect(db.get_bind()).has_table("user_provider_credentials"):
+    if not inspect(db.connection()).has_table("user_provider_credentials"):
         return str(legacy_revision)
     rows = db.execute(select(UserProviderCredential.provider_id, UserProviderCredential.updated_at).where(
         UserProviderCredential.user_id == workspace.user_id).order_by(UserProviderCredential.provider_id))
@@ -90,7 +90,7 @@ def client_catalog(db, workspace, data):
         else:
             disconnected.discard(binding)
     account_ids = set()
-    if inspect(db.get_bind()).has_table("user_provider_credentials"):
+    if inspect(db.connection()).has_table("user_provider_credentials"):
         account_ids = set(db.scalars(select(UserProviderCredential.provider_id).where(
             UserProviderCredential.user_id == workspace.user_id)))
     # A single account credential is usable in all owned workspaces. Legacy

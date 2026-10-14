@@ -12,7 +12,7 @@ from ..models import UserProviderCredential
 
 def require_schema(db: Session):
     """Fail clearly before account connection reads if migration 0017 is absent."""
-    if not inspect(db.get_bind()).has_table("user_provider_credentials"):
+    if not inspect(db.connection()).has_table("user_provider_credentials"):
         raise HTTPException(503, "Account provider connections require database migration 0017")
 
 

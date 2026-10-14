@@ -2,7 +2,7 @@
 
 **Updated:** 2026-10-14  
 **Source of truth:** this file on `updates`  
-**Last verified working branch:** `updates`; latest reviewed commit before this document: `23974362c233a617fb4bef57000eb4b9496c50dd`  
+**Last audited baseline:** `updates` at `2b9f2618eb178e5f94a0b4cea32f9a5148bd2ec8`; see the stabilization entry below for this round's evidence and repair commit.
 **Status:** DEVELOPMENT / UNVERIFIED — NOT RELEASE-READY
 
 > **MANDATORY FOR EVERY CODING AGENT (Codex, OpenCode, Work, or another agent):** Read this document **before** changing code. After every coherent change, update this document **in the same branch and commit or an immediately following commit**. Never mark a task complete merely because code was written. State evidence, tests, remaining gaps, commit SHA, and any deployment impacts. Continue using the existing design and architecture; do not remove requirements silently.
@@ -139,3 +139,82 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 - Do not silently change customer's requested 50 MB quota, UI/RTL, payment terms, project-independent connections, or active session handling.
 
 **Source of truth is the repository version of this file.** The assistant's conversational context can help but cannot replace this durable record.
+
+## 12. 2026-10-14 — Regression stabilization (not a release approval)
+
+Scope: complete the confirmed repairs before large architectural changes. No broad cleanup, migrations, dependency upgrades, visual redesign, production access or deployment. The earlier implementation register remains open except for the specific evidence below. Repair commit SHA is recorded in the immediately following documentation commit (a commit cannot contain its own SHA).
+
+### Confirmed repairs
+
+- **Provider revocation:** stopped workspace runtimes now have their persisted `auth.json` scrubbed, in addition to the account runtime and running workspaces. Previously the stopped-runtime branch skipped the file. Other providers and another user's file are preserved.
+- **Account Connections UI:** selection, auth dialog, custom-provider dialog and callbacks support account mode with no active project. Account mode is the default; selecting a workspace explicitly retains the legacy workspace interface. Removed duplicate catalog loading and redundant search expression after examining callers; no routes or working authentication handlers deleted.
+- **Selected provider status:** browser screenshot inspection found a stale "Disconnected" label beside a successfully connected provider. Refresh now updates the selected provider's status from the same snapshot as the connected-provider list; browser assertions cover the label after connect and reconnect.
+- **Owned catalog:** provider/search/agent catalog routes use the authenticated user's account OpenCode runtime. They no longer query the shared daemon. Cache entries are separated by runtime generation, expire, return copies and contain allowlisted metadata only. The compatibility helper still supports an explicit shared-service caller; no account route uses that fallback.
+- **Missing project/files:** workspace payload reports `files_available` without disclosing paths. Restoration/opening validates ownership and file availability, clears only stale selection, and returns to the project-independent Workspace home. Opening Workspace no longer implicitly selects the first/recent project. No project data is recreated or deleted.
+- **Pending registration:** the `enhancements.js` registration override respects `pending_email`, clears the password, shows the verification instruction and avoids the unauthenticated profile PATCH. The base handler and verified/social flows remain.
+- **Schema inspection:** use the current SQLAlchemy transaction connection for migration-presence checks rather than obtaining an extra pooled connection. This avoided a PGlite bridge wait during testing; it is **not evidence of a PostgreSQL-native application defect**. Native PostgreSQL verification remains required.
+
+### Actual test results
+
+| Run | Passed | Failed | Skipped | Scope / limits |
+|---|---:|---:|---:|---|
+| `python -m pytest backend/tests -q` | 28 | 0 | 12 | Offline regression/contracts; the disposable integration module is opt-in |
+| Isolated PGlite + OpenCode harness | 8 | 0 | 4 | Preliminary SQL compatibility/integration evidence, **not native PostgreSQL**; one dependency deprecation warning |
+| `node tests/browser/account-connections.cjs` | 6 scenarios | 0 | 0 | Real frontend, mocked Gateway APIs: no/missing project connection, disconnect/reconnect, deferred warning, Arabic/English RTL/LTR, 390px input fit, deleted/missing/available restoration and pending signup |
+| Real loopback staging browser | 0 completed journeys | 1 | 0 | Registration/verification/login reached Workspace home; Connections provider readiness did not complete; see blocker below |
+| JS syntax, Python compile, `git diff --check` | Passed | 0 | — | Parser/whitespace checks only, not end-to-end verification |
+
+The PGlite harness applied **all migrations through `0018_email_verification`**, including 0017 and 0018, to a new in-memory disposable database. It did not touch any existing database. It verified 249+ seeded countries, hashed/single-use verification tokens, resend password/cooldown/old-token invalidation, one verified-email 30-day trial, normalized duplicate registration rejection, encrypted account credentials, ownership checks, traversal/private-path denial, cross-origin mutation rejection, first-payment/early-renewal/expired-renewal and repeat-confirmation behavior. Payments were internal test orders; no PayPal or bank request occurred.
+
+Security evidence: two accounts can create same-named projects while foreign workspace/files/session/question/permission/preview-capability requests are denied. A `pending_email` account with a deliberately seeded otherwise-valid session receives 403 on auth/profile/profile PATCH/projects/workspaces/account catalog/connections/session messages/questions/permission reply. This samples protected routes; it is not a formal exhaustive security certification.
+
+**Real OpenCode 1.18.32 evidence:** dedicated account runtime starts without any project; native provider/auth-method metadata is available. Gateway Connect → duplicate Connect 409 → account runtime restart/key restore → two project runtimes → stop one → Disconnect → restart stopped runtime without revoked key → Reconnect → both project auth files updated → Disconnect succeeds. A second account's runtime auth file is byte-for-byte unchanged. Keys are fake; only external model validation is mocked in this integration test. The native permission/question/session APIs were queried with empty state; this does **not** verify a live pending approval/question or actual agent continuation.
+
+Busy-runtime deferral/no termination is covered by an offline contract, not a real streaming session. Provider credential persistence, revocation and idle-runtime fanout are tested; live composer synchronization and OAuth refresh remain open.
+
+### Reproduction and evidence
+
+Install backend test dependencies in a separate virtual environment. Auxiliary QA tools used: `@electric-sql/pglite@0.5.9`, `@electric-sql/pglite-socket@0.2.12`, `opencode-ai@1.18.32`, `playwright@1.56.1`, Chromium. These were not added to production dependencies.
+
+```bash
+python -m pytest backend/tests -q
+python tests/run_isolated_audit.py \
+  --pglite-command /absolute/path/to/pglite-server \
+  --opencode-binary /absolute/path/to/opencode
+NODE_PATH=/absolute/path/to/qa/node_modules \
+CHROMIUM_EXECUTABLE=/absolute/path/to/chromium \
+AUDIT_SCREENSHOT_DIR=/absolute/path/to/qa-evidence \
+node tests/browser/account-connections.cjs
+# Real local browser attempt (SMTP replaced by a disposable fixture mailbox):
+NODE_PATH=/absolute/path/to/qa/node_modules \
+CHROMIUM_EXECUTABLE=/absolute/path/to/chromium \
+AUDIT_SCREENSHOT_DIR=/absolute/path/to/qa-evidence \
+python tests/run_isolated_audit.py \
+  --pglite-command /absolute/path/to/pglite-server \
+  --opencode-binary /absolute/path/to/opencode --run-browser
+```
+
+`tests/browser/account-connections.cjs` and `tests/browser/staging.cjs` are reproducible browser evidence. The former saved `connections-no-project.png` and `connections-missing-project.png` locally with fixture data. They are not production screenshots or evidence of successful real-provider authentication. The staging script records API paths/statuses without token query strings and saves a failure screenshot when possible.
+
+For **native** PostgreSQL, a separate empty loopback disposable database is still required. Apply Alembic with that explicit test `DATABASE_URL`, then run `backend/tests/test_disposable_database.py` with `AUDIT_DISPOSABLE_DB=1`, `AUDIT_DB_ENGINE=native` and isolated `WORKSPACE_ROOT`/`RUNTIME_ROOT`; set `AUDIT_RUN_OPENCODE=1` only with the pinned executable. Never point this suite at production. Native-only tests cover exact email/username uniqueness, transaction rollback after constraint failure and concurrent duplicate provider inserts, and duplicate provider uniqueness. These four cases are deliberately skipped on the PGlite bridge, whose error/rollback protocol failed with psycopg. Do not classify that bridge failure as a product bug.
+
+### Blockers and remaining requirements
+
+1. **Native PostgreSQL:** no `postgres`/`initdb`, Docker/Podman or Docker socket; the environment maps only UID 0 and cannot run PostgreSQL as an unprivileged user. No authorized disposable native database supplied. Native migrations 0017/0018, constraints/rollback/concurrency and simultaneous HTTP connection/capture races remain **unverified**.
+2. **Real staging browser:** provider loading remained pending with no completed OpenCode API response in the first attempt. The attempt used the PGlite socket bridge, which has known transaction/concurrency limitations. Root cause must be reproduced on native PostgreSQL before changing production runtime behavior. The screenshot attempt initially timed out waiting for unavailable external fonts; failure capture now avoids that wait. No public staging URL was created; no deployment workflow changed. Switching real projects/sessions, refresh persistence, disconnect/reconnect in a real browser and Dashboard/billing/settings journeys remain incomplete.
+3. **Project deletion:** permanent project DELETE currently intentionally returns 409 and offers archive. Regression browser fixtures simulate a deleted 404; the integration test moves only a newly created test repo directory and retains/restores its database project. Do not claim a real permanent-delete customer journey passed.
+4. **OAuth:** encrypted token refresh/expiry/recovery/provider-specific callback/restart and two-account OAuth separation still require actual sandbox authorization. No production tokens used.
+5. **Unified Workspace/Agent:** follow-scroll/Jump to Latest, blank-message regressions, actual progress/todos, pending approvals that block/persist/resume/reject, structured question single/multi/recommended/custom answers and state restoration remain open. Empty native API responses are insufficient proof.
+6. **Universal Preview:** framework detection/static sandbox tests pass for seven Node frameworks plus static/traversal cases. Isolated runnable containers, quotas, network/port isolation and cleanup are **not implemented or verified**; no host execution of customer project scripts added.
+7. **Email, billing and retention:** SMTP delivery is mocked, not tested externally. Verification expiry boundary, PayPal sandbox capture/rejection/webhooks, unpaid/failed order full integration, concurrent payment idempotence, 90-day archive and reactivation/no-second-trial paths require further tests. The existing PayPal `INVALID_RESOURCE_ID` production report was not diagnosed by this isolated audit; payment settings unchanged.
+8. **UI/security coverage:** responsive check asserts the Connections input fits 390px and language direction changes. It does not certify every page, theme, GitHub integration, sidebar/session behavior or full cross-user runtime/preview execution isolation. OpenCode process directories are not an OS sandbox.
+
+### Files and protected state
+
+Changed application files: `app.js`, `dashboards.js`, `enhancements.js`, `management.js`; `backend/app/routes/workspaces.py`; services `workspaces.py`, `opencode.py`, `opencode_catalog.py`, `providers.py`, `user_provider_credentials.py`, `customer_lifecycle.py`.
+
+Changed/added evidence: `backend/tests/test_account_provider_routes.py`, `test_provider_revocation.py`, `test_account_catalog_isolation.py`, `test_preview_detection.py`, `test_disposable_database.py`; `tests/browser/fixture.js`, `account-connections.cjs`, `staging.cjs`; `tests/run_isolated_audit.py`, `tests/staging_app.py`; this handoff. Selected regression files are explicitly tracked despite an older blanket test ignore rule, following the owner's current test/publish requirement. No tables/routes/legacy files broadly removed.
+
+Protected refs checked before publication: `master` = `bff094a1e4079e51e1673942160e86a28293cc69`; `rollback-updates-2026-10-13` = `4e8dc91d8e2f007fb19ea3914f606c7d41fca377`. No changes to `.github/workflows/`, deployment files, config defaults, production `.env`, payment credentials, production VPS or production database. No production migrations, restart, merge or deploy.
+
+**Next action:** reproduce the staging provider-loading issue and run the prepared tests on native disposable PostgreSQL; resolve confirmed regressions before proceeding to the open architecture/features. Keep this project **NOT RELEASE-READY** until the missing evidence exists.
