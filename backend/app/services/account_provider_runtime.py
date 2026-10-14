@@ -43,7 +43,7 @@ def isolated_validation(user_id, db):
                             "XDG_DATA_HOME":"data", "XDG_STATE_HOME":"state",
                             "XDG_CACHE_HOME":"cache"}.items():
             location = root / folder
-            location.mkdir()
+            location.mkdir(exist_ok=True)
             env[key] = str(location)
         password = secrets.token_urlsafe(32)
         env.update(OPENCODE_SERVER_PASSWORD=password,
