@@ -176,6 +176,14 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 - Pending active gates: full agent permission/question stream verification, OAuth refresh persistence and live workspace retry, safe container-run previews, native disposable PostgreSQL, and cross-tenant security/browser tests. External PayPal/bank payment and SMTP delivery are **DEFERRED — MAIN SERVER** by owner request.
 - No production or protected branch changes.
 
+### 2026-10-14 — Owner-authorized autonomous continuation checkpoint
+
+- Commit `ce7f0277`: added [pre-merge verification gate](PRE_MERGE_VERIFICATION_GATE_2026-10-14.md) with all evidence-dependent remaining requirements, latest reproducible historical test results and exact scope of external services deferred by the owner.
+- Read current Agent, Preview, workspace runtime synchronization and credential sources. No new verified live OAuth/Agent/Preview integration could be produced: current connector can read/write GitHub repository files but cannot execute remote processes; local git fetch was blocked by DNS.
+- **No speculative security-critical integration edits were made** without a runnable test environment. Earlier post-staging changes remain code-only/unverified.
+- Next required execution: permitted isolated FastAPI/OpenCode browser, native disposable PostgreSQL and isolated container runner, then targeted acceptance checks in the linked gate. Do not merge/deploy until proven and owner approved.
+- External payments and SMTP are **DEFERRED — MAIN SERVER** as instructed. No changes to master, rollback, workflows or production environment.
+
 ## 10. Change log
 
 | Date | Commit | Change | Evidence / pending |
