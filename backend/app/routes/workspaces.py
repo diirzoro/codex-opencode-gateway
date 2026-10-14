@@ -700,7 +700,7 @@ def _refresh_other_user_runtimes(db, user_id, current_workspace_id, provider_id,
                     service = opencode.for_workspace(owned, start=False)
                 except HTTPException as exc:
                     if exc.status_code == 409:
-                        _scrub_runtime_provider(user.id,workspace.id,provider_id)
+                        # A stopped workspace restores the account credential on next start.
                         continue
                     raise
                 with service.state_lock:
