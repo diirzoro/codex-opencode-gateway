@@ -108,6 +108,13 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 **Then update this file**, noting in the changelog: date, exact commit, changed features, reproducible test evidence, unresolved blockers, dependencies, and next recommended task. Move a status to VERIFIED only with demonstrated tests.  
 **When delegating:** share the GitHub URL of this file and include: *"Read PROJECT_HANDOFF_AND_REMAINING_WORK.md before coding, and update it in your own change set."*
 
+### 2026-10-14 connection reliability audit
+
+- **Fixed in `018a5023`:** stopped-workspace refresh previously used undefined `user`/`workspace` variables and attempted to delete authentication while *connecting*. Now stopped workspaces defer restore to startup without scrubbing credentials.
+- **Regression test added in `4b228636`:** `test_stopped_workspaces_never_scrub_credentials_during_connect`. Test code exists; **NOT EXECUTED** in this GitHub-only session.
+- **Fixed in `e0761357`:** temporary account validation Runtime used `Path.mkdir()` repeatedly for shared `HOME`/`USERPROFILE` locations, causing `FileExistsError` before startup. Changed to `exist_ok=True`.
+- **Still pending:** run unit tests, isolated OpenCode process startup and real model validation, OAuth refresh, workspace key restore, two-account data isolation and browser Connections flow. No deployment or database migrations authorized.
+
 ## 10. Change log
 
 | Date | Commit | Change | Evidence / pending |
