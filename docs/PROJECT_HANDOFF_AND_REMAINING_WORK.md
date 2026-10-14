@@ -115,6 +115,13 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 - **Fixed in `e0761357`:** temporary account validation Runtime used `Path.mkdir()` repeatedly for shared `HOME`/`USERPROFILE` locations, causing `FileExistsError` before startup. Changed to `exist_ok=True`.
 - **Still pending:** run unit tests, isolated OpenCode process startup and real model validation, OAuth refresh, workspace key restore, two-account data isolation and browser Connections flow. No deployment or database migrations authorized.
 
+### 2026-10-14 — Partial synchronization reporting
+
+- Commit `ff5df6ee`: account-level API/OAuth connection responses now include `deferred_workspace_count` for active workspaces whose credential refresh failed. This makes partial synchronization visible rather than silently claiming full success.
+- Commit `aeb36c45`: Dashboard Connections warns users when running workspaces require a refresh.
+- **Not verified end-to-end:** credentials/authorization must be exercised with live OpenCode services, multiple users and concurrent workspaces. No automatic resync guarantee is claimed.
+- **Still required:** inspect and test provider OAuth token rotation and restart, isolated preview runner, ChatGPT-like agent approvals/questions/scrolling, billing and archived-account lifecycle, SMTP activation and migrations on a disposable database.
+
 ## 10. Change log
 
 | Date | Commit | Change | Evidence / pending |
