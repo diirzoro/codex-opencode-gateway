@@ -474,7 +474,8 @@ def session_questions(session_id: uuid.UUID,user: User=Depends(require_user),db:
                 'question':_sanitize(str(q.get('question',''))[:8000],workspace),
                 'multiple':bool(q.get('multiple')),'custom':q.get('custom') is not False,
                 'options':[{'label':_sanitize(str(o.get('label',''))[:2000],workspace),
-                    'description':_sanitize(str(o.get('description',''))[:2000],workspace)} for o in q.get('options',[])[:50]]})
+                    'description':_sanitize(str(o.get('description',''))[:2000],workspace),
+                    'recommended':o.get('recommended') is True} for o in q.get('options',[])[:50] if isinstance(o,dict)]})
         output.append({'id':row['id'],'questions':questions})
     return {'supported':True,'requests':output}
 
