@@ -174,7 +174,7 @@ async function refreshMessages(){
  try{
   const rows=await api(`/api/sessions/${sessionId}/messages`);
   if(revision!==messageRenderRevision||activeSession?.id!==sessionId||currentUser?.id!==owner)return;
-  const feed=$('#agentFeed');feed.replaceChildren();const seen=new Set();let previousPrompt='',previousAttachments=[];
+  const feed=$('#agentFeed');const followingLatest=feed.scrollHeight-feed.clientHeight-feed.scrollTop<110;const previousOffset=feed.scrollTop;feed.replaceChildren();const seen=new Set();let previousPrompt='',previousAttachments=[];
   const latestAssistant=rows.filter(row=>row.role==='assistant').at(-1);
   for(const row of rows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
@@ -205,6 +205,10 @@ async function refreshMessages(){
    node.append(bar);feed.append(node);
   }
   window.renderActivitySummary?.(rows);
+  // Follow live output only while the user was already near the bottom.
+  // Preserve intentional history reading during polling and avoid forced jumps.
+  if(followingLatest)feed.scrollTop=feed.scrollHeight;
+  else feed.scrollTop=previousOffset;
  }catch(error){if(activeSession?.id===sessionId&&currentUser?.id===owner)toast(error.message);}
 }
 
