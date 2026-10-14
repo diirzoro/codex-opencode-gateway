@@ -294,6 +294,27 @@ def test_first_payment_renewal_and_duplicate_confirmation(account):
 
 
 @pytest.mark.skipif(os.getenv("AUDIT_RUN_OPENCODE") != "1", reason="requires pinned OpenCode binary")
+def test_cold_account_catalog_request_without_project(account):
+    from fastapi import HTTPException
+    from backend.app.services import opencode
+    client, _, user, _ = account
+    uid = uuid.UUID(user["id"])
+    try:
+        with pytest.raises(HTTPException) as unavailable:
+            opencode.for_account(uid, start=False)
+        assert unavailable.value.status_code == 409
+        result = client.get("/api/opencode/catalog/providers")
+        assert result.status_code == 200, result.text
+        assert any(row["id"] == "openai" for row in result.json())
+        agents = client.get("/api/opencode/catalog/agents")
+        assert agents.status_code == 200 and isinstance(agents.json(), list)
+        search = client.get("/api/opencode/catalog/providers/search", params={"query":"openai"})
+        assert search.status_code == 200 and any(row["id"] == "openai" for row in search.json())
+    finally:
+        opencode.stop_workspace(opencode.account_workspace(uid))
+
+
+@pytest.mark.skipif(os.getenv("AUDIT_RUN_OPENCODE") != "1", reason="requires pinned OpenCode binary")
 def test_real_opencode_account_runtime_without_project(account, monkeypatch):
     import json
     from sqlalchemy import select

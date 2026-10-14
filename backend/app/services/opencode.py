@@ -323,15 +323,18 @@ def shared_health():
         service.close()
 
 
-def _initialize(service, workspace):
+def _initialize(service, workspace, *, db=None):
     """Restore user-owned keys with legacy workspace fallback per provider."""
     from sqlalchemy import inspect, select
+    from contextlib import nullcontext
     from ..database import SessionLocal
     from ..models import ProviderCredential, UserProviderCredential
     from . import credentials, providers
     started = time.monotonic()
     service.restore_passes += 1
-    with SessionLocal() as db:
+    # HTTP callers already own a transaction. Never acquire a second pooled
+    # connection while keeping that transaction (and potentially locks) open.
+    with (nullcontext(db) if db is not None else SessionLocal()) as db:
         # Migration 0017 is optional until rollout; older databases keep working.
         account_rows = []
         if inspect(db.connection()).has_table("user_provider_credentials"):
@@ -354,7 +357,7 @@ def _initialize(service, workspace):
                                                 "detail": "Stored credential could not be restored"})
     service.timings["credential_restore_ms"] = round((time.monotonic() - started) * 1000, 2)
 
-def for_workspace(workspace, *, start=True):
+def for_workspace(workspace, *, start=True, db=None):
     if settings.runtime_mode != "local":
         raise HTTPException(503, "Workspace runtime is disabled")
     key = str(workspace.id)
@@ -390,9 +393,10 @@ def for_workspace(workspace, *, start=True):
             path.mkdir(exist_ok=True)
             env[name] = str(path)
         from ..database import SessionLocal
+        from contextlib import nullcontext
         from .policy import load, permission_config
-        with SessionLocal() as db:
-            permission = permission_config(load(db))
+        with (nullcontext(db) if db is not None else SessionLocal()) as policy_db:
+            permission = permission_config(load(policy_db))
         password = secrets.token_urlsafe(32)
         env.update(OPENCODE_SERVER_PASSWORD=password, OPENCODE_CONFIG_CONTENT=json.dumps({
             "autoupdate": False, "share": "disabled", "plugin": [], "permission": permission}))
@@ -439,7 +443,7 @@ def for_workspace(workspace, *, start=True):
             else:
                 raise HTTPException(504, "OpenCode did not become healthy within the total startup deadline")
             service.timings["health_ready_ms"] = round((time.monotonic() - started) * 1000, 2)
-            _initialize(service, workspace)
+            _initialize(service, workspace, db=db)
             return service
         except Exception:
             stop_workspace(workspace)
@@ -452,9 +456,9 @@ def account_workspace(user_id):
     return SimpleNamespace(id=key, user_id=user_id, is_account_runtime=True)
 
 
-def for_account(user_id, *, start=True):
+def for_account(user_id, *, start=True, db=None):
     account = account_workspace(user_id)
-    return account, for_workspace(account, start=start)
+    return account, for_workspace(account, start=start, db=db)
 
 
 def stop_workspace(workspace):

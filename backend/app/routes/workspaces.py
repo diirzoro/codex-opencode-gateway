@@ -83,8 +83,8 @@ def _account_catalog_state(db, user, data):
     return {**data, "connected": sorted(connected), "gateway_disconnected": []}
 
 
-def _account_public_catalog(user, path, *, agents=False):
-    account, service = opencode.for_account(user.id)
+def _account_public_catalog(user, path, db, *, agents=False):
+    account, service = opencode.for_account(user.id, db=db)
     with opencode.workspace_lock(account), service.state_lock:
         return opencode_catalog.public_catalog(path, agents=agents, service=service)
 
@@ -92,20 +92,20 @@ def _account_public_catalog(user, path, *, agents=False):
 @router.get("/opencode/catalog/providers")
 def account_provider_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Project-independent definitions only; never expose global connected state."""
-    return providers.catalog_index(_account_catalog_state(db, user, _account_public_catalog(user,"/provider")), policy.load(db))
+    return providers.catalog_index(_account_catalog_state(db, user, _account_public_catalog(user,"/provider",db)), policy.load(db))
 
 
 @router.get("/opencode/catalog/providers/search")
 def account_provider_search(query: str=Query(min_length=2,max_length=200),
                             user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Search OpenCode definitions independently of a project; no auth status."""
-    return providers.search_index(_account_catalog_state(db, user, _account_public_catalog(user,"/provider")), query, policy.load(db))
+    return providers.search_index(_account_catalog_state(db, user, _account_public_catalog(user,"/provider",db)), query, policy.load(db))
 
 
 @router.get("/opencode/catalog/agents")
-def account_agent_catalog(user: User=Depends(require_user)):
+def account_agent_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """List only public agent choices without workspace or private agent configuration."""
-    data = _account_public_catalog(user,"/agent", agents=True)
+    data = _account_public_catalog(user,"/agent",db, agents=True)
     return [{"id":row["name"],"name":row["name"],"mode":row.get("mode")}
             for row in data if isinstance(row,dict)
             and isinstance(row.get("name"),str) and 0<len(row["name"])<=120
@@ -214,7 +214,7 @@ def account_oauth_authorize(provider_id: str,data: OAuthAuthorize,
     for owned in db.scalars(select(Workspace).where(Workspace.user_id==user.id)):
         if providers.is_locally_connected(db,owned,provider_id):
             raise HTTPException(409,"This provider is already connected in a workspace")
-    account,service=opencode.for_account(user.id)
+    account,service=opencode.for_account(user.id,db=db)
     with opencode.workspace_lock(account),service.state_lock:
         return providers.oauth_authorize(service,provider_id,data.method,data.inputs)
 
@@ -231,7 +231,7 @@ def account_oauth_callback(provider_id: str,data: OAuthCallback,
     for owned in db.scalars(select(Workspace).where(Workspace.user_id==user.id)):
         if providers.is_locally_connected(db,owned,provider_id):
             raise HTTPException(409,"This provider is already connected in a workspace")
-    account,service=opencode.for_account(user.id)
+    account,service=opencode.for_account(user.id,db=db)
     with opencode.workspace_lock(account),service.state_lock:
         accepted=providers.oauth_callback(service,provider_id,data.method,data.code)
         if not accepted:
@@ -486,7 +486,7 @@ def new_session(workspace_id: uuid.UUID,data: NewSession,user: User=Depends(requ
     manager.require_quota_headroom(row)
     session_lifecycle.lock_workspace(db,row)
     session_lifecycle.require_slot(db,row)
-    runtime_id=opencode.for_workspace(row).create_session(data.title)
+    runtime_id=opencode.for_workspace(row,db=db).create_session(data.title)
     session=WorkspaceSession(workspace_id=row.id,user_id=user.id,opencode_session_id=runtime_id,title=data.title)
     db.add(session); db.flush(); session_lifecycle.set_state(db,session,"active")
     row.last_activity_at=datetime.now(timezone.utc)
@@ -527,12 +527,12 @@ def session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=D
     row=manager.owned(db,WorkspaceSession,session_id,user.id)
     session_lifecycle.require_visible(db,row)
     workspace=manager.owned(db,Workspace,row.workspace_id,user.id)
-    live=opencode.for_workspace(workspace).request("GET","/session/"+row.opencode_session_id)
+    live=opencode.for_workspace(workspace,db=db).request("GET","/session/"+row.opencode_session_id)
     return {**providers.public_metadata(live),**session_lifecycle.payload(row,session_lifecycle.state(db,row)),"title":live["title"],"runtime_id":row.opencode_session_id}
 
 def _workspace_service(db,user,workspace_id):
     row=manager.owned(db,Workspace,workspace_id,user.id)
-    return row,opencode.for_workspace(row)
+    return row,opencode.for_workspace(row,db=db)
 
 @router.get("/workspaces/{workspace_id}/runtime")
 def workspace_runtime(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db),refresh: bool=False):
@@ -587,7 +587,7 @@ def search_providers(workspace_id: uuid.UUID,query: str=Query(min_length=2,max_l
 @router.get("/workspaces/{workspace_id}/agents")
 def available_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Workspace,workspace_id,user.id)
-    return agent_choices(opencode.for_workspace(row))
+    return agent_choices(opencode.for_workspace(row,db=db))
 
 def agent_choices(service):
     # Reuse the validated runtime catalog already shared by agent discovery.

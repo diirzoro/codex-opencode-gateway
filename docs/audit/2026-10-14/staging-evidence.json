@@ -1,0 +1,524 @@
+{
+  "baseline": "f9a9d553d4ba002f90e71320a1481b232c6ce1dd",
+  "environment": "Disposable PGlite 0.5.9/socket 0.2.12, real FastAPI and OpenCode 1.18.32; SMTP fixture mailbox; no paid model requests",
+  "before": {
+    "browser_timeout_ms": 45000,
+    "catalog_trace": [
+      {
+        "event": "http.begin",
+        "method": "GET",
+        "path": "/api/opencode/catalog/providers",
+        "elapsed_ms": 0.0
+      },
+      {
+        "event": "transaction.begin",
+        "elapsed_ms": 2.64
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "auth_sessions",
+        "elapsed_ms": 3.14
+      },
+      {
+        "event": "sql.end",
+        "ms": 9.87,
+        "elapsed_ms": 13.0
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "users",
+        "elapsed_ms": 13.58
+      },
+      {
+        "event": "sql.end",
+        "ms": 0.81,
+        "elapsed_ms": 14.37
+      },
+      {
+        "event": "runtime.for_account.begin",
+        "elapsed_ms": 15.05
+      },
+      {
+        "event": "runtime.for_workspace.begin",
+        "elapsed_ms": 15.14
+      }
+    ]
+  },
+  "after": {
+    "catalog_trace": [
+      {
+        "event": "http.begin",
+        "method": "GET",
+        "path": "/api/opencode/catalog/providers",
+        "elapsed_ms": 0.0
+      },
+      {
+        "event": "transaction.begin",
+        "elapsed_ms": 3.01
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "auth_sessions",
+        "elapsed_ms": 3.3
+      },
+      {
+        "event": "sql.end",
+        "ms": 1.27,
+        "elapsed_ms": 4.56
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "users",
+        "elapsed_ms": 5.54
+      },
+      {
+        "event": "sql.end",
+        "ms": 0.97,
+        "elapsed_ms": 6.48
+      },
+      {
+        "event": "runtime.for_account.begin",
+        "elapsed_ms": 7.79
+      },
+      {
+        "event": "runtime.for_workspace.begin",
+        "elapsed_ms": 8.28
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "platform_policy",
+        "elapsed_ms": 10.51
+      },
+      {
+        "event": "sql.end",
+        "ms": 1.06,
+        "elapsed_ms": 11.49
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 43.85
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 43.95
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 44.88
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 44.97
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 145.17
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 145.32
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 146.28
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 146.32
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 246.79
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 246.97
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 247.74
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 247.79
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 347.94
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 348.09
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 348.96
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 349.01
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 449.17
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 449.33
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 450.07
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 450.11
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 550.27
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 550.57
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 551.19
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 551.23
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 652.5
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 652.71
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 654.74
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 654.8
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 754.97
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 755.15
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 755.9
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 755.94
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 856.1
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 856.26
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 857.17
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 857.22
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 957.38
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 957.54
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 958.36
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 958.4
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 1058.61
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 1058.82
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 1059.56
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 1059.61
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 1159.82
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 1160.03
+      },
+      {
+        "event": "runtime.request.error",
+        "error": "HTTPException",
+        "elapsed_ms": 2162.31
+      },
+      {
+        "event": "runtime.health.error",
+        "error": "HTTPException",
+        "elapsed_ms": 2162.45
+      },
+      {
+        "event": "runtime.health.begin",
+        "elapsed_ms": 2262.92
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/global/health",
+        "elapsed_ms": 2263.08
+      },
+      {
+        "event": "runtime.request.end",
+        "ms": 9.29,
+        "elapsed_ms": 2272.37
+      },
+      {
+        "event": "runtime.health.end",
+        "ms": 9.57,
+        "elapsed_ms": 2272.49
+      },
+      {
+        "event": "runtime._initialize.begin",
+        "elapsed_ms": 2272.51
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "pg_catalog",
+        "elapsed_ms": 2274.3
+      },
+      {
+        "event": "sql.end",
+        "ms": 2.13,
+        "elapsed_ms": 2276.42
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "user_provider_credentials",
+        "elapsed_ms": 2277.61
+      },
+      {
+        "event": "sql.end",
+        "ms": 0.76,
+        "elapsed_ms": 2278.37
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "provider_credentials",
+        "elapsed_ms": 2279.56
+      },
+      {
+        "event": "sql.end",
+        "ms": 0.7,
+        "elapsed_ms": 2280.25
+      },
+      {
+        "event": "runtime._initialize.end",
+        "ms": 7.92,
+        "elapsed_ms": 2280.44
+      },
+      {
+        "event": "runtime.for_workspace.end",
+        "ms": 2272.19,
+        "elapsed_ms": 2280.47
+      },
+      {
+        "event": "runtime.for_account.end",
+        "ms": 2272.7,
+        "elapsed_ms": 2280.49
+      },
+      {
+        "event": "runtime.request.begin",
+        "method": "GET",
+        "path": "/provider",
+        "elapsed_ms": 2280.53
+      },
+      {
+        "event": "runtime.request.end",
+        "ms": 1477.75,
+        "elapsed_ms": 3758.27
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "pg_catalog",
+        "elapsed_ms": 3767.36
+      },
+      {
+        "event": "sql.end",
+        "ms": 1.61,
+        "elapsed_ms": 3768.95
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "user_provider_credentials",
+        "elapsed_ms": 3769.86
+      },
+      {
+        "event": "sql.end",
+        "ms": 0.59,
+        "elapsed_ms": 3770.44
+      },
+      {
+        "event": "sql.begin",
+        "operation": "SELECT",
+        "table": "platform_policy",
+        "elapsed_ms": 3770.88
+      },
+      {
+        "event": "sql.end",
+        "ms": 0.52,
+        "elapsed_ms": 3771.4
+      },
+      {
+        "event": "transaction.rollback",
+        "elapsed_ms": 3772.52
+      },
+      {
+        "event": "http.response",
+        "status": 200,
+        "ms": 3773.09,
+        "elapsed_ms": 3773.08
+      },
+      {
+        "event": "http.end",
+        "ms": 3774.86,
+        "elapsed_ms": 3774.85
+      }
+    ],
+    "browser_outcome": "passed",
+    "uncaught_errors": [],
+    "console_categories": [
+      {
+        "type": "error",
+        "category": "resource-http-error",
+        "status": 401
+      },
+      {
+        "type": "error",
+        "category": "resource-http-error",
+        "status": 401
+      },
+      {
+        "type": "error",
+        "category": "resource-http-error",
+        "status": 409
+      },
+      {
+        "type": "error",
+        "category": "resource-http-error",
+        "status": 404
+      },
+      {
+        "type": "error",
+        "category": "resource-http-error",
+        "status": 404
+      }
+    ],
+    "provider_requests": [
+      {
+        "path": "/api/opencode/catalog/providers",
+        "method": "GET",
+        "duration_ms": 3777
+      },
+      {
+        "path": "/api/opencode/connections/openai/options",
+        "method": "GET",
+        "duration_ms": 3519
+      }
+    ]
+  },
+  "independent_bridge_probe": {
+    "first_connection": "SELECT 1 in open transaction",
+    "second_connection": "SELECT 2",
+    "blocked_before_first_rollback": true,
+    "completed_after_first_rollback": true,
+    "measured_ms": 503
+  },
+  "native_postgresql": "BLOCKED: no server/container tools, only UID 0 is mapped; no production database used"
+}

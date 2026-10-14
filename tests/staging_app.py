@@ -15,6 +15,10 @@ def fixture_mail(email, token):
 email_verification.smtp_ready=lambda: True
 email_verification.send_link=fixture_mail
 
+if os.getenv("AUDIT_TRACE_FILE"):
+    from tests.staging_diagnostics import install
+    app = install(app, os.environ["AUDIT_TRACE_FILE"])
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ["AUDIT_STAGING_PORT"]), log_level="warning")

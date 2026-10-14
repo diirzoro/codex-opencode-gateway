@@ -316,7 +316,7 @@ def submission_receipt(session_id: uuid.UUID,request_id: uuid.UUID,user: User=De
 @router.get("/{session_id}/messages")
 def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,db=db)
     result=service.request("GET",service.session_path(session.opencode_session_id,"/message"))
     attachments={};submitted_text={}
     for recorded in db.scalars(select(ExecutionEvent).where(ExecutionEvent.session_id==session.id,ExecutionEvent.kind=='submission')):
@@ -339,7 +339,7 @@ def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=
 @router.get("/{session_id}/todos")
 def session_todos(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,db=db)
     try: rows=service.request('GET',service.session_path(session.opencode_session_id,'/todo'))
     except HTTPException as error:
         if error.status_code in {404,405}: return {'supported':False,'items':[]}
@@ -356,7 +356,7 @@ def session_todos(session_id: uuid.UUID,user: User=Depends(require_user),db: Ses
 @router.get("/{session_id}/diff")
 def session_diff(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,db=db)
     rows=service.request("GET",service.session_path(session.opencode_session_id,"/diff"))
     output=[]
     for item in rows or []:
@@ -447,7 +447,7 @@ def hide_message(session_id: uuid.UUID,message_id: str,user: User=Depends(requir
     session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
     if session.status in session_lifecycle.BUSY: raise HTTPException(409,"Stop the running request before hiding messages")
     if not re.fullmatch(r"msg_[A-Za-z0-9_-]{1,120}",message_id): raise HTTPException(422,"Invalid message ID")
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,db=db)
     rows=service.request("GET",service.session_path(session.opencode_session_id,"/message"))
     if not any(row.get("info",{}).get("id")==message_id for row in rows): raise HTTPException(404,"Message not found in this session")
     if message_id not in session_lifecycle.hidden_messages(db,session.id):
@@ -461,7 +461,7 @@ class QuestionReply(BaseModel):
 @router.get("/{session_id}/questions")
 def session_questions(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    try: rows=opencode.for_workspace(workspace).request('GET','/question')
+    try: rows=opencode.for_workspace(workspace,db=db).request('GET','/question')
     except HTTPException as error:
         if error.status_code in {404,405}: return {'supported':False,'requests':[]}
         raise
@@ -481,7 +481,7 @@ def session_questions(session_id: uuid.UUID,user: User=Depends(require_user),db:
 
 @router.post("/{session_id}/questions/{question_id}")
 def answer_question(session_id: uuid.UUID,question_id: str,data: QuestionReply,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    session,workspace=context(db,user,session_id);service=opencode.for_workspace(workspace)
+    session,workspace=context(db,user,session_id);service=opencode.for_workspace(workspace,db=db)
     rows=service.request('GET','/question')
     pending=next((r for r in rows if r.get('sessionID')==session.opencode_session_id and r.get('id')==question_id),None)
     if pending is None: raise HTTPException(404,'Question not found in this conversation')
@@ -580,7 +580,7 @@ def clear_remembered_permissions(session_id: uuid.UUID,user: User=Depends(requir
 @router.get("/{session_id}/permissions")
 def permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,db=db)
     rows=service.request("GET","/permission")
     remembered=remembered_approvals(db,session.id)
     _,_,allowed_tools=policy.provider_sets(policy.load(db))
@@ -649,7 +649,7 @@ def approve(session_id: uuid.UUID,permission_id: str,data: Approval,user: User=D
     if data.reply=='similar' and not requested.get('rememberable'):
         raise HTTPException(409,'This request cannot be remembered; approve once or reject')
     from urllib.parse import quote
-    result=opencode.for_workspace(workspace).request("POST","/permission/"+quote(permission_id,safe="")+"/reply",{"reply":"once" if data.reply=="similar" else data.reply})
+    result=opencode.for_workspace(workspace,db=db).request("POST","/permission/"+quote(permission_id,safe="")+"/reply",{"reply":"once" if data.reply=="similar" else data.reply})
     if result is not True: raise HTTPException(502,"Runtime did not confirm the decision")
     if data.reply=='similar':
         db.add(ExecutionEvent(session_id=session.id,kind='approval_rule',data=json.dumps({'fingerprint':requested['fingerprint']})))
