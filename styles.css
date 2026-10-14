@@ -678,3 +678,30 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
 #workspacePage .project-source-list{display:grid;gap:4px;min-width:0}
 #workspacePage .project-source-list .sidebar-project-root{margin:4px 0 8px}
 #workspacePage #sessionSidebar .project-folder-link{display:block;width:100%;text-align:start;font-size:13px;background:transparent;border:0;padding:8px 10px;overflow-wrap:anywhere;border-inline-start:2px solid var(--line)}
+
+
+/* Batch 2: the agent's pending question is one legible inline decision card. */
+:root #workspacePage .chat-questions .chat-approval{
+  border:1px solid var(--line);border-radius:14px;background:var(--panel);
+  padding:16px;box-shadow:0 2px 12px rgba(0,0,0,.035);
+}
+:root #workspacePage .chat-questions fieldset{
+  border:1px solid var(--line);border-radius:10px;padding:12px;
+  margin:14px 0;background:var(--panel2);
+}
+:root #workspacePage .chat-questions legend{padding-inline:6px;font-weight:600}
+:root #workspacePage .chat-questions label{
+  padding:10px 12px;border:1px solid var(--line);border-radius:9px;
+  background:var(--panel);cursor:pointer;align-items:flex-start;
+}
+:root #workspacePage .chat-questions label:has(input:checked){
+  border-color:var(--primary);outline:1px solid var(--primary);
+}
+:root #workspacePage .chat-questions label small{
+  flex-basis:100%;margin-inline-start:24px;line-height:1.4;
+}
+:root #workspacePage .chat-questions .question-recommended{
+  border-radius:999px;padding:2px 7px;font-size:11px;font-weight:600;
+  background:var(--panel2);color:var(--primary);
+}
+:root #workspacePage .chat-questions .chat-approval-actions{justify-content:flex-start}
