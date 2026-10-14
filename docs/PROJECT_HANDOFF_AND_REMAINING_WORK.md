@@ -160,6 +160,15 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 - This DOES NOT complete the consolidated list. Remaining: live approval execution blocking and persistence; question continuation and streaming; OAuth token refresh propagation; Composer busy-runtime retry; isolated container previews; native PostgreSQL concurrency; SMTP delivery; payment sandbox; retention end-to-end; full browser QA. Keep these OPEN, and do not infer production readiness.
 - No production data, `master`, rollback, deployment workflows, or VPS changed.
 
+### 2026-10-14 — Owner-directed remaining work, safety-first progress
+
+- `04a8d084`: changed routine auto-approval default to **OFF** for conversations without an explicit saved preference. Previously absent configuration defaulted to on. This is a deliberate safety behavior change; user-initiated opt-in remains.
+- `68041cc5`: added focused contract tests for absent, explicitly enabled, disabled and corrupt routine approval preferences; **NOT EXECUTED** in this tool-only environment.
+- **Not verified:** real OpenCode permission blocking, approval/reject/resume, browser persistence and multi-user concurrency. They remain OPEN.
+- Remaining active backlog: OAuth refresh propagation and live Composer sync, full Workspace streaming/tests, secure container preview, native disposable PostgreSQL constraints/concurrency, project/tenant security and browser QA.
+- Owner decision remains binding: external payments and outbound SMTP are **DEFERRED — MAIN SERVER** and must not be run now.
+- No master merge, rollback changes, production service/database changes, deployments or workflow edits.
+
 ## 10. Change log
 
 | Date | Commit | Change | Evidence / pending |
