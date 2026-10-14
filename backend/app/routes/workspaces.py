@@ -594,7 +594,10 @@ def session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=D
     row=manager.owned(db,WorkspaceSession,session_id,user.id)
     session_lifecycle.require_visible(db,row)
     workspace=manager.owned(db,Workspace,row.workspace_id,user.id)
-    live=opencode.for_workspace(workspace,db=db).request("GET","/session/"+row.opencode_session_id)
+    service=opencode.for_workspace(workspace,db=db)
+    from ..services.session_recovery import reconcile
+    reconcile(db,workspace,service,row)
+    live=service.request("GET","/session/"+row.opencode_session_id)
     return {**providers.public_metadata(live),**session_lifecycle.payload(row,session_lifecycle.state(db,row)),"title":live["title"],"runtime_id":row.opencode_session_id}
 
 def _workspace_service(db,user,workspace_id):

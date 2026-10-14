@@ -164,7 +164,7 @@ def finish_execution(db,session_id,kind,states=(),data=None,request_id=None,acti
     # Abort and the background HTTP response can finish concurrently. Evaluate
     # cancellation in the database, not on a previously loaded ORM snapshot.
     current=db.scalar(select(WorkspaceSession).where(WorkspaceSession.id==session_id).with_for_update().execution_options(populate_existing=True))
-    if current is None:
+    if current is None or current.status not in session_lifecycle.BUSY:
         db.rollback(); return
     latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=="submission").order_by(ExecutionEvent.id.desc()).limit(1))
     if request_id is not None and (not latest or json.loads(latest.data)["request_id"]!=str(request_id)):
@@ -182,7 +182,7 @@ def finish_execution(db,session_id,kind,states=(),data=None,request_id=None,acti
         db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
     db.commit()
 
-def begin_execution(session_id,message_id,request_id):
+def begin_execution(session_id,message_id,request_id,generation):
     with SessionLocal() as db:
         session=db.get(WorkspaceSession,session_id)
         if session is None:return None
@@ -190,7 +190,7 @@ def begin_execution(session_id,message_id,request_id):
         session_lifecycle.lock_workspace(db,workspace);db.refresh(session)
         latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=="submission").order_by(ExecutionEvent.id.desc()).limit(1))
         if session.status not in session_lifecycle.BUSY or not latest or json.loads(latest.data)["request_id"]!=str(request_id):return None
-        db.add(ExecutionEvent(session_id=session_id,kind="dispatch",data=json.dumps({"request_id":str(request_id),"message_id":message_id})))
+        db.add(ExecutionEvent(session_id=session_id,kind="dispatch",data=json.dumps({"request_id":str(request_id),"message_id":message_id,"generation":generation})))
         event(db,session_id,"analyzing")
         return workspace
 
@@ -201,7 +201,7 @@ def complete_execution(session_id,kind,**kwargs):
 
 async def execute(session_id,service,runtime_id,data,message_id):
     try:
-        workspace=await asyncio.to_thread(begin_execution,session_id,message_id,data.request_id)
+        workspace=await asyncio.to_thread(begin_execution,session_id,message_id,data.request_id,service.generation)
         if workspace is None:return
         payload={"messageID":message_id,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
         for item in attachment_metadata(workspace, data.attachments):

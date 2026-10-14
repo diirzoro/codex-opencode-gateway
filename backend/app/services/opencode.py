@@ -377,6 +377,8 @@ def _initialize(service, workspace, *, db=None):
             except Exception:
                 service.restore_errors.append({"provider_id": row.provider_id,
                                                 "detail": "Stored credential could not be restored"})
+        from .session_recovery import reconcile
+        reconcile(db, workspace, service)
     service.timings["credential_restore_ms"] = round((time.monotonic() - started) * 1000, 2)
 
 def for_workspace(workspace, *, start=True, db=None):
