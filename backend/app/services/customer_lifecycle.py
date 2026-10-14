@@ -1,9 +1,7 @@
 """Archive expired customers; reuse User, AccountAudit and existing token stores."""
 import logging
-import shutil
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, inspect, select
-from ..config import settings
 from ..database import SessionLocal
 from ..models import (AccountAudit, AuthSession, ExecutionEvent, GithubAuthState,
     GithubConnection, PasswordReset, ProviderCredential, UserProviderCredential, Subscription, User, Workspace, WorkspaceSession, EmailVerification)
@@ -53,6 +51,9 @@ def consent_payload(db, user_id):
 def archive_due(*, now=None):
     from . import opencode, workspace_cache
     from .entitlements import access_payload
+    from .archive_storage import StagedRuntime, recover_pending
+    with SessionLocal() as recovery_db:
+        recover_pending(recovery_db)
     if _policy_started is None:
         initialize()
     now = now or datetime.now(timezone.utc)
@@ -67,6 +68,7 @@ def archive_due(*, now=None):
             .order_by(User.trial_ends_at).limit(100)))
     for identifier in ids:
         locks = []
+        storage = None
         with SessionLocal() as db:
             try:
                 user = db.scalar(select(User).where(User.id == identifier).with_for_update(skip_locked=True))
@@ -82,6 +84,10 @@ def archive_due(*, now=None):
                     if ids_before != locked:
                         raise RuntimeError("Operational activity is in progress")
                 rows = list(db.scalars(select(Workspace).where(Workspace.user_id == identifier)))
+                account_lock = opencode.workspace_lock(opencode.account_workspace(identifier))
+                if not account_lock.acquire(blocking=False):
+                    raise RuntimeError("Account authentication is in progress")
+                locks.append(account_lock)
                 for row in rows:
                     lock = opencode.workspace_lock(row)
                     if not lock.acquire(blocking=False):
@@ -106,10 +112,8 @@ def archive_due(*, now=None):
                     opencode.stop_workspace(row)
                 # Project files have their own inactivity policy; account
                 # archival removes only sensitive operational runtime storage.
-                runtime_base = settings.runtime_root.resolve()
-                runtime = runtime_base / str(identifier)
-                if runtime.is_symlink(): raise RuntimeError("Unsafe runtime path")
-                if runtime.exists(): shutil.rmtree(runtime)
+                storage = StagedRuntime(identifier)
+                storage.stage()
                 session_ids = select(WorkspaceSession.id).where(WorkspaceSession.user_id == identifier)
                 db.execute(delete(ExecutionEvent).where(ExecutionEvent.session_id.in_(session_ids)))
                 for model in (WorkspaceSession, AuthSession, ProviderCredential, GithubAuthState, GithubConnection, PasswordReset, EmailVerification):
@@ -127,9 +131,31 @@ def archive_due(*, now=None):
                 db.add(AccountAudit(subject_id=identifier, action="account.last_activity", created_at=max(activity)))
                 db.add(AccountAudit(subject_id=identifier, action="account.archived"))
                 db.commit(); count += 1
+                # A failed erase is retried from the committed archived status.
+                try: storage.erase()
+                except Exception:
+                    logger.warning("Archived runtime erasure deferred for %s", identifier)
             except Exception:
                 db.rollback()
-                logger.warning("Customer archival could not complete for %s", identifier)
+                recovered = False
+                if storage is not None:
+                    try:
+                        # A lost commit acknowledgement may mean SQL actually
+                        # committed. Never restore secrets to an archived user.
+                        committed_status = db.scalar(select(User.status).where(User.id == identifier))
+                        if committed_status == "archived":
+                            count += 1
+                            storage.erase()
+                            recovered = True
+                        elif committed_status is not None:
+                            storage.restore()
+                    except Exception:
+                        # Unknown database outcome leaves the private staged
+                        # directory for the next status-based recovery pass.
+                        logger.warning("Account runtime restore deferred for %s", identifier)
+                    finally: db.rollback()
+                if not recovered:
+                    logger.warning("Customer archival could not complete for %s", identifier)
             finally:
                 for lock in reversed(locks): lock.release()
     return count
