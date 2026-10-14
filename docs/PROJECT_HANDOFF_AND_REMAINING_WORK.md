@@ -122,6 +122,14 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 - **Not verified end-to-end:** credentials/authorization must be exercised with live OpenCode services, multiple users and concurrent workspaces. No automatic resync guarantee is claimed.
 - **Still required:** inspect and test provider OAuth token rotation and restart, isolated preview runner, ChatGPT-like agent approvals/questions/scrolling, billing and archived-account lifecycle, SMTP activation and migrations on a disposable database.
 
+
+### 2026-10-14 — Batch 1 owner follow-up: OAuth rotation guard (in progress)
+
+- Commit `95d6e14f`: introduced tenant-scoped `replace_encrypted_if_current` in `backend/app/services/user_provider_credentials.py`. This uses a row lock and exact encrypted-value comparison before staging an update; caller retains commit responsibility. It is a **building block**, not yet wired into automatic OpenCode token refresh events.
+- Commit `612a3b97`: added three focused mock-level regression cases for the guard in `backend/tests/test_oauth_rotation_cas.py`. These tests have **NOT BEEN EXECUTED** in this GitHub-only editing environment.
+- **Not complete:** rotated OAuth tokens are not yet automatically synchronized from OpenCode runtime auth files to Gateway's encrypted database; native PostgreSQL concurrency, actual provider OAuth refresh/restart, busy workspace retry, and Composer fanout remain OPEN.
+- No deployment, migration, payment settings or protected branch changed. The next developer must not claim Batch 1 is verified until refresh propagation and real integration tests pass.
+
 ## 10. Change log
 
 | Date | Commit | Change | Evidence / pending |
