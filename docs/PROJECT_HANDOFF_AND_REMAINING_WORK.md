@@ -142,7 +142,7 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 
 ## 12. 2026-10-14 — Regression stabilization (not a release approval)
 
-Scope: complete the confirmed repairs before large architectural changes. No broad cleanup, migrations, dependency upgrades, visual redesign, production access or deployment. The earlier implementation register remains open except for the specific evidence below. Repair commit SHA is recorded in the immediately following documentation commit (a commit cannot contain its own SHA).
+Scope: complete the confirmed repairs before large architectural changes. No broad cleanup, migration-source edits, dependency upgrades, visual redesign, production access or deployment. The earlier implementation register remains open except for the specific evidence below. Repair commit: `c45bf25ce048d86423bbfa0376e0f8c58aa6ed85`. Its Git tree `e1723b3389b3ed312be0098ba2b833e9d4a2829b` exactly matches the reviewed/tested local source tree. This immediately following documentation commit records the exact published repair SHA.
 
 ### Confirmed repairs
 
@@ -208,6 +208,7 @@ For **native** PostgreSQL, a separate empty loopback disposable database is stil
 6. **Universal Preview:** framework detection/static sandbox tests pass for seven Node frameworks plus static/traversal cases. Isolated runnable containers, quotas, network/port isolation and cleanup are **not implemented or verified**; no host execution of customer project scripts added.
 7. **Email, billing and retention:** SMTP delivery is mocked, not tested externally. Verification expiry boundary, PayPal sandbox capture/rejection/webhooks, unpaid/failed order full integration, concurrent payment idempotence, 90-day archive and reactivation/no-second-trial paths require further tests. The existing PayPal `INVALID_RESOURCE_ID` production report was not diagnosed by this isolated audit; payment settings unchanged.
 8. **UI/security coverage:** responsive check asserts the Connections input fits 390px and language direction changes. It does not certify every page, theme, GitHub integration, sidebar/session behavior or full cross-user runtime/preview execution isolation. OpenCode process directories are not an OS sandbox.
+9. **Provider search interaction:** one browser attempt using a multi-character search lost its option while asynchronous results rerendered during click. The final regression uses the local single-character catalog filter to test connection handlers deterministically. Remote/debounced search selection under timing changes remains an open interaction issue; no application change was made for this observation.
 
 ### Files and protected state
 
