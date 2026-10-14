@@ -130,6 +130,14 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 - **Not complete:** rotated OAuth tokens are not yet automatically synchronized from OpenCode runtime auth files to Gateway's encrypted database; native PostgreSQL concurrency, actual provider OAuth refresh/restart, busy workspace retry, and Composer fanout remain OPEN.
 - No deployment, migration, payment settings or protected branch changed. The next developer must not claim Batch 1 is verified until refresh propagation and real integration tests pass.
 
+### 2026-10-14 — Batch 2 partial implementation
+
+- `cad9d79a`: agent questions now have visibly bounded rectangular answer cards and option rows including selected option and an explicit agent-provided recommendation badge, in `styles.css`. Visual/browser behavior has **not been tested**.
+- `7bf4b527`: `app.js` message refresh retains the current scroll offset when the reader was above the bottom; follows new output only if already within 110 pixels of the end before rerender. **Static JavaScript syntax passed; live browser scroll testing remains OPEN.**
+- **Open Batch 2 items:** Jump to Latest control, live approval blocking/persistence, question continuation and recommendation rationale, real agent streaming/progress, prevention of duplicate or blank responses, and safe isolated executable preview for non-HTML frameworks.
+- **No claim of universal project preview:** static HTML and manifest detection remain the only available preview modes. No Docker/runner infrastructure was added or deployed.
+- Do not mark Batch 2 VERIFIED until targeted real-browser and real-OpenCode tests pass. No production/branch/deployment changes.
+
 ## 10. Change log
 
 | Date | Commit | Change | Evidence / pending |
