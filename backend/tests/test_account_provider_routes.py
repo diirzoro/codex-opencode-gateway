@@ -65,3 +65,18 @@ def test_duplicate_connection_rejected_before_runtime_start(setup_account,monkey
     assert exc.value.status_code==409
     saved.assert_not_called()
     service.request.assert_not_called()
+
+
+def test_stopped_workspaces_never_scrub_credentials_during_connect(monkeypatch):
+    """Stopped runtimes restore new account credentials on startup; no deletion."""
+    workspace=SimpleNamespace(id="stopped-workspace",user_id="test-user")
+    db=Mock()
+    db.scalars.return_value=[workspace]
+    monkeypatch.setattr(routes.opencode,"workspace_lock",lambda owned:__import__("threading").RLock())
+    monkeypatch.setattr(routes.opencode,"for_workspace",
+                        lambda owned,start=False: (_ for _ in ()).throw(
+                            HTTPException(409,"No running runtime")))
+    monkeypatch.setattr(routes,"_scrub_runtime_provider",
+                        Mock(side_effect=AssertionError("Cannot scrub on connect")))
+    routes._refresh_other_user_runtimes(db,"test-user",None,"openai","encrypted-key")
+    routes._scrub_runtime_provider.assert_not_called()
