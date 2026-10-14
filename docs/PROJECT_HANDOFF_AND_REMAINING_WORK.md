@@ -169,6 +169,13 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 - Owner decision remains binding: external payments and outbound SMTP are **DEFERRED — MAIN SERVER** and must not be run now.
 - No master merge, rollback changes, production service/database changes, deployments or workflow edits.
 
+### 2026-10-14 — Focused question-response validation follow-up
+
+- `55ea52f2`: rejected duplicate selected answer values in an Agent multi-choice reply before forwarding the payload to OpenCode. Preserves single-choice, valid multiple choice, custom answer and reject pathways.
+- The edit is repository-only and **has not been executed in an active FastAPI/OpenCode environment**. Browser/real agent continuation remain NOT VERIFIED. Do not count as a passed test.
+- Pending active gates: full agent permission/question stream verification, OAuth refresh persistence and live workspace retry, safe container-run previews, native disposable PostgreSQL, and cross-tenant security/browser tests. External PayPal/bank payment and SMTP delivery are **DEFERRED — MAIN SERVER** by owner request.
+- No production or protected branch changes.
+
 ## 10. Change log
 
 | Date | Commit | Change | Evidence / pending |
