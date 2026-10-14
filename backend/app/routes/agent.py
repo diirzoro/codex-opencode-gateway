@@ -496,7 +496,12 @@ def answer_question(session_id: uuid.UUID,question_id: str,data: QuestionReply,u
             if not values or len(values)>20 or (not q.get('multiple') and len(values)!=1) or any(not v.strip() or len(v)>2000 for v in values):
                 raise HTTPException(422,'Invalid answer')
             labels={_sanitize(str(o.get('label',''))[:2000],workspace):o.get('label') for o in q.get('options',[])}
-            if q.get('custom') is False and any(v not in labels for v in values): raise HTTPException(422,'Select one of the offered answers')
+            # A duplicated answer must not be sent twice to the runtime; an
+            # untrusted custom answer cannot masquerade as an offered choice.
+            if len(set(values)) != len(values):
+                raise HTTPException(422,'Duplicate choices are not allowed')
+            if q.get('custom') is False and any(v not in labels for v in values):
+                raise HTTPException(422,'Select one of the offered answers')
             answers.append([labels.get(v,v) for v in values])
         result=service.request('POST',path+'/reply',{'answers':answers})
     if result is not True: raise HTTPException(502,'Runtime did not confirm the answer')
