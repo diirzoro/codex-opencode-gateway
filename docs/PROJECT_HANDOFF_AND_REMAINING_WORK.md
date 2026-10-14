@@ -222,7 +222,7 @@ Protected refs checked before publication: `master` = `bff094a1e4079e51e16739421
 
 ## 13. 2026-10-14 — Cold catalog stall diagnosed and repaired
 
-Baseline: `f9a9d553d4ba002f90e71320a1481b232c6ce1dd`. The exact repair SHA is recorded in the immediately following documentation commit. No merge, production access, workflow/config/credential changes or visual redesign.
+Baseline: `f9a9d553d4ba002f90e71320a1481b232c6ce1dd`. Published repair: `28da0ceaeee2ae5d443d21895088c02f62e023f8`, tree `61ee2e51344d7f65522ab0bc614242a7931452ea`, matching the reviewed and tested source/evidence. This immediately following documentation commit records the exact repair SHA. No merge, production access, workflow/config/credential changes or visual redesign.
 
 **Scope and root cause:** `management.js` sent `/api/opencode/catalog/providers`; authentication opened a DB transaction. Cold `for_account` → `for_workspace` then tried to open a second SQLAlchemy session for platform policy, followed by another for credential restore. Sanitized request/SQL/runtime tracing showed the request stopped before any OpenCode request. An independent two-connection PGlite test confirmed that an unrelated SELECT on connection two stayed blocked while connection one's transaction remained open, then completed as soon as connection one rolled back (503 ms including a deliberate 500 ms wait). Thus the reproduced stall is a **nested-connection dependency interacting with the PGlite bridge's single underlying connection**, not a proven native PostgreSQL row lock or frontend rendering defect. A QueuePool single-connection regression also proves nested startup reads cannot acquire another connection when the pool is occupied; SQLite there is only a pool-ownership unit fixture.
 
