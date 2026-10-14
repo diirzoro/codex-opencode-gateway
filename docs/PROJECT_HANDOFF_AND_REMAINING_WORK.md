@@ -138,6 +138,14 @@ Implement/test as a **single requirement**, not unrelated UI changes:
 - **No claim of universal project preview:** static HTML and manifest detection remain the only available preview modes. No Docker/runner infrastructure was added or deployed.
 - Do not mark Batch 2 VERIFIED until targeted real-browser and real-OpenCode tests pass. No production/branch/deployment changes.
 
+### 2026-10-14 — Batch 2 continuation: Jump to Latest
+
+- `ca0fbadd` adds a contextual Jump to Latest control in `app.js` for the conversation. It becomes visible when the reader is above the most recent messages and returns the feed to the bottom on user click, while the existing follow-tail logic preserves intentional history reading.
+- `5390090f` styles the control for the chat layout and hides it when not applicable.
+- Static JavaScript syntax check on `app.js` **PASSED**; **real browser behavior and mobile/RTL positioning NOT YET TESTED**.
+- Remaining Batch 2: native permission/question pause/resume persistence, actual OpenCode agent execution, streaming and blank/duplicate message checks, accessible real multi-framework previews using secure isolated runners and cleanup.
+- Batch 1 remains open for OAuth refresh persistence and active runtime synchronization. No master/production changes.
+
 ## 10. Change log
 
 | Date | Commit | Change | Evidence / pending |
