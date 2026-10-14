@@ -1,0 +1,87 @@
+{
+  "hostname": "376d84c57794",
+  "internal_addresses": [
+    "172.26.47.197",
+    "172.31.1.142"
+  ],
+  "scope": "disposable loopback only",
+  "configuration_sources": [
+    "tests/run_isolated_audit.py",
+    "tests/staging_app.py",
+    "backend/app/config.py",
+    "backend/app/services/opencode.py",
+    "/workspace/scratch/bd2189746f7a/gateway/tests/diagnose_agent_environment.py"
+  ],
+  "secret_environment": {
+    "DATABASE_URL": true,
+    "CREDENTIALS_ENCRYPTION_KEY": true,
+    "OPENCODE_SERVER_PASSWORD": false,
+    "HTTP_PROXY": true,
+    "HTTPS_PROXY": true,
+    "NO_PROXY": true
+  },
+  "fastapi": {
+    "host": "127.0.0.1",
+    "port": 39985,
+    "origin": "http://127.0.0.1:39985",
+    "api_base": "http://127.0.0.1:39985/api",
+    "health_status": 200,
+    "transport": "real Uvicorn HTTP; earlier fixture uses in-process https://testserver"
+  },
+  "database": {
+    "engine": "PGlite (not native PostgreSQL)",
+    "host": "127.0.0.1",
+    "port": 44429,
+    "ready": true,
+    "migration": "0018_email_verification"
+  },
+  "opencode": {
+    "executable": "/workspace/scratch/bd2189746f7a/audit-tools/node_modules/opencode-ai/bin/opencode.exe",
+    "version": "1.18.32",
+    "host": "127.0.0.1",
+    "port": 33093,
+    "origin": "http://127.0.0.1:33093",
+    "authenticated_health": true,
+    "unauthenticated_status": 401,
+    "authentication": "generated per-runtime HTTP Basic; password omitted",
+    "command": "opencode serve --pure --hostname 127.0.0.1 --port <allocated> --print-logs --log-level DEBUG",
+    "proxy_inheritance": "runtime may inherit proxy variables; Gateway client trust_env=False"
+  },
+  "roots": {
+    "workspace_root": "/tmp/gateway-isolated-audit-0sgqet22/workspaces",
+    "runtime_root": "/tmp/gateway-isolated-audit-0sgqet22/runtime",
+    "runtime_directory_exists": true,
+    "workdir_exists": true
+  },
+  "network_namespace_shared": "unavailable",
+  "model": {
+    "provider": "fixture",
+    "model": "fixture",
+    "endpoint": "http://127.0.0.1:35425/v1",
+    "health_status": 200,
+    "auth": "fixture-only value; omitted",
+    "npm": "@ai-sdk/openai",
+    "streaming": "fixture currently emits chat.completion.chunk",
+    "catalog_model_present": false
+  },
+  "agent_diagnostic": {
+    "status": 500,
+    "error_name": "UnknownError",
+    "error_reference": "err_40e04707",
+    "model_requests": [],
+    "assistant_error": null
+  },
+  "sanitized_fixture_errors": [
+    "timestamp=2026-10-14T11:42:19.758Z level=ERROR run=55199f2b message=\"share subscriber failed\" type=message.updated cause=\"Cause([Fail(ProviderModelNotFoundError: Model not found: fixture/fixture.)])\"",
+    "timestamp=2026-10-14T11:42:19.758Z level=ERROR run=55199f2b message=\"share subscriber failed\" type=message.updated cause=\"Cause([Fail(ProviderModelNotFoundError: Model not found: fixture/fixture.)])\"",
+    "timestamp=2026-10-14T11:42:19.774Z level=ERROR run=55199f2b message=failed ref=err_40e04707 error=\"ProviderModelNotFoundError: Model not found: fixture/fixture.\" cause=\"ProviderModelNotFoundError: Model not found: fixture/fixture.\\n    at <anonymous> (/$bunfs/root/chunk-y568bp57.js:439:94093)\\n    at SessionPrompt.getModel (/$bunfs/root/chunk-9mk16qmt.js:1142:11505)\\n    at SessionPrompt.getModel (definition) (/$bunfs/root/chunk-9mk16qmt.js:1142:908)\\n    at SessionPrompt.run (/$bunfs/root/chunk-9mk16qmt.js:1142:15339)\\n    at SessionPrompt.run (definition) (/$bunfs/root/chunk-9mk16qmt.js:1142:10503)\\n    at SessionRunState.ensureRunning (/$bunfs/root/chunk-9mk16qmt.js:1142:15308)\\n    at SessionRunState.ensureRunning (definition) (/$bunfs/root/chunk-9mk16qmt.js:2:8188)\\n    at SessionPrompt.loop (/$bunfs/root/chunk-9mk16qmt.js:1142:10225)\\n    at SessionPrompt.loop (definition) (/$bunfs/root/chunk-9mk16qmt.js:1142:15244)\\n    at SessionPrompt.prompt (/$bunfs/root/chunk-yaays9md.js:4:13297)\\n    at SessionPrompt.prompt (definition) (/$bunfs/root/chunk-9mk16qmt.js:1142:9844)\""
+  ],
+  "resource_preflight": {
+    "docker": "UNAVAILABLE",
+    "podman": "UNAVAILABLE",
+    "docker_socket": false,
+    "native_postgresql": "UNAVAILABLE: no postgres/initdb or mapped non-root UID",
+    "browser": "BLOCKED: installed Chromium --version exits SIGSEGV (-11)",
+    "github_app_environment": "UNSET; no authorized product installation/user token supplied"
+  }
+}

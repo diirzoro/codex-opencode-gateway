@@ -18,6 +18,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--pglite-command", required=True)
 parser.add_argument("--opencode-binary")
 parser.add_argument("--run-browser", action="store_true")
+parser.add_argument("--diagnose-agent", action="store_true", help="Inventory loopback services and trace one Agent request before tests")
 parser.add_argument("--pytest-target", action="append", help="Run only selected affected test modules/nodes")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -42,8 +43,9 @@ with tempfile.TemporaryDirectory(prefix="gateway-isolated-audit-") as directory:
         if args.opencode_binary:
             env.update(OPENCODE_RUNTIME_MODE="local", OPENCODE_BINARY=str(Path(args.opencode_binary).resolve()),
                        AUDIT_RUN_OPENCODE="1")
-        for command, cwd in [(["-m", "alembic", "upgrade", "head"], root/"backend"),
-                             (["-m", "pytest", *(args.pytest_target or ["backend/tests/test_disposable_database.py"]), "-q", "--tb=short"], root)]:
+        checks = [(["-m", "alembic", "upgrade", "head"], root/"backend")]
+        checks.append((["-m","tests.diagnose_agent_environment"] if args.diagnose_agent else ["-m", "pytest", *(args.pytest_target or ["backend/tests/test_disposable_database.py"]), "-q", "--tb=short"], root))
+        for command,cwd in checks:
             result = subprocess.run([sys.executable, *command], cwd=cwd, env=env, timeout=180)
             if result.returncode:
                 print("Isolated audit subprocess failed:", command[:3], "exit=",result.returncode,"database_exit=",db_process.poll(),flush=True)

@@ -85,6 +85,16 @@ def safe_tool_activity(parts, workspace):
         output.append(item)
     return output[:100]
 
+def record_activity(session_id,request_id,activity):
+    # DB work belongs to a worker, never the streaming event loop.
+    with SessionLocal() as db:
+        session=db.get(WorkspaceSession,session_id)
+        if session is None or session.status=='cancelled':return False
+        latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=='submission').order_by(ExecutionEvent.id.desc()).limit(1))
+        if not latest or json.loads(latest.data)['request_id']!=str(request_id):return False
+        event(db,session_id,'activity',activity)
+        return True
+
 async def monitor_activity(session_id,service,runtime_id,message_id,workspace,request_id,request_task):
     seen=set()
     while True:
@@ -96,12 +106,7 @@ async def monitor_activity(session_id,service,runtime_id,message_id,workspace,re
                 for activity in safe_tool_activity(row.get('parts',[]),workspace):
                     key=(activity['id'],activity['status'])
                     if key in seen: continue
-                    with SessionLocal() as db:
-                        session=db.get(WorkspaceSession,session_id)
-                        if session.status=='cancelled': return
-                        latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=='submission').order_by(ExecutionEvent.id.desc()).limit(1))
-                        if not latest or json.loads(latest.data)['request_id']!=str(request_id): return
-                        event(db,session_id,'activity',activity)
+                    if not await asyncio.to_thread(record_activity,session_id,request_id,activity):return
                     seen.add(key)
         except Exception:
             # Optional observation must never fail/retry the model submission.
@@ -177,17 +182,27 @@ def finish_execution(db,session_id,kind,states=(),data=None,request_id=None,acti
         db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
     db.commit()
 
+def begin_execution(session_id,message_id,request_id):
+    with SessionLocal() as db:
+        session=db.get(WorkspaceSession,session_id)
+        if session is None:return None
+        workspace=db.get(Workspace,session.workspace_id)
+        session_lifecycle.lock_workspace(db,workspace);db.refresh(session)
+        latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=="submission").order_by(ExecutionEvent.id.desc()).limit(1))
+        if session.status not in session_lifecycle.BUSY or not latest or json.loads(latest.data)["request_id"]!=str(request_id):return None
+        db.add(ExecutionEvent(session_id=session_id,kind="dispatch",data=json.dumps({"request_id":str(request_id),"message_id":message_id})))
+        event(db,session_id,"analyzing")
+        return workspace
+
+
+def complete_execution(session_id,kind,**kwargs):
+    with SessionLocal() as db:finish_execution(db,session_id,kind,**kwargs)
+
+
 async def execute(session_id,service,runtime_id,data,message_id):
     try:
-        with SessionLocal() as db:
-            session=db.get(WorkspaceSession,session_id)
-            workspace=db.get(Workspace,session.workspace_id)
-            session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
-            latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=="submission").order_by(ExecutionEvent.id.desc()).limit(1))
-            if session.status not in session_lifecycle.BUSY or not latest or json.loads(latest.data)["request_id"]!=str(data.request_id):
-                return
-            db.add(ExecutionEvent(session_id=session_id,kind="dispatch",data=json.dumps({"request_id":str(data.request_id),"message_id":message_id})))
-            event(db,session.id,"analyzing")
+        workspace=await asyncio.to_thread(begin_execution,session_id,message_id,data.request_id)
+        if workspace is None:return
         payload={"messageID":message_id,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
         for item in attachment_metadata(workspace, data.attachments):
             path=workspaces.safe_path(workspace,item['path'])
@@ -207,17 +222,14 @@ async def execute(session_id,service,runtime_id,data,message_id):
             with suppress(asyncio.CancelledError): await observer
         info=response.get("info",{}) if isinstance(response,dict) else {}
         failure=info.get("role")!="assistant" or bool(info.get("error")) or not info.get("time",{}).get("completed")
-        with SessionLocal() as db:
-            if failure:
-                # Provider error bodies can contain arbitrary credentials. Keep
-                # execution feedback useful without relaying those bodies.
-                finish_execution(db,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'},request_id=data.request_id)
-            else:
-                finish_execution(db,session_id,'completed',request_id=data.request_id,
-                                 activities=safe_tool_activity(response.get('parts',[]),workspace))
+        if failure:
+            # Never relay raw provider errors or credentials.
+            await asyncio.to_thread(complete_execution,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'},request_id=data.request_id)
+        else:
+            await asyncio.to_thread(complete_execution,session_id,'completed',request_id=data.request_id,
+                                    activities=safe_tool_activity(response.get('parts',[]),workspace))
     except Exception:
-        with SessionLocal() as db:
-            finish_execution(db,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'},request_id=data.request_id)
+        await asyncio.to_thread(complete_execution,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'},request_id=data.request_id)
     finally:
         if tasks.get(str(session_id)) is asyncio.current_task(): tasks.pop(str(session_id),None)
 
@@ -299,7 +311,11 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         await asyncio.to_thread(service.apply_session_policy,session.opencode_session_id,
                                 policy.session_permissions(policy_row))
         if advanced:
-            require_advanced(db,user,start=True); db.commit()
+            require_advanced(db,user,start=True)
+        # Release preflight reads/locks before the async worker opens its own
+        # session. Otherwise dispatch can starve a small pool or the PGlite
+        # bridge while request cleanup is waiting for that same event loop.
+        db.commit()
     except Exception:
         db.rollback(); finish_execution(db,session_id,"failed",data={"reason":"Runtime preflight failed; no new message was dispatched"},request_id=data.request_id)
         raise
@@ -664,27 +680,35 @@ def approve(session_id: uuid.UUID,permission_id: str,data: Approval,user: User=D
     event(db,session.id,"approval_decision",{"reply":data.reply})
     return {"accepted":True}
 
+def event_page(request,session_id,cursor):
+    # Return detached values; never keep a connection checked out while yielding
+    # SSE bytes to a slow/disconnected browser.
+    with SessionLocal() as current:
+        try:
+            current_user=require_user(request,current)
+            context(current,current_user,session_id)
+        except HTTPException as exc:
+            return [],'authentication_expired' if exc.status_code in {401,403} else 'closed'
+        rows=current.scalars(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.id>cursor).order_by(ExecutionEvent.id).limit(100))
+        return [(row.id,row.kind,row.data) for row in rows],None
+
+
 @router.get("/{session_id}/events")
-async def events(session_id: uuid.UUID,request: Request,after: int=0,last_event_id: str|None=Header(default=None),user: User=Depends(require_user),db: Session=Depends(get_db)):
+def events(session_id: uuid.UUID,request: Request,after: int=0,last_event_id: str|None=Header(default=None),user: User=Depends(require_user),db: Session=Depends(get_db)):
     context(db,user,session_id)
     try: cursor=max(0,int(last_event_id) if last_event_id is not None else after)
     except ValueError: raise HTTPException(422,"Invalid event ID")
+    db.rollback()  # Initial ownership is read-only; release before streaming.
     async def stream():
         nonlocal cursor
         while not await request.is_disconnected():
-            # Revalidate current cookie on each polling cycle (revocation/expiry).
-            with SessionLocal() as current:
-                try:
-                    current_user=require_user(request,current)
-                    context(current,current_user,session_id)
-                except HTTPException as exc:
-                    if exc.status_code in {401,403}:
-                        yield 'event: authentication_expired\ndata: {}\n\n'
-                    return
-                rows=list(current.scalars(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.id>cursor).order_by(ExecutionEvent.id).limit(100)))
-                for row in rows:
-                    cursor=row.id
-                    yield f"id: {row.id}\nevent: {row.kind}\ndata: {row.data}\n\n"
+            rows,failure=await asyncio.to_thread(event_page,request,session_id,cursor)
+            if failure:
+                if failure=='authentication_expired':yield 'event: authentication_expired\ndata: {}\n\n'
+                return
+            for identifier,kind,data in rows:
+                cursor=identifier
+                yield f"id: {identifier}\nevent: {kind}\ndata: {data}\n\n"
             yield ": keepalive\n\n"
             await asyncio.sleep(1)
     return StreamingResponse(stream(),media_type="text/event-stream",headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})

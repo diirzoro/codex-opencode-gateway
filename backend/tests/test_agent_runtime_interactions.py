@@ -9,20 +9,21 @@ from backend.tests.test_disposable_database import account
 pytestmark=pytest.mark.skipif(os.getenv('AUDIT_DISPOSABLE_DB')!='1' or os.getenv('AUDIT_RUN_OPENCODE')!='1',reason='isolated database and OpenCode required')
 
 
-def test_real_permission_and_question_wait_resume_reject(account):
-    from backend.app.services import opencode, workspaces, policy
-    from backend.app.database import SessionLocal
-    from backend.app.models import Workspace, WorkspaceSession
-    client,_,user,_=account
+@pytest.fixture
+def agent_fixture_model(monkeypatch):
+    from backend.app.services import opencode
     mode={'tool':'bash','file':'approved.txt'}
     class Model(BaseHTTPRequestHandler):
         def log_message(self,*args): pass
         def do_POST(self):
             payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-            if any(m.get('role')=='tool' for m in payload['messages']):
+            assert self.path=='/v1/chat/completions' and payload['stream'] is True
+            assert isinstance(payload.get('messages'),list) and payload.get('tools')
+            latest_user=max(i for i,m in enumerate(payload['messages']) if m.get('role')=='user')
+            if any(m.get('role')=='tool' for m in payload['messages'][latest_user+1:]):
                 delta={'content':'Fixture completed'};finish='stop'
             else:
-                args={'command':'printf approved > '+mode['file'],'description':'Write disposable approval fixture'} if mode['tool']=='bash' else {'questions':[{'header':'Color','question':'Pick a color','options':[{'label':'Blue','description':'Fixture recommendation'},{'label':'Green','description':'Alternative'}],'multiple':True,'custom':True}]}
+                args={'command':'printf approved > '+mode['file'],'description':'Write disposable approval fixture'} if mode['tool']=='bash' else {'questions':[{'header':'Color','question':'Pick a color','options':[{'label':'Blue','description':'Fixture recommendation'},{'label':'Green','description':'Alternative'}],'multiple':mode.get('multiple',True),'custom':True}]}
                 delta={'tool_calls':[{'index':0,'id':'fixture_call','type':'function','function':{'name':mode['tool'],'arguments':json.dumps(args)}}]};finish='tool_calls'
             self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
             for change,end in [(dict(role='assistant'),None),(delta,None),({},finish)]:
@@ -30,12 +31,32 @@ def test_real_permission_and_question_wait_resume_reject(account):
                 self.wfile.write(('data: '+json.dumps(chunk)+'\n\n').encode())
             self.wfile.write(b'data: [DONE]\n\n');self.wfile.flush()
     server=ThreadingHTTPServer(('127.0.0.1',0),Model);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    original_spawn=opencode.subprocess.Popen
+    def configured_spawn(args,*a,**kw):
+        if 'serve' in args:
+            env=dict(kw['env']);config=json.loads(env['OPENCODE_CONFIG_CONTENT'])
+            config['provider']={'fixture':{'npm':'@ai-sdk/openai-compatible','name':'Fixture','options':{'baseURL':f'http://127.0.0.1:{server.server_port}/v1','apiKey':'fixture-only'},'models':{'fixture':{'name':'Fixture','limit':{'context':16000,'output':1000}}}}}
+            env['OPENCODE_CONFIG_CONTENT']=json.dumps(config);kw['env']=env
+        return original_spawn(args,*a,**kw)
+    monkeypatch.setattr(opencode.subprocess,'Popen',configured_spawn)
+    try:yield mode,server
+    finally:server.shutdown();server.server_close()
+
+
+def test_real_permission_and_question_wait_resume_reject(account,agent_fixture_model):
+    from backend.app.services import opencode, workspaces
+    from backend.app.database import SessionLocal
+    from backend.app.models import Workspace, WorkspaceSession
+    client,_,user,_=account
+    mode,server=agent_fixture_model
     project=client.post('/api/projects',json={'project_name':'agent-fixture-'+uuid.uuid4().hex[:8]}).json()
     wid=uuid.UUID(project['workspace']['id'])
     with SessionLocal() as db:
         workspace=db.get(Workspace,wid);service=opencode.for_workspace(workspace,db=db)
     try:
-        service.request('PATCH','/config',{'provider':{'fixture':{'npm':'@ai-sdk/openai','name':'Fixture','options':{'baseURL':f'http://127.0.0.1:{server.server_port}/v1','apiKey':'fixture-only'},'models':{'fixture':{'name':'Fixture','api':{'id':'fixture','url':f'http://127.0.0.1:{server.server_port}/v1','npm':'@ai-sdk/openai'},'limit':{'context':16000,'output':1000}}}}}})
+        catalog=service.request('GET','/provider')
+        entry=next((p for p in catalog.get('all',[]) if p.get('id')=='fixture'),None)
+        assert entry and 'fixture' in entry.get('models',{}),'Fixture provider/model missing before submission'
         for tool,reply,filename in [('bash','once','approved.txt'),('bash','reject','rejected.txt'),('question',None,'unused.txt')]:
             mode.update(tool=tool,file=filename)
             native=service.request('POST','/session',{'title':'Fixture','permission':[{'permission':'*','pattern':'*','action':'ask'},{'permission':'external_directory','pattern':'*','action':'deny'}]})
@@ -78,4 +99,4 @@ def test_real_permission_and_question_wait_resume_reject(account):
             if lines:print('DISPOSABLE FIXTURE ERROR', '\n'.join(lines[-3:]).replace(str(context),'[runtime]').replace(str(workspaces.root_for(workspace)),'[fixture-workspace]')[-3000:])
         raise
     finally:
-        server.shutdown();server.server_close();opencode.stop_workspace(workspace)
+        opencode.stop_workspace(workspace)
