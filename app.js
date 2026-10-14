@@ -168,13 +168,37 @@ async function selectSession(session){const revision=++sessionSelectionRevision,
 Object.assign(copy.en,{repeatMsg:'Repeat',copyMsg:'Copy',editMsg:'Edit',regenerateMsg:'Regenerate (new request)',hideMsg:'Hide from your view',copied:'Copied',copyFailed:'Could not copy',resent:'Message resubmitted'});
 Object.assign(copy.ar,{repeatMsg:'إعادة',copyMsg:'نسخ',editMsg:'تعديل',regenerateMsg:'إعادة التوليد بطلب جديد',hideMsg:'إخفاء من واجهتك',copied:'تم النسخ',copyFailed:'تعذر النسخ',resent:'أُعيد إرسال الرسالة'});
 function feedAction(kind,text,attachments=[]){const icons={"repeat":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\"/><path d=\"M3 3v5h5\"/></svg>","regenerate":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\"/><path d=\"M3 3v5h5\"/></svg>","copy":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"/><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"/></svg>","edit":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\"/><path d=\"M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z\"/></svg>","hide":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49\"/><path d=\"M14.084 14.158a3 3 0 0 1-4.242-4.242\"/><path d=\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143\"/><path d=\"m2 2 20 20\"/></svg>"};const label=t({repeat:'repeatMsg',regenerate:'regenerateMsg',copy:'copyMsg',edit:'editMsg',hide:'hideMsg'}[kind]);const b=document.createElement('button');b.type='button';b.className='icon-btn';b.innerHTML=icons[kind];b.querySelector('svg')?.setAttribute('aria-hidden','true');b.title=label;b.setAttribute('aria-label',label);b.onclick=async()=>{if(kind==='repeat'||kind==='regenerate'){if(window.workspaceSubmissionBlocked?.())return;window.restoreComposerAttachments?.(attachments);$('#promptInput').value=text;$('#promptForm').requestSubmit();toast(t('resent'));}else if(kind==='edit'){window.restoreComposerAttachments?.(attachments);$('#promptInput').value=text;$('#promptInput').focus();try{$('#promptInput').setSelectionRange(text.length,text.length)}catch(error){}}else{try{await navigator.clipboard.writeText(text);toast(t('copied'))}catch(error){try{const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();toast(t('copied'))}catch(fallbackError){toast(t('copyFailed'))}}}};return b;}
+function workspaceLatestControl(feed){
+ let button=document.getElementById('workspaceJumpLatest');
+ if(!button){
+  button=document.createElement('button');
+  button.id='workspaceJumpLatest';button.type='button';
+  button.className='workspace-jump-latest';
+  button.textContent=lang==='ar'?'↓ أحدث رسالة':'↓ Jump to latest';
+  button.setAttribute('aria-label',button.textContent);
+  button.onclick=()=>{feed.scrollTo({top:feed.scrollHeight,behavior:'smooth'});};
+  feed.parentElement?.append(button);
+ }
+ if(button.dataset.boundFeed!=='agentFeed'){
+  feed.addEventListener('scroll',()=>workspaceLatestVisibility(feed),{passive:true});
+  button.dataset.boundFeed='agentFeed';
+ }
+ workspaceLatestVisibility(feed);
+ return button;
+}
+function workspaceLatestVisibility(feed){
+ const button=document.getElementById('workspaceJumpLatest');
+ if(!button)return;
+ button.textContent=lang==='ar'?'↓ أحدث رسالة':'↓ Jump to latest';
+ button.hidden=feed.scrollHeight-feed.clientHeight-feed.scrollTop<110;
+}
 async function refreshMessages(){
  if(!activeSession)return;
  const sessionId=activeSession.id,owner=currentUser?.id,revision=++messageRenderRevision;
  try{
   const rows=await api(`/api/sessions/${sessionId}/messages`);
   if(revision!==messageRenderRevision||activeSession?.id!==sessionId||currentUser?.id!==owner)return;
-  const feed=$('#agentFeed');const followingLatest=feed.scrollHeight-feed.clientHeight-feed.scrollTop<110;const previousOffset=feed.scrollTop;feed.replaceChildren();const seen=new Set();let previousPrompt='',previousAttachments=[];
+  const feed=$('#agentFeed');workspaceLatestControl(feed);const followingLatest=feed.scrollHeight-feed.clientHeight-feed.scrollTop<110;const previousOffset=feed.scrollTop;feed.replaceChildren();const seen=new Set();let previousPrompt='',previousAttachments=[];
   const latestAssistant=rows.filter(row=>row.role==='assistant').at(-1);
   for(const row of rows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
@@ -209,6 +233,7 @@ async function refreshMessages(){
   // Preserve intentional history reading during polling and avoid forced jumps.
   if(followingLatest)feed.scrollTop=feed.scrollHeight;
   else feed.scrollTop=previousOffset;
+  workspaceLatestVisibility(feed);
  }catch(error){if(activeSession?.id===sessionId&&currentUser?.id===owner)toast(error.message);}
 }
 
