@@ -487,7 +487,19 @@
       for(const {list} of projectBuckets.values())if(!list.children.length)list.append(textElement('p',tr('No projects in this section.','لا توجد مشاريع في هذا القسم.'),'muted-small'));
     }catch(error){if(activeWorkspace?.id===id&&revision===projectListRevision)placeCurrentProject();}
   }
-  placeCurrentProject();pane.replaceChildren(modes,projectGroups,sessionsSection,previewPanel);
+  // Three-column workspace: conversations at left, working chat center,
+  // live local/GitHub file trees and preview at right. Reuse all existing
+  // session, project, and preview handlers; no demo content is introduced.
+  const chatRail=document.createElement('aside');chatRail.id='workspaceChatRail';chatRail.className='workspace-chat-rail';
+  const chatBrand=textElement('strong','OpenCode Gateway','workspace-chat-brand');
+  const chatHeader=textElement('div','','workspace-chat-header');chatHeader.append(chatBrand);
+  const chatSettings=document.createElement('button');chatSettings.type='button';chatSettings.className='workspace-chat-settings';
+  chatSettings.textContent=tr('Settings','الإعدادات');
+  chatSettings.onclick=()=>page('connectionsPage');
+  chatRail.append(chatHeader,sessionsSection,chatSettings);
+  shell.prepend(chatRail);
+  sessionsSection.hidden=false;
+  placeCurrentProject();pane.replaceChildren(modes,projectGroups,previewPanel);
   pane.append(paneResizer);
   let panelMode='changes',changesStamp=0;
   async function loadChanges(){
@@ -504,7 +516,7 @@
       diffView.textContent=names.size?tr('Select a changed file to review its diff.','اختر ملفًا متغيرًا لمراجعة الفرق.'):tr('No changes in this workspace.','لا توجد تغييرات في مساحة العمل.');
     }catch(error){if(stamp===changesStamp)diffView.textContent=error.message;}
   }
-  async function setPanel(mode){panelMode=mode;projectGroups.hidden=mode!=='changes';sessionsSection.hidden=mode!=='conversations';previewPanel.hidden=mode!=='preview';changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));conversationsMode.setAttribute('aria-pressed',String(mode==='conversations'));if(mode==='changes')await Promise.all([loadChanges(),loadProjectGroups()]);if(mode==='conversations')await refreshSessions();}
+  async function setPanel(mode){panelMode=mode;projectGroups.hidden=mode!=='changes';sessionsSection.hidden=false;previewPanel.hidden=mode!=='preview';changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));conversationsMode.setAttribute('aria-pressed',String(mode==='conversations'));if(mode==='changes')await Promise.all([loadChanges(),loadProjectGroups()]);if(mode==='conversations')await refreshSessions();}
   function drawer(){return matchMedia('(max-width:1100px)').matches;}
   function closePane(){paneDragEnd();pane.classList.remove('open');shell.classList.remove('panel-docked');shell.classList.add('sessions-collapsed');shell.style.gridTemplateColumns='';overlay(false);}
   function togglePane(){const opening=shell.classList.contains('sessions-collapsed')||(drawer()&&!pane.classList.contains('open'));shell.classList.toggle('sessions-collapsed',!opening);pane.classList.toggle('open',opening);shell.classList.toggle('panel-docked',drawer()&&opening);shell.style.gridTemplateColumns='';overlay(false);if(opening){setPanelWidth(panelWidth);if(panelMode==='changes')loadChanges();}}
