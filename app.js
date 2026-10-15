@@ -196,6 +196,39 @@ function workspaceLatestVisibility(feed){
  button.textContent=lang==='ar'?'↓ أحدث رسالة':'↓ Jump to latest';
  button.hidden=feed.scrollHeight-feed.clientHeight-feed.scrollTop<110;
 }
+// Session-scoped OpenCode tasks: collapsible and pinned above the composer.
+let todoLastCheck=0,todoRequest=null,todoSessionKey='';
+async function refreshWorkspaceTodos(force=false){
+ const sessionId=activeSession?.id,ownerId=currentUser?.id;
+ let panel=document.getElementById('workspaceTodoPanel');
+ if(!panel){
+  panel=document.createElement('details');panel.id='workspaceTodoPanel';panel.className='workspace-todo-panel';panel.hidden=true;
+  const summary=document.createElement('summary');summary.id='workspaceTodoSummary';panel.append(summary);
+  const items=document.createElement('ol');items.id='workspaceTodoItems';panel.append(items);
+  const form=document.getElementById('promptForm');form?.parentElement?.insertBefore(panel,form);
+ }
+ const key=String(ownerId||'')+':'+String(sessionId||'');
+ if(key!==todoSessionKey){todoSessionKey=key;todoLastCheck=0;panel.hidden=true;panel.open=false;panel.querySelector('ol')?.replaceChildren();}
+ if(!sessionId||!ownerId)return;
+ if(!force&&Date.now()-todoLastCheck<8000)return;
+ if(todoRequest===key)return;
+ todoLastCheck=Date.now();todoRequest=key;
+ try{
+  const data=await api('/api/sessions/'+encodeURIComponent(sessionId)+'/todos');
+  if(todoSessionKey!==key||activeSession?.id!==sessionId||currentUser?.id!==ownerId)return;
+  const rows=Array.isArray(data.items)?data.items:[];
+  panel.hidden=!data.supported||!rows.length;
+  if(panel.hidden)return;
+  const finished=rows.filter(x=>x.status==='completed').length;
+  panel.querySelector('summary').textContent=(lang==='ar'?'▸ قائمة المهام':'▸ Task list')+' · '+finished+'/'+rows.length;
+  const list=panel.querySelector('ol');list.replaceChildren();
+  for(const item of rows){
+   const li=document.createElement('li');li.textContent=item.content;li.className='todo-'+item.status;
+   list.append(li);
+  }
+ }catch(error){/* Keep the composer responsive when optional task discovery fails. */}
+ finally{if(todoRequest===key)todoRequest=null;}
+}
 async function refreshMessages(){
  if(!activeSession)return;
  const sessionId=activeSession.id,owner=currentUser?.id,revision=++messageRenderRevision;
@@ -233,6 +266,7 @@ async function refreshMessages(){
    node.append(bar);feed.append(node);
   }
   window.renderActivitySummary?.(rows);
+  refreshWorkspaceTodos().catch(()=>{});
   // Follow live output only while the user was already near the bottom.
   // Preserve intentional history reading during polling and avoid forced jumps.
   if(followingLatest)feed.scrollTop=feed.scrollHeight;
