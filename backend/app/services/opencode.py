@@ -87,6 +87,7 @@ class OpenCodeService:
         self.restore_passes = 0
         self.restore_puts = 0
         self.restore_errors = []
+        self.connection_method_cache = {}
         self.oauth_pending = {}
         self.oauth_versions = {}
         self.session_policies = {}
@@ -158,6 +159,7 @@ class OpenCodeService:
         with self.cache_lock:
             self.discovery_revision += 1
             self.core_cache.clear()
+            self.connection_method_cache.clear()
             self.snapshot_cache = None
             self.snapshot_at = 0.0
             self.agent_capability_cache = None

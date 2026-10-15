@@ -194,8 +194,20 @@ def search_index(data, query, policy=None):
                if wanted in entry["id"].casefold() or wanted in (entry.get("name") or "").casefold()]
     matches.sort(key=lambda entry: (entry["id"].casefold() != wanted and (entry.get("name") or "").casefold() != wanted,
                                     entry.get("name") or entry["id"]))
-    return [provider_index(entry, data, policy) for entry in matches[:20]]
+    return [provider_index(entry, data, policy) for entry in matches[:50]]
 
+
+
+def catalog_page(data, policy=None, *, offset=0, limit=50, query=''):
+    wanted=query.strip().casefold()
+    entries=[r for r in _catalog_entries(data) if not wanted or wanted in r['id'].casefold()
+             or wanted in (r.get('name') or '').casefold()]
+    connected=set(data.get('connected',[]))
+    entries.sort(key=lambda r:(r['id'] not in connected,r['id'] not in POPULAR_PROVIDER_IDS,(r.get('name') or r['id']).casefold(),r['id']))
+    end=min(offset+limit,len(entries))
+    return {'items':[provider_index(r,data,policy) for r in entries[offset:end]],
+            'total':len(entries),'offset':offset,'limit':limit,
+            'next_offset':end if end<len(entries) else None}
 
 def model_details(data, provider_id, policy=None):
     """Sanitize and annotate models for exactly one runtime-reported provider."""
@@ -219,7 +231,18 @@ def auth_methods(service):
     return service._core_value("auth_methods", "/provider/auth")
 
 
+
 def connection_methods(service, provider_id):
+    from copy import deepcopy
+    cache=getattr(service,'connection_method_cache',None)
+    if not isinstance(cache,dict):return _discover_connection_methods(service,provider_id)
+    cached=cache.get(provider_id)
+    if cached and time.monotonic()-cached[0]<60:return deepcopy(cached[1])
+    result=_discover_connection_methods(service,provider_id)
+    cache[provider_id]=(time.monotonic(),deepcopy(result))
+    return deepcopy(result)
+
+def _discover_connection_methods(service, provider_id):
     """Discover one provider's real methods without expanding the startup payload.
 
     /provider/auth lists plugin hooks, not the generic key methods. OpenCode's
@@ -237,7 +260,7 @@ def connection_methods(service, provider_id):
     params = {"location[directory]": service.params["directory"]} if "directory" in service.params else {}
     deadline = time.monotonic() + 5
     while True:
-        result = service.request("GET", "/api/integration/" + quote(provider_id, safe=""), params=params)
+        result = service.request("GET", "/api/integration/" + quote(provider_id, safe=""), params=params, timeout=max(.1,min(3,deadline-time.monotonic())))
         if not isinstance(result, dict) or "data" not in result:
             raise HTTPException(502, "OpenCode returned invalid integration authentication data")
         integration = result["data"]

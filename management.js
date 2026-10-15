@@ -118,13 +118,34 @@
     let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
     let searchRows=[],searchQuery='',searchTimer=null,searchAbort=null,searchSequence=0,optionsOpen=false;
     const searchState=node('p','','provider-search-status');searchState.setAttribute('role','status');comboWrap.after(searchState);
+    let moreOffset=0,moreQuery=null,moreBusy=false;
+    const moreProviders=button(tr('Load 50 more providers','تحميل 50 مزوّدًا إضافيًا'),async()=>{
+      if(workspaceId||moreBusy||!view.ready)return;
+      const query=combo.value.trim().toLowerCase(),offset=moreQuery===query?moreOffset:0;
+      if(offset===null)return;
+      const sequence=searchSequence;moreBusy=true;moreProviders.disabled=true;
+      try{
+        const result=await api('/api/opencode/catalog/providers/page?limit=50&offset='+offset+'&query='+encodeURIComponent(query),{signal:controller.signal});
+        if(!alive()||sequence!==searchSequence||combo.value.trim().toLowerCase()!==query)return;
+        moreQuery=query;moreOffset=result.next_offset;
+        if(query){searchQuery=query;searchRows=[...new Map([...searchRows,...result.items].map(p=>[p.id,p])).values()];}
+        else snapshot={...snapshot,providers:[...new Map([...(snapshot?.providers||[]),...result.items].map(p=>[p.id,p])).values()]};
+        optionsOpen=true;renderOptions();moreProviders.hidden=moreOffset===null;
+        searchState.textContent=tr('Runtime providers: ','مزوّدات Runtime: ')+result.total;
+      }catch(error){if(alive()&&error.name!=='AbortError')searchState.textContent=error.message;}
+      finally{moreBusy=false;moreProviders.disabled=false;}
+    });moreProviders.hidden=Boolean(workspaceId);comboWrap.after(moreProviders);
+
     const sameCatalog=data=>data.workspace_id===workspaceId&&data.generation===snapshot?.generation&&data.revision===snapshot?.revision&&data.policy_revision===snapshot?.policy_revision;
     async function lookup(kind,value,signal){
       if(!workspaceId){
-        const url='/api/opencode/catalog/providers/search?query='+encodeURIComponent(value);
-        const rows=await api(url,{signal});
+        const url='/api/opencode/catalog/providers/page?limit=50&query='+encodeURIComponent(value);
+        const result=await api(url,{signal});
         if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
-        return kind==='resolve'?rows.filter(row=>row.id===value):rows;
+        if(kind==='search'&&combo.value.trim().toLowerCase()===value.toLowerCase()){
+          moreQuery=value.toLowerCase();moreOffset=result.next_offset;moreProviders.hidden=moreOffset===null;
+        }
+        return kind==='resolve'?result.items.filter(row=>row.id===value):result.items;
       }
       const data=await api(base+kind+'?'+(kind==='search'?'query':'name')+'='+encodeURIComponent(value),{signal});
       if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
@@ -165,7 +186,7 @@
       dlg.showModal();setFeedback(feedback,tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
       let choices,accountOptions=null;
       try{
-        if(!workspaceId){accountOptions=await api("/api/opencode/connections/"+encodeURIComponent(p.id)+"/options",{signal:discovery.signal});}
+        if(!workspaceId){const authStarted=performance.now();accountOptions=await api("/api/opencode/connections/"+encodeURIComponent(p.id)+"/options",{signal:discovery.signal});window.gatewayProviderTimings={...window.gatewayProviderTimings,auth_request_ms:performance.now()-authStarted};}
         else if(!resolved)p=(await lookup('resolve',p.id,discovery.signal))[0];
         if(!currentDialog())return;
         if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
@@ -298,6 +319,7 @@
       }
     }
     const renderOptions=()=>{
+      const renderStarted=performance.now();
       const query=(combo.value||'').trim().toLowerCase();const previous=new Map([...options.children].map(n=>[n.dataset.providerId,n]));
       const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
       const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query));
@@ -315,8 +337,9 @@
       }
       for(const old of previous.values())old.remove();
       options.hidden=!optionsOpen||!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
+      window.gatewayProviderTimings={...window.gatewayProviderTimings,render_sync_ms:performance.now()-renderStarted,rendered_options:rows.length};
     };
-    function stopSearch(){searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}
+    function stopSearch(){const empty=!combo.value.trim();moreOffset=empty?(snapshot?.providers?.length||0):0;moreQuery=empty?'':null;moreProviders.hidden=Boolean(workspaceId);searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}
     function scheduleSearch(){
       stopSearch();renderOptions();const query=combo.value.trim().toLowerCase();
       if(query.length<2||!view.ready)return;
@@ -355,10 +378,12 @@
         view.ready=false;
         message(tr('Loading account providers…','جارٍ تحميل مزوّدات الحساب…'));
         try{
+          const requestStarted=performance.now();
           const catalog=await api('/api/opencode/catalog/providers',{signal:controller.signal});
           if(!alive()||workspaceId)return;
           if(!Array.isArray(catalog))throw new Error('Invalid account provider catalog');
-          snapshot={providers:catalog};view.ready=true;customButton.disabled=false;renderOptions();renderConnected();
+          window.gatewayProviderTimings={metadata_request_ms:performance.now()-requestStarted};
+          snapshot={providers:catalog};moreOffset=catalog.length;moreQuery='';view.ready=true;customButton.disabled=false;renderOptions();renderConnected();
           message(tr('Account providers ready','مزوّدات الحساب جاهزة')+' · '+catalog.length);
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
@@ -393,7 +418,7 @@
       return refresh(true);
     }
     view.refresh=refresh;
-    combo.addEventListener('input',()=>{body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
+    combo.addEventListener('input',()=>{moreOffset=0;moreQuery=null;moreProviders.hidden=Boolean(workspaceId);body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
     combo.addEventListener('focus',()=>{optionsOpen=true;scheduleSearch();});
     combo.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}});
     document.addEventListener('click',event=>{if(!comboWrap.contains(event.target)){optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}},{signal:controller.signal});

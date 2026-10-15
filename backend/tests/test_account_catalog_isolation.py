@@ -33,3 +33,44 @@ def test_schema_check_reuses_request_transaction(monkeypatch):
     user_provider_credentials.require_schema(db)
     inspect.assert_called_once_with(connection)
     db.get_bind.assert_not_called()
+
+
+def test_slow_user_catalog_does_not_block_another_user(monkeypatch):
+    from threading import Event
+    from concurrent.futures import ThreadPoolExecutor
+    started,release=Event(),Event()
+    monkeypatch.setattr(catalog,'_catalog_cache',{})
+    def slow_request(*args):
+        started.set();assert release.wait(3)
+        return {'all':[{'id':'slow-owner','models':{}}]}
+    slow=SimpleNamespace(generation='slow',request=slow_request,close=Mock())
+    fast=SimpleNamespace(generation='fast',request=Mock(return_value={'all':[{'id':'fast-owner','models':{}}]}),close=Mock())
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first=pool.submit(catalog.public_catalog,'/provider',service=slow)
+        assert started.wait(1)
+        try:
+            second=pool.submit(catalog.public_catalog,'/provider',service=fast)
+            assert second.result(timeout=1)['all'][0]['id']=='fast-owner'
+        finally:release.set()
+        assert first.result(timeout=1)['all'][0]['id']=='slow-owner'
+
+
+def test_catalog_metadata_revision_invalidates_cache(monkeypatch):
+    monkeypatch.setattr(catalog,'_catalog_cache',{})
+    service=SimpleNamespace(generation='owner',discovery_revision=0,close=Mock(),request=Mock(side_effect=[{'all':[{'id':'before','models':{}}]},{'all':[{'id':'after','models':{}}]}]))
+    assert catalog.public_catalog('/provider',service=service)['all'][0]['id']=='before'
+    service.discovery_revision+=1
+    assert catalog.public_catalog('/provider',service=service)['all'][0]['id']=='after'
+
+
+def test_metadata_method_cache_copies_and_invalidates(monkeypatch):
+    from backend.app.services import providers,opencode
+    service=opencode.OpenCodeService('http://127.0.0.1:1')
+    discover=Mock(return_value=[{'type':'api','label':'Runtime schema'}])
+    monkeypatch.setattr(providers,'_discover_connection_methods',discover)
+    try:
+        first=providers.connection_methods(service,'fixture');first[0]['label']='mutated'
+        assert providers.connection_methods(service,'fixture')[0]['label']=='Runtime schema'
+        assert discover.call_count==1
+        service.invalidate();providers.connection_methods(service,'fixture');assert discover.call_count==2
+    finally:service.close()

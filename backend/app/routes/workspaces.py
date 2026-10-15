@@ -97,7 +97,15 @@ def _account_public_catalog(user, path, db, *, agents=False):
 @router.get("/opencode/catalog/providers")
 def account_provider_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Project-independent definitions only; never expose global connected state."""
-    return providers.catalog_index(_account_catalog_state(db, user, _account_public_catalog(user,"/provider",db)), policy.load(db))
+    return providers.catalog_page(_account_catalog_state(db, user, _account_public_catalog(user,"/provider",db)), policy.load(db),limit=50)["items"]
+
+
+@router.get("/opencode/catalog/providers/page")
+def account_provider_page(offset: int=Query(default=0,ge=0),limit: int=Query(default=50,ge=1,le=100),
+                          query: str=Query(default='',max_length=200),
+                          user: User=Depends(require_user),db: Session=Depends(get_db)):
+    data=_account_catalog_state(db,user,_account_public_catalog(user,"/provider",db))
+    return providers.catalog_page(data,policy.load(db),offset=offset,limit=limit,query=query)
 
 
 @router.get("/opencode/catalog/providers/search")
@@ -134,9 +142,9 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
         raise HTTPException(422, "Invalid provider identifier")
     if not policy.provider_allowed(policy.load(db), provider_id):
         raise HTTPException(403, "Provider disabled by policy")
-    from ..services.account_provider_runtime import isolated_validation
-    with isolated_validation(user.id, db) as service:
-        data = service.request("GET", "/provider")
+    account,service=opencode.for_account(user.id,db=db)
+    with opencode.workspace_lock(account),service.state_lock:
+        data = service._core_value("provider_data", "/provider")
         entry = providers.resolve_provider(data, provider_id)
         if entry["id"] != provider_id:
             raise HTTPException(422, "Use the exact OpenCode provider ID")
@@ -391,6 +399,12 @@ def publish_project(project_id: uuid.UUID,data: PublishProject,user: User=Depend
     require_advanced(db,user,start=True)
     db.commit()
     return manager.project_payload(project)
+
+@router.get("/workspace-context")
+def restore_workspace_context(workspace_id: uuid.UUID|None=None,session_id: uuid.UUID|None=None,
+                              user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services.workspace_context import restore
+    return restore(db,user,workspace_id,session_id)
 
 @router.get("/workspaces")
 def workspaces(user: User=Depends(require_user),db: Session=Depends(get_db)):

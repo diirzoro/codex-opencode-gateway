@@ -24,6 +24,7 @@ def agent_fixture_model(monkeypatch):
                 delta={'content':'Fixture completed'};finish='stop'
             else:
                 args={'command':'printf approved > '+mode['file'],'description':'Write disposable approval fixture'} if mode['tool']=='bash' else {'questions':[{'header':'Color','question':'Pick a color','options':[{'label':'Blue','description':'Fixture recommendation'},{'label':'Green','description':'Alternative'}],'multiple':mode.get('multiple',True),'custom':True}]}
+                args=mode.get('args',args)
                 delta={'tool_calls':[{'index':0,'id':'fixture_call','type':'function','function':{'name':mode['tool'],'arguments':json.dumps(args)}}]};finish='tool_calls'
             self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
             for change,end in [(dict(role='assistant'),None),(delta,None),({},finish)]:

@@ -59,10 +59,10 @@
     }
     return available;
   }
-  // Opening the workspace never creates/resumes a project implicitly.
+  // Sign-in restores owned context without creating a project or replaying work.
   window.openClientWorkspace=async function(){
     if(!currentUser)return page('authPage');
-    return page(admin()?'adminPage':'workspaceHomePage');
+    return openWorkspaceAfterLogin();
   };
   async function loadConnections(){
     const root=q('connectionsProviders'),query=root.querySelector('input[role=combobox]')?.value;
@@ -178,21 +178,13 @@
   const activitySummary=textElement('div','','activity-summary');
   const capabilityView=document.createElement('details');capabilityView.className='agent-capabilities';capabilityView.append(text('summary','Tools & skills','الأدوات والمهارات'));
   const capabilityBody=textElement('div');capabilityView.append(capabilityBody);workspaceDetails.append(capabilityView);activity.append(activityStage,activitySummary);
-  const todoView=textElement('section','','chat-todos');todoView.hidden=true;activity.append(todoView);
-  let activitySession=null,todosPending=false;
+  let activitySession=null;
   function keepChatActivity(){const feed=q('agentFeed');if(!activeSession)return;
-    if(activitySession!==activeSession.id){activitySession=activeSession.id;activityStage.textContent=activitySummary.textContent='';todoView.hidden=true;todoView.replaceChildren();}
+    if(activitySession!==activeSession.id){activitySession=activeSession.id;activityStage.textContent=activitySummary.textContent='';}
     const host=[...feed.querySelectorAll(':scope>.agent-response')].at(-1)||feed;
     if(activity.parentElement!==host)host.append(activity);
   }
   new MutationObserver(keepChatActivity).observe(q('agentFeed'),{childList:true});
-  window.refreshWorkspaceTodos=async()=>{if(!activeSession||todosPending)return;const sessionId=activeSession.id,owner=currentUser?.id;todosPending=true;
-    try{const result=await api('/api/sessions/'+sessionId+'/todos');if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;
-      keepChatActivity();todoView.replaceChildren();todoView.hidden=!result.supported||!result.items?.length;if(todoView.hidden)return;
-      todoView.append(textElement('strong',tr('Task list','قائمة المهام')));const list=document.createElement('ol');
-      for(const item of result.items){const row=document.createElement('li');row.dataset.status=item.status;const labels={pending:['Pending','بانتظار التنفيذ'],in_progress:['In progress','قيد التنفيذ'],completed:['Completed','مكتمل'],cancelled:['Cancelled','أُلغي']};row.append(textElement('span',item.status==='completed'?'✓':item.status==='in_progress'?'◉':'○','todo-state'),textElement('span',item.content),textElement('small',tr(...labels[item.status])));list.append(row);}todoView.append(list);
-    }catch(error){}finally{todosPending=false;}
-  };
   let capabilityWorkspace='',capabilityPending=false;
   capabilityView.addEventListener('toggle',async()=>{
     if(!capabilityView.open||!activeWorkspace||capabilityPending||capabilityWorkspace===activeWorkspace.id)return;
@@ -344,11 +336,12 @@
   const changesPanel=textElement('section','','workspace-changes'),previewPanel=textElement('section','','workspace-preview');
   changesPanel.id='workspaceChangesPanel';previewPanel.id='workspacePreviewPanel';
   const approvalsList=document.createElement('details');approvalsList.className='chat-approval-settings';
-  const questionView=textElement('section','','chat-questions');questionView.hidden=true;let questionSession=null,questionOwner=null,questionSignature='',questionSending=false;
+  const questionView=textElement('section','','chat-questions');questionView.hidden=true;let questionSession=null,questionOwner=null,questionSignature='',questionSending=false,questionRevision=0,questionError='';
+  window.resetWorkspaceQuestions=()=>{questionRevision++;questionSession=null;questionOwner=null;questionSignature='';questionView.hidden=true;questionView.replaceChildren();};
   function keepQuestions(){if(!questionView.hidden&&activeSession?.id===questionSession&&currentUser?.id===questionOwner&&!questionView.isConnected)q('agentFeed').append(questionView);}
   new MutationObserver(keepQuestions).observe(q('agentFeed'),{childList:true});
-  window.refreshWorkspaceQuestions=async()=>{if(!activeSession||questionSending)return;const sessionId=activeSession.id,owner=currentUser?.id;
-    try{const data=await api('/api/sessions/'+sessionId+'/questions');if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;const signature=lang+JSON.stringify(data.requests||[]);
+  window.refreshWorkspaceQuestions=async()=>{if(!activeSession||questionSending)return;const sessionId=activeSession.id,owner=currentUser?.id,revision=++questionRevision;
+    try{const data=await api('/api/sessions/'+sessionId+'/questions');if(revision!==questionRevision||activeSession?.id!==sessionId||currentUser?.id!==owner)return;questionError='';const signature=lang+JSON.stringify(data.requests||[]);
       if(questionSession===sessionId&&questionOwner===owner&&signature===questionSignature){keepQuestions();return;}
       questionSession=sessionId;questionOwner=owner;questionSignature=signature;questionView.replaceChildren();questionView.hidden=!data.requests?.length;
       for(const request of data.requests||[]){const form=document.createElement('form');form.className='chat-approval';form.append(textElement('strong',tr('The agent needs your answer','الوكيل ينتظر إجابتك')));const groups=[];
@@ -356,15 +349,15 @@
           for(const option of question.options){const label=document.createElement('label'),input=document.createElement('input');input.type=question.multiple?'checkbox':'radio';input.name='q'+index;input.value=option.label;label.append(input,textElement('span',option.label));if(option.description)label.append(textElement('small',option.description));if(option.recommended===true){const hint=textElement('span',tr('Recommended by agent','موصى به من الوكيل'),'question-recommended');label.append(hint);if(option.description)hint.title=option.description;}fieldset.append(label);inputs.push(input);}
           let custom=null;if(question.custom){custom=document.createElement('input');custom.type='text';custom.maxLength=2000;custom.placeholder=tr('Other — write your choice…','خيار آخر — اكتب إجابتك…');custom.setAttribute('aria-label',custom.placeholder);fieldset.append(custom);}groups.push({inputs,custom,multiple:question.multiple});form.append(fieldset);
         }
-        const actions=textElement('div','','chat-approval-actions'),submit=textElement('button',tr('Send answer','إرسال الإجابة'),'button ghost small'),reject=textElement('button',tr('Cancel question','إلغاء السؤال'),'button ghost small');submit.type='submit';reject.type='button';actions.append(submit,reject);form.append(actions);
+        const actions=textElement('div','','chat-approval-actions'),submit=textElement('button',tr('Choose and Continue','اختر وتابع'),'button ghost small'),reject=textElement('button',tr('Cancel question','إلغاء السؤال'),'button ghost small');submit.type='submit';reject.type='button';actions.append(submit,reject);form.append(actions);
         async function send(rejected){if(questionSending||activeSession?.id!==sessionId||currentUser?.id!==owner)return;const answers=groups.map(g=>{const selected=g.inputs.filter(i=>i.checked).map(i=>i.value),custom=g.custom?.value.trim();return [...new Set(custom?(g.multiple?[...selected,custom]:[custom]):selected)];});if(!rejected&&answers.some(a=>!a.length)){toast(tr('Answer every question.','أجب عن كل سؤال.'));return;}
           questionSending=true;form.querySelectorAll('input,button').forEach(n=>n.disabled=true);
           try{await api('/api/sessions/'+sessionId+'/questions/'+encodeURIComponent(request.id),{method:'POST',body:JSON.stringify({reject:rejected,answers:rejected?[]:answers})});questionSignature='';if(activeSession?.id===sessionId&&currentUser?.id===owner){await refreshSessionStatus();await refreshMessages();}}
-          catch(error){toast(error.message);form.querySelectorAll('input,button').forEach(n=>n.disabled=false);}finally{questionSending=false;await window.refreshWorkspaceQuestions();}
+          catch(error){if(activeSession?.id===sessionId&&currentUser?.id===owner){toast(error.status===404?tr('This question expired. Refreshing the conversation…','انتهت صلاحية السؤال. جارٍ تحديث المحادثة…'):error.message);if(error.status===404)questionSignature='';form.querySelectorAll('input,button').forEach(n=>n.disabled=false);}}finally{questionSending=false;await window.refreshWorkspaceQuestions();}
         }
         form.onsubmit=event=>{event.preventDefault();send(false);};reject.onclick=()=>send(true);questionView.append(form);
       }if(!questionView.hidden)q('agentFeed').append(questionView);
-    }catch(error){}
+    }catch(error){if(revision===questionRevision&&activeSession?.id===sessionId&&currentUser?.id===owner&&questionError!==error.message){questionError=error.message;toast(error.message);}}
   };
   const approvalBusy=new Set();let approvalOwner=null,approvalSession=null;
   const inlineApprovals=q('approvalBox');inlineApprovals.classList.add('chat-approvals');inlineApprovals.hidden=true;
@@ -573,7 +566,7 @@
     const workspaceId=activeWorkspace?.id;
     const result=await api('/api/sessions/'+row.id+(action==='delete'?'':'/'+action),{method:action==='delete'?'DELETE':'POST'});
     if(activeWorkspace?.id!==workspaceId)return;
-    if(row.id===activeSession?.id&&['close','archive','delete'].includes(action)){stopEvents();sessionSelectionRevision++;activeSession=null;renderWorkspaceEmpty();}
+    if(row.id===activeSession?.id&&['close','archive','delete'].includes(action)){stopEvents();sessionSelectionRevision++;activeSession=null;window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);renderWorkspaceEmpty();}
     sessionRows=action==='delete'?sessionRows.filter(session=>session.id!==row.id):sessionRows.map(session=>session.id===row.id?{...session,...result}:session);
     renderRuntimeSessions(sessionRows);
     await refreshSessions();updateSend();
@@ -581,7 +574,7 @@
   window.addEventListener('workspace-session-lifecycle',event=>{
     const {sessionId,workspaceId,action,result}=event.detail;
     if(activeWorkspace?.id!==workspaceId)return;
-    if(activeSession?.id===sessionId&&['close','archive','delete'].includes(action)){stopEvents();sessionSelectionRevision++;activeSession=null;renderWorkspaceEmpty();}
+    if(activeSession?.id===sessionId&&['close','archive','delete'].includes(action)){stopEvents();sessionSelectionRevision++;activeSession=null;window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);renderWorkspaceEmpty();}
     sessionRows=action==='delete'?sessionRows.filter(row=>row.id!==sessionId):sessionRows.map(row=>row.id===sessionId?{...row,...result}:row);
     renderRuntimeSessions(sessionRows);
   });
@@ -659,7 +652,7 @@
     if(admin()){await page('adminPage');return;}
     if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));
     if(!await usableWorkspace(workspace)){toast(tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.'));if(navigate)await page('workspaceHomePage');return;}
-    if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;sessionRows=[];retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
+    if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);sessionRows=[];retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
     discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
     renderWorkspaceEmpty();q('promptInput').value=pendingIdea;pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode'),''));updateSend();
@@ -682,7 +675,7 @@
   window.refreshWorkspaceSessionStatus=refreshSessionStatus;
   let eventRefreshTimer=null;
   window.addEventListener('authentication-cleared',()=>{
-    clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
+    window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
     pendingSubmission=null;sending=cancelRequested=false;sessionRows=[];providers=[];chosenAgent=chosenProvider=chosenModel='';
     runtimeReady=agentsReady=modelsReady=workAccess=false;entitlement=null;workspaceDays.hidden=workspaceAccess.hidden=true;workspaceDays.textContent='';workspaceAccess.replaceChildren();homeAccess.replaceChildren();retrySubmission.hidden=retryModels.hidden=true;
     storageData=null;submissionStatus.textContent=storageChip.textContent=activityStage.textContent=activitySummary.textContent='';

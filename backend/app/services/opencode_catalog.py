@@ -24,42 +24,39 @@ def public_catalog(path, *, agents=False, service=None):
         raise ValueError("Unsupported public catalog path")
     if agents != (path == "/agent"):
         raise ValueError("Catalog type must match the requested OpenCode endpoint")
+    # Cache locking must not serialize slow native HTTP across different users.
+    key = (path, service.generation if service is not None else None,
+           getattr(service, 'discovery_revision', 0) if service is not None else 0)
     with _catalog_lock:
-        # An account runtime must not depend on the shared daemon or reuse
-        # another runtime's potentially provider-specific catalog.
-        key = (path, service.generation if service is not None else None)
         now = time.monotonic()
-        for stale in [k for k, v in _catalog_cache.items() if now-v[0] >= CATALOG_TTL_SECONDS]:
-            _catalog_cache.pop(stale, None)
+        for stale in [k for k,v in _catalog_cache.items() if now-v[0] >= CATALOG_TTL_SECONDS]:
+            _catalog_cache.pop(stale,None)
         cached = _catalog_cache.get(key)
-        if cached and time.monotonic() - cached[0] < CATALOG_TTL_SECONDS:
+        if cached:
             return deepcopy(cached[1])
-        own_service = service is None
-        if own_service:
-            service = OpenCodeService(settings.opencode_url)
-        try:
-            data = service.request("GET", path)
-            if agents:
-                if not isinstance(data, list):
-                    raise HTTPException(502, "OpenCode returned an invalid agent catalog")
-                # Only public built-in-looking agent choice metadata; do not
-                # cache runtime config, private prompts or tools.
-                public = [{"name": row["name"], "mode": row.get("mode"), "hidden": row.get("hidden", False)}
-                          for row in data if isinstance(row, dict)
-                          and isinstance(row.get("name"), str) and 0 < len(row["name"]) <= 120]
-            else:
-                if not isinstance(data, dict) or not isinstance(data.get("all"), list):
-                    raise HTTPException(502, "OpenCode returned an invalid provider catalog")
-                # Copy only the public identifiers required by index/search.
-                public = {"all": [{"id": item["id"], "name": item.get("name", item["id"]),
-                                   "models": {k: None for k in item.get("models", {})}}
-                                  for item in data["all"] if isinstance(item, dict)
-                                  and isinstance(item.get("id"), str)
-                                  and isinstance(item.get("models", {}), dict)],
-                          "connected": [], "gateway_disconnected": [],
-                          "default": data.get("default", {})}
-            _catalog_cache[key] = (time.monotonic(), public)
-            return deepcopy(public)
-        finally:
-            if own_service:
-                service.close()
+    own_service = service is None
+    if own_service:
+        service = OpenCodeService(settings.opencode_url)
+    try:
+        core = 'agents' if agents else 'provider_data'
+        data = (service._core_value(core,path) if hasattr(service,'_core_value') else service.request('GET',path))
+        if agents:
+            if not isinstance(data,list):
+                raise HTTPException(502,'OpenCode returned an invalid agent catalog')
+            public = [{'name':r['name'],'mode':r.get('mode'),'hidden':r.get('hidden',False)}
+                      for r in data if isinstance(r,dict) and isinstance(r.get('name'),str) and 0<len(r['name'])<=120]
+        else:
+            if not isinstance(data,dict) or not isinstance(data.get('all'),list):
+                raise HTTPException(502,'OpenCode returned an invalid provider catalog')
+            public = {'all':[{'id':r['id'],'name':r.get('name',r['id']),
+                              'models':{k:None for k in r.get('models',{})}}
+                             for r in data['all'] if isinstance(r,dict) and isinstance(r.get('id'),str)
+                             and isinstance(r.get('models',{}),dict)],
+                      'connected':[],'gateway_disconnected':[],'default':data.get('default',{})}
+        with _catalog_lock:
+            if len(_catalog_cache)>=256:
+                _catalog_cache.pop(min(_catalog_cache,key=lambda k:_catalog_cache[k][0]))
+            _catalog_cache[key]=(time.monotonic(),public)
+        return deepcopy(public)
+    finally:
+        if own_service:service.close()
