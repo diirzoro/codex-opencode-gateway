@@ -784,3 +784,37 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
 @media(max-width:1100px){
  #workspacePage .workspace-chat-rail{display:none}
 }
+
+/* Workspace-only immersion: no global chrome; other app pages are unchanged. */
+body:has(#workspacePage.active) #app-header,
+body:has(#workspacePage.active) #app-sidebar{display:none!important}
+body:has(#workspacePage.active) #app-shell{height:100dvh!important;min-height:0!important;display:flex!important;flex-direction:column}
+body:has(#workspacePage.active) #app-frame{display:flex!important;flex:1!important;min-height:0!important;overflow:hidden}
+body:has(#workspacePage.active) #app-main{width:100%!important;max-width:none!important;min-width:0!important;flex:1!important;padding:0!important;margin:0!important;overflow:hidden}
+body:has(#workspacePage.active) #workspacePage{height:100%!important;max-height:100dvh;min-height:0;padding:0!important;margin:0!important}
+#workspacePage .workspace-first .project-bar{display:none!important}
+#workspacePage .workspace-first .agent-column{display:flex!important;flex-direction:column!important;min-height:0;overflow:hidden}
+#workspacePage .workspace-first #agentFeed{order:1;flex:1 1 auto!important;min-height:0!important;overflow:auto!important;padding-top:24px}
+#workspacePage .workspace-first #approvalBox{order:5}
+#workspacePage .workspace-first .workspace-todo-panel{order:8;margin-top:auto}
+#workspacePage .workspace-first .prompt-box{order:10;margin:4px auto 10px!important;padding:9px 12px 8px!important;border-radius:12px}
+#workspacePage .workspace-first .prompt-box textarea{min-height:34px!important;height:40px;max-height:120px!important;padding:0 2px 4px!important;font-size:14px;line-height:1.45}
+#workspacePage .workspace-first .composer-controls{min-height:34px;gap:5px}
+#workspacePage .workspace-first .composer-controls :is(.composer-utilities,.composer-actions)>button{width:30px;min-width:30px;height:30px;min-height:30px}
+#workspacePage .workspace-first .composer-actions #sendMessage{width:36px;min-width:36px;height:36px}
+#workspacePage .workspace-first .agent-column:has(.workspace-empty) .prompt-box{margin-bottom:10px!important}
+#workspacePage .workspace-first #agentFeed>article{max-width:var(--chat-width,900px);margin-bottom:18px;line-height:1.7}
+#workspacePage .workspace-first #agentFeed .agent-response{padding:8px 10px 12px}
+#workspacePage .workspace-first #agentFeed .user-bubble{padding:8px 10px;background:var(--control-fill);border-radius:12px;max-width:min(80%,680px);margin-inline-start:auto}
+#workspacePage .workspace-first #agentFeed .message-code-block{border-radius:9px;background:var(--panel);border:1px solid var(--line)}
+/* Preview is part of the right-hand workspace utility rail, matching the reference
+   without changing preview API behavior or pretending Node execution works. */
+#workspacePage .workspace-first #sessionSidebar .workspace-preview{margin:12px;padding:12px;border-radius:12px}
+#workspacePage .workspace-first #sessionSidebar .preview-toolbar{display:flex;flex-wrap:wrap;gap:8px}
+#workspacePage .workspace-first #sessionSidebar .workspace-preview iframe{height:min(48vh,430px);min-height:220px;width:100%;border-radius:9px}
+#workspacePage .workspace-first #sessionSidebar .workspace-panel-modes{display:flex;gap:6px}
+#workspacePage .workspace-first #sessionSidebar .workspace-panel-modes button{border-radius:9px;min-height:34px}
+@media(max-width:1100px){
+ #workspacePage .workspace-first .agent-column{width:100%}
+ #workspacePage .workspace-first .prompt-box{width:calc(100% - 20px)}
+}
