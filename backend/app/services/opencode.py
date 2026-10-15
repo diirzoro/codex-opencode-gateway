@@ -203,7 +203,11 @@ class OpenCodeService:
                     if cached is not None and time.monotonic() - cached[0] < SNAPSHOT_TTL:
                         return cached[1]
                     revision = self.discovery_revision
-                value = self.request("GET", path)
+                # Provider metadata can be slower to initialize than ordinary runtime calls.
+                # Keep the longer deadline scoped to catalog discovery; agent actions
+                # and other runtime requests retain their existing 15s default.
+                discovery_timeout = 40 if name in {"provider_data", "auth_methods"} else 15
+                value = self.request("GET", path, timeout=discovery_timeout)
                 valid = (isinstance(value, dict) and isinstance(value.get("all"), list)) if name == "provider_data" else (
                     isinstance(value, list) and all(isinstance(a, dict) and isinstance(a.get("name"), str) for a in value)
                     if name == "agents" else isinstance(value, dict))
