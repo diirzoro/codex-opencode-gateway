@@ -330,9 +330,9 @@
   }
   const modes=textElement('nav','','workspace-panel-modes');modes.setAttribute('aria-label',tr('Workspace panel','لوحة مساحة العمل'));
   const changesMode=btn('workspaceChanges','Project','المشروع',()=>setPanel('changes'));
-  const conversationsMode=btn('workspaceConversations','Conversations','المحادثات',()=>setPanel('conversations'));
+  const conversationsMode=btn('workspaceConversations','Conversations','المحادثات',()=>{document.getElementById('workspaceChatRail')?.querySelector('#workspaceSessionSearch')?.focus();});
   const previewMode=btn('workspacePreview','Preview','المعاينة',()=>setPanel('preview'));
-  modes.append(changesMode,conversationsMode,previewMode);
+  modes.append(changesMode,previewMode);
   const close=q('closeSessions');modes.append(close);
   const changesPanel=textElement('section','','workspace-changes'),previewPanel=textElement('section','','workspace-preview');
   changesPanel.id='workspaceChangesPanel';previewPanel.id='workspacePreviewPanel';
