@@ -320,6 +320,10 @@ async function refreshMessages(){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
    if(row.role==='user'){previousPrompt=row.text;previousAttachments=row.attachments||[];}
    const node=document.createElement('article');node.className=row.role==='user'?'user-bubble':'agent-response';node.dir='auto';node.tabIndex=0;
+   const avatar=textElement('span','','message-avatar');avatar.setAttribute('aria-hidden','true');
+   if(row.role==='user')avatar.textContent=Array.from(currentUser?.full_name||currentUser?.username||'').at(0)||'·';
+   else avatar.innerHTML='<svg viewBox="0 0 16 20"><use href="#icon-opencode"/></svg>';
+   node.append(avatar);
    if(row.id)node.dataset.messageId=row.id;
    const hasText=Boolean(row.text?.trim());
    const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text);node.append(content);
