@@ -818,3 +818,17 @@ body:has(#workspacePage.active) #workspacePage{height:100%!important;max-height:
  #workspacePage .workspace-first .agent-column{width:100%}
  #workspacePage .workspace-first .prompt-box{width:calc(100% - 20px)}
 }
+
+/* Calm Arena-inspired separators across Gateway, retaining brand palette. */
+:root{--line:color-mix(in srgb,var(--text) 8%,var(--panel))!important;--surface-edge:color-mix(in srgb,var(--text) 10%,var(--panel))!important;--shadow:0 2px 10px color-mix(in srgb,var(--text) 4%,transparent)!important}
+:root.dark{--line:color-mix(in srgb,var(--text) 12%,var(--panel))!important;--surface-edge:color-mix(in srgb,var(--text) 15%,var(--panel))!important}
+:root :is(.manage-card,.manage-provider-grid,.manage-grid-wrap,.action-form-dialog,.provider-auth-dialog,.workspace-side-section,.workspace-project-groups,.project-source-group,.sidebar-project-root,.workspace-preview,.workspace-changes,.workspace-chat-rail,.session-sidebar,.agent-column,.landing-connect,.welcome-composer,.feature-cards>*,.pricing-card,.plan-card,.portal-card,.card,.chat-approval,.chat-questions fieldset){border-color:var(--line)!important;box-shadow:none!important}
+:root :is(input,textarea,select,.button.ghost,.sidebar-new,.quick-actions button,.welcome-composer,.preview-toolbar,.preview-entry-picker){border-color:var(--line)!important;box-shadow:none}
+:root :is(input,textarea,select,button):focus-visible{outline:2px solid var(--primary)!important;outline-offset:2px}
+:root :is(.manage-grid th,.manage-grid td,.portal-header,.project-bar,.workspace-panel-modes,.action-dialog-head,.action-form-actions){border-color:var(--line)!important}
+:root .welcome-composer:focus-within,:root #workspacePage .prompt-box:focus-within{border-color:var(--primary)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--primary) 11%,transparent)!important}
+/* Preview selector and expandable pane without changing preview execution. */
+#workspacePage .workspace-preview .preview-entry-picker{flex:1 1 150px;min-width:100px;max-width:100%;height:34px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);padding-inline:8px}
+#workspacePage .workspace-preview .preview-toolbar{border-bottom:1px solid var(--line);padding-bottom:9px}
+#workspacePage .workspace-preview.preview-expanded{position:fixed!important;inset:12px!important;z-index:1000!important;background:var(--panel);overflow:auto!important;margin:0!important;box-shadow:0 10px 50px color-mix(in srgb,var(--text) 13%,transparent)!important}
+#workspacePage .workspace-preview.preview-expanded iframe{height:calc(100dvh - 165px)!important;max-height:none!important}
