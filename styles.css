@@ -851,3 +851,13 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 :root #workspacePage .reference-workspace .workspace-activity:is([data-state=running],[data-state=submitted],[data-state=analyzing],[data-state=reading_files],[data-state=editing],[data-state=running_command],[data-state=running_tests]) .activity-stage:not(:empty)::before{content:'';display:inline-block;width:13px;height:13px;margin-inline-end:8px;border:2px dotted var(--primary);border-radius:50%;vertical-align:middle;animation:workspace-progress-spin 1.2s linear infinite}
 @keyframes workspace-progress-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){:root #workspacePage .reference-workspace .activity-stage::before{animation:none!important}}
+
+/* Preview owns its available panel space; no nested floating status card. */
+:root #workspacePage #sessionSidebar .workspace-preview{flex:1 0 auto;min-height:calc(100dvh - 190px);margin-top:12px;padding:0;gap:0;border-radius:8px}
+:root #workspacePage #sessionSidebar .workspace-preview>h3{margin:0;padding:12px 14px}
+:root #workspacePage #sessionSidebar .workspace-preview .preview-toolbar{padding:10px 12px;border-bottom:1px solid var(--line)}
+:root #workspacePage #sessionSidebar .preview-canvas{display:flex;flex:1;flex-direction:column;min-height:300px;min-width:0}
+:root #workspacePage #sessionSidebar .preview-status{margin:0;padding:12px 14px;color:var(--muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+:root #workspacePage #sessionSidebar .workspace-preview:not([data-state=ready]) .preview-status{margin:auto;text-align:center;max-width:42ch;padding:24px 18px}
+:root #workspacePage #sessionSidebar .preview-canvas iframe{flex:1;width:100%;height:60dvh;min-height:300px;resize:vertical;border:0;border-top:1px solid var(--line);border-radius:0;background:#fff}
+:root #workspacePage #sessionSidebar .preview-actions .button:disabled{opacity:.4;cursor:not-allowed;background:transparent;color:var(--muted)}

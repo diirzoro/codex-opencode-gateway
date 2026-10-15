@@ -415,27 +415,39 @@
   const gitSummary=q('gitSummary'),gitActions=pane.querySelector('.git-actions'),changedFiles=textElement('div','','changed-file-list'),diffView=textElement('pre','','workspace-diff');
   diffView.id='workspaceFileDiff';changesPanel.append(gitSummary,btn('refreshWorkspaceChanges','Refresh changes','حدّث التغييرات',()=>loadChanges()),changedFiles,diffView,gitActions);
   const previewPath=document.createElement('input');previewPath.value='index.html';previewPath.setAttribute('aria-label',tr('Preview HTML entry','ملف HTML للمعاينة'));
-  const previewStatus=text('p','Start a sandboxed HTML preview. Backend/browser automation preview is not configured.','ابدأ معاينة HTML معزولة. معاينة الخادم وأتمتة المتصفح غير مهيأة.');
+  const previewStatus=text('p','Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');
+  previewStatus.className='preview-status';previewStatus.setAttribute('role','status');previewStatus.setAttribute('aria-live','polite');
   const frame=document.createElement('iframe');frame.title=tr('Project preview','معاينة المشروع');frame.setAttribute('sandbox','allow-scripts');frame.setAttribute('referrerpolicy','no-referrer');frame.hidden=true;
   let previewRevision=0;
-  function clearPreview(){previewRevision++;frame.hidden=true;frame.srcdoc='';frame.removeAttribute('src');}
+  function setPreviewState(state){
+    previewPanel.dataset.state=state;
+    const buttons=previewActions.children;
+    if(buttons.length!==5)return;
+    buttons[0].disabled=state==='loading'||state==='blocked';
+    buttons[1].disabled=state==='loading';
+    buttons[2].disabled=state!=='ready'&&state!=='loading';
+    for(let index=3;index<5;index++)buttons[index].disabled=state!=='ready';
+    previewPanel.setAttribute('aria-busy',String(state==='loading'));
+  }
+  function clearPreview(){previewRevision++;frame.hidden=true;frame.srcdoc='';frame.removeAttribute('src');setPreviewState('idle');}
   async function startPreview(){
     if(!activeWorkspace)return;
-    clearPreview();const revision=previewRevision,id=activeWorkspace.id;
+    clearPreview();setPreviewState('loading');const revision=previewRevision,id=activeWorkspace.id;
     previewStatus.textContent=tr('Detecting project…','جارٍ اكتشاف نوع المشروع…');
     try{
       const state=await api('/api/workspaces/'+id+'/preview/status');
       if(activeWorkspace?.id!==id||previewRevision!==revision)return;
       previewPath.hidden=state.mode!=='static';
       if(state.mode!=='static'){
-        previewStatus.textContent=tr('Detected ','تم اكتشاف ')+state.framework+' · '+tr('A secure isolated runner is unavailable. No application was started.','المشغّل المعزول الآمن غير متاح. لم يتم تشغيل أي تطبيق.');return;
+        setPreviewState('blocked');
+        previewStatus.textContent=tr('Detected ','تم اكتشاف ')+state.framework+' · '+tr('Application preview is not enabled on this server. No application was started. Use Refresh to check again after the preview service is enabled.','معاينة التطبيق غير مفعّلة على هذا الخادم. لم يتم تشغيل أي تطبيق. استخدم التحديث للتحقق مجددًا بعد تفعيل خدمة المعاينة.');return;
       }
       previewStatus.textContent=tr('Loading preview…','جارٍ تحميل المعاينة…');
       const result=await api('/api/workspaces/'+id+'/preview?path='+encodeURIComponent(previewPath.value));
       if(activeWorkspace?.id!==id||previewRevision!==revision)return;
-      frame.srcdoc=result.html;frame.hidden=false;
+      frame.srcdoc=result.html;frame.hidden=false;setPreviewState('ready');
       previewStatus.textContent=tr('Static preview · ','معاينة ثابتة · ')+result.path+' · '+tr('Network and backend servers are unavailable here.','الشبكة وخوادم التطبيقات غير متاحة هنا.');
-    }catch(error){if(activeWorkspace?.id===id&&previewRevision===revision){clearPreview();previewStatus.textContent=error.message;}}
+    }catch(error){if(activeWorkspace?.id===id&&previewRevision===revision){clearPreview();setPreviewState('error');previewStatus.textContent=error.message;}}
   }
   async function stopPreview(){
     clearPreview();const revision=previewRevision,id=activeWorkspace?.id;
@@ -455,7 +467,9 @@
   const previewIcons=['<path d="m9 5 10 7-10 7Z"/>','<path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/>','<rect x="6" y="6" width="12" height="12" rx="1"/>','<path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/>','<path d="M14 3h7v7M21 3 10 14M10 3H3v18h18v-7"/>'];
   [...previewActions.children].forEach((button,index)=>{const label=button.textContent;button.title=label;button.setAttribute('aria-label',label);button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+previewIcons[index]+'</svg>';});
   const previewToolbar=textElement('div','','preview-toolbar');previewToolbar.append(previewPath,previewActions);
-  previewPanel.append(text('h3','Project Preview','معاينة المشروع'),previewToolbar,previewStatus,frame);
+  const previewCanvas=textElement('div','','preview-canvas');previewCanvas.append(previewStatus,frame);
+  previewPanel.append(text('h3','Project Preview','معاينة المشروع'),previewToolbar,previewCanvas);
+  setPreviewState('idle');
   const projectRoot=document.createElement('details');projectRoot.className='sidebar-project-root';projectRoot.open=true;
   const projectSummary=document.createElement('summary'),projectName=textElement('strong'),projectKind=textElement('small'),projectBranch=textElement('span','','sidebar-project-branch');
   const projectIcon=textElement('span','','sidebar-project-icon');projectIcon.innerHTML=FILE_ICONS.directory;const projectIdentity=textElement('span','','sidebar-project-identity');projectIdentity.append(projectName,projectKind);projectSummary.append(projectIcon,projectIdentity);projectRoot.append(projectSummary,projectBranch);
@@ -702,7 +716,7 @@
     if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));
     if(!await usableWorkspace(workspace)){toast(tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.'));if(navigate)await page('workspaceHomePage');return;}
     if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);sessionRows=[];retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
-    discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
+    discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewStatus.textContent=tr('Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
     renderWorkspaceEmpty();q('promptInput').value=pendingIdea;pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode'),''));updateSend();
     if(!navigate){syncWorkspacePolling();return;}
