@@ -1,0 +1,191 @@
+name: Promote updates to test
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type promote-test to deploy updates to TEST ONLY'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-test:
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 25
+    steps:
+      - name: Require updates and promotion confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          PROMOTE_SECRET: ${{ secrets.STAGING_PROMOTE_SECRET }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/updates"
+          test "$CONFIRMATION" = "promote-test"
+          test -n "$PROMOTE_SECRET"
+
+      - name: Checkout updates
+        uses: actions/checkout@v4
+        with:
+          ref: updates
+          persist-credentials: false
+
+      - name: Python and JavaScript validation
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q backend/app
+          for file in app.js enhancements.js management.js dashboards.js billing.js; do
+            if [ -f "$file" ]; then node --check "$file"; fi
+          done
+
+      - name: Setup SSH (pinned host key)
+        env:
+          SSH_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+          HOST: ${{ secrets.STAGING_HOST }}
+          USERNAME: ${{ secrets.STAGING_USER }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?Missing STAGING_SSH_PRIVATE_KEY}"
+          : "${KNOWN_HOSTS:?Missing STAGING_SSH_KNOWN_HOSTS}"
+          : "${HOST:?Missing STAGING_HOST}"
+          : "${USERNAME:?Missing STAGING_USER}"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Check staging isolation and permissions
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USERNAME: ${{ secrets.STAGING_USER }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$USERNAME@$HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          APP="$HOME/opencode-gateway-test"
+          test -f "$APP/.env"
+          test -x "$APP/.venv/bin/python"
+          test -d /var/lib/opencode-runtime-test
+          test -d /var/lib/opencode-workspaces-test
+          systemctl is-active --quiet opencode-gateway-test
+          systemctl is-active --quiet opencode-web-test
+          curl -fsS --max-time 15 http://127.0.0.1:4097/global/health >/dev/null
+          "$APP/.venv/bin/python" - "$APP/.env" <<'PY'
+          from pathlib import Path
+          import sys
+          from sqlalchemy.engine import make_url
+          vals = {}
+          for line in Path(sys.argv[1]).read_text().splitlines():
+              if "=" in line and not line.lstrip().startswith("#"):
+                  k, v = line.split("=", 1)
+                  vals[k] = v.strip().strip('"').strip("'")
+          assert make_url(vals["DATABASE_URL"]).database == "opencode_gateway_test"
+          assert vals["APP_PORT"] == "8001"
+          assert vals["OPENCODE_BASE_URL"] == "http://127.0.0.1:4097"
+          assert vals["WORKSPACE_ROOT"] == "/var/lib/opencode-workspaces-test"
+          assert vals["RUNTIME_ROOT"] == "/var/lib/opencode-runtime-test"
+          print("Staging environment verified")
+          PY
+          # Restrict remote sudoers to the staging restart command; never fall back to production.
+          sudo -n -l /usr/bin/systemctl restart opencode-gateway-test.service >/dev/null
+          REMOTE
+
+      - name: Upload release files to staging only
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USERNAME: ${{ secrets.STAGING_USER }}
+        run: |
+          set -euo pipefail
+          ssh "$USERNAME@$HOST" 'mkdir -p "$HOME/opencode-gateway-test-incoming"'
+          rsync -az --delete \
+            --exclude='.git/' --exclude='.github/' \
+            --exclude='.env' --exclude='.env.*' \
+            --exclude='.venv/' --exclude='node_modules/' \
+            --exclude='runtime/' --exclude='workspaces/' \
+            --exclude='logs/' --exclude='receipts/' \
+            ./ "$USERNAME@$HOST:~/opencode-gateway-test-incoming/"
+
+      - name: Backup test, deploy, migrate and smoke test
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USERNAME: ${{ secrets.STAGING_USER }}
+        run: |
+          set -euo pipefail
+          ssh "$USERNAME@$HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          APP="$HOME/opencode-gateway-test"
+          INCOMING="$HOME/opencode-gateway-test-incoming"
+          BACKUP="$HOME/opencode-test-deploy-backups/$(date -u +%Y%m%dT%H%M%SZ)"
+          mkdir -p "$BACKUP"
+          chmod 700 "$HOME/opencode-test-deploy-backups" "$BACKUP"
+          tar -czf "$BACKUP/code.tar.gz" \
+            --exclude='.env' --exclude='.env.*' --exclude='.venv' \
+            --exclude='runtime' --exclude='workspaces' \
+            -C "$APP" .
+          chmod 600 "$BACKUP/code.tar.gz"
+
+          # Database backup using TEST URL only; no credentials printed.
+          "$APP/.venv/bin/python" - "$APP/.env" "$BACKUP/database.dump" <<'PY'
+          import os, subprocess, sys
+          from pathlib import Path
+          from sqlalchemy.engine import make_url
+          vals = {}
+          for line in Path(sys.argv[1]).read_text().splitlines():
+              if "=" in line and not line.lstrip().startswith("#"):
+                  k, v = line.split("=", 1)
+                  vals[k] = v.strip().strip('"').strip("'")
+          url = make_url(vals["DATABASE_URL"])
+          if url.database != "opencode_gateway_test":
+              raise SystemExit("Refusing non-test database")
+          env = dict(os.environ, PGPASSWORD=url.password or "")
+          with open(sys.argv[2], "wb") as f:
+              subprocess.run([
+                  "pg_dump", "-Fc", "-h", url.host or "127.0.0.1",
+                  "-p", str(url.port or 5432), "-U", url.username or "",
+                  "-d", "opencode_gateway_test"
+              ], stdout=f, env=env, check=True)
+          PY
+          chmod 600 "$BACKUP/database.dump"
+          pg_restore -l "$BACKUP/database.dump" >/dev/null
+          echo "STAGING_BACKUP_OK $BACKUP"
+
+          # Preserve staging-only configuration, local venv, and workspace/runtime files.
+          rsync -a --delete \
+            --exclude='.env' --exclude='.env.*' --exclude='.venv/' \
+            --exclude='runtime/' --exclude='workspaces/' \
+            --exclude='logs/' --exclude='receipts/' \
+            "$INCOMING/" "$APP/"
+
+          "$APP/.venv/bin/python" -m pip install -r "$APP/backend/requirements.txt"
+          set -a
+          . "$APP/.env"
+          set +a
+          cd "$APP/backend"
+          "$APP/.venv/bin/python" -m alembic upgrade head
+          sudo -n /usr/bin/systemctl restart opencode-gateway-test.service
+          for attempt in $(seq 1 20); do
+            if curl -fsS --max-time 5 http://127.0.0.1:8001/ >/dev/null; then
+              echo "STAGING_DEPLOY_OK"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "STAGING_DEPLOY_FAILED: test code and DB backup preserved at $BACKUP" >&2
+          exit 1
+          REMOTE
+
+      - name: Verify public test HTTPS
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 \
+            --max-time 15 https://test.opencode-gateway.codes/ >/dev/null
+          echo "STAGING_HTTPS_OK"
