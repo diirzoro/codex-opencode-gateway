@@ -573,3 +573,6 @@ Baseline verified/fetched `8e005a9b93cd275706d5d5eea00f1a24aee8906a`; clean upda
 **Actual runnable Preview remains BLOCKED, not fixed.** Requires separately accepted unprivileged runner/service with bounded prepared snapshots, CPU/memory/disk/process/time enforcement, controlled dependency preparation, no host secrets/socket, restricted networking, tenant/project leases, protected separate-origin authenticated routing and stop/reaping. Existing runner protocol/profile definitions are advisory, not an execution service. Once available, implement and verify Node and Python start/status/logs/stop plus cross-tenant routing using real TEST projects. Enabling a flag alone will not implement it. No new TEST dispatch/backup/deployment, production/master/rollback/workflow/environment/database/customer-data change. Source publication SHA follows.
 
 **Changed files:** `dashboards.js`, `styles.css`, `tests/browser/preview-controller-unit.cjs`, `docs/audit/workspace-visual-samples-2026-10-15.html`, this handoff.
+
+
+**Published Preview follow-up source:** `9e6f0ef241cd0d8a6fdc8d18f6ed604664a47c17` (parent `8e005a9b93cd275706d5d5eea00f1a24aee8906a`, reviewed source tree `f82294fa8f746ca12791cd0f3358fdf9737f534c`). 12 targeted VM checks passed; runnable Node/Python Preview remains BLOCKED and real TEST visual acceptance UNVERIFIED. No deployment performed.
