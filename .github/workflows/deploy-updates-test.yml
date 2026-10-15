@@ -99,6 +99,9 @@ jobs:
           sudo -n -l /usr/bin/systemctl restart opencode-gateway-test.service >/dev/null
           REMOTE
 
+      # Deployments are additive: never delete files from incoming or application.
+      # Customer workspaces live under /var/lib/opencode-workspaces-test, outside APP.
+      # No workflow step may remove, migrate, or overwrite customer workspace data.
       - name: Upload release files to staging only
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -106,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           ssh "$USERNAME@$HOST" 'mkdir -p "$HOME/opencode-gateway-test-incoming"'
-          rsync -az --delete \
+          rsync -az \
             --exclude='.git/' --exclude='.github/' \
             --exclude='.env' --exclude='.env.*' \
             --exclude='.venv/' --exclude='node_modules/' \
@@ -159,7 +162,7 @@ jobs:
           echo "STAGING_BACKUP_OK $BACKUP"
 
           # Preserve staging-only configuration, local venv, and workspace/runtime files.
-          rsync -a --delete \
+          rsync -a \
             --exclude='.env' --exclude='.env.*' --exclude='.venv/' \
             --exclude='runtime/' --exclude='workspaces/' \
             --exclude='logs/' --exclude='receipts/' \
