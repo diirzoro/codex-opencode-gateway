@@ -408,7 +408,7 @@ async function restoreWorkspaceContext(){
 }
 const navigationReady=authReady.then(async()=>{
  await interfaceReady;if(window.passwordRecoveryActive)return;
- if(!currentUser){await page(location.hash.startsWith('#social=')?'authPage':'landing');return;}
+ if(!currentUser){await page(location.hash.startsWith('#social=')||window.authRestoreExpired?'authPage':'landing');return;}
  window.__navRestored=true;
  if(['admin','owner'].includes(currentUser.role)){await page('adminPage');return;}
  await openWorkspaceAfterLogin();
