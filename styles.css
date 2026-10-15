@@ -714,3 +714,20 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
  font-size:13px;padding:9px 15px;cursor:pointer;
 }
 :root #workspacePage .workspace-jump-latest[hidden]{display:none!important}
+
+/* Session task list stays above the composer, separate from agent messages. */
+#workspacePage .workspace-todo-panel{order:9;flex:none;width:calc(100% - 40px);max-width:var(--chat-width,960px);margin:0 auto 4px;padding:9px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);max-height:min(35vh,290px);overflow:auto}
+#workspacePage .workspace-todo-panel[hidden]{display:none}
+#workspacePage .workspace-todo-panel>summary{cursor:pointer;font-size:13px;font-weight:650;list-style:none;user-select:none}
+#workspacePage .workspace-todo-panel>summary::after{content:"⌄";float:inline-end}
+#workspacePage .workspace-todo-panel:not([open])>summary::after{transform:rotate(90deg)}
+#workspacePage .workspace-todo-panel ol{padding-inline-start:22px;margin:10px 0 0;display:grid;gap:6px;font-size:13px}
+#workspacePage .workspace-todo-panel li{overflow-wrap:anywhere}
+#workspacePage .workspace-todo-panel .todo-completed{text-decoration:line-through;color:var(--muted)}
+#workspacePage .workspace-todo-panel .todo-in_progress{font-weight:650;color:var(--text)}
+#workspacePage .workspace-todo-panel .todo-cancelled{opacity:.6}
+@media(max-width:600px){#workspacePage .workspace-todo-panel{width:calc(100% - 24px)}}
+/* The agent's native questions remain part of the real session, not a demo widget. */
+#workspacePage .chat-questions .chat-approval fieldset>label{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;margin:6px 0;cursor:pointer}
+#workspacePage .chat-questions .chat-approval fieldset>label:has(input:checked){border-color:var(--primary);background:var(--control-fill)}
+#workspacePage .chat-questions .chat-approval fieldset>label .question-recommended{font-size:11px;font-weight:700;padding:2px 8px;border-radius:12px;background:var(--control-fill);color:var(--text)}
