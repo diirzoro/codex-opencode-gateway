@@ -66,3 +66,6 @@ Both warm local targets were met; cold cost and TEST network/frontend latency ar
 - No new TEST backup/deploy or server change is claimed in this report. After authorized deployment, verify actual browser login/restoration, Todo, choices, providers/method timing, RTL/LTR/theme/mobile and account isolation. External payment/email and production remain excluded.
 
 **The owner defines completion by demonstration on TEST. This round is not complete until those gates pass.**
+
+
+**Published repair source:** `38e3fcf2d03ab52a2a1626cdbe11dc39d69817f1` (parent `d7ddb59311a65a3416e4402fb4b4c2707a3c99cd`). This documentation follow-up records the immutable source SHA; TEST dispatch/acceptance remains pending as described above.
