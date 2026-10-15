@@ -210,27 +210,37 @@
   const operations={inspected:['Inspected','تم فحصه'],changed:['Changed','تم تغييره'],created:['Created','تم إنشاؤه'],deleted:['Deleted','تم حذفه'],moved:['Moved','تم نقله']};
   const activityLabel=(map,value)=>tr(...(map[value]||['Reported','مُعلن']));
   const workLabel=row=>(row.status==='running'?tr('In progress: ','جارٍ '):row.status==='completed'?tr('Completed: ','اكتمل: '):row.status==='error'?tr('Failed: ','تعذّر: '):tr('Waiting: ','بانتظار: '))+toolName(row.tool);
+  function activityDetail(row){
+    const parts=[];
+    if(row.command)parts.push(row.command+(row.command_limited?tr(' (arguments hidden)',' (المعاملات مخفية)'):''));
+    for(const file of (row.files||[]).slice(0,5))parts.push(file.path);
+    if(Number.isInteger(row.exit_code))parts.push(tr('Exit code: ','رمز الخروج: ')+row.exit_code);
+    if(Number.isFinite(row.duration_ms)&&row.duration_ms>=0)parts.push((row.duration_ms/1000).toFixed(1)+tr(' s',' ث'));
+    return parts.join(' · ');
+  }
   window.renderWorkspaceEventLine=(kind,data={})=>{
     keepChatActivity();
     activity.dataset.state=kind==='activity'?(data.status||'pending'):kind;
-    if(kind==='activity')activityStage.textContent=workLabel(data);
+    if(kind==='activity')activityStage.textContent=[workLabel(data),activityDetail(data)].filter(Boolean).join(' · ');
     else if(stages[kind])activityStage.textContent=activityLabel(stages,kind);
   };
   window.renderMessageActivity=(host,rows)=>{
     if(!rows.length)return;
     const details=document.createElement('details');details.className='message-activity';details.open=!host.querySelector('.message-content')?.textContent.trim();details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')));const list=document.createElement('ul');
-    for(const row of rows){const item=textElement('li',workLabel(row)+(row.command?' · '+row.command:''));
+    for(const row of rows){const item=textElement('li',workLabel(row));
+      if(row.command){const command=textElement('code',row.command+(row.command_limited?tr(' (arguments hidden)',' (المعاملات مخفية)'):''),'activity-command');command.dir='ltr';item.append(command);}
+      if(Number.isInteger(row.exit_code))item.append(textElement('small',tr('Exit code: ','رمز الخروج: ')+row.exit_code));
+      if(Number.isFinite(row.duration_ms)&&row.duration_ms>=0)item.append(textElement('small',(row.duration_ms/1000).toFixed(1)+tr(' s',' ث')));
       for(const file of row.files||[])item.append(textElement('div',file.path+' · '+(row.status==='completed'?activityLabel(operations,file.operation):tr('Requested','مطلوب'))));list.append(item);
     }details.append(list);host.append(details);
   };
   window.renderActivitySummary=rows=>{
-    const files=new Set(),inspected=new Set(),tools=new Set();
+    const files=new Set(),inspected=new Set();
     const currentRows=rows.slice(rows.findLastIndex(row=>row.role==='user')+1);
-    for(const row of currentRows)for(const entry of row.activity||[]){tools.add(entry.tool);if(entry.status==='completed')for(const file of entry.files||[])(file.operation==='inspected'?inspected:files).add(file.path);}
+    for(const row of currentRows)for(const entry of row.activity||[]){if(entry.status==='completed')for(const file of entry.files||[])(file.operation==='inspected'?inspected:files).add(file.path);}
     const changed=files.size?tr('Reported file changes: ','تغييرات الملفات المُعلنة: ')+[...files].slice(0,20).join(', '):'';
     const read=inspected.size?tr('Files inspected: ','الملفات التي فُحصت: ')+[...inspected].slice(0,20).join(', '):'';
-    const used=tools.size?tr('Work summary: ','ملخّص العمل: ')+[...tools].map(toolName).join(', '):'';
-    keepChatActivity();activitySummary.textContent=[changed,read,used].filter(Boolean).join(' · ');window.refreshWorkspaceTodos?.();
+    keepChatActivity();activitySummary.textContent=[changed,read].filter(Boolean).join(' · ');window.refreshWorkspaceTodos?.();
   };
   const agent=q('agentSelect');agent.title=tr('Agent','الوكيل');controls.insertBefore(agent,q('providerSelect'));
   const newTask=textElement('button','','icon-btn');newTask.id='composerNewTask';newTask.type='button';newTask.title=tr('New task','مهمة جديدة');newTask.setAttribute('aria-label',tr('New task','مهمة جديدة'));newTask.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>';newTask.onclick=async()=>{if(!activeWorkspace){toast(tr('Open a workspace first.','افتح مساحة عمل أولاً.'));return;}try{await createSession();toast(tr('New task started in this workspace.','بدأت مهمة جديدة في مساحة العمل.'));}catch(error){toast(error.message)}};

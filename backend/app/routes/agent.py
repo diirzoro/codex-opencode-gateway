@@ -2,7 +2,7 @@
 
 Runtime model access is a separate prerequisite. No synthetic execution progress.
 """
-import asyncio, hashlib, json, re, time, uuid, mimetypes
+import asyncio, hashlib, json, re, shlex, time, uuid, mimetypes
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +19,20 @@ from ..services.entitlements import require_advanced
 
 router=APIRouter(prefix="/api/sessions",tags=["agent"],dependencies=[Depends(require_workspace_entitlement)])
 tasks={}
+
+EXECUTION_REPORTING = """Execution reporting for this Gateway conversation:
+Follow the user's language, selected agent role, project instructions and all existing permissions.
+For multi-step work, briefly describe each meaningful next step before tools, then report its actual result.
+Use the native Todo tool for a real multi-step plan when available; update it from actual progress.
+If a tool or test fails, explain the observed failure without exposing secrets, diagnose it, and attempt a
+safe correction within the existing authorization. Rerun only affected checks after a relevant correction.
+Never blindly repeat failed operations, bypass a rejection, or proceed past a pending approval/question.
+Keep progress updates concise, user-facing and factual; do not disclose private reasoning or credentials.
+Before finishing, provide a final report: changes completed, checks actually run and their outcomes,
+errors fixed, unresolved issues, and blocked or unverified work. Distinguish a finished tool call from
+completion of the entire request. Do not claim success, deployment or verification without evidence.
+If you cannot continue safely, explain the blocker and what is needed, rather than inventing progress.
+"""
 
 _SECRET_RE = re.compile(r"(?:sk-[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})")
 
@@ -43,8 +57,27 @@ def normalize_states(parts):
         if not states or states[-1]!=state: states.append(state)
     return states
 
+def command_activity_label(command):
+    """Expose only exact, harmless command shapes; never arbitrary shell payloads."""
+    if not isinstance(command,str) or len(command)>2000:return None
+    executable=command.strip().split(' ',1)[0]
+    try: argv=shlex.split(command)
+    except ValueError:return None
+    safe=False
+    if argv and argv[0] in {'npm','pnpm','yarn','bun'}:
+        args=argv[1:]
+        scripts={'test','build','lint','check','typecheck','start','dev','compile','format'}
+        safe=(len(args)==1 and args[0] in scripts) or (len(args)==2 and args[0]=='run' and args[1] in scripts)
+    if argv in [['python','-m','pytest'],['python3','-m','pytest'],['pytest'],['pytest','-q'],['go','test','./...'],['cargo','test']]:safe=True
+    if argv and argv[0]=='git' and argv[1:] in [['status'],['status','--short'],['diff','--stat'],['diff','--check'],['branch','--show-current']]:safe=True
+    if safe:return ' '.join(argv)
+    # This is explicitly labelled as a restricted summary, not the full command.
+    if executable in {'npm','pnpm','yarn','pytest','python','python3','node','git','rg','ls','cat','go','cargo','bun','make'}:return executable
+    return None
+
+
 def safe_tool_activity(parts, workspace):
-    """Allowlisted execution metadata, never reasoning, tool output or raw commands."""
+    """Allowlisted execution metadata; no reasoning, tool output or shell payloads."""
     output=[]
     if not any(isinstance(part,dict) and part.get('type')=='tool' for part in parts or []): return output
     root=workspaces.root_for(workspace).resolve()
@@ -77,11 +110,18 @@ def safe_tool_activity(parts, workspace):
                 operation={'add':'created','update':'changed','delete':'deleted','move':'moved'}.get(entry.get('type'))
                 if path and operation: files.append({'path':path,'operation':operation})
         if files: item['files']=files
-        # Showing only a known executable avoids disclosing command-line secrets.
-        if tool.lower() in {'bash','shell'} and isinstance(inp.get('command'),str):
-            executable=inp['command'].strip().split(' ',1)[0]
-            if executable in {'npm','pnpm','yarn','pytest','python','python3','node','git','rg','ls','cat','go','cargo','bun','make'}:
-                item['command']=executable
+        if tool.lower() in {'bash','shell'}:
+            command=command_activity_label(inp.get('command'))
+            if command:
+                item['command']=command
+                item['command_limited']=command!=str(inp.get('command','')).strip()
+            exit_code=metadata.get('exit')
+            if status in {'completed','error'} and type(exit_code) is int:
+                item['exit_code']=exit_code
+        times=state.get('time') if isinstance(state.get('time'),dict) else {}
+        start,end=times.get('start'),times.get('end')
+        if status in {'completed','error'} and type(start) is int and type(end) is int and end>=start:
+            item['duration_ms']=end-start
         output.append(item)
     return output[:100]
 
@@ -104,7 +144,7 @@ async def monitor_activity(session_id,service,runtime_id,message_id,workspace,re
             for row in rows:
                 if row.get('info',{}).get('role')!='assistant' or row.get('info',{}).get('parentID')!=message_id: continue
                 for activity in safe_tool_activity(row.get('parts',[]),workspace):
-                    key=(activity['id'],activity['status'])
+                    key=json.dumps(activity,sort_keys=True)
                     if key in seen: continue
                     if not await asyncio.to_thread(record_activity,session_id,request_id,activity):return
                     seen.add(key)
@@ -203,7 +243,7 @@ async def execute(session_id,service,runtime_id,data,message_id):
     try:
         workspace=await asyncio.to_thread(begin_execution,session_id,message_id,data.request_id,service.generation)
         if workspace is None:return
-        payload={"messageID":message_id,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
+        payload={"messageID":message_id,"system":EXECUTION_REPORTING,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
         for item in attachment_metadata(workspace, data.attachments):
             path=workspaces.safe_path(workspace,item['path'])
             # Native file parts for formats OpenCode consumes directly. Other
