@@ -692,8 +692,9 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
 #workspacePage #sessionSidebar .workspace-panel-modes{flex-wrap:wrap}
 
 #workspacePage #sessionSidebar>.workspace-project-groups{flex:0 0 auto;min-width:0}
-#workspacePage .project-source-group{margin-top:12px}
-#workspacePage .project-source-group>summary{cursor:pointer;font-size:13px;font-weight:600;padding:8px 0}
+#workspacePage .project-source-group{margin-top:14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}
+#workspacePage .project-source-group>summary{cursor:pointer;font-size:13px;font-weight:500;padding:12px}
+#workspacePage .project-source-group[open]>summary{border-bottom:1px solid var(--line)}
 #workspacePage .project-source-group:not([open])>.project-source-list{display:none}
 #workspacePage .project-source-list{display:grid;gap:4px;min-width:0}
 #workspacePage .project-source-list .sidebar-project-root{margin:4px 0 8px}
@@ -705,7 +706,7 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
 #workspacePage .project-source-group[data-source=local] .sidebar-project-icon{color:#b77908}
 #workspacePage .project-source-group[data-source=local] .sidebar-project-icon svg{fill:#f9ce53}
 #workspacePage .project-source-group[data-source=github] .sidebar-project-icon{color:var(--primary)}
-#workspacePage .project-source-group .project-source-list{padding-inline-start:12px}
+#workspacePage .project-source-group .project-source-list{padding:8px 12px}
 #workspacePage .workspace-project-groups .sidebar-project-root>summary{padding:8px 4px}
 #workspacePage #sessionSidebar .project-folder-link{display:block;width:100%;text-align:start;font-size:13px;background:transparent;border:0;padding:8px 10px;overflow-wrap:anywhere;border-inline-start:2px solid var(--line)}
 

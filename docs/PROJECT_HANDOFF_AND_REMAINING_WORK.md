@@ -518,3 +518,10 @@ Baseline `updates`: `b752a33591740036ff651a878361a8b03940d844`. Owner supplied t
 **Published quiet-border/Preview source:** `2d18d8e5a1c417db19f949d444ce7f237d0045f6` (parent `b752a33591740036ff651a878361a8b03940d844`). GitHub source tree matches the reviewed local source. The visual HTML is an illustrative offline artifact, not TEST deployment evidence.
 
 **TEST access outcome:** secure GitHub browser authentication was offered for the existing TEST workflow; the result was `declined`. No repeated credential request, workflow dispatch, backup or deployment was performed. The owner's last sidebar image confirms local project folders and linked GitHub project folders; the delivered visual examples show both with their own nested working-copy files. Public TEST remains a previous build until a separately completed authorized TEST deployment.
+
+
+## 21. 2026-10-15 — Owner clarification: framed file sections
+
+Baseline `updates` `8bc2833c19bd08cf38a0cdcce0ef35a2bbdaeadc`. Both new screenshots confirm that each complete sidebar section should have its own quiet rectangular outline, not that all section outlines should disappear. Local projects and GitHub projects now each have a 1px theme-derived outer border, 8px corners, padded title and a thin divider below the expanded header. Folder/file rows stay unboxed inside each section, yellow Local folders and GitHub folders retain their behavior, and each group remains collapsible. No individual project/file cards, extra panels, data, API or workflow changes.
+
+Updated the existing self-contained visual sample with the actual changed stylesheet. `git diff --check` and sample HTML parsing passed. This CSS-only adjustment needs visual acceptance, not a repeat of unchanged Python/Agent/provider suites; their valid evidence is reused. Actual browser layout on TEST remains UNVERIFIED because the previously declined GitHub sign-in blocks new TEST dispatch. No authentication retry, deployment or production change. Changed files: `styles.css`, `docs/audit/workspace-visual-samples-2026-10-15.html`, this handoff. Exact published source SHA follows in the documentation entry.
