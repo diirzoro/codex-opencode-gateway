@@ -450,7 +450,42 @@
   previewActions.append(btn('startWorkspacePreview','Start preview','ابدأ المعاينة',startPreview),btn('refreshWorkspacePreview','Refresh preview','حدّث المعاينة',startPreview),btn('stopWorkspacePreview','Stop preview','إيقاف المعاينة',stopPreview),fullPreview,newTabPreview);
   const previewIcons=['<path d="m9 5 10 7-10 7Z"/>','<path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/>','<rect x="6" y="6" width="12" height="12" rx="1"/>','<path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/>','<path d="M14 3h7v7M21 3 10 14M10 3H3v18h18v-7"/>'];
   [...previewActions.children].forEach((button,index)=>{const label=button.textContent;button.title=label;button.setAttribute('aria-label',label);button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+previewIcons[index]+'</svg>';});
-  const previewToolbar=textElement('div','','preview-toolbar');previewToolbar.append(previewPath,previewActions);
+  // Browse actual workspace HTML files from the owned files API, not demo entries.
+  const previewEntry=document.createElement('select');previewEntry.className='preview-entry-picker';
+  previewEntry.setAttribute('aria-label',tr('Choose preview file','اختر ملف المعاينة'));
+  previewEntry.add(new Option('index.html','index.html'));
+  previewEntry.onchange=()=>{previewPath.value=previewEntry.value;startPreview();};
+  const previewBrowse=btn('browsePreviewFiles','Files','الملفات',async()=>{
+    if(!activeWorkspace)return;
+    const workspaceId=activeWorkspace.id,owner=currentUser?.id;
+    previewBrowse.disabled=true;
+    try{
+      const candidates=[];
+      const walk=async(path,depth)=>{
+        if(depth>4||candidates.length>=150)return;
+        const url='/api/workspaces/'+workspaceId+'/files'+(path?'?path='+encodeURIComponent(path):'');
+        const rows=await api(url);
+        if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+        for(const row of rows||[]){
+          if(row.type==='directory'&&depth<4)await walk(row.path,depth+1);
+          else if(row.type==='file'&&/\\.html?$/i.test(row.path))candidates.push(row.path);
+          if(candidates.length>=150)break;
+        }
+      };
+      await walk('',0);
+      if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+      previewEntry.replaceChildren(...(candidates.length?candidates:['index.html']).map(path=>new Option(path,path)));
+      if(candidates.includes(previewPath.value))previewEntry.value=previewPath.value;
+      else previewPath.value=previewEntry.value;
+      previewEntry.focus();
+    }catch(error){toast(error.message);}finally{previewBrowse.disabled=false;}
+  });
+  const previewExpand=btn('togglePreviewPane','Expand preview','توسيع المعاينة',()=>{
+    previewPanel.classList.toggle('preview-expanded');
+    previewExpand.setAttribute('aria-pressed',String(previewPanel.classList.contains('preview-expanded')));
+  });
+  previewExpand.setAttribute('aria-pressed','false');
+  const previewToolbar=textElement('div','','preview-toolbar');previewToolbar.append(previewBrowse,previewEntry,previewPath,previewExpand,previewActions);
   previewPanel.append(text('h3','Project Preview','معاينة المشروع'),previewToolbar,previewStatus,frame);
   const projectRoot=document.createElement('details');projectRoot.className='sidebar-project-root';projectRoot.open=true;
   const projectSummary=document.createElement('summary'),projectName=textElement('strong'),projectKind=textElement('small'),projectBranch=textElement('span','','sidebar-project-branch');
