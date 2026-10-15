@@ -155,7 +155,26 @@ $$('[data-auth-tab]').forEach(el=>el.onclick=()=>{$$('[data-auth-tab]').forEach(
 $('#registerCountry').onchange=async()=>{try{await fillSelect('registerRegion',value('registerCountry')?`/api/locations/countries/${value('registerCountry')}/regions`:null,'Optional');await fillSelect('registerCity',null,'Optional')}catch(error){toast(error.message)}};
 $('#registerRegion').onchange=async()=>{try{await fillSelect('registerCity',value('registerRegion')?`/api/locations/regions/${value('registerRegion')}/cities`:null,'Optional')}catch(error){toast(error.message)}};
 $('#registerForm').onsubmit=async event=>{event.preventDefault();if($('#registerSubmit').disabled||!event.currentTarget.reportValidity())return;if(value('registerUsername')&&value('registerUsername').length<6){apiMessage('registerMessage',t('usernameHint'),true);return}const password=$('#registerPassword').value;if(password.length<8||!/[0-9]/.test(password)||![...password].some(c=>passwordSymbols.includes(c))){apiMessage('registerMessage',t('passwordHint'),true);return}const button=$('#registerSubmit');button.disabled=true;try{const prefs={preferred_language:lang,preferred_theme:dark?'dark':'light'};const registered=await api('/api/auth/register',{method:'POST',body:JSON.stringify(registrationPayload())});if(registered.status==='pending_email'){ $('#registerPassword').value='';apiMessage('registerMessage',lang==='ar'?'تم إرسال رابط التفعيل إلى بريدك. افتح الرسالة للتحقق ثم سجل الدخول.':'Check your email for the verification link, then sign in.');return;}renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));$('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('registerMessage',error.message,true)}finally{button.disabled=false}};
-$('#loginForm').onsubmit=async event=>{event.preventDefault();if($('#loginSubmit').disabled||!event.currentTarget.reportValidity())return;const button=$('#loginSubmit');button.disabled=true;try{renderProfile(await api('/api/auth/login',{method:'POST',body:JSON.stringify({identity:value('loginIdentity'),password:$('#loginPassword').value})}));$('#loginPassword').value='';try{if($('#rememberIdentity').checked)localStorage.setItem('og-login-identity',value('loginIdentity'));else localStorage.removeItem('og-login-identity');}catch(error){}await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
+// Successful sign-in should land in the customer's existing workspace, not Account.
+// Never create a project automatically or reuse an unverified cross-account ID.
+async function openWorkspaceAfterLogin(){
+ if(['admin','owner'].includes(currentUser?.role)){await page('adminPage');return;}
+ let preferred='';try{preferred=localStorage.getItem('og-workspace')||'';}catch(error){}
+ try{
+  const [workspaces,projects]=await Promise.all([api('/api/workspaces'),api('/api/projects')]);
+  const candidates=[...(Array.isArray(workspaces)?workspaces:[])];
+  if(preferred)candidates.sort((a,b)=>(b.id===preferred?1:0)-(a.id===preferred?1:0));
+  for(const workspace of candidates){
+   if(workspace.files_available===false)continue;
+   const project=(Array.isArray(projects)?projects:[]).find(p=>p.id===workspace.project_id);
+   if(!project)continue;
+   await openWorkspace(project,workspace);
+   return;
+  }
+ }catch(error){toast(error.message);}
+ await page('workspaceHomePage');
+}
+$('#loginForm').onsubmit=async event=>{event.preventDefault();if($('#loginSubmit').disabled||!event.currentTarget.reportValidity())return;const button=$('#loginSubmit');button.disabled=true;try{renderProfile(await api('/api/auth/login',{method:'POST',body:JSON.stringify({identity:value('loginIdentity'),password:$('#loginPassword').value})}));$('#loginPassword').value='';try{if($('#rememberIdentity').checked)localStorage.setItem('og-login-identity',value('loginIdentity'));else localStorage.removeItem('og-login-identity');}catch(error){}if(pendingIdea){await page('onboarding');$('#projectName').value=pendingIdea.slice(0,120);}else{await openWorkspaceAfterLogin();}}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
 $('#resendEmailVerification').onclick=async()=>{const identity=value('loginIdentity').trim();const password=$('#loginPassword').value;if(!identity||!password){apiMessage('loginMessage',lang==='ar'?'أدخل البريد أو اسم المستخدم وكلمة المرور لإعادة إرسال التفعيل.':'Enter your email or username and password to resend verification.',true);return}const button=$('#resendEmailVerification');button.disabled=true;try{await api('/api/auth/resend-verification',{method:'POST',body:JSON.stringify({identity,password})});apiMessage('loginMessage',lang==='ar'?'أُرسلت رسالة تفعيل جديدة. افتح بريدك للتحقق.':'A new verification email was sent. Please check your inbox.')}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
 $('#logoutButton').onclick=()=>window.logoutSession().catch(error=>toast(error.message));
 
