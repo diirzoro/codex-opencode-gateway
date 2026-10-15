@@ -279,6 +279,35 @@ async function refreshWorkspaceTodos(force=false){
  }catch(error){/* Keep the composer responsive when optional task discovery fails. */}
  finally{if(todoRequest===token)todoRequest=null;}
 }
+// A deliberately small, text-only Markdown subset. Never interpret Agent HTML.
+function renderAgentText(host,value){
+ host.replaceChildren();host.classList.add('message-rich');
+ function inline(node,text){
+  let at=0;const tokens=/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
+  for(const match of text.matchAll(tokens)){
+   node.append(document.createTextNode(text.slice(at,match.index)));
+   const code=match[0].startsWith('`'),part=document.createElement(code?'code':'strong');
+   part.textContent=match[0].slice(code?1:2,code?-1:-2);node.append(part);at=match.index+match[0].length;
+  }
+  node.append(document.createTextNode(text.slice(at)));
+ }
+ const lines=String(value||'').split('\n');let paragraph=[],list=null;
+ const flush=()=>{if(paragraph.length){const p=document.createElement('p');inline(p,paragraph.join('\n'));host.append(p);paragraph=[];}list=null;};
+ for(let i=0;i<lines.length;i++){
+  const fence=lines[i].match(/^\s{0,3}(`{3,}|~{3,})([^`]*)$/);
+  if(fence){flush();const body=[],marker=fence[1][0],length=fence[1].length;
+   while(++i<lines.length){const end=lines[i].trim();if(end.length>=length&&[...end].every(c=>c===marker))break;body.push(lines[i]);}
+   const block=textElement('section','','message-code-block'),header=textElement('div','','message-code-header'),pre=document.createElement('pre'),code=document.createElement('code');
+   const language=fence[2].trim().split(/\s/)[0].slice(0,40)||'text';header.append(textElement('span',language),feedAction('copy',body.join('\n')));code.textContent=body.join('\n');pre.dir='ltr';pre.append(code);block.append(header,pre);host.append(block);continue;
+  }
+  if(!lines[i].trim()){flush();continue;}
+  const heading=lines[i].match(/^(#{1,6})\s+(.+)$/),item=lines[i].match(/^\s*(?:([-+*])|\d+[.)])\s+(.+)$/);
+  if(heading){flush();const h=document.createElement('h'+Math.min(heading[1].length+1,6));inline(h,heading[2]);host.append(h);}
+  else if(item){const tag=item[1]?'ul':'ol';if(!list||list.tagName.toLowerCase()!==tag){flush();list=document.createElement(tag);host.append(list);}const li=document.createElement('li');inline(li,item[2]);list.append(li);}
+  else{if(list)flush();paragraph.push(lines[i]);}
+ }
+ flush();
+}
 async function refreshMessages(){
  if(!activeSession)return;
  const sessionId=activeSession.id,owner=currentUser?.id,revision=++messageRenderRevision;
@@ -293,7 +322,7 @@ async function refreshMessages(){
    const node=document.createElement('article');node.className=row.role==='user'?'user-bubble':'agent-response';node.dir='auto';node.tabIndex=0;
    if(row.id)node.dataset.messageId=row.id;
    const hasText=Boolean(row.text?.trim());
-   const content=textElement('div',row.text||'','message-content');node.append(content);
+   const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text);node.append(content);
    if(row.role==='assistant'&&!hasText){const latest=row===latestAssistant,status=latest?activeSession.execution_status:null;
     const state=status==='waiting_approval'?'waiting_approval':status==='failed'||row.state==='failed'?'failed':status==='cancelled'?'cancelled':status==='submitted'?'working':row.state==='working'&&latest?'working':'completed';
     const labels={waiting_approval:['Waiting for your approval…','بانتظار موافقتك…'],failed:['The agent could not finish this request. Review the activity below before retrying.','تعذر على الوكيل إكمال الطلب. راجع النشاط أدناه قبل إعادة المحاولة.'],cancelled:['Execution stopped.','تم إيقاف التنفيذ.'],working:['The agent is working…','الوكيل يعمل الآن…'],completed:['Tool step completed.','اكتملت خطوة الأدوات.']};
