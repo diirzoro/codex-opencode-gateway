@@ -1,0 +1,24 @@
+# Registration stub for GitHub Actions discovery on the default branch.
+# The actual deployment definition lives on the updates branch.
+# To deploy Test: Actions > Promote updates to test > Run workflow > Branch: updates.
+name: Promote updates to test
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type promote-test to deploy updates to TEST ONLY'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  default-branch-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse deployment from default branch
+        run: |
+          echo "No staging deployment from master. Choose the updates branch in Run workflow."
+          exit 1
