@@ -330,9 +330,9 @@
   }
   const modes=textElement('nav','','workspace-panel-modes');modes.setAttribute('aria-label',tr('Workspace panel','لوحة مساحة العمل'));
   const changesMode=btn('workspaceChanges','Project','المشروع',()=>setPanel('changes'));
-  const conversationsMode=btn('workspaceConversations','Conversations','المحادثات',()=>{document.getElementById('workspaceChatRail')?.querySelector('#workspaceSessionSearch')?.focus();});
+  const conversationsMode=btn('workspaceConversations','Conversations','المحادثات',()=>setPanel('conversations'));
   const previewMode=btn('workspacePreview','Preview','المعاينة',()=>setPanel('preview'));
-  modes.append(changesMode,previewMode);
+  modes.append(changesMode,conversationsMode,previewMode);
   const close=q('closeSessions');modes.append(close);
   const changesPanel=textElement('section','','workspace-changes'),previewPanel=textElement('section','','workspace-preview');
   changesPanel.id='workspaceChangesPanel';previewPanel.id='workspacePreviewPanel';
@@ -450,42 +450,7 @@
   previewActions.append(btn('startWorkspacePreview','Start preview','ابدأ المعاينة',startPreview),btn('refreshWorkspacePreview','Refresh preview','حدّث المعاينة',startPreview),btn('stopWorkspacePreview','Stop preview','إيقاف المعاينة',stopPreview),fullPreview,newTabPreview);
   const previewIcons=['<path d="m9 5 10 7-10 7Z"/>','<path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/>','<rect x="6" y="6" width="12" height="12" rx="1"/>','<path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/>','<path d="M14 3h7v7M21 3 10 14M10 3H3v18h18v-7"/>'];
   [...previewActions.children].forEach((button,index)=>{const label=button.textContent;button.title=label;button.setAttribute('aria-label',label);button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+previewIcons[index]+'</svg>';});
-  // Browse actual workspace HTML files from the owned files API, not demo entries.
-  const previewEntry=document.createElement('select');previewEntry.className='preview-entry-picker';
-  previewEntry.setAttribute('aria-label',tr('Choose preview file','اختر ملف المعاينة'));
-  previewEntry.add(new Option('index.html','index.html'));
-  previewEntry.onchange=()=>{previewPath.value=previewEntry.value;startPreview();};
-  const previewBrowse=btn('browsePreviewFiles','Files','الملفات',async()=>{
-    if(!activeWorkspace)return;
-    const workspaceId=activeWorkspace.id,owner=currentUser?.id;
-    previewBrowse.disabled=true;
-    try{
-      const candidates=[];
-      const walk=async(path,depth)=>{
-        if(depth>4||candidates.length>=150)return;
-        const url='/api/workspaces/'+workspaceId+'/files'+(path?'?path='+encodeURIComponent(path):'');
-        const rows=await api(url);
-        if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
-        for(const row of rows||[]){
-          if(row.type==='directory'&&depth<4)await walk(row.path,depth+1);
-          else if(row.type==='file'&&/\\.html?$/i.test(row.path))candidates.push(row.path);
-          if(candidates.length>=150)break;
-        }
-      };
-      await walk('',0);
-      if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
-      previewEntry.replaceChildren(...(candidates.length?candidates:['index.html']).map(path=>new Option(path,path)));
-      if(candidates.includes(previewPath.value))previewEntry.value=previewPath.value;
-      else previewPath.value=previewEntry.value;
-      previewEntry.focus();
-    }catch(error){toast(error.message);}finally{previewBrowse.disabled=false;}
-  });
-  const previewExpand=btn('togglePreviewPane','Expand preview','توسيع المعاينة',()=>{
-    previewPanel.classList.toggle('preview-expanded');
-    previewExpand.setAttribute('aria-pressed',String(previewPanel.classList.contains('preview-expanded')));
-  });
-  previewExpand.setAttribute('aria-pressed','false');
-  const previewToolbar=textElement('div','','preview-toolbar');previewToolbar.append(previewBrowse,previewEntry,previewPath,previewExpand,previewActions);
+  const previewToolbar=textElement('div','','preview-toolbar');previewToolbar.append(previewPath,previewActions);
   previewPanel.append(text('h3','Project Preview','معاينة المشروع'),previewToolbar,previewStatus,frame);
   const projectRoot=document.createElement('details');projectRoot.className='sidebar-project-root';projectRoot.open=true;
   const projectSummary=document.createElement('summary'),projectName=textElement('strong'),projectKind=textElement('small'),projectBranch=textElement('span','','sidebar-project-branch');
@@ -522,19 +487,7 @@
       for(const {list} of projectBuckets.values())if(!list.children.length)list.append(textElement('p',tr('No projects in this section.','لا توجد مشاريع في هذا القسم.'),'muted-small'));
     }catch(error){if(activeWorkspace?.id===id&&revision===projectListRevision)placeCurrentProject();}
   }
-  // Three-column workspace: conversations at left, working chat center,
-  // live local/GitHub file trees and preview at right. Reuse all existing
-  // session, project, and preview handlers; no demo content is introduced.
-  const chatRail=document.createElement('aside');chatRail.id='workspaceChatRail';chatRail.className='workspace-chat-rail';
-  const chatBrand=textElement('strong','OpenCode Gateway','workspace-chat-brand');
-  const chatHeader=textElement('div','','workspace-chat-header');chatHeader.append(chatBrand);
-  const chatSettings=document.createElement('button');chatSettings.type='button';chatSettings.className='workspace-chat-settings';
-  chatSettings.textContent=tr('Settings','الإعدادات');
-  chatSettings.onclick=()=>page('connectionsPage');
-  chatRail.append(chatHeader,sessionsSection,chatSettings);
-  shell.prepend(chatRail);
-  sessionsSection.hidden=false;
-  placeCurrentProject();pane.replaceChildren(modes,projectGroups,previewPanel);
+  placeCurrentProject();pane.replaceChildren(modes,projectGroups,sessionsSection,previewPanel);
   pane.append(paneResizer);
   let panelMode='changes',changesStamp=0;
   async function loadChanges(){
@@ -551,7 +504,7 @@
       diffView.textContent=names.size?tr('Select a changed file to review its diff.','اختر ملفًا متغيرًا لمراجعة الفرق.'):tr('No changes in this workspace.','لا توجد تغييرات في مساحة العمل.');
     }catch(error){if(stamp===changesStamp)diffView.textContent=error.message;}
   }
-  async function setPanel(mode){panelMode=mode;projectGroups.hidden=mode!=='changes';sessionsSection.hidden=false;previewPanel.hidden=mode!=='preview';changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));conversationsMode.setAttribute('aria-pressed',String(mode==='conversations'));if(mode==='changes')await Promise.all([loadChanges(),loadProjectGroups()]);if(mode==='conversations')await refreshSessions();}
+  async function setPanel(mode){panelMode=mode;projectGroups.hidden=mode!=='changes';sessionsSection.hidden=mode!=='conversations';previewPanel.hidden=mode!=='preview';changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));conversationsMode.setAttribute('aria-pressed',String(mode==='conversations'));if(mode==='changes')await Promise.all([loadChanges(),loadProjectGroups()]);if(mode==='conversations')await refreshSessions();}
   function drawer(){return matchMedia('(max-width:1100px)').matches;}
   function closePane(){paneDragEnd();pane.classList.remove('open');shell.classList.remove('panel-docked');shell.classList.add('sessions-collapsed');shell.style.gridTemplateColumns='';overlay(false);}
   function togglePane(){const opening=shell.classList.contains('sessions-collapsed')||(drawer()&&!pane.classList.contains('open'));shell.classList.toggle('sessions-collapsed',!opening);pane.classList.toggle('open',opening);shell.classList.toggle('panel-docked',drawer()&&opening);shell.style.gridTemplateColumns='';overlay(false);if(opening){setPanelWidth(panelWidth);if(panelMode==='changes')loadChanges();}}
