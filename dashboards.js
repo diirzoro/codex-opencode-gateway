@@ -301,7 +301,8 @@
   const filesBody=textElement('div','','section-body');filesBody.append(filesTree,filesStatus);
   filesSection.append(filesSummary,filesBody);
   const FILE_ICONS={directory:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',file:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v4h4"/></svg>'};
-  function renderFileRows(host,rows){
+  function renderFileRows(host,rows,context={workspaceId:activeWorkspace?.id,owner:currentUser?.id,root:filesTree,status:filesStatus}){
+    const valid=()=>currentUser?.id===context.owner&&context.root.isConnected&&(context.detachedProject||activeWorkspace?.id===context.workspaceId);
     host.replaceChildren();
     if(!rows.length){host.append(textElement('p',tr('Empty folder','مجلد فارغ'),'muted-small'));return;}
     const sorted=[...rows].sort((a,b)=>(a.type==='directory'?0:1)-(b.type==='directory'?0:1)||a.name.localeCompare(b.name,lang,{numeric:true,sensitivity:'base'}));
@@ -312,10 +313,10 @@
       rowButton.innerHTML=FILE_ICONS[row.type==='directory'?'directory':'file']+'<span></span>';rowButton.querySelector('span').textContent=row.name;
       if(row.type==='directory'){
         const children=textElement('div','','file-children');children.hidden=true;rowButton.setAttribute('aria-expanded','false');
-        rowButton.onclick=async()=>{const opening=children.hidden;children.hidden=!opening;rowButton.setAttribute('aria-expanded',String(opening));if(!opening)return;const workspaceId=activeWorkspace?.id;if(!workspaceId||children.dataset.loaded)return;children.dataset.loaded='1';try{const childRows=await api('/api/workspaces/'+workspaceId+'/files?path='+encodeURIComponent(row.path));if(activeWorkspace?.id!==workspaceId)return;renderFileRows(children,childRows);}catch(error){if(activeWorkspace?.id===workspaceId){children.replaceChildren();children.append(textElement('p',error.message,'muted-small'));}}};
+        rowButton.onclick=async()=>{if(!valid())return;const opening=children.hidden;children.hidden=!opening;rowButton.setAttribute('aria-expanded',String(opening));if(!opening||children.dataset.loaded)return;children.dataset.loaded='1';try{const childRows=await api('/api/workspaces/'+context.workspaceId+'/files?path='+encodeURIComponent(row.path));if(!valid()||!children.isConnected)return;renderFileRows(children,childRows,context);}catch(error){if(valid()){delete children.dataset.loaded;children.replaceChildren();children.append(textElement('p',error.message,'muted-small'));}}};
         item.append(rowButton,children);
       }else{
-        rowButton.onclick=()=>{filesTree.querySelectorAll('.file-row.selected').forEach(node=>node.classList.remove('selected'));rowButton.classList.add('selected');filesStatus.textContent=row.path;};
+        rowButton.onclick=()=>{if(!valid())return;context.root.querySelectorAll('.file-row.selected').forEach(node=>node.classList.remove('selected'));rowButton.classList.add('selected');context.status.textContent=row.path;};
         item.append(rowButton);
       }
       host.append(item);
@@ -453,16 +454,33 @@
   const projectIcon=textElement('span','','sidebar-project-icon');projectIcon.innerHTML=FILE_ICONS.directory;const projectIdentity=textElement('span','','sidebar-project-identity');projectIdentity.append(projectName,projectKind);projectSummary.append(projectIcon,projectIdentity);projectRoot.append(projectSummary,projectBranch);
   const changesSection=document.createElement('details');changesSection.className='workspace-side-section workspace-change-group';changesSection.open=false;changesSection.append(text('summary','Project changes','تغييرات المشروع'),changesPanel);
   projectRoot.append(filesSection,changesSection);
-  function updateProjectIdentity(){projectName.textContent=activeProject?.repository||activeProject?.name||tr('Project','المشروع');projectKind.textContent=activeProject?.source_type==='github'?tr('GitHub repository','مستودع GitHub'):tr('Local project','مشروع محلي');projectBranch.textContent=tr('Branch: ','الفرع: ')+(activeProject?.branch||'—');projectBranch.hidden=!activeProject?.branch;}
+  function updateProjectIdentity(){projectName.textContent=activeProject?.repository||activeProject?.name||tr('Project','المشروع');projectKind.textContent=activeProject?.source_type==='github'?tr('GitHub working copy','نسخة عمل GitHub'):tr('Local project','مشروع محلي');projectBranch.textContent=tr('Branch: ','الفرع: ')+(activeProject?.branch||'—');projectBranch.hidden=!activeProject?.branch;}
   const projectGroups=textElement('div','','workspace-project-groups'),projectBuckets=new Map();
-  for(const [kind,en,ar] of [['local','Local test files','ملفات التجربة المحلية'],['github','GitHub files','ملفات GitHub']]){const group=document.createElement('details');group.className='project-source-group';group.open=true;group.dataset.source=kind;const list=textElement('div','','project-source-list');group.append(text('summary',en,ar),list);projectGroups.append(group);projectBuckets.set(kind,{group,list});}
+  for(const [kind,en,ar] of [['local','Local projects','المشاريع المحلية'],['github','GitHub projects','مشاريع GitHub']]){const group=document.createElement('details');group.className='project-source-group';group.open=true;group.dataset.source=kind;const list=textElement('div','','project-source-list'),summary=document.createElement('summary'),icon=textElement('span','','sidebar-project-icon');icon.innerHTML=FILE_ICONS.directory;summary.append(icon,text('span',en,ar));group.append(summary,list);projectGroups.append(group);projectBuckets.set(kind,{group,list});}
+  function projectFileFolder(project,workspace){
+    const folder=document.createElement('details');folder.className='sidebar-project-root';
+    const summary=document.createElement('summary'),icon=textElement('span','','sidebar-project-icon');icon.innerHTML=FILE_ICONS.directory;
+    const identity=textElement('span','','sidebar-project-identity');identity.append(textElement('strong',project.repository||project.name),textElement('small',project.source_type==='github'?tr('GitHub working copy','نسخة عمل GitHub'):tr('Local project','مشروع محلي')));summary.append(icon,identity);
+    const body=textElement('div','','section-body'),tree=textElement('div','','files-tree'),status=textElement('p','','muted-small');
+    const open=btn('project-folder-'+project.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace));open.className='project-folder-link';
+    body.append(open,tree,status);folder.append(summary,body);let loaded=false,pending=false;
+    const owner=currentUser?.id,context={workspaceId:workspace.id,owner,root:tree,status,detachedProject:true};
+    folder.addEventListener('toggle',async()=>{
+      if(!folder.open||loaded||pending||currentUser?.id!==owner)return;
+      pending=true;status.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
+      try{const rows=await api('/api/workspaces/'+workspace.id+'/files');if(currentUser?.id!==owner||!folder.isConnected)return;renderFileRows(tree,rows,context);loaded=true;status.textContent='';}
+      catch(error){if(currentUser?.id===owner&&folder.isConnected)status.textContent=error.message;}
+      finally{pending=false;}
+    });
+    return folder;
+  }
   let projectListRevision=0;
   function placeCurrentProject(){const kind=activeProject?.source_type==='github'?'github':'local';projectBuckets.get(kind).list.prepend(projectRoot);updateProjectIdentity();}
   async function loadProjectGroups(){
     const id=activeWorkspace?.id,owner=currentUser?.id,revision=++projectListRevision;if(!id)return;placeCurrentProject();
     try{const data=await api('/api/dashboard');if(activeWorkspace?.id!==id||currentUser?.id!==owner||revision!==projectListRevision)return;
       for(const {list} of projectBuckets.values())list.replaceChildren();placeCurrentProject();
-      for(const project of data.projects||[]){if(project.id===activeProject?.id)continue;const workspace=project.workspaces?.find(w=>w.status==='ready')||project.workspaces?.[0];if(!workspace)continue;const name=project.repository||project.name;const link=btn('project-folder-'+project.id,name,name,()=>openWorkspace(project,workspace));link.className='project-folder-link';link.title=name;projectBuckets.get(project.source_type==='github'?'github':'local').list.append(link);}
+      for(const project of data.projects||[]){if(project.id===activeProject?.id)continue;const workspace=project.workspaces?.find(w=>w.status==='ready')||project.workspaces?.[0];if(!workspace)continue;projectBuckets.get(project.source_type==='github'?'github':'local').list.append(projectFileFolder(project,workspace));}
       for(const {list} of projectBuckets.values())if(!list.children.length)list.append(textElement('p',tr('No projects in this section.','لا توجد مشاريع في هذا القسم.'),'muted-small'));
     }catch(error){if(activeWorkspace?.id===id&&revision===projectListRevision)placeCurrentProject();}
   }
@@ -719,14 +737,15 @@
     if(currentUser?.id!==sendingPreview.owner||activeWorkspace?.id!==sendingPreview.workspaceId||(sendingPreview.sessionId&&activeSession?.id!==sendingPreview.sessionId)){clearSendingPreview();return;}
     const delivered=[...q('agentFeed').querySelectorAll('.user-bubble[data-message-id]')].some(node=>!sendingPreview.existingIds.has(node.dataset.messageId)&&node.querySelector('.message-content')?.textContent===sendingPreview.text);
     if(delivered){clearSendingPreview();return;}
-    if(!sendingPreview.node.isConnected){q('agentFeed').append(sendingPreview.node);sendingPreview.node.scrollIntoView({block:'nearest'});}
+    if(!sendingPreview.node.isConnected)q('agentFeed').append(sendingPreview.node);
   }
   function showSendingPreview(prompt){
     clearSendingPreview();
+    const feed=q('agentFeed');workspaceLatestControl(feed);feed.workspaceFollow.following=true;
     const node=textElement('article','','user-bubble sending-preview');node.dir='auto';
     node.append(textElement('div',prompt,'message-content'));
     const status=textElement('small',tr('Sending…','جارٍ الإرسال…'),'sending-preview-status');status.setAttribute('role','status');node.append(status);
-    sendingPreview={node,text:prompt,owner:currentUser.id,workspaceId:activeWorkspace.id,existingIds:new Set([...q('agentFeed').querySelectorAll('[data-message-id]')].map(row=>row.dataset.messageId))};keepSendingPreview();
+    sendingPreview={node,text:prompt,owner:currentUser.id,workspaceId:activeWorkspace.id,existingIds:new Set([...q('agentFeed').querySelectorAll('[data-message-id]')].map(row=>row.dataset.messageId))};keepSendingPreview();workspaceFollowLatest(feed);
   }
   // Session creation and SSE refreshes rebuild the feed while a POST is pending.
   // Keep one clearly unconfirmed preview without affecting request IDs/retries.

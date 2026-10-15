@@ -677,6 +677,16 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
 #workspacePage .project-source-group:not([open])>.project-source-list{display:none}
 #workspacePage .project-source-list{display:grid;gap:4px;min-width:0}
 #workspacePage .project-source-list .sidebar-project-root{margin:4px 0 8px}
+#workspacePage .workspace-project-groups .sidebar-project-root{border:0;border-radius:0;background:transparent;box-shadow:none}
+#workspacePage .project-source-group>summary{display:flex;align-items:center;gap:8px;list-style:none}
+#workspacePage .project-source-group>summary::-webkit-details-marker{display:none}
+#workspacePage .project-source-group>summary::after{content:'›';margin-inline-start:auto;transition:transform .15s}
+#workspacePage .project-source-group[open]>summary::after{transform:rotate(90deg)}
+#workspacePage .project-source-group[data-source=local] .sidebar-project-icon{color:#b77908}
+#workspacePage .project-source-group[data-source=local] .sidebar-project-icon svg{fill:#f9ce53}
+#workspacePage .project-source-group[data-source=github] .sidebar-project-icon{color:var(--primary)}
+#workspacePage .project-source-group .project-source-list{padding-inline-start:12px}
+#workspacePage .workspace-project-groups .sidebar-project-root>summary{padding:8px 4px}
 #workspacePage #sessionSidebar .project-folder-link{display:block;width:100%;text-align:start;font-size:13px;background:transparent;border:0;padding:8px 10px;overflow-wrap:anywhere;border-inline-start:2px solid var(--line)}
 
 
@@ -708,7 +718,7 @@ body:has(#workspacePage.active) .app-shell{grid-template-columns:minmax(0,1fr)}
 
 /* In-conversation navigation: visible only while reading older agent output. */
 :root #workspacePage .workspace-jump-latest{
- position:fixed;inset-inline-end:clamp(20px,5vw,64px);bottom:118px;z-index:20;
+ position:relative;align-self:center;flex:0 0 auto;order:8;margin:-42px auto 8px;z-index:2;
  border:1px solid var(--line);border-radius:999px;background:var(--panel);
  color:var(--text);box-shadow:0 3px 15px rgba(0,0,0,.12);
  font-size:13px;padding:9px 15px;cursor:pointer;
