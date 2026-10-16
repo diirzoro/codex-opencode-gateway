@@ -23,7 +23,7 @@ from .preview_worker_archive import extract_into_sandbox
 from .preview_container_spec import ContainerSpec
 
 MAX_BODY = 72 * 1024 * 1024
-JOB_NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}
+JOB_NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}' + chr(36))
 LOCK = RLock()
 JOBS = {}
 
@@ -110,7 +110,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     try:
                         source = root / "src"
                         source.mkdir(mode=0o700)
-                        extract_into_sandbox(io.BytesIO(snapshot), source)
+                        extract_into_sandbox(tarfile.open(fileobj=io.BytesIO(snapshot), mode='r:'), source)
                         # Archive content is owned by the worker; the container
                         # runs under a different UID and requires read access.
                         for path in source.rglob("*"):
@@ -119,8 +119,9 @@ class WorkerHandler(BaseHTTPRequestHandler):
                             elif path.is_file():
                                 path.chmod(0o644)
                         source.chmod(0o755)
-                        from .preview_worker_images import image_for
-                        image = image_for(profile.family)
+                        image = os.environ.get('PREVIEW_IMAGE_' + profile.family.upper(), '')
+                        if not image:
+                            raise ValueError('Worker runtime image is not configured')
                         JOBS[job_id] = {"spec": ContainerSpec(image, profile.argv, str(source)),
                                         "container_id": None, "state": "ready"}
                     except Exception:
