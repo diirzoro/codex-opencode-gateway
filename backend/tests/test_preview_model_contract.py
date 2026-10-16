@@ -1,6 +1,7 @@
 """Preview lease ORM schema checks; no production DB migrations executed."""
 import unittest
 from app.models.preview import PreviewRuntimeLease
+from sqlalchemy import UniqueConstraint
 
 
 class PreviewModelContractTests(unittest.TestCase):
@@ -13,7 +14,7 @@ class PreviewModelContractTests(unittest.TestCase):
         self.assertNotIn("provider_token", cols)
 
     def test_workspace_is_unique_per_lease(self):
-        self.assertTrue(PreviewRuntimeLease.__table__.c.workspace_id.unique)
+        self.assertTrue(any(isinstance(item, UniqueConstraint) and\n                            {col.name for col in item.columns} == {"workspace_id"}\n                            for item in PreviewRuntimeLease.__table__.constraints))
 
 if __name__ == "__main__":
     unittest.main()
