@@ -71,6 +71,23 @@ class PreviewCapacityStoreTests(unittest.TestCase):
         self.assertFalse(preview_capacity_store.release(
             db2, user_id=self.owner, workspace_id=self.workspace, generation=3))
 
+    def test_release_refuses_stale_generation(self):
+        self.lease.worker_id = "verified-1"
+        self.worker.active_jobs = 1
+        db = FakeDB(self.lease)
+        self.assertFalse(preview_capacity_store.release(
+            db, user_id=self.owner, workspace_id=self.workspace, generation=2))
+        self.assertEqual(self.worker.active_jobs, 1)
+
+    def test_release_detects_inconsistent_worker_count(self):
+        self.lease.worker_id = "verified-1"
+        self.worker.active_jobs = 0
+        db = FakeDB(self.lease, self.worker, self.lease)
+        with self.assertRaises(ValueError):
+            preview_capacity_store.release(
+                db, user_id=self.owner, workspace_id=self.workspace, generation=3)
+        self.assertEqual(self.lease.worker_id, "verified-1")
+
     def test_exhausted_worker_refuses_new_job(self):
         self.worker.active_jobs = 1
         db = FakeDB(self.worker, self.lease)
