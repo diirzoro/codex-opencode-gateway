@@ -97,6 +97,16 @@ class WorkerHandler(BaseHTTPRequestHandler):
                 from .preview_runner import PROFILES
                 framework = request.get("framework")
                 profile = PROFILES.get(framework) if isinstance(framework, str) else None
+                selected = request.get("entrypoint")
+                if framework == "python" and selected in ("main.py", "app.py"):
+                    from .preview_runner import LaunchProfile
+                    profile = LaunchProfile("python", ("python", "-m", "uvicorn", selected[:-3] + ":app", "--host", "0.0.0.0", "--port", "8080"))
+                elif framework == "node" and selected in ("server.js", "index.js"):
+                    from .preview_runner import LaunchProfile
+                    profile = LaunchProfile("node", ("node", selected))
+                elif framework == "php" and selected == "index.php":
+                    from .preview_runner import LaunchProfile
+                    profile = LaunchProfile("php", ("php", "-S", "0.0.0.0:8080"))
                 if profile is None or not isinstance(request.get("archive"), str):
                     self.reply(400, {"error": "unsupported_framework"})
                     return
@@ -113,6 +123,8 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         extract_into_sandbox(tarfile.open(fileobj=io.BytesIO(snapshot), mode='r:'), source)
                         # Archive content is owned by the worker; the container
                         # runs under a different UID and requires read access.
+                        if selected and not (source / selected).is_file():
+                            raise ValueError("Missing selected entrypoint")
                         for path in source.rglob("*"):
                             if path.is_dir():
                                 path.chmod(0o755)
