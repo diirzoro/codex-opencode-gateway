@@ -141,5 +141,10 @@ Repository: diirzoro/codex-opencode-gateway
 - No isolated Preview Worker is enabled. `/preview/start` still intentionally fails closed for dynamic runtimes. The user alone starts Preview by clicking the existing Start Preview button.
 - Remaining: tested transactional lease store integration, trusted worker heartbeat/registry, isolated runner, authenticated routing, idle reaper and full Test E2E. Not yet ready for release.
 
+## Progress — migration contract checks (2026-10-16, updates only)
+- Added `backend/tests/test_preview_migration_contract.py` to verify the 0019 revision parent, compare the migration's column names with the ORM model and confirm the Preview schema remains independent from `workspace_sessions`. Tests use mocked Alembic operations and a local SQL dialect and do not modify any deployed database.
+- The checks are **committed but not yet executed**. They supplement, not replace, a disposable PostgreSQL `alembic upgrade head` validation and an isolated rollback test.
+- Readiness gate remains: do not ask the owner to deploy Test until migrations, runner isolation and related tests are validated. Dynamic Preview remains fail-closed and Start Preview remains manual.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
