@@ -30,5 +30,11 @@ Branch: updates. Never touch master/Live without explicit approval.
 - [ ] Deploy only to Test with new isolated service; preserve existing staging .env, workflows and Live settings.
 - [ ] Require explicit owner approval before any Live promotion.
 
+## Progress — host headroom gate (2026-10-16)
+- Added `backend/app/services/preview_host_gate.py` as a pure, fail-closed admission check: one concurrent preview maximum; requires trusted host telemetry and reserves 1536 MiB available RAM and 4096 MiB free disk after prospective 768 MiB RAM / 1024 MiB sandbox allocation.
+- Added `backend/tests/test_preview_host_gate.py` regression tests for low RAM, low disk, forged/invalid telemetry, unknown state and slot saturation.
+- **Advisory only**: no host collector, authenticated ingestion or real isolated runner has been deployed. This gate is not yet wired to actual reservation and does not prove that capacity is available. Tests committed but not run on Test.
+- Implementation must use system-level enforcement and fresh trusted measurements, not a browser-provided `collector_verified` field. Actual production safeguards require independently measured overhead and security review.
+
 ## Current status
 The repository has planning and dormant lease/capacity code and an explicit fail-closed Preview start (503). No worker is running and dynamic Preview is not usable. Same VPS selection does NOT make these checklist items complete.
