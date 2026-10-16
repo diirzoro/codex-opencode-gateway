@@ -20,13 +20,13 @@ class UnsafeContainerSpec(ValueError):
 
 def argv_for(spec: ContainerSpec) -> tuple[str, ...]:
     """Fixed Docker arguments; no shell, user-supplied flags, ports or mounts."""
-    if not spec.image.startswith("sha256:") or len(spec.image) != 71 or any(
-        c not in "0123456789abcdef" for c in spec.image[7:]
-    ):
+    if not isinstance(spec.image, str) or re.fullmatch(
+        r"[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}", spec.image
+    ) is None:
         raise UnsafeContainerSpec("Verified SHA256 image digest required")
     if (not spec.argv or spec.internal_port != 8080 or
             re.fullmatch(r"/var/lib/preview-worker/jobs/[a-zA-Z0-9_-]{1,64}/src", spec.project_mount) is None or
-            any(not isinstance(part, str) or not part or "\\x00" in part for part in spec.argv)):
+            any(not isinstance(part, str) or not part or "\x00" in part or "\n" in part for part in spec.argv)):
         raise UnsafeContainerSpec("Invalid fixed worker launch contract")
     # This is a *configuration contract*, not a complete sandbox security proof.
     # No -p, --privileged, host namespaces, Docker socket or secret volumes.
