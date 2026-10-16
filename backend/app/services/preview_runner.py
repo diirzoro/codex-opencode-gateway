@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from fastapi import HTTPException
 from . import preview, preview_scheduling, preview_package_manager, workspaces
+from .preview_readiness import PreviewReadiness
 
 # Fixed security contract: clients cannot loosen these limits via API input.
 LIMITS={"cpu_cores":1,"memory_mb":768,"disk_mb":1024,"processes":128,
@@ -105,7 +106,9 @@ def launch_options(workspace):
 
 
 def status(workspace):
+    readiness = PreviewReadiness(False, False, False, False, False, False)
     return {**plan(workspace), 'launch': launch_options(workspace),
+            'readiness': {'enabled': readiness.enabled, 'missing': list(readiness.missing())},
             'runner_available': False, 'url': None, 'logs': [],
             'reason': 'An accepted isolated runner and protected separate-origin router are not available.'}
 
