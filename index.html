@@ -16,7 +16,7 @@
     html.bootstrapping[data-restore-page="workspacePage"] #clientNav,
     html.bootstrapping[data-restore-page="connectionsPage"] #clientNav,
     html.bootstrapping[data-restore-page="workspaceHomePage"] #clientNav { display:flex!important }
-    .pricing{padding:2.5rem 0;border-top:1px solid var(--border,#e6e6e6)}
+    .pricing{padding:2.5rem 0;border-top:1px solid var(--border,#e6e6e6);background:var(--panel2)}
     .pricing-head{text-align:center;margin-bottom:1.25rem}
     .pricing-cards{display:flex;gap:1rem;flex-wrap:wrap;justify-content:center}
     .price-card{border:1px solid var(--border,#e6e6e6);border-radius:14px;padding:1.25rem 1.5rem;min-width:160px;text-align:center}
@@ -374,8 +374,8 @@
 </style>
 <style id="readable-contrast-theme">
 /* Shared text and edge contrast: normal text stays dark on light surfaces. */
-:root:not(.dark){--text:#172033;--muted:#24324a;--line:color-mix(in srgb,var(--text) 9%,var(--panel));--border:var(--line);--primary:#1e40af;--primary2:#1e3a8a}
-:root.dark{--line:color-mix(in srgb,var(--text) 9%,var(--panel));--border:var(--line)}
+:root:not(.dark){--text:#172033;--muted:#24324a;--line:color-mix(in srgb,var(--text) 15%,var(--panel));--border:var(--line);--primary:#1e40af;--primary2:#1e3a8a}
+:root.dark{--line:color-mix(in srgb,var(--text) 15%,var(--panel));--border:var(--line)}
 :root:not(.dark) :is(h1,h2,h3,h4,h5,h6,p,small,label,legend,dt,dd,th,td,a,button,input,select,textarea,kbd,.lead,.eyebrow,.section-title,.brand-caption,.gateway-label,.app-user,.sidebar-section-label,.sidebar-empty,.composer-context,.badge,.banner){color:var(--text)}
 :root:not(.dark) :is(.price-card,.project-card,.trial-dates) small,:root:not(.dark) .trial-dates{opacity:1}
 :root:not(.dark) :is(.sidebar-links button,.sidebar-links button>span,.sidebar-profile small,.feature-icon,.nav-icon,.composer-context span,.home-project-row span,.home-session-row span,.price-card span,.plan-tag,.pricing-summary){color:var(--text);opacity:1}
@@ -409,8 +409,8 @@
 </style>
 <style id="product-control-hierarchy">
 /* Actions, fields and content surfaces have distinct visual weight. */
-:root{--control-fill:#f1f7ff;--control-edge:color-mix(in srgb,var(--text) 12%,var(--panel));--surface-edge:color-mix(in srgb,var(--text) 9%,var(--panel));--surface-depth:0 1px 3px rgba(15,23,42,.04);--action-depth:0 4px 8px rgba(37,99,235,.1),0 9px 20px -9px rgba(37,99,235,.4)}
-:root.dark{--control-fill:#1b2b43;--control-edge:color-mix(in srgb,var(--text) 12%,var(--panel));--surface-edge:color-mix(in srgb,var(--text) 9%,var(--panel));--surface-depth:0 1px 4px rgba(0,0,0,.16);--action-depth:0 6px 20px -8px rgba(59,130,246,.5)}
+:root{--control-fill:#f1f7ff;--control-edge:color-mix(in srgb,var(--text) 18%,var(--panel));--surface-edge:color-mix(in srgb,var(--text) 15%,var(--panel));--surface-depth:0 2px 6px rgba(15,23,42,.06);--action-depth:0 4px 8px rgba(37,99,235,.1),0 9px 20px -9px rgba(37,99,235,.4)}
+:root.dark{--control-fill:#1b2b43;--control-edge:color-mix(in srgb,var(--text) 18%,var(--panel));--surface-edge:color-mix(in srgb,var(--text) 15%,var(--panel));--surface-depth:0 2px 8px rgba(0,0,0,.2);--action-depth:0 6px 20px -8px rgba(59,130,246,.5)}
 :root:not(.dark) .button:not(.ghost):not(:disabled),:root:not(.dark) .send-circle:not(:disabled){background:linear-gradient(135deg,#a8d5ff,#60a5fa);color:#10213c;border:1px solid var(--control-edge);box-shadow:var(--action-depth);font-weight:700}
 :root:not(.dark) .button.ghost{background:linear-gradient(180deg,#fff,#eff6ff);color:var(--text);border:1px solid var(--control-edge);box-shadow:0 2px 5px rgba(30,64,175,.07);font-weight:600}
 .button{border-radius:12px;min-height:42px;transition:background .18s,box-shadow .18s,transform .18s}
