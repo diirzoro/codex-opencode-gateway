@@ -177,5 +177,12 @@ Repository: diirzoro/codex-opencode-gateway
 - **Status remains INCOMPLETE / NOT DEPLOYABLE as working dynamic Preview.** No isolated worker exists, no npm/Python runtime has been launched, tests have not been executed in Test, and production is unchanged. Avoid claiming completion or asking owner to promote branches.
 - The next hands-on prerequisite is a trusted isolated sandbox worker and disposable Test PostgreSQL environment. Implementation and testing require access to those environments; complete and verify before enabling the existing manual Start button.
 
+## Progress — honest Preview readiness signaling (2026-10-16, updates)
+- Updated `preview_runner.start()` to return structured HTTP 503 `PREVIEW_WORKER_NOT_READY` with detected framework and `execution_started=false`, `retry_automatically=false`. This is an intentional fail-closed state, not a successful preview launch. Workspace UI must distinguish it from agent Bash tool approval/execution failure.
+- Aligned policy resource ceilings with build-admission minimums (1 CPU core, 768 MB RAM and 1024 MB ephemeral disk estimates); verified physical capacity and resource limits still require a secure worker.
+- Added `backend/tests/test_preview_runner_readiness.py` for structured blocking and minimum resource agreement; **not run on Test yet**.
+- Outstanding before real Smart Preview: dedicated sandbox worker on isolated infrastructure, trusted registration and private authenticated control channel, snapshot validation in runner, package preparation, separate-origin protected proxy, durable lifecycle/reaper and tested Start/Stop integration. None should be bypassed by asking OpenCode to run `node server.js`.
+- No deployment, no Live/master changes, no claim of full Preview completion.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
