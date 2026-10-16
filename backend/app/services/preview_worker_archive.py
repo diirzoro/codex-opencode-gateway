@@ -4,7 +4,6 @@ This module is intended for a dedicated worker, NOT for extraction on the
 Gateway host. Its successful result is necessary but not sufficient for safety.
 """
 import os
-import stat
 import tarfile
 from pathlib import Path, PurePosixPath
 
