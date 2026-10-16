@@ -445,6 +445,14 @@
 
   const gitSummary=q('gitSummary'),gitActions=pane.querySelector('.git-actions'),changedFiles=textElement('div','','changed-file-list'),diffView=textElement('pre','','workspace-diff');
   diffView.id='workspaceFileDiff';changesPanel.append(gitSummary,btn('refreshWorkspaceChanges','Refresh changes','حدّث التغييرات',()=>loadChanges()),changedFiles,diffView,gitActions);
+  const previewProjectSelect=document.createElement('select');
+  previewProjectSelect.setAttribute('aria-label',tr('Select project to preview','اختر المشروع للمعاينة'));
+  previewProjectSelect.style.cssText='width:100%;min-height:38px;border-radius:8px;padding:5px';
+  const previewProjectTargets=new Map();
+  previewProjectSelect.addEventListener('change',()=>{
+    const target=previewProjectTargets.get(previewProjectSelect.value);
+    if(target&&target.workspace.id!==activeWorkspace?.id)openWorkspace(target.project,target.workspace);
+  });
   const previewIdentity=textElement('div','','preview-project-identity');
   previewIdentity.style.cssText='padding:10px 12px;margin:8px 0;border:1px solid var(--border-color,#d4d9e1);border-radius:10px;display:flex;flex-direction:column;gap:4px;overflow-wrap:anywhere';
   previewIdentity.setAttribute('aria-live','polite');
@@ -457,7 +465,7 @@
     const details=document.createElement('small');
     details.textContent=(workspaceName?tr('Workspace: ','مساحة العمل: ')+workspaceName:'')+
       (activeProject?.branch?' · '+tr('Branch: ','الفرع: ')+activeProject.branch:'');
-    previewIdentity.append(heading,details);
+    previewIdentity.append(heading,details,previewProjectSelect);
     const allowed=Boolean(activeWorkspace?.id&&activeProject?.id);
     if(!allowed){
       previewStatus.textContent=tr('Select a project and workspace to preview.','اختر مشروعًا ومساحة عمل قبل تشغيل المعاينة.');
@@ -589,6 +597,19 @@
     const id=activeWorkspace?.id,owner=currentUser?.id,revision=++projectListRevision;if(!id)return;placeCurrentProject();
     try{const data=await api('/api/dashboard');if(activeWorkspace?.id!==id||currentUser?.id!==owner||revision!==projectListRevision)return;
       for(const {list} of projectBuckets.values())list.replaceChildren();placeCurrentProject();
+      previewProjectTargets.clear();
+      previewProjectSelect.replaceChildren();
+      for(const project of data.projects||[]){
+        const workspace=project.workspaces?.find(w=>w.status==='ready')||project.workspaces?.[0];
+        if(!workspace)continue;
+        previewProjectTargets.set(workspace.id,{project,workspace});
+        const option=document.createElement('option');
+        option.value=workspace.id;
+        option.textContent=(project.repository||project.name||tr('Project','مشروع'))+' — '+(workspace.name||workspace.title||workspace.id.slice(0,8));
+        previewProjectSelect.append(option);
+      }
+      previewProjectSelect.value=activeWorkspace?.id||'';
+      previewProjectSelect.disabled=!previewProjectTargets.size;
       for(const project of data.projects||[]){if(project.id===activeProject?.id)continue;const workspace=project.workspaces?.find(w=>w.status==='ready')||project.workspaces?.[0];if(!workspace)continue;projectBuckets.get(project.source_type==='github'?'github':'local').list.append(projectFileFolder(project,workspace));}
       for(const {list} of projectBuckets.values())if(!list.children.length)list.append(textElement('p',tr('No projects in this section.','لا توجد مشاريع في هذا القسم.'),'muted-small'));
     }catch(error){if(activeWorkspace?.id===id&&revision===projectListRevision)placeCurrentProject();}
