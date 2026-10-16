@@ -165,5 +165,11 @@ Repository: diirzoro/codex-opencode-gateway
 - **Safety gate:** the caller must own transaction and use independently authenticated worker heartbeats; do not accept worker identity/capacity from browser. Slot release requires actual worker destruction and route revocation before commit. No preview execution or npm/Python install enabled. Tests committed but NOT run on Test/CI.
 - Remaining: disposable PostgreSQL migration 0019->0020 test, concurrent transaction tests on PostgreSQL, trusted worker registry ingestion, isolated worker provisioning, cleanup reaper, authenticated routing and workspace Start integration. Do not deploy or announce production readiness.
 
+## Progress — reservation lifecycle hardening (updates only, 2026-10-16)
+- Fixed `preview_lease_store.apply_transition()` so a new Start cannot erase a still-attached worker reservation, and Stop/idle expiry/failure cannot be marked final while a worker is attached. This prevents losing resource tracking but requires the future dispatcher to first revoke preview access, destroy the isolated worker and release its slot.
+- Added unit regressions for blocked restart/Stop with attached worker and stale-generation/inconsistent-slot release. Keep the same worker-first lock order on reservation and release.
+- **Still not real concurrency validation**: tests are committed but not executed, and actual concurrent PostgreSQL transactions, crash recovery and process cleanup are unverified. No Preview code execution or Test/Live deployment occurred.
+- Next: implement trusted isolated worker lifecycle with cleanup acknowledgments and PostgreSQL concurrency tests in a disposable Test environment, then UI Start integration. Do NOT connect unsafe preview execution to Gateway host.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
