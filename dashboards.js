@@ -429,14 +429,14 @@
   window.renderWorkspaceApprovals=renderApprovals;
   async function loadApprovals(){if(!activeSession){await renderApprovals([],null);return;}return refreshPermissions();}
   const paneResizer=document.createElement('div');paneResizer.className='pane-resizer';paneResizer.title=tr('Drag to resize','اسحب لتغيير الحجم');paneResizer.setAttribute('role','separator');paneResizer.setAttribute('aria-label',paneResizer.title);paneResizer.setAttribute('aria-orientation','vertical');paneResizer.tabIndex=0;
-  let paneDragging=false;let panelWidth=Math.round(Math.min(420,innerWidth*.28));
-  function panelBounds(){const width=shell.getBoundingClientRect().width||innerWidth,min=drawer()?Math.min(250,Math.max(180,width-120)):250,rail=Math.min(290,Math.max(210,innerWidth*.19));return {min,max:Math.max(min,Math.min(width*.7,width-(drawer()?120:rail+380)))};}
+  let paneDragging=false;const dashboardWidth=()=>Math.min(290,Math.max(210,innerWidth*.19));let panelWidth=Math.round(dashboardWidth());
+  function panelBounds(){const width=shell.getBoundingClientRect().width||innerWidth,min=drawer()?Math.min(210,Math.max(180,width-120)):210,rail=dashboardWidth();return {min,max:Math.max(min,Math.min(width*.7,width-(drawer()?120:rail+380)))};}
   function setPanelWidth(value){const {min,max}=panelBounds();panelWidth=Math.round(Math.min(Math.max(min,value),Math.max(min,max)));shell.style.setProperty('--panel-w',panelWidth+'px');paneResizer.setAttribute('aria-valuenow',String(panelWidth));paneResizer.setAttribute('aria-valuemin',String(Math.round(min)));paneResizer.setAttribute('aria-valuemax',String(Math.round(Math.max(min,max))));shell.style.gridTemplateColumns='';}
   paneResizer.addEventListener('pointerdown',event=>{if(event.button!==0)return;paneDragging=true;paneResizer.setPointerCapture(event.pointerId);document.body.style.userSelect='none';event.preventDefault();});
-  paneResizer.addEventListener('pointermove',event=>{if(!paneDragging)return;const rect=shell.getBoundingClientRect();setPanelWidth(rect.right-event.clientX);});
+  paneResizer.addEventListener('pointermove',event=>{if(!paneDragging)return;const rect=shell.getBoundingClientRect();setPanelWidth(getComputedStyle(shell).direction==='rtl'?event.clientX-rect.left:rect.right-event.clientX);});
   const paneDragEnd=()=>{paneDragging=false;document.body.style.userSelect='';};paneResizer.addEventListener('pointerup',paneDragEnd);paneResizer.addEventListener('pointercancel',paneDragEnd);paneResizer.addEventListener('lostpointercapture',paneDragEnd);
-  paneResizer.addEventListener('dblclick',()=>setPanelWidth(320));
-  paneResizer.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight'].includes(event.key))return;event.preventDefault();setPanelWidth(panelWidth+(event.key==='ArrowRight'?-20:20));});
+  paneResizer.addEventListener('dblclick',()=>setPanelWidth(dashboardWidth()));
+  paneResizer.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight'].includes(event.key))return;event.preventDefault();setPanelWidth(panelWidth+(event.key==='ArrowRight'?-20:20)*(getComputedStyle(shell).direction==='rtl'?-1:1));});
   function clampPanelWidth(){setPanelWidth(panelWidth);if(drawer()&&!pane.classList.contains('open'))shell.style.gridTemplateColumns='';}
   window.addEventListener('resize',clampPanelWidth);setPanelWidth(panelWidth);
 
@@ -600,7 +600,7 @@
   const selectIcons=['<circle cx="12" cy="7" r="3"/><path d="M5 21v-3a7 7 0 0 1 14 0v3"/>','<path d="M7 18a5 5 0 0 1-1-10 6 6 0 0 1 11-1 5.5 5.5 0 0 1 1 11Z"/>','<path d="m12 3 9 5v8l-9 5-9-5V8Z M3 8l9 5 9-5M12 13v8"/>'];
   [agent,q('providerSelect'),q('modelSelect')].forEach((select,index)=>{const label=textElement('label','','composer-select');label.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">'+selectIcons[index]+'</svg>';label.append(select);picks.append(label);});
   utilities.append(attach,newTask);projectPanelBrand.append(q('chatGithub'),q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
-  const choices=textElement('button','+','icon-btn composer-choice-toggle');choices.type='button';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
+  const choices=textElement('button','','icon-btn composer-choice-toggle');choices.type='button';choices.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
   choices.onclick=()=>{const open=picks.classList.toggle('open');choices.setAttribute('aria-expanded',String(open));};
   controls.replaceChildren(utilities,choices,picks,actions,retryModels);
   document.addEventListener('click',event=>{if(!picks.contains(event.target)&&event.target!==choices){picks.classList.remove('open');choices.setAttribute('aria-expanded','false');}});
