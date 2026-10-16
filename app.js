@@ -309,6 +309,12 @@ function renderAgentText(host,value){
  }
  flush();
 }
+function workspaceMessagePresentation(row,latest,status){
+ const hasText=Boolean(row.text?.trim()),activity=(row.activity||[]).filter(item=>!['todowrite','todoread'].includes(item.tool));
+ if(row.role!=='assistant'||hasText)return {hasText,activity,omit:false,feedback:false};
+ const state=status==='waiting_approval'?'waiting_approval':status==='failed'||row.state==='failed'?'failed':status==='cancelled'?'cancelled':status==='submitted'?'working':row.state==='working'&&latest?'working':'completed';
+ return {hasText,activity,state,omit:!latest&&state==='completed'&&!activity.length,feedback:latest||state!=='completed'};
+}
 async function refreshMessages(){
  if(!activeSession)return;
  const sessionId=activeSession.id,owner=currentUser?.id,revision=++messageRenderRevision;
@@ -323,21 +329,21 @@ async function refreshMessages(){
   for(const row of rows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
    if(row.role==='user'){previousPrompt=row.text;previousAttachments=row.attachments||[];}
+   const latest=row===latestAssistant,presentation=workspaceMessagePresentation(row,latest,latest?activeSession.execution_status:null);if(presentation.omit)continue;
    const node=document.createElement('article');node.className=row.role==='user'?'user-bubble':'agent-response';node.dir='auto';node.tabIndex=0;
    const avatar=textElement('span','','message-avatar');avatar.setAttribute('aria-hidden','true');
    if(row.role==='user')avatar.textContent=Array.from(currentUser?.full_name||currentUser?.username||'').at(0)||'·';
    else avatar.innerHTML='<svg viewBox="0 0 16 20"><use href="#icon-opencode"/></svg>';
    node.append(avatar);
    if(row.id)node.dataset.messageId=row.id;
-   const hasText=Boolean(row.text?.trim());
+   const hasText=presentation.hasText;
    const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text);node.append(content);
-   if(row.role==='assistant'&&!hasText){const latest=row===latestAssistant,status=latest?activeSession.execution_status:null;
-    const state=status==='waiting_approval'?'waiting_approval':status==='failed'||row.state==='failed'?'failed':status==='cancelled'?'cancelled':status==='submitted'?'working':row.state==='working'&&latest?'working':'completed';
+   if(row.role==='assistant'&&!hasText&&presentation.feedback){const state=presentation.state;
     const labels={waiting_approval:['Waiting for your approval…','بانتظار موافقتك…'],failed:['The agent could not finish this request. Review the activity below before retrying.','تعذر على الوكيل إكمال الطلب. راجع النشاط أدناه قبل إعادة المحاولة.'],cancelled:['Execution stopped.','تم إيقاف التنفيذ.'],working:['The agent is working…','الوكيل يعمل الآن…'],completed:['Tool step completed.','اكتملت خطوة الأدوات.']};
     if(latest&&state==='completed')labels.completed=['The agent finished without a text reply. Review the tool results below.','انتهى الوكيل دون رد نصي. راجع نتائج الأدوات أدناه.'];
     const feedback=textElement('p',labels[state][lang==='ar'?1:0],'agent-progress-note');feedback.setAttribute('role','status');node.append(feedback);
    }if(row.role==='user'&&row.attachments?.length){const attached=textElement('div','','message-attachments');for(const file of row.attachments){const label=textElement('span',file.name+' · '+Math.ceil(file.size/1024)+' KB');label.dir='auto';label.title=file.path;attached.append(label);}node.append(attached);}
-   window.renderMessageActivity?.(node,row.activity||[]);
+   window.renderMessageActivity?.(node,presentation.activity);
    if(row.role==='assistant'&&!hasText){feed.append(node);continue;}
    const bar=document.createElement('div');bar.className='feed-actions';bar.setAttribute('role','group');bar.setAttribute('aria-label',lang==='ar'?'إجراءات الرسالة':'Message actions');
    if(row.role==='user')bar.append(feedAction('repeat',row.text,row.attachments),feedAction('edit',row.text,row.attachments));

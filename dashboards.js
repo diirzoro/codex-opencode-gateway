@@ -388,18 +388,25 @@
   const inlineApprovals=q('approvalBox');inlineApprovals.classList.add('chat-approvals');inlineApprovals.hidden=true;
   function keepInlineApprovals(){if(!inlineApprovals.hidden&&approvalOwner===currentUser?.id&&approvalSession===activeSession?.id&&!inlineApprovals.isConnected)q('agentFeed').append(inlineApprovals);}
   new MutationObserver(keepInlineApprovals).observe(q('agentFeed'),{childList:true});
+  let approvalRenderRevision=0,approvalSignature='';
   async function renderApprovals(rows,sessionId){
+    const revision=++approvalRenderRevision;
     const owner=currentUser?.id;approvalOwner=owner;approvalSession=sessionId;
-    inlineApprovals.replaceChildren();approvalsList.replaceChildren(textElement('summary',tr('Approval settings for this conversation','إعدادات الموافقة لهذه المحادثة')));
-    if(!activeSession||activeSession.id!==sessionId){inlineApprovals.hidden=true;approvalsList.hidden=true;return;}approvalsList.hidden=false;
-    try{const routine=await api('/api/sessions/'+sessionId+'/permissions/routine');if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;
+    if(!activeSession||activeSession.id!==sessionId){approvalSignature='';inlineApprovals.hidden=true;inlineApprovals.replaceChildren();approvalsList.hidden=true;approvalsList.replaceChildren();return;}
+    const metadata=await Promise.allSettled([api('/api/sessions/'+sessionId+'/permissions/routine'),api('/api/sessions/'+sessionId+'/permissions/remembered')]);
+    if(revision!==approvalRenderRevision||activeSession?.id!==sessionId||currentUser?.id!==owner)return;
+    const routineData=metadata[0].status==='fulfilled'?metadata[0].value:null,rememberedData=metadata[1].status==='fulfilled'?metadata[1].value:null;
+    const signature=JSON.stringify([owner,sessionId,lang,rows,routineData,rememberedData]);
+    if(approvalSignature===signature){if(!inlineApprovals.hidden&&!inlineApprovals.isConnected)q('agentFeed').append(inlineApprovals);return;}
+    inlineApprovals.replaceChildren();approvalsList.replaceChildren(textElement('summary',tr('Approval settings for this conversation','إعدادات الموافقة لهذه المحادثة')));approvalsList.hidden=false;
+    try{if(!routineData)throw new Error('Permission settings unavailable');const routine=routineData;
       const label=document.createElement('label');label.className='routine-permissions';const toggle=document.createElement('input');toggle.type='checkbox';toggle.checked=routine.enabled===true;
       toggle.onchange=async()=>{if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;toggle.disabled=true;try{await api('/api/sessions/'+sessionId+'/permissions/routine',{method:'PUT',body:JSON.stringify({enabled:toggle.checked})});await loadApprovals();}catch(error){toggle.checked=!toggle.checked;toast(error.message);}finally{toggle.disabled=false;}};
       label.append(toggle,textElement('span',tr('Allow routine project-file work; ask for commands and patches','السماح بأعمال ملفات المشروع المعتادة؛ الموافقة للأوامر والباتشات')));approvalsList.append(label);
     }catch(error){}
     approvalsList.append(textElement('p',tr('Review permission requests directly in the conversation.','راجع طلبات الموافقة مباشرة داخل الدردشة.')));
     for(const request of rows){const key=owner+':'+sessionId+':'+request.id;
-      const section=textElement('section','','chat-approval');section.append(textElement('strong',tr('Permission requested: ','طلب موافقة: ')+(request.permission||'permission')),textElement('pre',(request.patterns||[]).join('\n')));
+      const section=textElement('section','','chat-approval');section.append(textElement('strong',tr('Permission requested: ','طلب موافقة: ')+(toolNames[request.permission]?toolName(request.permission):(request.permission||tr('Operation','عملية')))),textElement('pre',(request.patterns||[]).join('\n')));
       if(!request.reviewable)section.append(textElement('p',tr('Full details are unavailable. Reject this request.','التفاصيل الكاملة غير متاحة. ارفض هذا الطلب.')));
       const buttons=textElement('div','','chat-approval-actions');
       for(const [reply,en,ar,icon] of [['reject','Reject','رفض','×'],['once','Allow once','موافقة مرة واحدة','✓'],['similar','Allow matching repeats','موافقة على الكل المماثل','✓✓']]){
@@ -413,10 +420,11 @@
       section.append(buttons,textElement('small',tr('Matching repeats applies only to the same reviewed request in this conversation.','موافقة الكل المماثل تخص الطلب نفسه الذي راجعته في هذه المحادثة فقط.')));inlineApprovals.append(section);
     }
     inlineApprovals.hidden=!rows.length;if(rows.length)q('agentFeed').append(inlineApprovals);
-    try{const remembered=await api('/api/sessions/'+sessionId+'/permissions/remembered');if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;
-      if(remembered.count){const note=textElement('div','','remembered-approvals');note.append(textElement('span',tr('Matching repeats approved in this conversation.','تم السماح بالطلبات المماثلة في هذه المحادثة.')));
+    try{const remembered=rememberedData;
+      if(remembered?.count){const note=textElement('div','','remembered-approvals');note.append(textElement('span',tr('Matching repeats approved in this conversation.','تم السماح بالطلبات المماثلة في هذه المحادثة.')));
         const clear=btn('clearRememberedApprovals','Clear remembered approvals','إلغاء الموافقات المحفوظة',async()=>{if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;await api('/api/sessions/'+sessionId+'/permissions/remembered',{method:'DELETE'});await loadApprovals();});note.append(clear);approvalsList.append(note);}
     }catch(error){}
+    approvalSignature=signature;
   }
   window.renderWorkspaceApprovals=renderApprovals;
   async function loadApprovals(){if(!activeSession){await renderApprovals([],null);return;}return refreshPermissions();}

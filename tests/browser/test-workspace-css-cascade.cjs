@@ -47,3 +47,7 @@ const outerFrame=doc.createElement('div');outerFrame.className='app-frame';const
 assert.equal(result(1366,oldSidebar,'display'),'none');assert.equal(result(1366,outerFrame,'grid-template-columns'),'minmax(0,1fr)');
 workspacePage.classList.remove('active');assert.equal(result(1366,oldSidebar,'display'),'flex');assert.equal(result(1366,outerFrame,'grid-template-columns'),'248px minmax(0,1fr)');
 console.log('2 passed: old shell sidebar/column removed only in Workspace and restored elsewhere');
+
+const approvals=doc.createElement('div');approvals.className='chat-approvals';const card=doc.createElement('section');card.className='chat-approval';const allow=doc.createElement('button');allow.dataset.reply='once';card.append(allow);approvals.append(card);workspacePage.append(approvals);
+assert.equal(result(1366,card,'border-radius'),'12px');assert.equal(result(1366,card,'border'),'1px solid var(--line)');assert.equal(result(1366,allow,'background'),'var(--soft)');
+console.log('3 passed: actual approval card has rounded quiet frame and distinct allow-once action');
