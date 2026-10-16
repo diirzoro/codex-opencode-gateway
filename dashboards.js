@@ -603,7 +603,7 @@
   const choices=textElement('button','','icon-btn composer-choice-toggle');choices.type='button';choices.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
   choices.onclick=()=>{const open=picks.classList.toggle('open');choices.setAttribute('aria-expanded',String(open));};
   controls.replaceChildren(utilities,choices,picks,actions,retryModels);
-  document.addEventListener('click',event=>{if(!picks.contains(event.target)&&event.target!==choices){picks.classList.remove('open');choices.setAttribute('aria-expanded','false');}});
+  document.addEventListener('click',event=>{if(!picks.contains(event.target)&&!choices.contains(event.target)){picks.classList.remove('open');choices.setAttribute('aria-expanded','false');}});
   controls.addEventListener('keydown',event=>{if(event.key==='Escape'){picks.classList.remove('open');choices.setAttribute('aria-expanded','false');choices.focus();}});
   window.addEventListener('workspace-provider-disconnected',event=>{
     if(activeWorkspace?.id!==event.detail.workspaceId)return;
@@ -846,8 +846,19 @@
     for(const [kind,en,ar] of [['local','Local','محلي'],['github','GitHub','GitHub']])choices.append(btn('conversation-kind-'+kind,en,ar,()=>show(kind),'button ghost small'));
     if(initialKind==='github'||initialKind==='local')await show(initialKind);
   }
-  newSessionButton.onclick=()=>chooseNewConversation().catch(error=>toast(error.message));
-  const conversationGithub=btn('conversationGithub','GitHub','GitHub',()=>chooseNewConversation('github').catch(error=>toast(error.message)),'button ghost small');conversationGithub.setAttribute('aria-label',tr('GitHub conversation · repository and branch','محادثة GitHub · المستودع والفرع'));sessionsSummary.append(conversationGithub);
+  // Compact source picker; keep existing project/session creation functions unchanged.
+  const sessionSourceMenu=document.createElement('div');sessionSourceMenu.className='session-source-menu';sessionSourceMenu.hidden=true;
+  sessionSourceMenu.setAttribute('role','group');sessionSourceMenu.setAttribute('aria-label',tr('New conversation source','مصدر المحادثة الجديدة'));
+  for(const [kind,en,ar] of [['local','Local project','مشروع محلي'],['github','GitHub','GitHub']]){
+    const item=btn('conversation-source-'+kind,en,ar,()=>{sessionSourceMenu.hidden=true;newSessionButton.setAttribute('aria-expanded','false');chooseNewConversation(kind).catch(error=>toast(error.message));},'session-source-option');
+    sessionSourceMenu.append(item);
+  }
+  sessionsSummary.append(sessionSourceMenu);
+  newSessionButton.setAttribute('aria-haspopup','true');newSessionButton.setAttribute('aria-expanded','false');
+  newSessionButton.onclick=()=>{if(newSessionButton.disabled)return;sessionSourceMenu.hidden=!sessionSourceMenu.hidden;newSessionButton.setAttribute('aria-expanded',String(!sessionSourceMenu.hidden));};
+  document.addEventListener('click',event=>{if(!sessionsSummary.contains(event.target)){sessionSourceMenu.hidden=true;newSessionButton.setAttribute('aria-expanded','false');}});
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!sessionSourceMenu.hidden){sessionSourceMenu.hidden=true;newSessionButton.setAttribute('aria-expanded','false');newSessionButton.focus();}});
+
 
   const projectMenu=document.createElement('details');projectMenu.className='composer-project-menu';projectMenu.id='composerProjectMenu';
   const projectMenuToggle=document.createElement('summary');projectMenuToggle.setAttribute('aria-label',tr('Projects and connections','المشاريع والربط'));projectMenuToggle.title=tr('Projects and connections','المشاريع والربط');projectMenuToggle.innerHTML='<svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg>';const projectMenuItems=textElement('div');projectMenu.append(projectMenuToggle,projectMenuItems);
