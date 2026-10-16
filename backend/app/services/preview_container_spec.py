@@ -25,11 +25,8 @@ def argv_for(spec: ContainerSpec) -> tuple[str, ...]:
     ):
         raise UnsafeContainerSpec("Verified SHA256 image digest required")
     if (not spec.argv or spec.internal_port != 8080 or
-            not spec.project_mount.startswith("/var/lib/preview-worker/jobs/") or
-            ".." in spec.project_mount.split("/") or
-            not spec.project_mount.endswith("/src") or
-            any(not part for part in spec.argv) or
-            any("\x00" in part for part in spec.argv)):
+            re.fullmatch(r"/var/lib/preview-worker/jobs/[a-zA-Z0-9_-]{1,64}/src", spec.project_mount) is None or
+            any(not isinstance(part, str) or not part or "\\x00" in part for part in spec.argv)):
         raise UnsafeContainerSpec("Invalid fixed worker launch contract")
     # This is a *configuration contract*, not a complete sandbox security proof.
     # No -p, --privileged, host namespaces, Docker socket or secret volumes.
