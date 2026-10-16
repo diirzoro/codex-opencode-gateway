@@ -5,7 +5,7 @@ This suite does not connect to production or Test PostgreSQL.
 import unittest
 from unittest.mock import patch
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, Column
 from sqlalchemy.schema import CreateTable
 
 from app.models.preview import PreviewRuntimeLease
@@ -39,7 +39,7 @@ class PreviewMigrationContractTests(unittest.TestCase):
         captured = {}
         def create_table(name, *columns, **kwargs):
             captured["name"] = name
-            captured["columns"] = {c.name for c in columns if hasattr(c, "name") and c.name is not None}
+            captured["columns"] = {c.name for c in columns if isinstance(c, Column)}
         with patch.object(module.op, "create_table", create_table), patch.object(module.op, "create_index"):
             module.upgrade()
         self.assertEqual(captured["name"], PreviewRuntimeLease.__tablename__)
