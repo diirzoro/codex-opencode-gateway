@@ -22,3 +22,16 @@ for(const width of [390,700,900,1100,1366]){
 workspace.classList.add('panel-docked');doc.getElementById('sessionSidebar').classList.add('open');
 assert.equal(result(900,doc.getElementById('sessionSidebar'),'position'),'fixed');
 console.log('6 passed: loaded CSS cascade at five viewport widths and docked project drawer (DOM/CSS parser, not rendered pixels)');
+for(const dark of [false,true]){
+ doc.documentElement.classList.toggle('dark',dark);
+ assert.equal(result(1366,doc.documentElement,'--line'),'color-mix(in srgb,var(--text) 9%,var(--panel))');
+ assert.equal(result(1366,doc.documentElement,'--surface-edge'),'color-mix(in srgb,var(--text) 9%,var(--panel))');
+ assert.equal(result(1366,doc.documentElement,'--control-edge'),'color-mix(in srgb,var(--text) 12%,var(--panel))');
+}
+const carousel=doc.createElement('section');carousel.className='feature-carousel';const media=doc.createElement('div');media.className='home-media';carousel.append(media);doc.body.append(carousel);
+assert.equal(result(1366,media,'border'),'1px solid var(--line)');
+const method=doc.createElement('label');method.className='checkout-method';doc.body.append(method);
+assert.equal(result(1366,method,'border'),'1px solid var(--line)');
+assert.ok(html.includes(':focus-visible{outline:0;border-color:#2563eb'));
+assert.ok(sources[0].includes('.checkout-method:has(input:checked){background:#e9f2ff;border:2px solid #3978c9;'));
+console.log('5 passed: light/dark shared edges, Landing inner media, checkout resting border, preserved focus/selection (DOM/CSS parser/source)');

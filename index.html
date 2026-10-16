@@ -73,7 +73,7 @@
     .price-card b{font-size:2.1rem;font-weight:800;letter-spacing:-1px;background:linear-gradient(135deg,var(--primary),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
     .price-card span{display:block;margin-top:.2rem;font-weight:600}
     .price-card small{display:block;margin-top:.15rem;opacity:.7}
-    .price-card:nth-child(3){border-color:color-mix(in srgb,var(--primary) 45%,var(--line))}
+    .price-card:nth-child(3){border-color:color-mix(in srgb,var(--primary) 12%,var(--line))}
     .price-card:nth-child(3)::after{content:"Best value";position:absolute;top:12px;inset-inline-end:12px;font-size:10px;font-weight:700;letter-spacing:.4px;padding:3px 8px;border-radius:999px;background:var(--soft);color:var(--primary)}
     .pricing-summary{display:block;width:fit-content;margin:1.25rem auto 0;padding:8px 16px;border-radius:999px;background:var(--soft);color:var(--primary);font-weight:700}
     .pricing-head h2{font-size:1.5rem;letter-spacing:-.4px}
@@ -374,8 +374,8 @@
 </style>
 <style id="readable-contrast-theme">
 /* Shared text and edge contrast: normal text stays dark on light surfaces. */
-:root:not(.dark){--text:#172033;--muted:#24324a;--line:color-mix(in srgb,var(--text) 11%,var(--panel));--border:var(--line);--primary:#1e40af;--primary2:#1e3a8a}
-:root.dark{--line:color-mix(in srgb,var(--text) 11%,var(--panel));--border:var(--line)}
+:root:not(.dark){--text:#172033;--muted:#24324a;--line:color-mix(in srgb,var(--text) 9%,var(--panel));--border:var(--line);--primary:#1e40af;--primary2:#1e3a8a}
+:root.dark{--line:color-mix(in srgb,var(--text) 9%,var(--panel));--border:var(--line)}
 :root:not(.dark) :is(h1,h2,h3,h4,h5,h6,p,small,label,legend,dt,dd,th,td,a,button,input,select,textarea,kbd,.lead,.eyebrow,.section-title,.brand-caption,.gateway-label,.app-user,.sidebar-section-label,.sidebar-empty,.composer-context,.badge,.banner){color:var(--text)}
 :root:not(.dark) :is(.price-card,.project-card,.trial-dates) small,:root:not(.dark) .trial-dates{opacity:1}
 :root:not(.dark) :is(.sidebar-links button,.sidebar-links button>span,.sidebar-profile small,.feature-icon,.nav-icon,.composer-context span,.home-project-row span,.home-session-row span,.price-card span,.plan-tag,.pricing-summary){color:var(--text);opacity:1}
@@ -409,9 +409,9 @@
 </style>
 <style id="product-control-hierarchy">
 /* Actions, fields and content surfaces have distinct visual weight. */
-:root{--control-fill:#f1f7ff;--control-edge:color-mix(in srgb,var(--text) 18%,var(--panel));--surface-edge:color-mix(in srgb,var(--text) 14%,var(--panel));--surface-depth:0 1px 3px rgba(15,23,42,.04);--action-depth:0 4px 8px rgba(37,99,235,.1),0 9px 20px -9px rgba(37,99,235,.4)}
-:root.dark{--control-fill:#1b2b43;--control-edge:color-mix(in srgb,var(--text) 18%,var(--panel));--surface-edge:color-mix(in srgb,var(--text) 14%,var(--panel));--surface-depth:0 1px 4px rgba(0,0,0,.16);--action-depth:0 6px 20px -8px rgba(59,130,246,.5)}
-:root:not(.dark) .button:not(.ghost):not(:disabled),:root:not(.dark) .send-circle:not(:disabled){background:linear-gradient(135deg,#a8d5ff,#60a5fa);color:#10213c;border:1px solid #3475d6;box-shadow:var(--action-depth);font-weight:700}
+:root{--control-fill:#f1f7ff;--control-edge:color-mix(in srgb,var(--text) 12%,var(--panel));--surface-edge:color-mix(in srgb,var(--text) 9%,var(--panel));--surface-depth:0 1px 3px rgba(15,23,42,.04);--action-depth:0 4px 8px rgba(37,99,235,.1),0 9px 20px -9px rgba(37,99,235,.4)}
+:root.dark{--control-fill:#1b2b43;--control-edge:color-mix(in srgb,var(--text) 12%,var(--panel));--surface-edge:color-mix(in srgb,var(--text) 9%,var(--panel));--surface-depth:0 1px 4px rgba(0,0,0,.16);--action-depth:0 6px 20px -8px rgba(59,130,246,.5)}
+:root:not(.dark) .button:not(.ghost):not(:disabled),:root:not(.dark) .send-circle:not(:disabled){background:linear-gradient(135deg,#a8d5ff,#60a5fa);color:#10213c;border:1px solid var(--control-edge);box-shadow:var(--action-depth);font-weight:700}
 :root:not(.dark) .button.ghost{background:linear-gradient(180deg,#fff,#eff6ff);color:var(--text);border:1px solid var(--control-edge);box-shadow:0 2px 5px rgba(30,64,175,.07);font-weight:600}
 .button{border-radius:12px;min-height:42px;transition:background .18s,box-shadow .18s,transform .18s}
 .button.small{min-height:36px}
@@ -420,11 +420,11 @@
 :root button:disabled{box-shadow:none;transform:none}
 :root :is(input:not([type=checkbox]):not([type=radio]),select,textarea){background:var(--control-fill);border:1px solid var(--control-edge);border-radius:11px;box-shadow:inset 0 1px 2px rgba(30,64,175,.04);transition:border-color .18s,box-shadow .18s,background .18s}
 :root :is(input:not([type=checkbox]):not([type=radio]),select){min-height:44px;padding:10px 13px}
-:root :is(input,select,textarea):hover{border-color:#2563eb}
+:root :is(input,select,textarea):hover{border-color:color-mix(in srgb,var(--text) 20%,var(--panel))}
 :root :is(input,select,textarea):focus-visible{outline:0;border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.16);background:var(--panel)}
 :root :is(.price-card,.project-card,.summary-card,.list-card,.manage-card,.auth-card,.onboard-panel,.settings-list,.admin-section,.billing-section,.subscription-card,.feature-cards article,.account-grid article,.stat-grid article){border:1px solid var(--surface-edge);border-radius:18px;box-shadow:var(--surface-depth)}
 :root:not(.dark) :is(.price-card,.summary-card,.manage-card,.feature-cards article,.account-grid article,.stat-grid article){background:linear-gradient(145deg,#fff 45%,#f3f8ff)}
-:root :is(.price-card,.feature-cards article):hover{border-color:#2563eb;box-shadow:0 12px 28px -12px rgba(37,99,235,.3)}
+:root :is(.price-card,.feature-cards article):hover{border-color:var(--control-edge);box-shadow:var(--surface-depth)}
 :root .manage-card h2{font-size:20px;font-weight:750;letter-spacing:-.3px;margin-bottom:20px}
 :root .manage-form label{font-weight:600;gap:9px}
 :root .manage-form{gap:22px 24px;align-items:start}
@@ -447,7 +447,7 @@
 :root .quick-actions [data-quick],:root .welcome-center .quick-actions [data-go]{background:var(--control-fill);border:1px solid var(--control-edge);border-radius:11px;min-height:42px;padding:10px 15px;font-size:13px;color:var(--text)}
 :root .quick-actions [data-quick]:hover,:root .welcome-center .quick-actions [data-go]:hover{background:var(--shell-hover);box-shadow:0 4px 12px rgba(37,99,235,.1)}
 #app-sidebar .avatar{border:0;background:var(--shell-hover)}
-:root:not(.dark) #homeNewProject{background:linear-gradient(135deg,#a8d5ff,#60a5fa);color:#10213c;border:1px solid #3475d6;box-shadow:var(--action-depth);font-weight:700}
+:root:not(.dark) #homeNewProject{background:linear-gradient(135deg,#a8d5ff,#60a5fa);color:#10213c;border:1px solid var(--control-edge);box-shadow:var(--action-depth);font-weight:700}
 :root .home-project-row,:root .home-session-row{background:var(--panel);border:1px solid var(--surface-edge);border-radius:14px;padding:16px 20px;margin:12px 0;box-shadow:0 4px 15px -9px rgba(37,99,235,.24)}
 :root .home-project-row:hover,:root .home-session-row:hover{background:var(--control-fill);border-color:var(--control-edge)}
 #app-sidebar :is(button.active,button[aria-current=page]){background:linear-gradient(115deg,#bfdbfe,#d8eaff);font-weight:700;box-shadow:0 5px 14px -7px rgba(37,99,235,.24)}
