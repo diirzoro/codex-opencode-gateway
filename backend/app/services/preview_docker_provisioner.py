@@ -74,7 +74,7 @@ class DockerProvisioner:
         if CONTAINER_ID.fullmatch(container_id) is None or JOB_ID.fullmatch(job_id) is None:
             raise PreviewProvisioningError("Invalid sandbox identity")
         labels = self._call(("inspect", "--format",
-                             "{{index .Config.Labels \\"opencode.preview.job\\"}}|{{index .Config.Labels \\"opencode.preview.managed\\"}}",
+                             '{{index .Config.Labels "opencode.preview.job"}}|{{index .Config.Labels "opencode.preview.managed"}}',
                              container_id))
         if labels != f"{job_id}|true":
             raise PreviewProvisioningError("Refusing access to an unowned container")
