@@ -32,9 +32,12 @@ def validate_archive(archive: tarfile.TarFile) -> tuple[int, int]:
                 any(part in ("", ".", "..") for part in name.split("/")) or
                 len(path.parts) > MAX_DEPTH or path.is_absolute()):
             raise UnsafePreviewArchive("Unsafe archive member path")
-        if path.parts[0].startswith(".") or any(
-                part.startswith(".env") or part in (".git", ".ssh", ".aws", "node_modules", ".venv")
-                for part in path.parts):
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+            raise UnsafePreviewArchive("Archive path contains control characters")
+        if any(part.startswith(".env") or part in (".git", ".ssh", ".aws",
+                ".azure", ".config", "node_modules", ".venv", "venv",
+                "__pycache__", ".next", "vendor", "opencode.json",
+                "opencode.jsonc") for part in path.parts):
             raise UnsafePreviewArchive("Private or generated files cannot enter Preview")
         canonical = str(path)
         if canonical in seen:
