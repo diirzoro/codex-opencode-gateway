@@ -1,6 +1,11 @@
 # Smart Preview — Test-only validation and release gate
-Status: NOT READY TO ENABLE DYNAMIC EXECUTION. No deployment performed.
+Status: READY FOR CONTROLLED TEST-ONLY VALIDATION AFTER BACKUP; NOT READY TO ENABLE DYNAMIC EXECUTION. No deployment performed.
 Branch: updates; production master and Live remain untouched.
+
+## Test deployment decision (2026-10-16)
+- A controlled **Test-only checkout and validation** is appropriate once a backup and rollback path have been confirmed; do not promote to master and do not enable the isolated preview runner.
+- Fixed unit-test contract bugs: capacity release inconsistency test now passes the cleanup acknowledgement; migration column assertions ignore named constraints.
+- The test plan is **not evidence of passing tests**; all runtime and PostgreSQL checks must actually be executed in Test.
 
 ## Before any Test update
 1. Confirm the Test checkout points to `updates`; snapshot/backup **Test only** database/files/config. Never copy or expose production .env.
