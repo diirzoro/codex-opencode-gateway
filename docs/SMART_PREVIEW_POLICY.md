@@ -112,5 +112,12 @@ Repository: diirzoro/codex-opencode-gateway
 - This does NOT yet wire a secure worker or start endpoint to the admission layer. Backend dynamic start remains fail-closed (503); no automatic Preview activation was introduced.
 - No production code or deployment changed; Test/CI tests still need running.
 
+## Progress — preview lease state machine (2026-10-16, updates only)
+- Added `backend/app/services/preview_leases.py`: pure, fail-closed lifecycle for queued/starting/running/stopped/expired/failed, explicit user Start, safe Stop, and five-minute idle expiry.
+- Status polling does not count as user activity. Expired/stopped previews require a new explicit Start request; neither tab opening nor reconnect can restart them.
+- Added `backend/tests/test_preview_leases.py` for manual transitions, 300-second expiry, inactivity refresh from explicit activity only, blocked auto-resume, and timezone checks.
+- This is **not yet persisted in PostgreSQL or connected to the actual Preview runner**. It starts NO containers and executes NO npm/Python. Tests committed but not yet executed on Test/CI.
+- Remaining: persistent per-owner leases and admission transactions, isolated worker + cleanup reaper, safe origin routing, UI integration and end-to-end staging verification.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
