@@ -25,7 +25,7 @@ class WorkerArchiveTests(unittest.TestCase):
             self.assertEqual(validate_archive(tar), (2, 10))
 
     def test_rejects_traversal_absolute_and_private(self):
-        for name in ("../etc/passwd", "/etc/passwd", "src/../x", ".env", "src/.env.local", "node_modules/a.js"):
+        for name in ("../etc/passwd", "/etc/passwd", "src/../x", ".env", "src/.env.local", "node_modules/a.js", "src/.ssh/key", "src/.config/secrets", "nested/opencode.json", "src/a\x01b"):
             with self.subTest(name=name), make_archive([name]) as tar:
                 with self.assertRaises(UnsafePreviewArchive):
                     validate_archive(tar)
