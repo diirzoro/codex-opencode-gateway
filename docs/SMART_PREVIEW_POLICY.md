@@ -75,5 +75,13 @@ Repository: diirzoro/codex-opencode-gateway
 - Added `backend/tests/test_preview_scheduling.py` with focused unit tests. **Tests have not yet been executed on the Test server or CI; do not mark runtime feature complete.**
 - The actual scheduler, separate-origin static server, isolated npm build worker, automatic pool provisioning, idle leases and dynamic previews remain outstanding.
 
+## Session and terminal inactivity policy (agreed 2026-10-16)
+- **Gateway user login:** 15 minutes of genuine user inactivity expires the authenticated web session and requires a new login. Existing server-side session policy in `backend/app/security/sessions.py` already specifies `IDLE_TIMEOUT = timedelta(minutes=15)`; verify frontend activity acknowledgements are based on actual interaction, not background polling. Idle expiration does NOT remove projects, messages, or stored data.
+- **Preview-owned npm / terminal processes:** after **5 minutes (300 seconds)** without meaningful activity, stop the preview-owned shell/process, clean up its process group and release the sandbox slot. Only a new explicit user request can start a new one. Repeated terminal output without active customer interaction does not count as activity indefinitely.
+- **Preview dynamic runtime:** same 300-second idle cutoff, separate from the account session timer. Stop automatically, keep the Preview panel visible in stopped state, and restart only on explicit Preview click.
+- Never terminate independent OpenCode coding-agent tasks, builds, or tests that are actively executing solely because a browser tab has been idle for five minutes. Distinguish preview-owned npm/terminal from agent-owned terminals. Warn user before terminating user-interactive shell sessions when practical and preserve persisted output/logs within policy limits.
+- A user logout/session expiry revokes preview access and should asynchronously release that user's owned preview resources. Do not make cleanup a prerequisite for secure session revocation.
+- Five-minute cleanup and authenticated idle policy must be validated on Test before enabling execution. Current code has policy metadata only; an actual worker/terminal lease reaper is not yet implemented.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
