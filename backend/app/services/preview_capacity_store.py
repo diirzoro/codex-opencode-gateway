@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..models.preview import PreviewRuntimeLease, PreviewWorkerCapacity
 from .preview_admission import WorkerCapacity
 from .preview_worker_registry import WorkerHeartbeat, available_worker
+from .preview_host_gate import HostTelemetry, permit_preview
 
 
 def _aware(dt):
@@ -17,7 +18,8 @@ def _aware(dt):
 
 
 def reserve(db: Session, *, user_id, workspace_id, worker_id: str,
-            generation: int, framework: str, now: datetime) -> bool:
+            generation: int, framework: str, now: datetime,
+            host_telemetry: HostTelemetry | None = None) -> bool:
     """Reserve one worker slot under its row lock and lease row lock.
 
     Caller owns transaction; failed results perform no writes. Locks serialize
@@ -26,6 +28,10 @@ def reserve(db: Session, *, user_id, workspace_id, worker_id: str,
     """
     if now.tzinfo is None or generation < 1 or not worker_id:
         raise ValueError("Invalid reservation request")
+    # A positive host decision does not replace DB slot locking or isolation.
+    # Trusted telemetry must be supplied from internal collector, never browser.
+    if not permit_preview(host_telemetry)["admitted"]:
+        return False
     worker = db.scalar(select(PreviewWorkerCapacity).where(
         PreviewWorkerCapacity.worker_id == worker_id).with_for_update())
     if worker is None:
