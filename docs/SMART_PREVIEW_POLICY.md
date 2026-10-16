@@ -171,5 +171,11 @@ Repository: diirzoro/codex-opencode-gateway
 - **Still not real concurrency validation**: tests are committed but not executed, and actual concurrent PostgreSQL transactions, crash recovery and process cleanup are unverified. No Preview code execution or Test/Live deployment occurred.
 - Next: implement trusted isolated worker lifecycle with cleanup acknowledgments and PostgreSQL concurrency tests in a disposable Test environment, then UI Start integration. Do NOT connect unsafe preview execution to Gateway host.
 
+## Finalization checkpoint — 2026-10-16
+- Hardened `preview_capacity_store.release()` to require explicit `cleanup_confirmed=True` from a trusted dispatcher after sandbox destruction and routing revocation; client input must never supply that flag. Added regression test.
+- Created `docs/PREVIEW_TEST_DEPLOYMENT_CHECKLIST.md` with Test-only migration and unit-test commands, disposable PostgreSQL verification, concurrency/security checks, and strict enabling criteria.
+- **Status remains INCOMPLETE / NOT DEPLOYABLE as working dynamic Preview.** No isolated worker exists, no npm/Python runtime has been launched, tests have not been executed in Test, and production is unchanged. Avoid claiming completion or asking owner to promote branches.
+- The next hands-on prerequisite is a trusted isolated sandbox worker and disposable Test PostgreSQL environment. Implementation and testing require access to those environments; complete and verify before enabling the existing manual Start button.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
