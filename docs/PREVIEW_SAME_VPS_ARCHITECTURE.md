@@ -13,6 +13,14 @@ Branch: updates. Never touch master/Live without explicit approval.
 8. User Start only; STOP revokes preview route, destroys sandbox, verifies cleanup and only then releases slot. Crash reaper performs identical cleanup. After 300 seconds of meaningful user inactivity stop only Preview-owned process, not agent execution or ongoing independent builds. Panel stays open.
 9. Operating limitation: kernel-sharing containers on one VPS are not equivalent to a separate VM/host. Before admitting untrusted customer code require a threat-model/security review, tested isolation and fail-closed controls. If VPS cannot provide acceptable isolation, deny dynamic Preview rather than using unsandboxed node/python.
 
+## Confirmed capacity input — owner reported VPS size
+- VPS capacity reported by owner: **4 GB RAM, 80 GB total storage**. CPU count, usable/free disk and RAM, swap, OS, current Gateway/OpenCode/PostgreSQL use are not yet measured.
+- Begin with a strict **single dynamic preview slot maximum** (not 50 concurrent). Even one isolated container must remain **disabled until measured headroom and sandbox security pass**.
+- Provisional per-preview cgroup envelope: 1 CPU core, up to 768 MiB memory and 1 GiB ephemeral disk, up to 128 PIDs, 300s Preview idle threshold. Add explicit host-reserved headroom for Gateway, OpenCode, PostgreSQL and OS; if headroom is insufficient, return queued/unavailable instead of causing host OOM. These are limits, not guarantees.
+- The 80 GB is **total storage**, not free space. Inspect `df -h`, inode availability, container image/cache size and backups before allocating any sandbox storage.
+- Packages/builds can exceed 768 MiB or 1 GiB; refuse or queue projects that do not fit, rather than raising host limits blindly. Never run package install or project code on the host.
+- Upgrade RAM or use a separate worker host when telemetry shows sustained pressure; 4 GB is unsuitable for promising many simultaneous dynamic previews.
+
 ## Test rollout prerequisites (all NOT YET VERIFIED)
 - [ ] Verify current VPS OS/kernel, RAM, CPU, free disk, available namespaces/cgroup v2, seccomp/AppArmor, rootless runtime, reverse-proxy isolation and service privileges without altering Live.
 - [ ] Decide safe max workers based on measured resources. No default of 50 concurrent users.
