@@ -19,8 +19,9 @@ if [[ ! -f /etc/opencode-preview-worker-test.env ]]; then
   umask 077
   TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')
   printf 'PREVIEW_WORKER_TOKEN=%s\n' "$TOKEN" > /etc/opencode-preview-worker-test.env
-  chmod 0600 /etc/opencode-preview-worker-test.env
 fi
+chown root:preview-worker /etc/opencode-preview-worker-test.env
+chmod 0640 /etc/opencode-preview-worker-test.env
 install -o root -g root -m 0644 "$SOURCE" "/etc/systemd/system/$SERVICE"
 systemctl daemon-reload
 # Deliberately do not enable/start: the Gateway worker registry and browser
