@@ -126,5 +126,12 @@ Repository: diirzoro/codex-opencode-gateway
 - **NOT READY FOR TEST DEPLOYMENT YET.** Requirements before informing owner to deploy Test: verify migration chain, integrate ORM and transaction-safe lease repository, run the unit tests, verify DB migration upgrade and downgrade in disposable staging, and ensure disabled-runner behavior remains 503.
 - When ready for Test, provide explicit steps and settings for Test only, separate from Live; never modify .env secrets or workflow configuration by assumption.
 
+## Progress — durable lease transition preparation (2026-10-16, updates only)
+- Added `backend/app/services/preview_lease_store.py` as a **dormant** owner-scoped row-locking transaction layer for future PostgreSQL Preview leases. It enforces state transitions, increments generations on explicit re-start, and never allocates containers.
+- Corrected `preview_leases.py` to reject user activity received *after* a running lease has already been idle for 300 seconds (late heartbeats cannot revive an expired preview). Added a regression test.
+- The `PreviewRuntimeLease` ORM model has **not** been registered in `app.models` and the migration chain has not yet been verified. Do not call the new persistence layer until a migration and dedicated database tests are prepared and passed.
+- IMPORTANT: This checkpoint is **not deploy-ready**. Confirm the repository's current Alembic revision via a full migrations directory listing or `alembic heads` in a disposable Test-only checkout before adding migrations. Avoid guessed revision IDs and Live database actions.
+- Still pending: trusted worker registry, atomic worker capacity reservation, isolated npm/Python runner, cleanup reaper, separate-origin routing, end-to-end tests and deployment authorization.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
