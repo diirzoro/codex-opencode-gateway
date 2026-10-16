@@ -62,3 +62,25 @@ def idle_expired(*, last_activity_monotonic: float, now_monotonic: float) -> boo
     must never be recorded as genuine activity.
     """
     return now_monotonic - last_activity_monotonic >= DYNAMIC_IDLE_TIMEOUT_SECONDS
+
+
+def plan_pools(user_count: int, *, users_per_pool: int = DEFAULT_POOL_USERS) -> dict[str, object]:
+    """Calculate logical pool demand only; never provision hosts or containers.
+
+    Actual pool activation must be gated by measured capacity, security checks,
+    and durable admission state. User count is NOT active runtime concurrency.
+    """
+    if isinstance(user_count, bool) or not isinstance(user_count, int) or user_count < 0:
+        raise ValueError("user_count must be a nonnegative integer")
+    if isinstance(users_per_pool, bool) or not isinstance(users_per_pool, int) or not 1 <= users_per_pool <= MAX_POOL_USERS:
+        raise ValueError("users_per_pool must be between 1 and 100")
+    requested = (user_count + users_per_pool - 1) // users_per_pool
+    return {
+        "registered_users": user_count,
+        "users_per_pool": users_per_pool,
+        "logical_pools_required": requested,
+        "provisioned_pools": None,
+        "worker_capacity_verified": False,
+        "auto_provision_enabled": False,
+        "note": "This plan does not allocate CPU, RAM, containers or sessions.",
+    }
