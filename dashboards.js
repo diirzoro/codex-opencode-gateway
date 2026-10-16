@@ -507,6 +507,7 @@
             previewStatus.textContent=tr('Running application preview','معاينة التطبيق تعمل');
             return;
           }
+          throw new Error(tr('Container started, but no preview URL was returned.','بدأت الحاوية دون رابط معاينة صالح.'));
         } catch(launchError) {
           if(activeWorkspace?.id!==id||previewRevision!==revision)return;
           // The runner may be unavailable in development: try HTML without
