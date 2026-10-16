@@ -415,7 +415,7 @@
     if (!feed) return;
     var line = textElement('div', '· ' + kind, 'event-line');
     feed.append(line);
-    feed.scrollTop = feed.scrollHeight;
+    // The shared chat-scroll controller owns follow-tail behavior.
   }
 
   // The base client owns the sole SSE connection and durable replay cursor.
@@ -621,7 +621,12 @@
     const button = $('#registerSubmit'); button.disabled = true;
     try {
       const prefs = { preferred_language: lang, preferred_theme: dark ? 'dark' : 'light' };
-      await api('/api/auth/register', { method: 'POST', body: JSON.stringify(registrationPayload()) });
+      const registered = await api('/api/auth/register', { method: 'POST', body: JSON.stringify(registrationPayload()) });
+      if (registered.status === 'pending_email') {
+        $('#registerPassword').value = '';
+        apiMessage('registerMessage', tr('Check your email for the verification link, then sign in.', 'تم إرسال رابط التفعيل إلى بريدك. افتح الرسالة للتحقق ثم سجل الدخول.'));
+        return;
+      }
       renderProfile(await api('/api/profile', { method: 'PATCH', body: JSON.stringify(prefs) }));
       $('#registerPassword').value = '';
       if (pendingIdea) { $('#projectName').value = pendingIdea.slice(0, 120); pendingIdea = ''; }
@@ -1513,14 +1518,27 @@
   
     function homeGo(next) { var max = homeMax(); home.index = next > max ? 0 : (next < 0 ? max : next); homeUpdate(); homeSchedule(); }
   
+    function homeWithPlatformBenefits(items) {
+      // Owner-approved product information, not demo projects or database rows.
+      // Preserve every admin item, its dates/media/CTA and existing order.
+      var existing=Array.isArray(items)?items:[],icons=['icon-terminal','icon-github','icon-link','icon-clock'];
+      var required=icons.map(function(icon,index){
+        var key='b'+(index+1);
+        return {id:'gateway-benefit-'+(index+1),item_type:'platform',media_kind:'icon',icon:icon,
+          title_en:copy.en[key+'t'],title_ar:copy.ar[key+'t'],body_en:copy.en[key+'d'],body_ar:copy.ar[key+'d']};
+      });
+      return required.filter(function(info){return !existing.some(function(item){return item.title_en===info.title_en&&item.title_ar===info.title_ar&&item.body_en===info.body_en&&item.body_ar===info.body_ar;});}).concat(existing);
+    }
+
     async function renderHomeCarousel() {
       var host = document.getElementById('homeCarousel');
       if (!host) return;
       home.host = host;
       var items;
       try { items = await api('/api/homepage', { cache: 'no-store', allowAnonymous: true }); }
-      catch (error) { return; }
-      home.items = Array.isArray(items) ? items : [];
+      catch (error) { items=home.remoteItems||[]; }
+      home.remoteItems=Array.isArray(items)?items:[];
+      home.items = homeWithPlatformBenefits(home.remoteItems);
       if (!home.items.length) { host.replaceChildren(); return; }
       if (!home.built || !home.track) homeBuildShell();
       homeRenderCards(); homeUpdate(); homeSchedule();

@@ -2,7 +2,7 @@
 
 Runtime model access is a separate prerequisite. No synthetic execution progress.
 """
-import asyncio, hashlib, json, re, time, uuid, mimetypes
+import asyncio, hashlib, json, re, shlex, time, uuid, mimetypes
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +19,20 @@ from ..services.entitlements import require_advanced
 
 router=APIRouter(prefix="/api/sessions",tags=["agent"],dependencies=[Depends(require_workspace_entitlement)])
 tasks={}
+
+EXECUTION_REPORTING = """Execution reporting for this Gateway conversation:
+Follow the user's language, selected agent role, project instructions and all existing permissions.
+For multi-step work, briefly describe each meaningful next step before tools, then report its actual result.
+Use the native Todo tool for a real multi-step plan when available; update it from actual progress.
+If a tool or test fails, explain the observed failure without exposing secrets, diagnose it, and attempt a
+safe correction within the existing authorization. Rerun only affected checks after a relevant correction.
+Never blindly repeat failed operations, bypass a rejection, or proceed past a pending approval/question.
+Keep progress updates concise, user-facing and factual; do not disclose private reasoning or credentials.
+Before finishing, provide a final report: changes completed, checks actually run and their outcomes,
+errors fixed, unresolved issues, and blocked or unverified work. Distinguish a finished tool call from
+completion of the entire request. Do not claim success, deployment or verification without evidence.
+If you cannot continue safely, explain the blocker and what is needed, rather than inventing progress.
+"""
 
 _SECRET_RE = re.compile(r"(?:sk-[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})")
 
@@ -43,8 +57,27 @@ def normalize_states(parts):
         if not states or states[-1]!=state: states.append(state)
     return states
 
+def command_activity_label(command):
+    """Expose only exact, harmless command shapes; never arbitrary shell payloads."""
+    if not isinstance(command,str) or len(command)>2000:return None
+    executable=command.strip().split(' ',1)[0]
+    try: argv=shlex.split(command)
+    except ValueError:return None
+    safe=False
+    if argv and argv[0] in {'npm','pnpm','yarn','bun'}:
+        args=argv[1:]
+        scripts={'test','build','lint','check','typecheck','start','dev','compile','format'}
+        safe=(len(args)==1 and args[0] in scripts) or (len(args)==2 and args[0]=='run' and args[1] in scripts)
+    if argv in [['python','-m','pytest'],['python3','-m','pytest'],['pytest'],['pytest','-q'],['go','test','./...'],['cargo','test']]:safe=True
+    if argv and argv[0]=='git' and argv[1:] in [['status'],['status','--short'],['diff','--stat'],['diff','--check'],['branch','--show-current']]:safe=True
+    if safe:return ' '.join(argv)
+    # This is explicitly labelled as a restricted summary, not the full command.
+    if executable in {'npm','pnpm','yarn','pytest','python','python3','node','git','rg','ls','cat','go','cargo','bun','make'}:return executable
+    return None
+
+
 def safe_tool_activity(parts, workspace):
-    """Allowlisted execution metadata, never reasoning, tool output or raw commands."""
+    """Allowlisted execution metadata; no reasoning, tool output or shell payloads."""
     output=[]
     if not any(isinstance(part,dict) and part.get('type')=='tool' for part in parts or []): return output
     root=workspaces.root_for(workspace).resolve()
@@ -77,13 +110,30 @@ def safe_tool_activity(parts, workspace):
                 operation={'add':'created','update':'changed','delete':'deleted','move':'moved'}.get(entry.get('type'))
                 if path and operation: files.append({'path':path,'operation':operation})
         if files: item['files']=files
-        # Showing only a known executable avoids disclosing command-line secrets.
-        if tool.lower() in {'bash','shell'} and isinstance(inp.get('command'),str):
-            executable=inp['command'].strip().split(' ',1)[0]
-            if executable in {'npm','pnpm','yarn','pytest','python','python3','node','git','rg','ls','cat','go','cargo','bun','make'}:
-                item['command']=executable
+        if tool.lower() in {'bash','shell'}:
+            command=command_activity_label(inp.get('command'))
+            if command:
+                item['command']=command
+                item['command_limited']=command!=str(inp.get('command','')).strip()
+            exit_code=metadata.get('exit')
+            if status in {'completed','error'} and type(exit_code) is int:
+                item['exit_code']=exit_code
+        times=state.get('time') if isinstance(state.get('time'),dict) else {}
+        start,end=times.get('start'),times.get('end')
+        if status in {'completed','error'} and type(start) is int and type(end) is int and end>=start:
+            item['duration_ms']=end-start
         output.append(item)
     return output[:100]
+
+def record_activity(session_id,request_id,activity):
+    # DB work belongs to a worker, never the streaming event loop.
+    with SessionLocal() as db:
+        session=db.get(WorkspaceSession,session_id)
+        if session is None or session.status=='cancelled':return False
+        latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=='submission').order_by(ExecutionEvent.id.desc()).limit(1))
+        if not latest or json.loads(latest.data)['request_id']!=str(request_id):return False
+        event(db,session_id,'activity',activity)
+        return True
 
 async def monitor_activity(session_id,service,runtime_id,message_id,workspace,request_id,request_task):
     seen=set()
@@ -94,14 +144,9 @@ async def monitor_activity(session_id,service,runtime_id,message_id,workspace,re
             for row in rows:
                 if row.get('info',{}).get('role')!='assistant' or row.get('info',{}).get('parentID')!=message_id: continue
                 for activity in safe_tool_activity(row.get('parts',[]),workspace):
-                    key=(activity['id'],activity['status'])
+                    key=json.dumps(activity,sort_keys=True)
                     if key in seen: continue
-                    with SessionLocal() as db:
-                        session=db.get(WorkspaceSession,session_id)
-                        if session.status=='cancelled': return
-                        latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=='submission').order_by(ExecutionEvent.id.desc()).limit(1))
-                        if not latest or json.loads(latest.data)['request_id']!=str(request_id): return
-                        event(db,session_id,'activity',activity)
+                    if not await asyncio.to_thread(record_activity,session_id,request_id,activity):return
                     seen.add(key)
         except Exception:
             # Optional observation must never fail/retry the model submission.
@@ -159,7 +204,7 @@ def finish_execution(db,session_id,kind,states=(),data=None,request_id=None,acti
     # Abort and the background HTTP response can finish concurrently. Evaluate
     # cancellation in the database, not on a previously loaded ORM snapshot.
     current=db.scalar(select(WorkspaceSession).where(WorkspaceSession.id==session_id).with_for_update().execution_options(populate_existing=True))
-    if current is None:
+    if current is None or current.status not in session_lifecycle.BUSY:
         db.rollback(); return
     latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=="submission").order_by(ExecutionEvent.id.desc()).limit(1))
     if request_id is not None and (not latest or json.loads(latest.data)["request_id"]!=str(request_id)):
@@ -177,18 +222,28 @@ def finish_execution(db,session_id,kind,states=(),data=None,request_id=None,acti
         db.add(ExecutionEvent(session_id=session_id,kind=kind,data=json.dumps(data or {})))
     db.commit()
 
+def begin_execution(session_id,message_id,request_id,generation):
+    with SessionLocal() as db:
+        session=db.get(WorkspaceSession,session_id)
+        if session is None:return None
+        workspace=db.get(Workspace,session.workspace_id)
+        session_lifecycle.lock_workspace(db,workspace);db.refresh(session)
+        latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=="submission").order_by(ExecutionEvent.id.desc()).limit(1))
+        if session.status not in session_lifecycle.BUSY or not latest or json.loads(latest.data)["request_id"]!=str(request_id):return None
+        db.add(ExecutionEvent(session_id=session_id,kind="dispatch",data=json.dumps({"request_id":str(request_id),"message_id":message_id,"generation":generation})))
+        event(db,session_id,"analyzing")
+        return workspace
+
+
+def complete_execution(session_id,kind,**kwargs):
+    with SessionLocal() as db:finish_execution(db,session_id,kind,**kwargs)
+
+
 async def execute(session_id,service,runtime_id,data,message_id):
     try:
-        with SessionLocal() as db:
-            session=db.get(WorkspaceSession,session_id)
-            workspace=db.get(Workspace,session.workspace_id)
-            session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
-            latest=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.kind=="submission").order_by(ExecutionEvent.id.desc()).limit(1))
-            if session.status not in session_lifecycle.BUSY or not latest or json.loads(latest.data)["request_id"]!=str(data.request_id):
-                return
-            db.add(ExecutionEvent(session_id=session_id,kind="dispatch",data=json.dumps({"request_id":str(data.request_id),"message_id":message_id})))
-            event(db,session.id,"analyzing")
-        payload={"messageID":message_id,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
+        workspace=await asyncio.to_thread(begin_execution,session_id,message_id,data.request_id,service.generation)
+        if workspace is None:return
+        payload={"messageID":message_id,"system":EXECUTION_REPORTING,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
         for item in attachment_metadata(workspace, data.attachments):
             path=workspaces.safe_path(workspace,item['path'])
             # Native file parts for formats OpenCode consumes directly. Other
@@ -207,17 +262,14 @@ async def execute(session_id,service,runtime_id,data,message_id):
             with suppress(asyncio.CancelledError): await observer
         info=response.get("info",{}) if isinstance(response,dict) else {}
         failure=info.get("role")!="assistant" or bool(info.get("error")) or not info.get("time",{}).get("completed")
-        with SessionLocal() as db:
-            if failure:
-                # Provider error bodies can contain arbitrary credentials. Keep
-                # execution feedback useful without relaying those bodies.
-                finish_execution(db,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'},request_id=data.request_id)
-            else:
-                finish_execution(db,session_id,'completed',request_id=data.request_id,
-                                 activities=safe_tool_activity(response.get('parts',[]),workspace))
+        if failure:
+            # Never relay raw provider errors or credentials.
+            await asyncio.to_thread(complete_execution,session_id,'failed',data={'reason':'OpenCode reported an agent error. Review the session before retrying.'},request_id=data.request_id)
+        else:
+            await asyncio.to_thread(complete_execution,session_id,'completed',request_id=data.request_id,
+                                    activities=safe_tool_activity(response.get('parts',[]),workspace))
     except Exception:
-        with SessionLocal() as db:
-            finish_execution(db,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'},request_id=data.request_id)
+        await asyncio.to_thread(complete_execution,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'},request_id=data.request_id)
     finally:
         if tasks.get(str(session_id)) is asyncio.current_task(): tasks.pop(str(session_id),None)
 
@@ -299,7 +351,11 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         await asyncio.to_thread(service.apply_session_policy,session.opencode_session_id,
                                 policy.session_permissions(policy_row))
         if advanced:
-            require_advanced(db,user,start=True); db.commit()
+            require_advanced(db,user,start=True)
+        # Release preflight reads/locks before the async worker opens its own
+        # session. Otherwise dispatch can starve a small pool or the PGlite
+        # bridge while request cleanup is waiting for that same event loop.
+        db.commit()
     except Exception:
         db.rollback(); finish_execution(db,session_id,"failed",data={"reason":"Runtime preflight failed; no new message was dispatched"},request_id=data.request_id)
         raise
@@ -316,7 +372,7 @@ def submission_receipt(session_id: uuid.UUID,request_id: uuid.UUID,user: User=De
 @router.get("/{session_id}/messages")
 def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,db=db)
     result=service.request("GET",service.session_path(session.opencode_session_id,"/message"))
     attachments={};submitted_text={}
     for recorded in db.scalars(select(ExecutionEvent).where(ExecutionEvent.session_id==session.id,ExecutionEvent.kind=='submission')):
@@ -339,7 +395,7 @@ def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=
 @router.get("/{session_id}/todos")
 def session_todos(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,db=db)
     try: rows=service.request('GET',service.session_path(session.opencode_session_id,'/todo'))
     except HTTPException as error:
         if error.status_code in {404,405}: return {'supported':False,'items':[]}
@@ -356,7 +412,7 @@ def session_todos(session_id: uuid.UUID,user: User=Depends(require_user),db: Ses
 @router.get("/{session_id}/diff")
 def session_diff(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,db=db)
     rows=service.request("GET",service.session_path(session.opencode_session_id,"/diff"))
     output=[]
     for item in rows or []:
@@ -447,7 +503,7 @@ def hide_message(session_id: uuid.UUID,message_id: str,user: User=Depends(requir
     session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
     if session.status in session_lifecycle.BUSY: raise HTTPException(409,"Stop the running request before hiding messages")
     if not re.fullmatch(r"msg_[A-Za-z0-9_-]{1,120}",message_id): raise HTTPException(422,"Invalid message ID")
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,db=db)
     rows=service.request("GET",service.session_path(session.opencode_session_id,"/message"))
     if not any(row.get("info",{}).get("id")==message_id for row in rows): raise HTTPException(404,"Message not found in this session")
     if message_id not in session_lifecycle.hidden_messages(db,session.id):
@@ -461,7 +517,7 @@ class QuestionReply(BaseModel):
 @router.get("/{session_id}/questions")
 def session_questions(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    try: rows=opencode.for_workspace(workspace).request('GET','/question')
+    try: rows=opencode.for_workspace(workspace,db=db).request('GET','/question')
     except HTTPException as error:
         if error.status_code in {404,405}: return {'supported':False,'requests':[]}
         raise
@@ -474,13 +530,14 @@ def session_questions(session_id: uuid.UUID,user: User=Depends(require_user),db:
                 'question':_sanitize(str(q.get('question',''))[:8000],workspace),
                 'multiple':bool(q.get('multiple')),'custom':q.get('custom') is not False,
                 'options':[{'label':_sanitize(str(o.get('label',''))[:2000],workspace),
-                    'description':_sanitize(str(o.get('description',''))[:2000],workspace)} for o in q.get('options',[])[:50]]})
+                    'description':_sanitize(str(o.get('description',''))[:2000],workspace),
+                    'recommended':o.get('recommended') is True or bool(re.search(r'\(\s*(?:recommended|موصى به)\s*\)\s*$',str(o.get('label','')),re.I))} for o in q.get('options',[])[:50] if isinstance(o,dict)]})
         output.append({'id':row['id'],'questions':questions})
     return {'supported':True,'requests':output}
 
 @router.post("/{session_id}/questions/{question_id}")
 def answer_question(session_id: uuid.UUID,question_id: str,data: QuestionReply,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    session,workspace=context(db,user,session_id);service=opencode.for_workspace(workspace)
+    session,workspace=context(db,user,session_id);service=opencode.for_workspace(workspace,db=db)
     rows=service.request('GET','/question')
     pending=next((r for r in rows if r.get('sessionID')==session.opencode_session_id and r.get('id')==question_id),None)
     if pending is None: raise HTTPException(404,'Question not found in this conversation')
@@ -495,7 +552,12 @@ def answer_question(session_id: uuid.UUID,question_id: str,data: QuestionReply,u
             if not values or len(values)>20 or (not q.get('multiple') and len(values)!=1) or any(not v.strip() or len(v)>2000 for v in values):
                 raise HTTPException(422,'Invalid answer')
             labels={_sanitize(str(o.get('label',''))[:2000],workspace):o.get('label') for o in q.get('options',[])}
-            if q.get('custom') is False and any(v not in labels for v in values): raise HTTPException(422,'Select one of the offered answers')
+            # A duplicated answer must not be sent twice to the runtime; an
+            # untrusted custom answer cannot masquerade as an offered choice.
+            if len(set(values)) != len(values):
+                raise HTTPException(422,'Duplicate choices are not allowed')
+            if q.get('custom') is False and any(v not in labels for v in values):
+                raise HTTPException(422,'Select one of the offered answers')
             answers.append([labels.get(v,v) for v in values])
         result=service.request('POST',path+'/reply',{'answers':answers})
     if result is not True: raise HTTPException(502,'Runtime did not confirm the answer')
@@ -508,7 +570,8 @@ class RoutineApproval(BaseModel):
 def routine_enabled(db, session_id):
     record=db.scalar(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,
         ExecutionEvent.kind=='routine_approval').order_by(ExecutionEvent.id.desc()).limit(1))
-    if record is None: return True
+    # Fail closed: new conversations require explicit approval until the user opts in.
+    if record is None: return False
     try: return json.loads(record.data).get('enabled') is True
     except (ValueError,TypeError): return False
 
@@ -579,7 +642,7 @@ def clear_remembered_permissions(session_id: uuid.UUID,user: User=Depends(requir
 @router.get("/{session_id}/permissions")
 def permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
-    service=opencode.for_workspace(workspace)
+    service=opencode.for_workspace(workspace,db=db)
     rows=service.request("GET","/permission")
     remembered=remembered_approvals(db,session.id)
     _,_,allowed_tools=policy.provider_sets(policy.load(db))
@@ -648,7 +711,7 @@ def approve(session_id: uuid.UUID,permission_id: str,data: Approval,user: User=D
     if data.reply=='similar' and not requested.get('rememberable'):
         raise HTTPException(409,'This request cannot be remembered; approve once or reject')
     from urllib.parse import quote
-    result=opencode.for_workspace(workspace).request("POST","/permission/"+quote(permission_id,safe="")+"/reply",{"reply":"once" if data.reply=="similar" else data.reply})
+    result=opencode.for_workspace(workspace,db=db).request("POST","/permission/"+quote(permission_id,safe="")+"/reply",{"reply":"once" if data.reply=="similar" else data.reply})
     if result is not True: raise HTTPException(502,"Runtime did not confirm the decision")
     if data.reply=='similar':
         db.add(ExecutionEvent(session_id=session.id,kind='approval_rule',data=json.dumps({'fingerprint':requested['fingerprint']})))
@@ -657,27 +720,35 @@ def approve(session_id: uuid.UUID,permission_id: str,data: Approval,user: User=D
     event(db,session.id,"approval_decision",{"reply":data.reply})
     return {"accepted":True}
 
+def event_page(request,session_id,cursor):
+    # Return detached values; never keep a connection checked out while yielding
+    # SSE bytes to a slow/disconnected browser.
+    with SessionLocal() as current:
+        try:
+            current_user=require_user(request,current)
+            context(current,current_user,session_id)
+        except HTTPException as exc:
+            return [],'authentication_expired' if exc.status_code in {401,403} else 'closed'
+        rows=current.scalars(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.id>cursor).order_by(ExecutionEvent.id).limit(100))
+        return [(row.id,row.kind,row.data) for row in rows],None
+
+
 @router.get("/{session_id}/events")
-async def events(session_id: uuid.UUID,request: Request,after: int=0,last_event_id: str|None=Header(default=None),user: User=Depends(require_user),db: Session=Depends(get_db)):
+def events(session_id: uuid.UUID,request: Request,after: int=0,last_event_id: str|None=Header(default=None),user: User=Depends(require_user),db: Session=Depends(get_db)):
     context(db,user,session_id)
     try: cursor=max(0,int(last_event_id) if last_event_id is not None else after)
     except ValueError: raise HTTPException(422,"Invalid event ID")
+    db.rollback()  # Initial ownership is read-only; release before streaming.
     async def stream():
         nonlocal cursor
         while not await request.is_disconnected():
-            # Revalidate current cookie on each polling cycle (revocation/expiry).
-            with SessionLocal() as current:
-                try:
-                    current_user=require_user(request,current)
-                    context(current,current_user,session_id)
-                except HTTPException as exc:
-                    if exc.status_code in {401,403}:
-                        yield 'event: authentication_expired\ndata: {}\n\n'
-                    return
-                rows=list(current.scalars(select(ExecutionEvent).where(ExecutionEvent.session_id==session_id,ExecutionEvent.id>cursor).order_by(ExecutionEvent.id).limit(100)))
-                for row in rows:
-                    cursor=row.id
-                    yield f"id: {row.id}\nevent: {row.kind}\ndata: {row.data}\n\n"
+            rows,failure=await asyncio.to_thread(event_page,request,session_id,cursor)
+            if failure:
+                if failure=='authentication_expired':yield 'event: authentication_expired\ndata: {}\n\n'
+                return
+            for identifier,kind,data in rows:
+                cursor=identifier
+                yield f"id: {identifier}\nevent: {kind}\ndata: {data}\n\n"
             yield ": keepalive\n\n"
             await asyncio.sleep(1)
     return StreamingResponse(stream(),media_type="text/event-stream",headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})

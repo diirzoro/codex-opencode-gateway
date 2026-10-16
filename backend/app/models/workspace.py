@@ -86,3 +86,15 @@ class ProviderCredential(Base):
     last4: Mapped[str] = mapped_column(String(8))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class UserProviderCredential(Base):
+    """User-owned encrypted API credential (not a shared provider catalog)."""
+    __tablename__ = "user_provider_credentials"
+    __table_args__ = (UniqueConstraint("user_id", "provider_id", name="uq_user_provider_credential"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    provider_id: Mapped[str] = mapped_column(String(120))
+    ciphertext: Mapped[str] = mapped_column(Text)
+    last4: Mapped[str] = mapped_column(String(8))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

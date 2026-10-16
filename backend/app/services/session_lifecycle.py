@@ -59,9 +59,10 @@ def workspace_rows(db, workspace):
 
 def require_slot(db, workspace, selected=None):
     rows = workspace_rows(db, workspace)
-    values = states(db, rows)
-    if any((row.status in BUSY or values[row.id] == "active") and row.id != selected for row in rows):
-        raise HTTPException(409, "Close the active session before opening or creating another session")
+    # Open conversations are navigation state, not an execution lock.
+    # Only actual submitted/approval-blocked work occupies the shared files.
+    if any(row.status in BUSY and row.id != selected for row in rows):
+        raise HTTPException(409, "Finish or stop running workspace work before starting another request")
 
 
 def require_visible(db, session):

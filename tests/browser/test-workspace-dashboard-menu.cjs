@@ -1,0 +1,13 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),{JSDOM}=require('jsdom');
+const doc=new JSDOM('<body><section><nav id="clientNav"><button>Account</button></nav><main id="workspacePage"></main></section><header></header></body>').window.document;
+const nav=doc.getElementById('clientNav'),parent=nav.parentNode,next=nav.nextSibling;let called=0;nav.firstChild.onclick=()=>called++;
+const nativeCreate=doc.createElement.bind(doc);doc.createElement=tag=>{const e=nativeCreate(tag);if(tag==='dialog'){e.showModal=()=>e.setAttribute('open','');e.close=()=>{e.removeAttribute('open');e.dispatchEvent(new doc.defaultView.Event('close'));};}return e;};
+const c={shell:doc.createElement('div'),textElement:(tag,text='',cls='')=>Object.assign(doc.createElement(tag),{textContent:text,className:cls}),drawer:()=>true,window:{addEventListener(){}},document:doc,currentUser:{id:'owner'},projectbar:doc.querySelector('header'),q:id=>doc.getElementById(id),tr:en=>en,btn:(id,en,ar,onclick,cls)=>{const b=nativeCreate('button');Object.assign(b,{id,textContent:en,onclick,className:cls});return b;}};vm.createContext(c);
+const src=fs.readFileSync('dashboards.js','utf8');vm.runInContext(src.slice(src.indexOf("  const dashboardMenu=document.createElement('dialog');"),src.indexOf("  let panelMode='conversations'")),c);
+doc.getElementById('openWorkspaceDashboard').click();assert.ok(doc.querySelector('dialog').open);assert.equal(nav.parentNode,doc.querySelector('dialog'));
+nav.firstChild.click();assert.equal(called,1);assert.equal(nav.parentNode,parent);assert.equal(nav.nextSibling,next);assert.equal(doc.querySelector('dialog').open,false);
+doc.getElementById('openWorkspaceDashboard').click();doc.getElementById('closeWorkspaceDashboard').click();assert.equal(nav.parentNode,parent);
+c.currentUser=null;doc.getElementById('openWorkspaceDashboard').click();assert.equal(doc.querySelector('dialog').open,false);
+c.currentUser={id:'owner'};c.drawer=()=>false;doc.getElementById('workspacePage').classList.add('active');c.placeDashboardNav();assert.equal(nav.parentNode.id,'workspaceDashboardRail');
+doc.getElementById('workspacePage').classList.remove('active');c.placeDashboardNav();assert.equal(nav.parentNode,parent);
+console.log('6 passed: native Dashboard navigation moved, original click preserved, close restores, signed-out guard (jsdom; modal methods controlled)');

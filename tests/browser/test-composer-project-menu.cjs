@@ -1,0 +1,11 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),{JSDOM}=require('jsdom');
+const doc=new JSDOM('<body><section id="utilities"></section><main></main></body>').window.document,chosen=[];
+const node=(tag,text='',cls='')=>Object.assign(doc.createElement(tag),{textContent:text,className:cls});
+const c={document:doc,window:doc.defaultView,utilities:doc.getElementById('utilities'),tr:en=>en,textElement:node,btn:(id,en,ar,onclick)=>Object.assign(node('button',en),{id,onclick}),chooseNewConversation:async kind=>chosen.push(kind),toast(){}};vm.createContext(c);const source=fs.readFileSync('dashboards.js','utf8');vm.runInContext(source.slice(source.indexOf("  const projectMenu=document.createElement('details');"),source.indexOf('  const submissionCurrent=')),c);
+(async()=>{const menu=doc.getElementById('composerProjectMenu');assert.equal(menu.open,false);assert.equal(menu.querySelectorAll('button').length,2);assert.equal(menu.querySelectorAll('button svg').length,2);
+ menu.open=true;await doc.getElementById('composer-project-github').onclick();assert.equal(menu.open,false);assert.deepEqual(chosen,['github']);
+ menu.open=true;await doc.getElementById('composer-project-local').onclick();assert.equal(menu.open,false);assert.deepEqual(chosen,['github','local']);
+ menu.open=true;doc.querySelector('main').click();assert.equal(menu.open,false);menu.open=true;doc.dispatchEvent(new doc.defaultView.KeyboardEvent('keydown',{key:'Escape'}));assert.equal(menu.open,false);
+ menu.open=true;doc.defaultView.dispatchEvent(new doc.defaultView.Event('authentication-cleared'));assert.equal(menu.open,false);
+ console.log('5 passed: compact plus/two icons, GitHub routing, local routing, outside/Escape dismissal, sign-out reset (jsdom)');
+})().catch(e=>{console.error(e);process.exitCode=1;});
