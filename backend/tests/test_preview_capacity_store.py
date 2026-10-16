@@ -58,25 +58,34 @@ class PreviewCapacityStoreTests(unittest.TestCase):
             db, user_id=self.owner, workspace_id=self.workspace, worker_id="verified-1",
             generation=2, framework="vite", now=NOW))
 
+    def test_release_requires_cleanup_acknowledgement(self):
+        self.lease.worker_id = "verified-1"
+        self.worker.active_jobs = 1
+        db = FakeDB(self.lease)
+        with self.assertRaises(ValueError):
+            preview_capacity_store.release(
+                db, user_id=self.owner, workspace_id=self.workspace, generation=3)
+        self.assertEqual(self.worker.active_jobs, 1)
+
     def test_release_is_idempotent(self):
         self.lease.state = "starting"
         self.lease.worker_id = "verified-1"
         self.worker.active_jobs = 1
         db = FakeDB(self.lease, self.worker, self.lease)
         self.assertTrue(preview_capacity_store.release(
-            db, user_id=self.owner, workspace_id=self.workspace, generation=3))
+            db, user_id=self.owner, workspace_id=self.workspace, generation=3, cleanup_confirmed=True))
         self.assertEqual(self.worker.active_jobs, 0)
         self.assertIsNone(self.lease.worker_id)
         db2 = FakeDB(self.lease)
         self.assertFalse(preview_capacity_store.release(
-            db2, user_id=self.owner, workspace_id=self.workspace, generation=3))
+            db2, user_id=self.owner, workspace_id=self.workspace, generation=3, cleanup_confirmed=True))
 
     def test_release_refuses_stale_generation(self):
         self.lease.worker_id = "verified-1"
         self.worker.active_jobs = 1
         db = FakeDB(self.lease)
         self.assertFalse(preview_capacity_store.release(
-            db, user_id=self.owner, workspace_id=self.workspace, generation=2))
+            db, user_id=self.owner, workspace_id=self.workspace, generation=2, cleanup_confirmed=True))
         self.assertEqual(self.worker.active_jobs, 1)
 
     def test_release_detects_inconsistent_worker_count(self):
