@@ -24,7 +24,7 @@ class PreviewWorkerClient:
             raise PreviewWorkerUnavailable("Test worker endpoint or credentials invalid")
 
     def request(self, operation: str, payload: dict) -> dict:
-        if operation not in ("prepare", "start", "stop", "status", "logs"):
+        if operation not in ("prepare", "start", "stop", "status", "logs", "fetch"):
             raise ValueError("Unknown worker operation")
         body = json.dumps(payload, separators=(",", ":")).encode()
         if len(body) > 72 * 1024 * 1024:
