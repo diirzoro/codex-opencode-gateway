@@ -468,16 +468,24 @@
     try{
       const state=await api('/api/workspaces/'+id+'/preview/status');
       if(activeWorkspace?.id!==id||previewRevision!==revision)return;
-      previewPath.hidden=state.mode!=='static';
-      if(state.mode!=='static'){
-        setPreviewState('blocked');
-        previewStatus.textContent=tr('Detected ','تم اكتشاف ')+state.framework+' · '+tr('Application preview is not enabled on this server. No application was started. Use Refresh to check again after the preview service is enabled.','معاينة التطبيق غير مفعّلة على هذا الخادم. لم يتم تشغيل أي تطبيق. استخدم التحديث للتحقق مجددًا بعد تفعيل خدمة المعاينة.');return;
+      previewPath.hidden=false;
+      previewStatus.textContent=tr('Loading HTML entry…','جارٍ تحميل صفحة HTML…');
+      try {
+        const result=await api('/api/workspaces/'+id+'/preview?path='+encodeURIComponent(previewPath.value));
+        if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+        frame.srcdoc=result.html;frame.hidden=false;setPreviewState('ready');
+        previewStatus.textContent=tr('HTML preview · ','معاينة HTML · ')+result.path+
+          (state.mode==='static'?'':tr(' · Static fallback; app server is not running.',' · عرض ثابت؛ خادم التطبيق غير مشغّل.'));
+      } catch(staticError) {
+        if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+        if(state.mode!=='static') {
+          setPreviewState('blocked');
+          previewStatus.textContent=tr('No standalone HTML preview is available for ','لا توجد صفحة HTML مستقلة للمعاينة في ')+
+            state.framework+'. '+tr('Dynamic server preview is not enabled yet.','معاينة الخادم الديناميكية لم تُفعّل بعد.');
+          return;
+        }
+        throw staticError;
       }
-      previewStatus.textContent=tr('Loading preview…','جارٍ تحميل المعاينة…');
-      const result=await api('/api/workspaces/'+id+'/preview?path='+encodeURIComponent(previewPath.value));
-      if(activeWorkspace?.id!==id||previewRevision!==revision)return;
-      frame.srcdoc=result.html;frame.hidden=false;setPreviewState('ready');
-      previewStatus.textContent=tr('Static preview · ','معاينة ثابتة · ')+result.path+' · '+tr('Network and backend servers are unavailable here.','الشبكة وخوادم التطبيقات غير متاحة هنا.');
     }catch(error){if(activeWorkspace?.id===id&&previewRevision===revision){clearPreview();setPreviewState('error');previewStatus.textContent=error.message;}}
   }
   async function stopPreview(){
