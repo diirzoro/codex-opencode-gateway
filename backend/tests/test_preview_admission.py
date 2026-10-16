@@ -1,10 +1,21 @@
 """Read-only secure admission decisions; no containers are started."""
 import unittest
-from app.services.preview_admission import WorkerCapacity, assess_worker
+from app.services.preview_admission import WorkerCapacity, assess_worker, request_start
 
 GOOD = WorkerCapacity("test-worker", True, True, 2000, 2048, 4096, 0, 2, True)
 
 class WorkerAdmissionTests(unittest.TestCase):
+    def test_preview_never_auto_starts(self):
+        for framework in ("html", "vite", "python"):
+            with self.subTest(framework=framework):
+                result = request_start({"framework": framework}, GOOD, explicit_start=False)
+                self.assertFalse(result["admitted"])
+                self.assertEqual(result["action"], "await_user_start")
+
+    def test_explicit_start_only_checks_eligibility(self):
+        result = request_start({"framework": "vite"}, GOOD, explicit_start=True)
+        self.assertEqual(result["action"], "request_durable_lease")
+
     def test_static_needs_no_worker(self):
         self.assertEqual(assess_worker({"framework": "html"}, None)["action"], "serve_static")
 
