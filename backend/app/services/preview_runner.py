@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Protocol
 from fastapi import HTTPException
-from . import preview
+from . import preview, preview_scheduling
 
 # Fixed security contract: clients cannot loosen these limits via API input.
 LIMITS={"cpu_cores":1,"memory_mb":512,"disk_mb":512,"processes":128,
@@ -23,7 +23,7 @@ def plan(workspace):
     framework=detected['framework']
     web=framework in {'html','nextjs','vite','angular','nuxt','svelte','react','vue','node','django','laravel','python','php'}
     family='node' if framework in {'nextjs','vite','angular','nuxt','svelte','react','vue','node'} else 'python' if framework in {'django','python'} else 'php' if framework in {'laravel','php'} else None
-    return {"framework":framework,"mode":"static" if framework=='html' else "isolated_runner_required",
+    return {**preview_scheduling.classify(detected), "mode":"static" if framework=='html' else "isolated_runner_required",
             "runtime_family":family,"web_candidate":web,
             "state":"static_available" if framework=='html' else "blocked",
             "execution_enabled":False,"limits":deepcopy(LIMITS),
