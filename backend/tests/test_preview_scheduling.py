@@ -1,7 +1,7 @@
 """Fast unit checks for Smart Preview metadata; runs without worker or npm."""
 import unittest
 
-from app.services.preview_scheduling import classify, idle_expired, DYNAMIC_IDLE_TIMEOUT_SECONDS
+from app.services.preview_scheduling import classify, idle_expired, plan_pools, DYNAMIC_IDLE_TIMEOUT_SECONDS
 
 
 class SmartPreviewClassificationTests(unittest.TestCase):
@@ -42,6 +42,22 @@ class SmartPreviewClassificationTests(unittest.TestCase):
         self.assertEqual(DYNAMIC_IDLE_TIMEOUT_SECONDS, 300)
         self.assertFalse(idle_expired(last_activity_monotonic=10.0, now_monotonic=309.9))
         self.assertTrue(idle_expired(last_activity_monotonic=10.0, now_monotonic=310.0))
+
+    def test_logical_pool_boundaries(self):
+        self.assertEqual(plan_pools(0)["logical_pools_required"], 0)
+        self.assertEqual(plan_pools(50)["logical_pools_required"], 1)
+        self.assertEqual(plan_pools(51)["logical_pools_required"], 2)
+        self.assertEqual(plan_pools(100, users_per_pool=100)["logical_pools_required"], 1)
+        self.assertFalse(plan_pools(51)["auto_provision_enabled"])
+        self.assertIsNone(plan_pools(51)["provisioned_pools"])
+
+    def test_pool_inputs_reject_invalid_values(self):
+        for count in (-1, True, 3.5):
+            with self.subTest(count=count), self.assertRaises(ValueError):
+                plan_pools(count)
+        for size in (0, 101, True):
+            with self.subTest(size=size), self.assertRaises(ValueError):
+                plan_pools(1, users_per_pool=size)
 
     def test_unknown_fails_closed(self):
         result = classify({"framework": "something-new"})
