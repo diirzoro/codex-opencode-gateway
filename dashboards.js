@@ -498,6 +498,7 @@
       const state=await api('/api/workspaces/'+id+'/preview/status');
       if(activeWorkspace?.id!==id||previewRevision!==revision)return;
       previewPath.hidden=state.mode!=='static';
+      let dynamicError=null;
       if(state.mode!=='static'){
         try {
           const launched=await api('/api/workspaces/'+id+'/preview/start',{method:'POST'});
@@ -510,9 +511,8 @@
           throw new Error(tr('Container started, but no preview URL was returned.','بدأت الحاوية دون رابط معاينة صالح.'));
         } catch(launchError) {
           if(activeWorkspace?.id!==id||previewRevision!==revision)return;
-          // The runner may be unavailable in development: try HTML without
-          // claiming a backend application has been started.
-          previewStatus.textContent=tr('Server preview unavailable; checking HTML fallback…','معاينة الخادم غير متاحة؛ جارٍ محاولة عرض HTML…');
+          dynamicError=launchError;
+          previewStatus.textContent=tr('Server preview failed; checking HTML fallback…','تعذر تشغيل معاينة الخادم؛ جارٍ فحص بديل HTML…');
         }
       }
       previewStatus.textContent=tr('Loading HTML entry…','جارٍ تحميل صفحة HTML…');
@@ -526,8 +526,8 @@
         if(activeWorkspace?.id!==id||previewRevision!==revision)return;
         if(state.mode!=='static') {
           setPreviewState('blocked');
-          previewStatus.textContent=tr('No standalone HTML preview is available for ','لا توجد صفحة HTML مستقلة للمعاينة في ')+
-            state.framework+'. '+tr('Dynamic server preview is not enabled yet.','معاينة الخادم الديناميكية لم تُفعّل بعد.');
+          previewStatus.textContent=tr('Dynamic preview failed: ','فشل تشغيل المعاينة الديناميكية: ')+
+            (dynamicError?.message||tr('Runner unavailable or application did not start.','الخدمة غير متاحة أو التطبيق لم يبدأ.'));
           return;
         }
         throw staticError;
