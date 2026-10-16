@@ -36,5 +36,11 @@ Branch: updates. Never touch master/Live without explicit approval.
 - **Advisory only**: no host collector, authenticated ingestion or real isolated runner has been deployed. This gate is not yet wired to actual reservation and does not prove that capacity is available. Tests committed but not run on Test.
 - Implementation must use system-level enforcement and fresh trusted measurements, not a browser-provided `collector_verified` field. Actual production safeguards require independently measured overhead and security review.
 
+## Progress — enforce headroom in reservation (2026-10-16)
+- Wired the fail-closed host admission rule into `preview_capacity_store.reserve()`: without trusted `HostTelemetry`, no worker slot can be reserved. Preserves worker row locking and owner/generation validation.
+- Extended `test_preview_capacity_store.py` to supply verified 4 GB VPS test telemetry and reject missing host telemetry before any DB query.
+- This is **not a live host telemetry collector**, and the private dispatcher is not yet implemented. A `collector_verified=True` value supplied by clients must never count as attestation. Actual code execution remains disabled and tests not yet run on Test.
+- Outstanding: authenticated telemetry service, sandbox provisioner, proxy and cleanup, PostgreSQL concurrency and E2E tests. Security isolation on the same VPS requires review before enabling dynamic Preview.
+
 ## Current status
 The repository has planning and dormant lease/capacity code and an explicit fail-closed Preview start (503). No worker is running and dynamic Preview is not usable. Same VPS selection does NOT make these checklist items complete.
