@@ -105,32 +105,67 @@ def launch_options(workspace):
             'preparation_required': True, 'execution_enabled': False}
 
 
+def _worker():
+    from .preview_worker_client import configured_client, PreviewWorkerUnavailable
+    try:
+        client = configured_client()
+    except PreviewWorkerUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if client is None:
+        raise HTTPException(503, "Test Preview worker is not configured")
+    return client
+
+
+def _job_id(workspace):
+    return str(workspace.id)
+
+
 def status(workspace):
-    readiness = PreviewReadiness(False, False, False, False, False, False)
-    return {**plan(workspace), 'launch': launch_options(workspace),
-            'readiness': {'enabled': readiness.enabled, 'missing': list(readiness.missing())},
-            'runner_available': False, 'url': None, 'logs': [],
-            'reason': 'An accepted isolated runner and protected separate-origin router are not available.'}
+    base = plan(workspace)
+    client = None
+    from .preview_worker_client import configured_client, PreviewWorkerUnavailable
+    try:
+        client = configured_client()
+        result = client.request("status", {"job_id": _job_id(workspace)}) if client else {}
+    except PreviewWorkerUnavailable:
+        result = {}
+    return {**base, "launch": launch_options(workspace),
+            "runner_available": client is not None,
+            "state": result.get("state", base["state"]),
+            "url": result.get("url"), "logs": [],
+            "reason": None if result else "No prepared Preview job is available"}
 
 
 def start(workspace):
-    # Manual Start is the only valid entry point. Before worker acceptance,
-    # return an actionable, structured failure instead of suggesting that
-    # an agent-side 'node server.js' is a Preview launch.
-    detected = preview.detect(workspace)
-    raise HTTPException(
-        status_code=503,
-        detail={
-            "code": "PREVIEW_WORKER_NOT_READY",
-            "framework": detected.get("framework"),
-            "message": "Smart Preview dynamic execution is not enabled on this server.",
-            "action": "Configure and verify a dedicated isolated Preview worker; do not run project commands on the Gateway host.",
-            "execution_started": False,
-            "retry_automatically": False,
-        },
-    )
+    import base64
+    import tempfile
+    from .preview_snapshot import export
+    from .preview_worker_client import PreviewWorkerUnavailable
+    info = launch_options(workspace)
+    framework = info["framework"]
+    # Package-based frameworks require a preparation stage, and cannot be
+    # declared running until dependencies and browser routing are available.
+    if framework not in PROFILES:
+        raise HTTPException(422, "No executable Preview profile for this workspace")
+    try:
+        client = _worker()
+        with tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024) as spool:
+            export(workspace, spool)
+            spool.seek(0)
+            archive = base64.b64encode(spool.read()).decode("ascii")
+        client.request("prepare", {"job_id": _job_id(workspace),
+                                   "framework": framework, "archive": archive})
+        response = client.request("start", {"job_id": _job_id(workspace)})
+        # No iframe URL is provided until dedicated browser routing exists.
+        return {**response, "url": None, "execution_enabled": True}
+    except PreviewWorkerUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 def stop(workspace):
-    # No runner is enabled, therefore no owned application can be running here.
-    return {'state': 'stopped', 'execution_enabled': False, 'url': None}
+    from .preview_worker_client import PreviewWorkerUnavailable
+    try:
+        result = _worker().request("stop", {"job_id": _job_id(workspace)})
+        return {**result, "url": None}
+    except PreviewWorkerUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
