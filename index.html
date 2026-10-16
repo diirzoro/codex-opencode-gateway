@@ -329,8 +329,8 @@
 </style>
 <style>
 /* Workspace first: compact Changes/Preview pane and focused bottom composer. */
-#workspacePage .workspace-shell.workspace-first{grid-template-columns:minmax(0,1fr) 250px}
-#workspacePage .workspace-first.sessions-collapsed{grid-template-columns:minmax(0,1fr) 0}
+#workspacePage .workspace-shell.workspace-first:not(.reference-workspace){grid-template-columns:minmax(0,1fr) 250px}
+#workspacePage .workspace-first.sessions-collapsed:not(.reference-workspace){grid-template-columns:minmax(0,1fr) 0}
 #workspacePage .workspace-first .agent-column{grid-column:1}
 #workspacePage .workspace-first .session-sidebar{grid-column:2;border-inline-start:1px solid var(--line);border-inline-end:0}
 #workspacePage .workspace-first .project-bar{min-height:46px}

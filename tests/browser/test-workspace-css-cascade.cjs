@@ -2,7 +2,7 @@
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const css=require('css-tree'),{JSDOM}=require('jsdom');
 const html=fs.readFileSync('index.html','utf8'),dom=new JSDOM(html),doc=dom.window.document;
-const workspace=doc.querySelector('#workspacePage .workspace-shell');workspace.classList.add('reference-workspace');
+const workspace=doc.querySelector('#workspacePage .workspace-shell');workspace.classList.add('workspace-first','reference-workspace');
 const sources=[fs.readFileSync('styles.css','utf8'),...Array.from(doc.querySelectorAll('style')).map(s=>s.textContent)];
 function result(width,element,property){let winner;let order=0;
  for(const source of sources){const ast=css.parse(source,{parseCustomProperty:true});
@@ -17,7 +17,7 @@ function result(width,element,property){let winner;let order=0;
 }
 for(const width of [390,700,900,1100,1366]){
  const columns=result(width,workspace,'grid-template-columns');
- assert.equal(columns,width<=700?'minmax(0,1fr)':width<=1100?'var(--conversation-rail-width) minmax(0,1fr)':'var(--conversation-rail-width) minmax(0,1fr) var(--panel-w,400px)');
+ assert.equal(columns,width<=1100?'minmax(0,1fr)':'var(--conversation-rail-width) minmax(0,1fr) var(--panel-w,400px)');
 }
 workspace.classList.add('panel-docked');doc.getElementById('sessionSidebar').classList.add('open');
 assert.equal(result(900,doc.getElementById('sessionSidebar'),'position'),'fixed');
@@ -38,3 +38,5 @@ console.log('5 passed: light/dark shared edges, Landing inner media, checkout re
 
 assert.equal(result(1366,doc.querySelector('.pricing'),'background'),'var(--panel2)');
 console.log('1 passed: pricing section has a distinct theme-aware background');
+assert.equal(result(900,doc.querySelector('.workspace-conversation-rail')||(()=>{const e=doc.createElement('aside');e.className='workspace-conversation-rail';workspace.prepend(e);return e;})(),'display'),'none');
+console.log('1 passed: conversation rail defaults hidden at tablet/mobile widths');
