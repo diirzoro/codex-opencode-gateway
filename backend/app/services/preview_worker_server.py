@@ -164,6 +164,31 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         raise
                     job["container_id"] = cid
                     job["state"] = "running"
+                    # Docker accepted the container; that is not proof the HTTP
+                    # app has started. Gate the iframe URL on a real response.
+                    import time
+                    ready = False
+                    for _ in range(12):
+                        try:
+                            if self.server.provisioner.status(cid, job_id) != "running":
+                                break
+                            response = self.server.provisioner.fetch(
+                                cid, job_id, job["spec"].image.startswith("docker.io/library/node")
+                                and "node" or "python", "/")
+                            ready = 200 <= response["status"] < 500
+                            if ready:
+                                break
+                        except (PreviewProvisioningError, OSError, ValueError):
+                            pass
+                        time.sleep(0.5)
+                    if not ready:
+                        job["state"] = "failed"
+                        try:
+                            self.server.provisioner.stop(cid, job_id)
+                        except PreviewProvisioningError:
+                            pass
+                        self.reply(503, {"error": "application_not_ready"})
+                        return
                     result = {"state": "running", "job_id": job_id, "container_id": cid, "url": None}
                 elif operation == "status":
                     cid = job["container_id"]
