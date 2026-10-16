@@ -469,6 +469,22 @@
       const state=await api('/api/workspaces/'+id+'/preview/status');
       if(activeWorkspace?.id!==id||previewRevision!==revision)return;
       previewPath.hidden=false;
+      if(state.mode!=='static'){
+        try {
+          const launched=await api('/api/workspaces/'+id+'/preview/start',{method:'POST'});
+          if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+          if(launched.url){
+            frame.src=launched.url;frame.hidden=false;setPreviewState('ready');
+            previewStatus.textContent=tr('Running application preview','معاينة التطبيق تعمل');
+            return;
+          }
+        } catch(launchError) {
+          if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+          // The runner may be unavailable in development: try HTML without
+          // claiming a backend application has been started.
+          previewStatus.textContent=tr('Server preview unavailable; checking HTML fallback…','معاينة الخادم غير متاحة؛ جارٍ محاولة عرض HTML…');
+        }
+      }
       previewStatus.textContent=tr('Loading HTML entry…','جارٍ تحميل صفحة HTML…');
       try {
         const result=await api('/api/workspaces/'+id+'/preview?path='+encodeURIComponent(previewPath.value));
