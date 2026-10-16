@@ -24,10 +24,10 @@ class PreviewWorkerClient:
             raise PreviewWorkerUnavailable("Test worker endpoint or credentials invalid")
 
     def request(self, operation: str, payload: dict) -> dict:
-        if operation not in ("start", "stop", "status", "logs"):
+        if operation not in ("prepare", "start", "stop", "status", "logs"):
             raise ValueError("Unknown worker operation")
         body = json.dumps(payload, separators=(",", ":")).encode()
-        if len(body) > 32768:
+        if len(body) > 72 * 1024 * 1024:
             raise ValueError("Worker request exceeds limit")
         request = urllib.request.Request(
             self.base_url.rstrip("/") + "/v1/" + operation, data=body,
