@@ -23,7 +23,7 @@ class PreviewLeaseStoreTests(unittest.TestCase):
         self.owner = uuid4()
         self.workspace = uuid4()
         self.row = SimpleNamespace(user_id=self.owner, workspace_id=self.workspace,
-                                   state="stopped", generation=0, worker_id="old-worker",
+                                   state="stopped", generation=0, worker_id=None,
                                    pool_id="old-pool", last_user_activity_at=NOW,
                                    started_at=None, expires_at=NOW)
         self.db = FakeDB()
@@ -45,6 +45,20 @@ class PreviewLeaseStoreTests(unittest.TestCase):
         self.assertIsNone(row.pool_id)
         self.assertIsNone(row.expires_at)
         self.assertTrue(self.db.flushed)
+
+    def test_restart_rejected_until_old_worker_released(self):
+        self.row.worker_id = "old-worker"
+        with self.assertRaises(ValueError):
+            self.update("start")
+        self.assertEqual(self.row.generation, 0)
+        self.assertEqual(self.row.worker_id, "old-worker")
+
+    def test_stop_rejected_before_worker_cleanup(self):
+        self.row.state = "running"
+        self.row.worker_id = "still-running"
+        with self.assertRaises(ValueError):
+            self.update("stop")
+        self.assertEqual(self.row.state, "running")
 
     def test_unauthorized_transition_fails_closed(self):
         with self.assertRaises(ValueError):
