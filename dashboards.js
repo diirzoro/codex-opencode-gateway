@@ -445,6 +445,24 @@
 
   const gitSummary=q('gitSummary'),gitActions=pane.querySelector('.git-actions'),changedFiles=textElement('div','','changed-file-list'),diffView=textElement('pre','','workspace-diff');
   diffView.id='workspaceFileDiff';changesPanel.append(gitSummary,btn('refreshWorkspaceChanges','Refresh changes','حدّث التغييرات',()=>loadChanges()),changedFiles,diffView,gitActions);
+  const previewIdentity=textElement('div','','preview-project-identity');
+  previewIdentity.style.cssText='padding:10px 12px;margin:8px 0;border:1px solid var(--border-color,#d4d9e1);border-radius:10px;display:flex;flex-direction:column;gap:4px;overflow-wrap:anywhere';
+  previewIdentity.setAttribute('aria-live','polite');
+  function updatePreviewIdentity(){
+    const name=activeProject?.repository||activeProject?.name;
+    const workspaceName=activeWorkspace?.name||activeWorkspace?.title||activeWorkspace?.id;
+    previewIdentity.replaceChildren();
+    const heading=document.createElement('strong');
+    heading.textContent=name||tr('No project selected','لم يتم تحديد مشروع');
+    const details=document.createElement('small');
+    details.textContent=(workspaceName?tr('Workspace: ','مساحة العمل: ')+workspaceName:'')+
+      (activeProject?.branch?' · '+tr('Branch: ','الفرع: ')+activeProject.branch:'');
+    previewIdentity.append(heading,details);
+    const allowed=Boolean(activeWorkspace?.id&&activeProject?.id);
+    if(!allowed){
+      previewStatus.textContent=tr('Select a project and workspace to preview.','اختر مشروعًا ومساحة عمل قبل تشغيل المعاينة.');
+    }
+  }
   const previewPath=document.createElement('input');previewPath.value='index.html';previewPath.setAttribute('aria-label',tr('Preview HTML entry','ملف HTML للمعاينة'));
   const previewStatus=text('p','Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');
   previewStatus.className='preview-status';previewStatus.setAttribute('role','status');previewStatus.setAttribute('aria-live','polite');
@@ -462,7 +480,8 @@
   }
   function clearPreview(){previewRevision++;frame.hidden=true;frame.srcdoc='';frame.removeAttribute('src');setPreviewState('idle');}
   async function startPreview(){
-    if(!activeWorkspace)return;
+    updatePreviewIdentity();
+    if(!activeWorkspace?.id||!activeProject?.id){setPreviewState('blocked');return;}
     clearPreview();setPreviewState('loading');const revision=previewRevision,id=activeWorkspace.id;
     previewStatus.textContent=tr('Detecting project…','جارٍ اكتشاف نوع المشروع…');
     try{
@@ -523,7 +542,7 @@
   [...previewActions.children].forEach((button,index)=>{const label=button.textContent;button.title=label;button.setAttribute('aria-label',label);button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+previewIcons[index]+'</svg>';});
   const previewToolbar=textElement('div','','preview-toolbar');previewToolbar.append(previewPath,previewActions);
   const previewCanvas=textElement('div','','preview-canvas');previewCanvas.append(previewStatus,frame);
-  previewPanel.append(text('h3','Project Preview','معاينة المشروع'),previewToolbar,previewCanvas);
+  previewPanel.append(text('h3','Project Preview','معاينة المشروع'),previewIdentity,previewToolbar,previewCanvas);
   setPreviewState('idle');
   const projectRoot=document.createElement('details');projectRoot.className='sidebar-project-root';projectRoot.open=true;
   const projectSummary=document.createElement('summary'),projectName=textElement('strong'),projectKind=textElement('small'),projectBranch=textElement('span','','sidebar-project-branch');
@@ -533,7 +552,7 @@
   let exportSource;
   function projectKindControls(){const github=activeProject?.source_type==='github';changesSection.hidden=!github;if(exportSource)exportSource.hidden=github;gitActions.hidden=!github;gitActions.querySelector('#commitButton').hidden=!github;gitActions.querySelector('#pushButton').hidden=!github;}
 
-  function updateProjectIdentity(){projectKindControls();projectName.textContent=activeProject?.repository||activeProject?.name||tr('Project','المشروع');projectKind.textContent=activeProject?.source_type==='github'?tr('GitHub working copy','نسخة عمل GitHub'):tr('Local project','مشروع محلي');projectBranch.textContent=tr('Branch: ','الفرع: ')+(activeProject?.branch||'—');projectBranch.hidden=!activeProject?.branch;}
+  function updateProjectIdentity(){updatePreviewIdentity();projectKindControls();projectName.textContent=activeProject?.repository||activeProject?.name||tr('Project','المشروع');projectKind.textContent=activeProject?.source_type==='github'?tr('GitHub working copy','نسخة عمل GitHub'):tr('Local project','مشروع محلي');projectBranch.textContent=tr('Branch: ','الفرع: ')+(activeProject?.branch||'—');projectBranch.hidden=!activeProject?.branch;}
   const projectGroups=textElement('div','','workspace-project-groups'),projectBuckets=new Map();
   for(const [kind,en,ar] of [['local','Workspace','مساحة العمل'],['github','GitHub projects','مشاريع GitHub']]){
     const group=document.createElement('details');group.className='project-source-group';group.open=true;group.dataset.source=kind;
