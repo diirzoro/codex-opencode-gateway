@@ -62,22 +62,29 @@ class DockerProvisioner:
             raise PreviewProvisioningError("Docker returned an invalid container identifier")
         return container_id
 
-    def stop(self, container_id: str, job_id: str) -> None:
-        """Stop only a matching Preview container; never touch unrelated jobs."""
+    def status(self, container_id: str, job_id: str) -> str:
+        """Inspect a matching sandbox, without ever running an application."""
+        self._require_owned(container_id, job_id)
+        state = self._call(("inspect", "--format", "{{.State.Status}}", container_id))
+        if state not in ("created", "running", "restarting", "exited", "dead", "paused"):
+            raise PreviewProvisioningError("Unknown sandbox state")
+        return state
+
+    def _require_owned(self, container_id: str, job_id: str) -> None:
         if CONTAINER_ID.fullmatch(container_id) is None or JOB_ID.fullmatch(job_id) is None:
             raise PreviewProvisioningError("Invalid sandbox identity")
-        label = self._call(("inspect", "--format",
-                            "{{index .Config.Labels \"opencode.preview.job\"}}", container_id))
-        if label != job_id:
-            raise PreviewProvisioningError("Refusing to stop an unowned container")
+        labels = self._call(("inspect", "--format",
+                             "{{index .Config.Labels \\"opencode.preview.job\\"}}|{{index .Config.Labels \\"opencode.preview.managed\\"}}",
+                             container_id))
+        if labels != f"{job_id}|true":
+            raise PreviewProvisioningError("Refusing access to an unowned container")
+
+    def stop(self, container_id: str, job_id: str) -> None:
+        """Stop only a matching Preview container; never touch unrelated jobs."""
+        self._require_owned(container_id, job_id)
         self._call(("stop", "--time", "2", container_id), timeout=15)
 
     def logs(self, container_id: str, job_id: str) -> str:
         """Bound logs and verify job identity before reading."""
-        if CONTAINER_ID.fullmatch(container_id) is None or JOB_ID.fullmatch(job_id) is None:
-            raise PreviewProvisioningError("Invalid sandbox identity")
-        label = self._call(("inspect", "--format",
-                            "{{index .Config.Labels \"opencode.preview.job\"}}", container_id))
-        if label != job_id:
-            raise PreviewProvisioningError("Refusing logs for an unowned container")
+        self._require_owned(container_id, job_id)
         return self._call(("logs", "--tail", "100", container_id), timeout=10)[-100000:]
