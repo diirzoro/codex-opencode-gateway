@@ -17,6 +17,7 @@ SOCKET=unix:///run/preview-worker/docker.sock
 install -d -o root -g root -m 0755 "$WORKER_ROOT"
 # The independent Worker is intentionally not a Git checkout.
 # Copy backend app only; do not copy Test secrets or its .env.
+rm -rf "$WORKER_ROOT/app.new" "$WORKER_ROOT/app.previous"
 cp -a "$TEST_ROOT/backend/app" "$WORKER_ROOT/app.new"
 chown -R root:root "$WORKER_ROOT/app.new"
 chmod -R a+rX "$WORKER_ROOT/app.new"
