@@ -83,5 +83,12 @@ Repository: diirzoro/codex-opencode-gateway
 - A user logout/session expiry revokes preview access and should asynchronously release that user's owned preview resources. Do not make cleanup a prerequisite for secure session revocation.
 - Five-minute cleanup and authenticated idle policy must be validated on Test before enabling execution. Current code has policy metadata only; an actual worker/terminal lease reaper is not yet implemented.
 
+## Progress update — 2026-10-16 (updates branch)
+- Confirmed agent offline/pause/resume behavior is a **separate product feature**, not part of Preview. Do not suspend/cancel agent execution when Preview becomes idle; preserve independent OpenCode task ownership and lifecycle.
+- Added `plan_pools(user_count, users_per_pool=50)` to `preview_scheduling.py`: computes the number of logical pools needed at thresholds 50/100, validates inputs, and explicitly refuses to claim any worker provisioned or capacity verified.
+- Added tests for zero/50/51 users, configurable 100-user pools and invalid inputs.
+- No container has been provisioned, no npm/python project has been started, and no production code/deployment was touched. These tests are committed but **not yet executed in Test/CI**.
+- Next: inspect/test existing runtime integration, implement durable pool membership plus resource-based admission (separate from active worker count), then add isolated build worker and expiry reaper. Do not run customer commands on Gateway host.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
