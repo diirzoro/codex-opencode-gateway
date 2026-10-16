@@ -159,5 +159,11 @@ Repository: diirzoro/codex-opencode-gateway
 - Manual Start Preview remains mandatory. The Preview panel stays open on idle stop; no agent task is stopped.
 - Separate launch decision for temporary email verification: see `docs/REMAINING_WORK_AGENDA.md`. Do not conflate email settings with Preview capabilities.
 
+## Progress — two implementation steps (2026-10-16, updates only)
+1. Added `PreviewWorkerCapacity` model and Alembic `0020_preview_worker_capacity.py` (following 0019) with private worker resource fields, heartbeat/attestation timestamps, slot-count and nonnegative-capacity constraints. Model registered in SQLAlchemy metadata. Migration has NOT been applied.
+2. Added dormant `preview_capacity_store.py` with worker-first row lock and generation/owner-bound lease lock, atomic transaction-scoped slot reservation, stale worker rejection and idempotent release. Added `test_preview_capacity_store.py` with reservation/slot exhaustion/generation/staleness/release tests. This is not exposed via API or wired to real workers.
+- **Safety gate:** the caller must own transaction and use independently authenticated worker heartbeats; do not accept worker identity/capacity from browser. Slot release requires actual worker destruction and route revocation before commit. No preview execution or npm/Python install enabled. Tests committed but NOT run on Test/CI.
+- Remaining: disposable PostgreSQL migration 0019->0020 test, concurrent transaction tests on PostgreSQL, trusted worker registry ingestion, isolated worker provisioning, cleanup reaper, authenticated routing and workspace Start integration. Do not deploy or announce production readiness.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
