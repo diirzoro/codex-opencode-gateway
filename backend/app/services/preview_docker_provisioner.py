@@ -80,7 +80,7 @@ class DockerProvisioner:
             raise PreviewProvisioningError("Invalid preview path")
         script = (
             "const http=require('http');"
-            "http.get({hostname:'127.0.0.1',port:8080,path:process.argv[1],timeout:5000},"
+            "http.get({hostname:'127.0.0.1',port:Number(process.env.PORT||8080),path:process.argv[1],timeout:5000},"
             "r=>{const chunks=[];let n=0;r.on('data',c=>{n+=c.length;if(n>262144){r.destroy();process.exit(3);}chunks.push(c)});"
             "r.on('end',()=>{const b=Buffer.concat(chunks);"
             "process.stdout.write(JSON.stringify({status:r.statusCode,type:String(r.headers['content-type']||'application/octet-stream'),body:b.toString('base64')}))})}"
