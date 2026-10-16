@@ -807,7 +807,7 @@ body:has(#workspacePage.active) #app-sidebar{display:none!important}
 /* Owner-approved reference Workspace. Other dashboards retain their navigation. */
 body:has(#workspacePage.active) .app-header{display:none!important}
 :root #workspacePage.active{height:100dvh!important}
-:root #workspacePage .reference-workspace{--dashboard-rail-width:clamp(210px,19vw,290px);direction:inherit;display:grid!important;grid-template-areas:'dashboard chat project';grid-template-columns:var(--dashboard-rail-width) minmax(0,1fr) var(--panel-w,400px);height:100%;min-width:0}
+:root #workspacePage .reference-workspace{--dashboard-rail-width:clamp(210px,19vw,290px);direction:inherit;display:grid!important;grid-template-areas:'dashboard chat project';grid-template-columns:var(--dashboard-rail-width) minmax(0,1fr) var(--panel-w,var(--dashboard-rail-width));height:100%;min-width:0}
 :root #workspacePage .reference-workspace.sessions-collapsed{grid-template-columns:var(--dashboard-rail-width) minmax(0,1fr) 0!important}
 :root #workspacePage .reference-workspace .agent-column{grid-area:chat;height:100%;background:var(--panel)}
 :root #workspacePage .reference-workspace #sessionSidebar{grid-area:project;min-width:0;border-inline-start:1px solid var(--line);padding:20px 16px;background:var(--panel);overflow:auto}
