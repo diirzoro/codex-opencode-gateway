@@ -152,5 +152,12 @@ Repository: diirzoro/codex-opencode-gateway
 - Execution status: **tests were NOT run against the repository**. Git checkout was not accessible from the available container; do not claim pass. No Alembic migration was executed on PostgreSQL. No runner or worker was started.
 - Next steps: fetch/clone `updates` on isolated Test, run Python suites, verify `alembic heads` and 0019 upgrade on disposable PostgreSQL, then implement authenticated durable lease transactions and isolated worker provisioning. Keep dynamic `/preview/start` fail-closed until the runner is accepted.
 
+## Progress — worker heartbeat and candidate selection (2026-10-16)
+- Added `preview_worker_registry.py`: 30-second freshness bounds on worker heartbeat and isolation attestation; reject stale/future reports and continue failing closed when no worker is available.
+- Added `select_worker()` to select an eligible worker candidate using measured available RAM/CPU, without allocating capacity or executing any project code. Added regression tests for stale workers and exhausted candidates.
+- **Still advisory**: no trusted worker registry database, worker provisioning, atomic reservation or authenticated Preview routing is wired. Tests committed but not executed on Test/CI.
+- Manual Start Preview remains mandatory. The Preview panel stays open on idle stop; no agent task is stopped.
+- Separate launch decision for temporary email verification: see `docs/REMAINING_WORK_AGENDA.md`. Do not conflate email settings with Preview capabilities.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
