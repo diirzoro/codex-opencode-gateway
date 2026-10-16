@@ -42,12 +42,31 @@ class DockerAdapterTests(unittest.TestCase):
             worker.stop(CID, "job1")
         self.assertEqual(len(calls), 1)
 
+    def test_status_of_owned_container(self):
+        calls = []
+        def fake(args, **kwargs):
+            calls.append(args)
+            if "inspect" in args and "{{.State.Status}}" in args:
+                return subprocess.CompletedProcess(args, 0, "running")
+            return subprocess.CompletedProcess(args, 0, "job1|true")
+        self.assertEqual(DockerProvisioner(run=fake).status(CID, "job1"), "running")
+        self.assertEqual(len(calls), 2)
+
+    def test_rejects_matching_job_without_management_marker(self):
+        calls = []
+        def fake(args, **kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, "job1|<no value>")
+        with self.assertRaises(PreviewProvisioningError):
+            DockerProvisioner(run=fake).logs(CID, "job1")
+        self.assertEqual(len(calls), 1)
+
     def test_owned_stop(self):
         calls = []
         def fake(args, **kwargs):
             calls.append(args)
             return subprocess.CompletedProcess(args, 0,
-                                               "job1" if "inspect" in args else CID)
+                                               "job1|true" if "inspect" in args else CID)
         worker = DockerProvisioner(run=fake)
         worker.stop(CID, "job1")
         self.assertEqual(calls[-1][1], "stop")
