@@ -2,7 +2,7 @@
 import unittest
 from app.services.preview_container_spec import ContainerSpec, UnsafeContainerSpec, argv_for
 
-DIGEST = "sha256:" + "a" * 64
+DIGEST = "docker.io/library/python@sha256:" + "a" * 64
 
 
 class ContainerSpecTests(unittest.TestCase):
@@ -29,6 +29,15 @@ class ContainerSpecTests(unittest.TestCase):
         ):
             with self.subTest(path=path), self.assertRaises(UnsafeContainerSpec):
                 argv_for(ContainerSpec(DIGEST, ("python",), path))
+
+    def test_rejects_digest_without_repository(self):
+        with self.assertRaises(UnsafeContainerSpec):
+            argv_for(ContainerSpec("sha256:" + "a" * 64, ("python",), "/var/lib/preview-worker/jobs/a/src"))
+
+    def test_rejects_control_characters_in_argv(self):
+        for part in ("python\\x00run", "python\\nrun"):
+            with self.subTest(part=part), self.assertRaises(UnsafeContainerSpec):
+                argv_for(ContainerSpec(DIGEST, (part,), "/var/lib/preview-worker/jobs/a/src"))
 
     def test_rejects_untrusted_mount(self):
         with self.assertRaises(UnsafeContainerSpec):
