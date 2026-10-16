@@ -50,6 +50,8 @@ def transition(lease: PreviewLease, event: str, *, now: datetime) -> PreviewLeas
     if event == "worker_reserved" and lease.state == "queued":
         return PreviewLease(lease.owner_id, lease.workspace_id, "starting", lease.last_user_activity_at, lease.started_at)
     if event == "user_activity" and lease.state == "running":
+        if should_expire(lease, now=stamp):
+            raise ValueError("Expired preview cannot be revived by late activity")
         if stamp < _utc(lease.last_user_activity_at):
             raise ValueError("Activity timestamp cannot go backwards")
         return PreviewLease(lease.owner_id, lease.workspace_id, "running", stamp, lease.started_at)
