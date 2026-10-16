@@ -148,7 +148,8 @@
     initializeWorkspace();if(!workspaceInitialized||openWorkspace===lazyOpenWorkspace)throw new Error('Workspace initialization did not complete');return openWorkspace(project,workspace,options);
   };
   openWorkspace=lazyOpenWorkspace;
-  window.openGithubProject=()=>{initializeWorkspace();return window.openGithubProject();};
+  const previousOpenGithubProject=window.openGithubProject;
+  window.openGithubProject=(...args)=>{initializeWorkspace();if(typeof previousOpenGithubProject!=='function')throw new Error('GitHub project opener is unavailable');return previousOpenGithubProject(...args);};
   function initializeWorkspace(){
     if(workspaceInitialized)return;workspaceInitialized=true;
   const shell=document.querySelector('#workspacePage .workspace-shell'),center=shell.querySelector('.agent-column'),pane=q('sessionSidebar');
