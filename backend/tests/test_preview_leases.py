@@ -26,6 +26,10 @@ class PreviewLeaseTests(unittest.TestCase):
         self.assertFalse(should_expire(touched, now=T0 + timedelta(seconds=500)))
         self.assertTrue(should_expire(touched, now=T0 + timedelta(seconds=550)))
 
+    def test_late_user_activity_does_not_revive_expired_lease(self):
+        with self.assertRaises(ValueError):
+            transition(self.lease("running"), "user_activity", now=T0 + timedelta(seconds=301))
+
     def test_expired_requires_explicit_new_start(self):
         expired = transition(self.lease("running"), "idle_expired", now=T0 + timedelta(seconds=300))
         self.assertEqual(expired.state, "expired")
