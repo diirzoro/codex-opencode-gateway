@@ -136,7 +136,7 @@
   async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/profile/access');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();}
   const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(id==='workspacePage'&&currentUser&&!admin())initializeWorkspace();await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage','onboarding'].includes(id))refreshEntitlement().then(()=>updateSend()).catch(error=>toast(error.message));if(!admin()&&id==='workspacePage'&&activeWorkspace){refreshChoices().catch(error=>toast(error.message));loadWorkspaceDetails();}if(admin()){if(q('adminPage').classList.contains('active')&&document.querySelector('[data-admin-panel=billing].active'))await loadPaymentOrders(true);return;}if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')loadHome().catch(error=>toast(error.message));if(id==='connectionsPage')loadConnections().catch(error=>toast(error.message));}};
   const previousShow=showPage;showPage=function(id){if(id==='adminPage'&&!admin()){toast('Administrator access required');id=currentUser?'workspaceHomePage':'authPage';}if(admin()&&['workspaceHomePage','connectionsPage','workspacePage'].includes(id))id='adminPage';q('sessionSidebar').classList.remove('open');overlay(false);try{if(currentUser)localStorage.setItem('og-page',id);}catch(error){}previousShow(id);syncWorkspacePolling();q('clientWorkspaceHome').classList.toggle('active',['workspaceHomePage','workspacePage'].includes(id));q('clientConnections').classList.toggle('active',id==='connectionsPage');if(['workspaceHomePage','workspacePage','connectionsPage'].includes(id))q('clientNav').querySelectorAll('[data-client-view]').forEach(n=>n.classList.remove('active'));};
-  openWorkspace=async function(project,workspace,options={}){
+  const lazyOpenWorkspace=async function(project,workspace,options={}){
     if(options.navigate===false&&!workspaceInitialized){
       if(!await usableWorkspace(workspace))return;
       // Composer attachment state does not exist until initializeWorkspace() runs.
@@ -145,8 +145,9 @@
       stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;
       try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}return;
     }
-    initializeWorkspace();return openWorkspace(project,workspace,options);
+    initializeWorkspace();if(!workspaceInitialized||openWorkspace===lazyOpenWorkspace)throw new Error('Workspace initialization did not complete');return openWorkspace(project,workspace,options);
   };
+  openWorkspace=lazyOpenWorkspace;
   window.openGithubProject=()=>{initializeWorkspace();return window.openGithubProject();};
   function initializeWorkspace(){
     if(workspaceInitialized)return;workspaceInitialized=true;
@@ -505,7 +506,7 @@
   const changesSection=document.createElement('details');changesSection.className='workspace-side-section workspace-change-group';changesSection.open=false;changesSection.append(text('summary','Project changes','تغييرات المشروع'),changesPanel);
   projectRoot.append(filesSection,changesSection);
   let exportSource;
-  function projectKindControls(){const github=activeProject?.source_type==='github';changesSection.hidden=!github;if(exportSource)exportSource.hidden=github;gitActions.hidden=!github;q('commitButton').hidden=!github;q('pushButton').hidden=!github;}
+  function projectKindControls(){const github=activeProject?.source_type==='github';changesSection.hidden=!github;if(exportSource)exportSource.hidden=github;gitActions.hidden=!github;gitActions.querySelector('#commitButton').hidden=!github;gitActions.querySelector('#pushButton').hidden=!github;}
 
   function updateProjectIdentity(){projectKindControls();projectName.textContent=activeProject?.repository||activeProject?.name||tr('Project','المشروع');projectKind.textContent=activeProject?.source_type==='github'?tr('GitHub working copy','نسخة عمل GitHub'):tr('Local project','مشروع محلي');projectBranch.textContent=tr('Branch: ','الفرع: ')+(activeProject?.branch||'—');projectBranch.hidden=!activeProject?.branch;}
   const projectGroups=textElement('div','','workspace-project-groups'),projectBuckets=new Map();
