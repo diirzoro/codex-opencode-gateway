@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from . import preview, preview_scheduling, preview_package_manager, workspaces
 
 # Fixed security contract: clients cannot loosen these limits via API input.
-LIMITS={"cpu_cores":1,"memory_mb":512,"disk_mb":512,"processes":128,
+LIMITS={"cpu_cores":1,"memory_mb":768,"disk_mb":1024,"processes":128,
         "execution_seconds":900,"log_bytes":100000,"uid":10001,
         "read_only_root":True,"drop_capabilities":["ALL"],"no_new_privileges":True,
         "network":"none","public_ports":[],"docker_socket":False,
@@ -111,8 +111,21 @@ def status(workspace):
 
 
 def start(workspace):
-    # Do not silently fall back to Popen, docker run, or same-origin proxying.
-    raise HTTPException(503, 'Isolated preview execution is unavailable; no code was started')
+    # Manual Start is the only valid entry point. Before worker acceptance,
+    # return an actionable, structured failure instead of suggesting that
+    # an agent-side 'node server.js' is a Preview launch.
+    detected = preview.detect(workspace)
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "PREVIEW_WORKER_NOT_READY",
+            "framework": detected.get("framework"),
+            "message": "Smart Preview dynamic execution is not enabled on this server.",
+            "action": "Configure and verify a dedicated isolated Preview worker; do not run project commands on the Gateway host.",
+            "execution_started": False,
+            "retry_automatically": False,
+        },
+    )
 
 
 def stop(workspace):
