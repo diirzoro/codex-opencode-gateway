@@ -209,7 +209,7 @@
   const statuses={pending:['Waiting','بانتظار التنفيذ'],running:['Running','قيد التشغيل'],completed:['Completed','اكتمل'],error:['Failed','فشل']};
   const operations={inspected:['Inspected','تم فحصه'],changed:['Changed','تم تغييره'],created:['Created','تم إنشاؤه'],deleted:['Deleted','تم حذفه'],moved:['Moved','تم نقله']};
   const activityLabel=(map,value)=>tr(...(map[value]||['Reported','مُعلن']));
-  const workLabel=row=>(row.status==='running'?tr('In progress: ','جارٍ '):row.status==='completed'?tr('Completed: ','اكتمل: '):row.status==='error'?tr('Failed: ','تعذّر: '):tr('Waiting: ','بانتظار: '))+toolName(row.tool);
+  const workLabel=row=>(row.status==='interrupted'?tr('Execution ended; last reported step: ','انتهى التنفيذ؛ آخر خطوة مُعلنة: '):row.status==='running'?tr('In progress: ','جارٍ '):row.status==='completed'?tr('Completed: ','اكتمل: '):row.status==='error'?tr('Failed: ','تعذّر: '):tr('Waiting: ','بانتظار: '))+toolName(row.tool);
   function activityDetail(row){
     const parts=[];
     if(row.command)parts.push(row.command+(row.command_limited?tr(' (arguments hidden)',' (المعاملات مخفية)'):''));
@@ -219,12 +219,18 @@
     return parts.join(' · ');
   }
   window.renderWorkspaceEventLine=(kind,data={})=>{
+    if(kind==='activity'&&['todowrite','todoread'].includes(data.tool)){window.refreshWorkspaceTodos?.();return;}
     keepChatActivity();
+    const final=typeof activeSession==='undefined'?null:activeSession?.execution_status;
+    if(['completed','failed','cancelled'].includes(final))kind=final;
     activity.dataset.state=kind==='activity'?(data.status||'pending'):kind;
-    if(kind==='activity')activityStage.textContent=[workLabel(data),activityDetail(data)].filter(Boolean).join(' · ');
-    else if(stages[kind])activityStage.textContent=activityLabel(stages,kind);
+    const label=kind==='activity'?[workLabel(data),activityDetail(data)].filter(Boolean).join(' · '):stages[kind]?activityLabel(stages,kind):activityStage.textContent;
+    if(activityStage.textContent!==label)activityStage.textContent=label;
   };
   window.renderMessageActivity=(host,rows)=>{
+    rows=rows.filter(row=>!['todowrite','todoread'].includes(row.tool));
+    const ended=typeof activeSession!=='undefined'&&['completed','failed','cancelled'].includes(activeSession?.execution_status);
+    if(ended)rows=rows.map(row=>['pending','running'].includes(row.status)?{...row,status:'interrupted'}:row);
     if(!rows.length)return;
     const details=document.createElement('details');details.className='message-activity';details.open=rows.some(row=>['pending','running','error'].includes(row.status));details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')));const list=document.createElement('ul');
     for(const row of rows){const item=document.createElement('li'),step=document.createElement('details');step.className='tool-execution';step.dataset.state=row.status;step.open=['pending','running','error'].includes(row.status);
@@ -237,12 +243,13 @@
     }details.append(list);host.append(details);
   };
   window.renderActivitySummary=rows=>{
+    if(typeof activeSession!=='undefined'&&['completed','failed','cancelled'].includes(activeSession?.execution_status))window.renderWorkspaceEventLine(activeSession.execution_status);
     const files=new Set(),inspected=new Set();
     const currentRows=rows.slice(rows.findLastIndex(row=>row.role==='user')+1);
     for(const row of currentRows)for(const entry of row.activity||[]){if(entry.status==='completed')for(const file of entry.files||[])(file.operation==='inspected'?inspected:files).add(file.path);}
     const changed=files.size?tr('Reported file changes: ','تغييرات الملفات المُعلنة: ')+[...files].slice(0,20).join(', '):'';
     const read=inspected.size?tr('Files inspected: ','الملفات التي فُحصت: ')+[...inspected].slice(0,20).join(', '):'';
-    keepChatActivity();activitySummary.textContent=[changed,read].filter(Boolean).join(' · ');window.refreshWorkspaceTodos?.();
+    keepChatActivity();const summary=[changed,read].filter(Boolean).join(' · ');if(activitySummary.textContent!==summary)activitySummary.textContent=summary;window.refreshWorkspaceTodos?.();
   };
   const agent=q('agentSelect');agent.title=tr('Agent','الوكيل');controls.insertBefore(agent,q('providerSelect'));
   const newTask=textElement('button','','icon-btn');newTask.id='composerNewTask';newTask.type='button';newTask.title=tr('New task','مهمة جديدة');newTask.setAttribute('aria-label',tr('New task','مهمة جديدة'));newTask.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>';newTask.onclick=async()=>{if(!activeWorkspace){toast(tr('Open a workspace first.','افتح مساحة عمل أولاً.'));return;}try{await createSession();toast(tr('New task started in this workspace.','بدأت مهمة جديدة في مساحة العمل.'));}catch(error){toast(error.message)}};
@@ -352,7 +359,7 @@
   const close=q('closeSessions');modes.append(close);
   const changesPanel=textElement('section','','workspace-changes'),previewPanel=textElement('section','','workspace-preview');
   changesPanel.id='workspaceChangesPanel';previewPanel.id='workspacePreviewPanel';previewPanel.hidden=true;
-  const approvalsList=document.createElement('details');approvalsList.className='chat-approval-settings';
+  const approvalsList=document.createElement('details');approvalsList.className='chat-approval-settings';workspaceDetails.append(approvalsList);
   const questionView=textElement('section','','chat-questions');questionView.hidden=true;let questionSession=null,questionOwner=null,questionSignature='',questionSending=false,questionRevision=0,questionError='';
   window.resetWorkspaceQuestions=()=>{questionRevision++;questionSession=null;questionOwner=null;questionSignature='';questionView.hidden=true;questionView.replaceChildren();};
   function keepQuestions(){if(!questionView.hidden&&activeSession?.id===questionSession&&currentUser?.id===questionOwner&&!questionView.isConnected)q('agentFeed').append(questionView);}
@@ -383,10 +390,10 @@
   async function renderApprovals(rows,sessionId){
     const owner=currentUser?.id;approvalOwner=owner;approvalSession=sessionId;
     inlineApprovals.replaceChildren();approvalsList.replaceChildren(textElement('summary',tr('Approval settings for this conversation','إعدادات الموافقة لهذه المحادثة')));
-    if(!activeSession||activeSession.id!==sessionId){inlineApprovals.hidden=true;return;}
+    if(!activeSession||activeSession.id!==sessionId){inlineApprovals.hidden=true;approvalsList.hidden=true;return;}approvalsList.hidden=false;
     try{const routine=await api('/api/sessions/'+sessionId+'/permissions/routine');if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;
       const label=document.createElement('label');label.className='routine-permissions';const toggle=document.createElement('input');toggle.type='checkbox';toggle.checked=routine.enabled===true;
-      toggle.onchange=async()=>{toggle.disabled=true;try{await api('/api/sessions/'+sessionId+'/permissions/routine',{method:'PUT',body:JSON.stringify({enabled:toggle.checked})});await loadApprovals();}catch(error){toggle.checked=!toggle.checked;toast(error.message);}finally{toggle.disabled=false;}};
+      toggle.onchange=async()=>{if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;toggle.disabled=true;try{await api('/api/sessions/'+sessionId+'/permissions/routine',{method:'PUT',body:JSON.stringify({enabled:toggle.checked})});await loadApprovals();}catch(error){toggle.checked=!toggle.checked;toast(error.message);}finally{toggle.disabled=false;}};
       label.append(toggle,textElement('span',tr('Allow routine project-file work; ask for commands and patches','السماح بأعمال ملفات المشروع المعتادة؛ الموافقة للأوامر والباتشات')));approvalsList.append(label);
     }catch(error){}
     approvalsList.append(textElement('p',tr('Review permission requests directly in the conversation.','راجع طلبات الموافقة مباشرة داخل الدردشة.')));
@@ -404,10 +411,10 @@
       }
       section.append(buttons,textElement('small',tr('Matching repeats applies only to the same reviewed request in this conversation.','موافقة الكل المماثل تخص الطلب نفسه الذي راجعته في هذه المحادثة فقط.')));inlineApprovals.append(section);
     }
-    inlineApprovals.append(approvalsList);inlineApprovals.hidden=false;q('agentFeed').append(inlineApprovals);
+    inlineApprovals.hidden=!rows.length;if(rows.length)q('agentFeed').append(inlineApprovals);
     try{const remembered=await api('/api/sessions/'+sessionId+'/permissions/remembered');if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;
       if(remembered.count){const note=textElement('div','','remembered-approvals');note.append(textElement('span',tr('Matching repeats approved in this conversation.','تم السماح بالطلبات المماثلة في هذه المحادثة.')));
-        const clear=btn('clearRememberedApprovals','Clear remembered approvals','إلغاء الموافقات المحفوظة',async()=>{if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;await api('/api/sessions/'+sessionId+'/permissions/remembered',{method:'DELETE'});await loadApprovals();});note.append(clear);inlineApprovals.append(note);inlineApprovals.hidden=false;q('agentFeed').append(inlineApprovals);}
+        const clear=btn('clearRememberedApprovals','Clear remembered approvals','إلغاء الموافقات المحفوظة',async()=>{if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;await api('/api/sessions/'+sessionId+'/permissions/remembered',{method:'DELETE'});await loadApprovals();});note.append(clear);approvalsList.append(note);}
     }catch(error){}
   }
   window.renderWorkspaceApprovals=renderApprovals;
@@ -766,7 +773,7 @@
     if(!activeSession)return;const sessionId=activeSession.id,workspaceId=activeWorkspace?.id,owner=currentUser?.id;
     if(statusPending?.sessionId===sessionId)return statusPending.promise;
     const promise=(async()=>{const row=await api('/api/sessions/'+sessionId);if(activeSession?.id!==sessionId||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
-      activeSession={...activeSession,...row};q('runtimeStatus').textContent=row.status;
+      activeSession={...activeSession,...row};q('runtimeStatus').textContent=row.status;if(['completed','failed','cancelled'].includes(row.execution_status))window.renderWorkspaceEventLine?.(row.execution_status);
       if(!pendingSubmission&&!['submitted','waiting_approval'].includes(row.execution_status)){
         try{sessionStorage.removeItem('og-submit:'+owner+':'+sessionId);}catch(error){}
       }
