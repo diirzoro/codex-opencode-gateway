@@ -62,6 +62,49 @@ class DockerProvisioner:
             raise PreviewProvisioningError("Docker returned an invalid container identifier")
         return container_id
 
+    def fetch(self, container_id: str, job_id: str, family: str, path: str) -> dict:
+        """Fetch a bounded HTTP resource from inside a network-none container.
+
+        No container port is exposed to the host. Only GET resources can be
+        served by this minimal Preview relay.
+        """
+        import base64
+        from urllib.parse import urlsplit
+        self._require_owned(container_id, job_id)
+        if family not in ("node", "python", "php") or not isinstance(path, str):
+            raise PreviewProvisioningError("Unsupported preview runtime")
+        parsed = urlsplit(path)
+        if (not path.startswith("/") or path.startswith("//") or
+                parsed.scheme or parsed.netloc or len(path) > 2048 or
+                any(ord(char) < 32 for char in path)):
+            raise PreviewProvisioningError("Invalid preview path")
+        script = (
+            "const http=require('http');"
+            "http.get({hostname:'127.0.0.1',port:8080,path:process.argv[1],timeout:5000},"
+            "r=>{const chunks=[];let n=0;r.on('data',c=>{n+=c.length;if(n>262144){r.destroy();process.exit(3);}chunks.push(c)});"
+            "r.on('end',()=>{const b=Buffer.concat(chunks);"
+            "process.stdout.write(JSON.stringify({status:r.statusCode,type:String(r.headers['content-type']||'application/octet-stream'),body:b.toString('base64')}))})}"
+            ").on('error',()=>process.exit(4))"
+        ) if family == "node" else (
+            "import sys,urllib.request,urllib.error,base64,json;"
+            "u='http://127.0.0.1:8080'+sys.argv[1];"
+            "r=urllib.request.urlopen(u,timeout=5);"
+            "b=r.read(262145);"
+            "assert len(b)<=262144;"
+            "print(json.dumps({'status':r.status,'type':r.headers.get('Content-Type','application/octet-stream'),'body':base64.b64encode(b).decode()}))"
+        )
+        if family == "php":
+            raise PreviewProvisioningError("PHP relay not yet available")
+        binary = "node" if family == "node" else "python"
+        output = self._call(("exec", container_id, binary, "-e" if family == "node" else "-c", script, path), timeout=12)
+        try:
+            result = __import__("json").loads(output)
+            if not isinstance(result, dict) or not 200 <= result.get("status", 0) <= 599:
+                raise ValueError("Invalid response")
+            return result
+        except (ValueError, TypeError) as exc:
+            raise PreviewProvisioningError("Application returned an invalid response") from exc
+
     def status(self, container_id: str, job_id: str) -> str:
         """Inspect a matching sandbox, without ever running an application."""
         self._require_owned(container_id, job_id)
