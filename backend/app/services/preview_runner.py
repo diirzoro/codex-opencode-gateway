@@ -145,7 +145,7 @@ def start(workspace):
     framework = info["framework"]
     # Package-based frameworks require a preparation stage, and cannot be
     # declared running until dependencies and browser routing are available.
-    if framework not in PROFILES:
+    if not info["profile_available"]:
         raise HTTPException(422, "No executable Preview profile for this workspace")
     try:
         client = _worker()
@@ -154,7 +154,7 @@ def start(workspace):
             spool.seek(0)
             archive = base64.b64encode(spool.read()).decode("ascii")
         client.request("prepare", {"job_id": _job_id(workspace),
-                                   "framework": framework, "archive": archive})
+                                   "framework": framework, "entrypoint": info["argv"][-1] if framework == "node" else ("main.py" if "main:app" in info["argv"] else "app.py" if "app:app" in info["argv"] else "index.php" if framework == "php" else None), "archive": archive})
         response = client.request("start", {"job_id": _job_id(workspace)})
         # No iframe URL is provided until dedicated browser routing exists.
         return {**response, "url": None, "execution_enabled": True}
