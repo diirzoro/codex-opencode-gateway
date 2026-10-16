@@ -40,7 +40,7 @@ def register_local_job(job_id: str, image: str, argv: tuple[str, ...]):
         if job_id in JOBS:
             raise ValueError("Already registered")
         JOBS[job_id] = {"spec": ContainerSpec(image, tuple(argv), str(mount)),
-                        "container_id": None, "state": "ready"}
+                        "container_id": None, "state": "ready", "family": "node" if argv[0] == "node" else "python"}
 
 
 class WorkerServer(ThreadingHTTPServer):
@@ -139,7 +139,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         if not image:
                             raise ValueError('Worker runtime image is not configured')
                         JOBS[job_id] = {"spec": ContainerSpec(image, profile.argv, str(source)),
-                                        "container_id": None, "state": "ready"}
+                                        "container_id": None, "state": "ready", "family": profile.family}
                     except Exception:
                         shutil.rmtree(root)
                         raise
@@ -173,8 +173,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                             if self.server.provisioner.status(cid, job_id) != "running":
                                 break
                             response = self.server.provisioner.fetch(
-                                cid, job_id, job["spec"].image.startswith("docker.io/library/node")
-                                and "node" or "python", "/")
+                                cid, job_id, job["family"], "/")
                             ready = 200 <= response["status"] < 500
                             if ready:
                                 break
@@ -200,9 +199,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         self.reply(409, {"error": "not_running"})
                         return
                     result = self.server.provisioner.fetch(
-                        cid, job_id, job["spec"].argv[0] == "node" and "node"
-                        or job["spec"].argv[0] in ("python", "python3") and "python"
-                        or "unsupported", request.get("path", "/"))
+                        cid, job_id, job["family"], request.get("path", "/"))
                 elif operation == "logs":
                     cid = job["container_id"]
                     result = {"logs": self.server.provisioner.logs(cid, job_id) if cid else ""}
