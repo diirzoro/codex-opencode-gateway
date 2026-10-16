@@ -666,10 +666,33 @@
       else if(row.lifecycle==='archived')actions.append(btn('restore-session-'+row.id,'Restore','استعادة',()=>sessionAction(row,'restore')));
       else actions.append(btn('archive-session-'+row.id,'Archive','أرشفة',()=>sessionAction(row,'archive')));
       if(row.lifecycle!=='active')actions.append(btn('delete-session-'+row.id,'Delete from history','حذف من السجل',()=>sessionAction(row,'delete')));
+      // Float the actions outside the row layout without changing session actions.
+      menu.addEventListener('toggle',()=>{
+        if(!menu.open||!menu.isConnected)return;
+        for(const other of list.querySelectorAll('.conversation-menu[open]'))if(other!==menu)other.open=false;
+        const anchor=more.getBoundingClientRect(),width=190;
+        const left=Math.min(Math.max(8,anchor.right-width),window.innerWidth-width-8);
+        const spaceBelow=window.innerHeight-anchor.bottom;
+        actions.style.left=left+'px';
+        actions.style.right='auto';
+        actions.style.top=spaceBelow>=130?Math.max(8,anchor.bottom+4)+'px':'auto';
+        actions.style.bottom=spaceBelow>=130?'auto':Math.max(8,window.innerHeight-anchor.top+4)+'px';
+      });
       menu.append(actions);item.append(name,menu);list.append(item);
     }
     updateSend();
   }
+  document.addEventListener('click',event=>{
+    for(const menu of document.querySelectorAll('#workspacePage .conversation-menu[open]')){
+      if(!menu.contains(event.target))menu.open=false;
+    }
+  });
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape')for(const menu of document.querySelectorAll('#workspacePage .conversation-menu[open]'))menu.open=false;
+  });
+  q('sessionList').addEventListener('scroll',()=>{
+    for(const menu of q('sessionList').querySelectorAll('.conversation-menu[open]'))menu.open=false;
+  },{passive:true});
   refreshSessions=async function(){
     if(!activeWorkspace)return;
     const workspaceId=activeWorkspace.id,owner=currentUser?.id;
