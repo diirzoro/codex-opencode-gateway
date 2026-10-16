@@ -926,3 +926,13 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 :root #workspacePage .session-source-option:hover,:root #workspacePage .session-source-option:focus-visible{background:var(--panel2)}
 /* Keep the compact agent/provider/model picker above the composer. */
 @container workspace-chat (max-width:680px){:root #workspacePage .composer-picks{bottom:calc(100% + 8px);top:auto;z-index:30}}
+
+/* Project-source specific controls and compact conversation list. */
+:root #workspacePage #sessionSidebar .workspace-change-group[hidden],:root #workspacePage #sessionSidebar .git-actions[hidden],:root #workspacePage #sessionSidebar #exportWorkspaceSource[hidden]{display:none!important}
+:root #workspacePage #sessionSidebar #exportWorkspaceSource{margin-inline-start:auto;font-size:11px;white-space:nowrap;flex:none}
+:root #workspacePage .reference-workspace #sessionSidebar .conversation-row.current{background:transparent}
+:root #workspacePage .reference-workspace #sessionSidebar #sessionList{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}
+:root #workspacePage .reference-workspace #sessionSidebar .workspace-conversations>.section-body{flex:1 1 auto;min-height:0}
+:root #workspacePage .reference-workspace #sessionSidebar .conversation-menu[open]>.session-actions{position:relative;inset:auto;min-width:0;max-width:100%;box-shadow:none}
+:root #workspacePage .reference-workspace #sessionSidebar .conversation-row:has(.conversation-menu[open]){flex-wrap:wrap}
+:root #workspacePage .reference-workspace #sessionSidebar .conversation-menu[open]{flex-basis:100%}
