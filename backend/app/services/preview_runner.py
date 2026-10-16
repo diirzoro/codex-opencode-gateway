@@ -157,7 +157,7 @@ def start(workspace):
                                    "framework": framework, "entrypoint": info["argv"][-1] if framework == "node" else ("main.py" if "main:app" in info["argv"] else "app.py" if "app:app" in info["argv"] else "index.php" if framework == "php" else None), "archive": archive})
         response = client.request("start", {"job_id": _job_id(workspace)})
         # No iframe URL is provided until dedicated browser routing exists.
-        return {**response, "url": None, "execution_enabled": True}
+        return {**response, "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/", "execution_enabled": True}
     except PreviewWorkerUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -169,3 +169,30 @@ def stop(workspace):
         return {**result, "url": None}
     except PreviewWorkerUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
+
+
+def fetch_asset(workspace, path: str):
+    """Proxy a bounded GET asset from the tenant-owned running preview."""
+    import base64
+    from fastapi import Response
+    from .preview_worker_client import PreviewWorkerUnavailable
+    if len(path) > 2048 or not path.startswith("/"):
+        raise HTTPException(400, "Invalid preview asset path")
+    try:
+        result = _worker().request("fetch", {"job_id": _job_id(workspace), "path": path})
+        body = base64.b64decode(result["body"], validate=True)
+        if len(body) > 262144:
+            raise ValueError("Oversized preview response")
+        status_code = int(result["status"])
+        if not 200 <= status_code <= 599:
+            raise ValueError("Invalid upstream response")
+        media_type = str(result.get("type") or "application/octet-stream").split(";")[0]
+        if media_type not in ("text/html", "text/css", "application/javascript",
+                              "text/javascript", "application/json", "image/png",
+                              "image/jpeg", "image/svg+xml", "text/plain"):
+            media_type = "application/octet-stream"
+        return Response(content=body, status_code=status_code, media_type=media_type,
+                        headers={"Cache-Control": "no-store",
+                                 "Content-Security-Policy": "sandbox allow-scripts"})
+    except (PreviewWorkerUnavailable, KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(503, "Preview application is not responding yet") from exc
