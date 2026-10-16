@@ -74,7 +74,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
             self.reply(401, {"error": "unauthorized"})
             return
         operation = self.path.removeprefix("/v1/")
-        if self.path != "/v1/" + operation or operation not in ("prepare", "start", "stop", "status", "logs"):
+        if self.path != "/v1/" + operation or operation not in ("prepare", "start", "stop", "status", "logs", "fetch"):
             self.reply(404, {"error": "not_found"})
             return
         try:
@@ -165,6 +165,15 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     cid = job["container_id"]
                     state = self.server.provisioner.status(cid, job_id) if cid else job["state"]
                     result = {"state": state, "job_id": job_id, "url": None}
+                elif operation == "fetch":
+                    cid = job["container_id"]
+                    if not cid or job["state"] != "running":
+                        self.reply(409, {"error": "not_running"})
+                        return
+                    result = self.server.provisioner.fetch(
+                        cid, job_id, job["spec"].argv[0] == "node" and "node"
+                        or job["spec"].argv[0] in ("python", "python3") and "python"
+                        or "unsupported", request.get("path", "/"))
                 elif operation == "logs":
                     cid = job["container_id"]
                     result = {"logs": self.server.provisioner.logs(cid, job_id) if cid else ""}
