@@ -57,6 +57,7 @@ class PreviewWorkerClient:
                 "job_already_started", "unregistered_job", "not_running",
                 "unsupported_framework", "invalid_snapshot",
                 "worker_operation_failed", "application_not_ready",
+                "unsafe_job_directory", "stale_job_in_use",
             }
             try:
                 error = json.loads(exc.read(1024)).get("error")
