@@ -42,5 +42,11 @@ Branch: updates. Never touch master/Live without explicit approval.
 - This is **not a live host telemetry collector**, and the private dispatcher is not yet implemented. A `collector_verified=True` value supplied by clients must never count as attestation. Actual code execution remains disabled and tests not yet run on Test.
 - Outstanding: authenticated telemetry service, sandbox provisioner, proxy and cleanup, PostgreSQL concurrency and E2E tests. Security isolation on the same VPS requires review before enabling dynamic Preview.
 
+## Progress — Linux resource probe (2026-10-16)
+- Added `backend/app/services/preview_host_probe.py` to read Linux `/proc/meminfo` MemTotal/MemAvailable and `shutil.disk_usage` for the intended worker storage path. No shell subprocess, package install, worker provisioning, or host mutation.
+- Added `backend/tests/test_preview_host_probe.py` for accurate units, missing-value refusal and `collector_verified=False` by default.
+- **Important:** probe is not wired to a verified private collector; telemetry from normal Gateway/client requests cannot be trusted as attestation. Tests are committed but NOT executed here. No isolated worker has been deployed and Start Preview remains fail-closed.
+- Immediate next work on Test: measure VPS actual spare RAM/disk, verify cgroup v2 and sandbox security support, implement and test dedicated unprivileged worker-control service with authenticated local transport and isolated provisioning. Do not use Docker on the Gateway service.
+
 ## Current status
 The repository has planning and dormant lease/capacity code and an explicit fail-closed Preview start (503). No worker is running and dynamic Preview is not usable. Same VPS selection does NOT make these checklist items complete.
