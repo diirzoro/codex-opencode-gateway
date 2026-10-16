@@ -1,8 +1,10 @@
 """Worker archive rejection tests. In-memory only; no extraction or Docker."""
 import io
 import tarfile
+import tempfile
+from pathlib import Path
 import unittest
-from app.services.preview_worker_archive import validate_archive, UnsafePreviewArchive
+from app.services.preview_worker_archive import validate_archive, UnsafePreviewArchive, extract_into_sandbox
 
 
 def make_archive(names):
@@ -32,6 +34,27 @@ class WorkerArchiveTests(unittest.TestCase):
         with make_archive(["index.html", "index.html"]) as tar:
             with self.assertRaises(UnsafePreviewArchive):
                 validate_archive(tar)
+
+    def test_extracts_regular_files_in_empty_sandbox(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with make_archive(["index.html", "src/app.py"]) as tar:
+                self.assertEqual(extract_into_sandbox(tar, Path(tmp)), (2, 10))
+            self.assertEqual((Path(tmp) / "src" / "app.py").read_bytes(), b"hello")
+
+    def test_refuses_nonempty_destination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "existing").write_text("keep")
+            with make_archive(["index.html"]) as tar:
+                with self.assertRaises(UnsafePreviewArchive):
+                    extract_into_sandbox(tar, Path(tmp))
+            self.assertEqual((Path(tmp) / "existing").read_text(), "keep")
+
+    def test_does_not_extract_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with make_archive(["../escape"]) as tar:
+                with self.assertRaises(UnsafePreviewArchive):
+                    extract_into_sandbox(tar, Path(tmp))
+            self.assertFalse((Path(tmp).parent / "escape").exists())
 
     def test_rejects_symlink(self):
         buf = io.BytesIO()
