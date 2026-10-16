@@ -130,12 +130,18 @@
         moreQuery=query;moreOffset=result.next_offset;
         if(query){searchQuery=query;searchRows=[...new Map([...searchRows,...result.items].map(p=>[p.id,p])).values()];}
         else snapshot={...snapshot,providers:[...new Map([...(snapshot?.providers||[]),...result.items].map(p=>[p.id,p])).values()]};
-        optionsOpen=true;renderOptions();moreProviders.hidden=moreOffset===null;
+        optionsOpen=true;renderOptions();moreProviders.hidden=true;
         searchState.textContent=tr('Runtime providers: ','مزوّدات Runtime: ')+result.total;
       }catch(error){if(alive()&&error.name!=='AbortError')searchState.textContent=error.message;}
       finally{moreBusy=false;moreProviders.disabled=false;}
-    });moreProviders.hidden=Boolean(workspaceId);comboWrap.after(moreProviders);
+    });moreProviders.hidden=true;comboWrap.after(moreProviders);
 
+    // Keep the first 50 fast; fetch further pages only when a user scrolls the results.
+    // The legacy pagination action stays internal and never blocks the first render.
+    options.addEventListener('scroll',()=>{
+      if(workspaceId||moreBusy||!view.ready||!optionsOpen||moreOffset===null)return;
+      if(options.scrollTop+options.clientHeight>=options.scrollHeight-48)moreProviders.click();
+    });
     const sameCatalog=data=>data.workspace_id===workspaceId&&data.generation===snapshot?.generation&&data.revision===snapshot?.revision&&data.policy_revision===snapshot?.policy_revision;
     async function lookup(kind,value,signal){
       if(!workspaceId){
@@ -143,7 +149,7 @@
         const result=await api(url,{signal});
         if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
         if(kind==='search'&&combo.value.trim().toLowerCase()===value.toLowerCase()){
-          moreQuery=value.toLowerCase();moreOffset=result.next_offset;moreProviders.hidden=moreOffset===null;
+          moreQuery=value.toLowerCase();moreOffset=result.next_offset;moreProviders.hidden=true;
         }
         return kind==='resolve'?result.items.filter(row=>row.id===value):result.items;
       }
@@ -214,36 +220,15 @@
         }
         const updatePrompts=()=>{const values=Object.fromEntries(new FormData(f));for(const {prompt,field} of promptInputs){const condition=prompt.when;field.parentElement.hidden=Boolean(condition)&&(condition.op==='eq'?values[condition.key]!==condition.value:values[condition.key]===condition.value);field.disabled=field.parentElement.hidden;}};
         f.addEventListener('change',updatePrompts);updatePrompts();
-        let validationModel=null,validationModelsReady=false,submitting=false;
+        let submitting=false;
         if(keyMethod){
           const key=input(f,tr('API key (server-side only)','مفتاح API (على الخادم فقط)'),'api_key','password');key.required=true;key.autocomplete='new-password';
-          validationModel=select(f,tr('Model for real credential validation','نموذج للتحقق الحقيقي من المفتاح'),'model_id',[['',tr('Loading models…','جارٍ تحميل النماذج…')]]);
-          validationModel.required=true;validationModel.disabled=true;
-          f.append(node('p',tr('Validation sends a real model request through OpenCode. Provider usage charges may apply. The key is saved only after validation succeeds.','يرسل التحقق طلب نموذج فعليًا عبر OpenCode وقد تُحتسب رسوم استخدام لدى المزوّد. يُحفظ المفتاح فقط بعد نجاح التحقق.'),'provider-note'));
+          f.append(node('p',tr('OpenCode automatically selects an allowed text model for one real validation request. Provider charges may apply. The key is saved only after validation succeeds.','يختار OpenCode تلقائيًا نموذجًا نصيًا مسموحًا لطلب تحقق حقيقي واحد. قد تُحتسب رسوم لدى المزوّد. لا يُحفظ المفتاح إلا بعد نجاح التحقق.'),'provider-note'));
         }
         const submit=node('button',keyMethod?tr('Validate and connect','تحقق واربط'):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
         const currentForm=()=>currentDialog()&&view.ready&&methodArea.contains(f);
-        if(validationModel){
-          submit.disabled=true;const retryModels=button(tr('Retry models','أعد تحميل النماذج'),()=>loadModels());retryModels.hidden=true;body.append(retryModels);
-          async function loadModels(){
-            validationModelsReady=false;submit.disabled=true;validationModel.disabled=true;retryModels.hidden=true;setFeedback(feedback,tr('Loading provider models…','جارٍ تحميل نماذج المزوّد…'));
-            try{
-              const data=workspaceId?await window.workspaceRuntime.loadModels(workspaceId,p.id):{models:accountOptions.models,allowed:true,default_model:null};
-              if(!currentForm())return;
-              const rows=data.models.filter(m=>data.allowed!==false&&m.allowed!==false&&(!m.modalities?.output||m.modalities.output.includes('text')));
-              validationModel.replaceChildren(new Option(tr('Select validation model','اختر نموذج التحقق'),''));
-              for(const model of rows)validationModel.add(new Option(model.name||model.id,model.id));
-              if(rows.some(m=>m.id===data.default_model))validationModel.value=data.default_model;
-              validationModelsReady=rows.length>0;validationModel.disabled=submit.disabled=!validationModelsReady;
-              setFeedback(feedback,validationModelsReady?'':tr('No allowed text models reported by OpenCode.','لم يعلن OpenCode عن نماذج نصية مسموحة.'),'warning');
-            }catch(error){if(currentForm()){setFeedback(feedback,error.message,'error');retryModels.hidden=false;}}
-          }
-          loadModels();
-          methodPicker.addEventListener('change',()=>retryModels.remove(),{once:true});
-        }
         f.onsubmit=async event=>{
           event.preventDefault();if(submitting||!currentForm()||!f.reportValidity())return;
-          if(keyMethod&&!validationModelsReady){setFeedback(feedback,tr('Wait for provider models before connecting.','انتظر تحميل نماذج المزوّد قبل الربط.'),'warning');return;}
           const values=Object.fromEntries(new FormData(f));submitting=true;submit.disabled=methodPicker.disabled=true;f.setAttribute('aria-busy','true');
           try{
             if(keyMethod){
@@ -276,7 +261,7 @@
             window.workspaceRuntime.invalidate(workspaceId);
             if(currentDialog())setFeedback(feedback,error.message,'error');
             if(alive()&&contextCurrent()&&window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
-          }finally{submitting=false;f.removeAttribute('aria-busy');methodPicker.disabled=false;submit.disabled=keyMethod&&!validationModelsReady;}
+          }finally{submitting=false;f.removeAttribute('aria-busy');methodPicker.disabled=false;submit.disabled=false;}
         };
       }
       methodPicker.onchange=renderMethod;renderMethod();methodPicker.focus();
@@ -339,7 +324,7 @@
       options.hidden=!optionsOpen||!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
       window.gatewayProviderTimings={...window.gatewayProviderTimings,render_sync_ms:performance.now()-renderStarted,rendered_options:rows.length};
     };
-    function stopSearch(){const empty=!combo.value.trim();moreOffset=empty?(snapshot?.providers?.length||0):0;moreQuery=empty?'':null;moreProviders.hidden=Boolean(workspaceId);searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}
+    function stopSearch(){const empty=!combo.value.trim();moreOffset=empty?(snapshot?.providers?.length||0):0;moreQuery=empty?'':null;moreProviders.hidden=true;searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}
     function scheduleSearch(){
       stopSearch();renderOptions();const query=combo.value.trim().toLowerCase();
       if(query.length<2||!view.ready)return;
@@ -418,7 +403,7 @@
       return refresh(true);
     }
     view.refresh=refresh;
-    combo.addEventListener('input',()=>{moreOffset=0;moreQuery=null;moreProviders.hidden=Boolean(workspaceId);body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
+    combo.addEventListener('input',()=>{moreOffset=0;moreQuery=null;moreProviders.hidden=true;body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
     combo.addEventListener('focus',()=>{optionsOpen=true;scheduleSearch();});
     combo.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}});
     document.addEventListener('click',event=>{if(!comboWrap.contains(event.target)){optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}},{signal:controller.signal});
