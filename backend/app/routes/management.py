@@ -14,6 +14,7 @@ from ..security.passwords import hash_password, verify_password
 from ..security.sessions import (hash_session_token, new_reactivation_token,
     reactivation_cookie_name, reactivation_eligible)
 from ..services import credentials, recovery, opencode, paypal
+from ..services.billing_methods import method_payload
 from ..services.accounts import user_payload
 from .dependencies import require_user, require_admin, require_billing_user, require_reactivation_user
 
@@ -213,7 +214,6 @@ class MethodInput(BaseModel):
 def scope(user,platform):
     if platform and user.role not in {'owner','admin','finance'}: raise HTTPException(403,'Billing administration required')
     return None if platform else user.id
-def method_payload(row): return {'id':str(row.id),'kind':row.kind,'label':row.label,'enabled':row.enabled,'details':json.loads(credentials.decrypt(row.details))}
 def method_values(data):
     values=data.model_dump(); detail={key:values.pop(key) for key in ['account_name','account_reference','iban','branch','bank_name','currency','network','instructions','checkout_mode','payment_url','plan_id','available_country_codes']}
     return {**values,'details':credentials.encrypt(json.dumps(detail))}

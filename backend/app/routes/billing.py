@@ -14,6 +14,8 @@ from ..database import get_db
 from ..models import Plan, Subscription, User, PaymentOrder,BillingMethod,AccountAudit,Country,Region,City
 from .dependencies import require_user,require_admin,require_billing_user,access_payload
 from ..services import paypal
+from ..services.location_validation import validate_locations
+from ..services.billing_methods import method_payload
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 PAYMENT_MESSAGE = "Payment integration not available yet"
@@ -46,15 +48,24 @@ def subscription_payload(db, user) -> dict:
     if end is not None and end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
     remaining = max(0, ceil((end - now).total_seconds() / 86400)) if end else 0
+    paid_end = row.current_period_end
+    if paid_end is not None and paid_end.tzinfo is None:
+        paid_end = paid_end.replace(tzinfo=timezone.utc)
+    paid_active = bool(row.status == 'active' and row.plan_id and paid_end and paid_end > now)
+    paid_remaining = max(0, ceil((paid_end - now).total_seconds() / 86400)) if paid_end else 0
     plans = [plan_payload(p) for p in db.scalars(select(Plan).where(Plan.active.is_(True)).order_by(Plan.sort_order, Plan.id))]
+    access = access_payload(db, user)
     return {
         "plan": plan_payload(user.plan),
         "selected_plan": plan_payload(db.get(Plan, row.plan_id)) if row.plan_id else None,
-        "trial": {"started_at": user.trial_started_at, "ends_at": user.trial_ends_at, "remaining_days": remaining, "active": remaining > 0},
+        "trial": {"started_at": user.trial_started_at, "ends_at": user.trial_ends_at, "remaining_days": access["core_trial"]["remaining_days"], "active": access["core_trial"]["active"]},
         "subscription": {"status": row.status, "started_at": row.started_at, "current_period_end": row.current_period_end, "cancelled_at": row.cancelled_at, "auto_renew": bool(row.auto_renew)},
         "plans": plans,
+        "paid_entitlement": {"active": paid_active, "ends_at": paid_end,
+                             "remaining_days": paid_remaining if paid_active else 0,
+                             "plan_id": row.plan_id if paid_active else None},
         "payment": {"available": bool(db.scalar(select(BillingMethod.id).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)).limit(1))), "message": "Choose checkout; activation requires verified payment" if db.scalar(select(BillingMethod.id).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)).limit(1)) else PAYMENT_MESSAGE},
-        "access": access_payload(db,user),
+        "access": access,
     }
 
 @router.get("/subscription")
@@ -176,13 +187,11 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
     plan=db.get(Plan,data.plan_id);method=db.get(BillingMethod,data.method_id)
     if not plan or not plan.active: raise HTTPException(422,'Unknown or inactive plan')
     if not method or method.user_id is not None or not method.enabled: raise HTTPException(422,'Payment method is unavailable')
-    from .management import method_payload
     details=method_payload(method)
     if details['details'].get('checkout_mode')=='link' and (not details['details'].get('payment_url') or not details['details'].get('plan_id')):
         raise HTTPException(503,'This payment method needs its hosted checkout link and matching plan configured by administration. No payment was made.')
     if details['details'].get('currency')!=plan.currency: raise HTTPException(422,'Payment method currency does not match this plan')
     if details['details'].get('plan_id') not in (None,plan.id):raise HTTPException(422,'Payment link belongs to another plan')
-    from .auth import validate_locations
     validate_locations(db,data.country_id,data.region_id,data.city_id)
     country=db.get(Country,data.country_id) if data.country_id else None
     region=db.get(Region,data.region_id) if data.region_id else None

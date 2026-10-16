@@ -1,0 +1,262 @@
+[
+  {
+    "turn": 0,
+    "gateway_origin": "http://127.0.0.1:34345",
+    "opencode_origin": "http://127.0.0.1:52179",
+    "messages": [
+      {
+        "role": "user",
+        "id": "msg_13a463513001EgPtoAAFFkdFSL",
+        "parent": null,
+        "created": 1791979043490,
+        "text_lengths": [
+          14
+        ]
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a463abd0019BhU152ATMeBOD",
+        "parent": "msg_13a463513001EgPtoAAFFkdFSL",
+        "created": 1791979043517,
+        "text_lengths": []
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a463e34001gFskz2pan8XFnh",
+        "parent": "msg_13a463513001EgPtoAAFFkdFSL",
+        "created": 1791979044405,
+        "text_lengths": [
+          17
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 1,
+    "gateway_origin": "http://127.0.0.1:34345",
+    "opencode_origin": "http://127.0.0.1:52179",
+    "messages": [
+      {
+        "role": "user",
+        "id": "msg_13a463513001EgPtoAAFFkdFSL",
+        "parent": null,
+        "created": 1791979043490,
+        "text_lengths": [
+          14
+        ]
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a463abd0019BhU152ATMeBOD",
+        "parent": "msg_13a463513001EgPtoAAFFkdFSL",
+        "created": 1791979043517,
+        "text_lengths": []
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a463e34001gFskz2pan8XFnh",
+        "parent": "msg_13a463513001EgPtoAAFFkdFSL",
+        "created": 1791979044405,
+        "text_lengths": [
+          17
+        ]
+      },
+      {
+        "role": "user",
+        "id": "msg_13a463f3e0012hG3PcmWkhdD5h",
+        "parent": null,
+        "created": 1791979045332,
+        "text_lengths": [
+          14
+        ]
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a4641dd001r4WmfpDMM33SUg",
+        "parent": "msg_13a463f3e0012hG3PcmWkhdD5h",
+        "created": 1791979045341,
+        "text_lengths": []
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a464baa001j33dXJaQCch4l5",
+        "parent": "msg_13a463f3e0012hG3PcmWkhdD5h",
+        "created": 1791979047850,
+        "text_lengths": [
+          17
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "gateway_origin": "http://127.0.0.1:34345",
+    "opencode_origin": "http://127.0.0.1:52179",
+    "messages": [
+      {
+        "role": "user",
+        "id": "msg_13a463513001EgPtoAAFFkdFSL",
+        "parent": null,
+        "created": 1791979043490,
+        "text_lengths": [
+          14
+        ]
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a463abd0019BhU152ATMeBOD",
+        "parent": "msg_13a463513001EgPtoAAFFkdFSL",
+        "created": 1791979043517,
+        "text_lengths": []
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a463e34001gFskz2pan8XFnh",
+        "parent": "msg_13a463513001EgPtoAAFFkdFSL",
+        "created": 1791979044405,
+        "text_lengths": [
+          17
+        ]
+      },
+      {
+        "role": "user",
+        "id": "msg_13a463f3e0012hG3PcmWkhdD5h",
+        "parent": null,
+        "created": 1791979045332,
+        "text_lengths": [
+          14
+        ]
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a4641dd001r4WmfpDMM33SUg",
+        "parent": "msg_13a463f3e0012hG3PcmWkhdD5h",
+        "created": 1791979045341,
+        "text_lengths": []
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a464baa001j33dXJaQCch4l5",
+        "parent": "msg_13a463f3e0012hG3PcmWkhdD5h",
+        "created": 1791979047850,
+        "text_lengths": [
+          17
+        ]
+      },
+      {
+        "role": "user",
+        "id": "msg_13a464c9f001YELN6CedJAWJNI",
+        "parent": null,
+        "created": 1791979048839,
+        "text_lengths": [
+          14
+        ]
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a464f90001fwZkGrk5loR4Zy",
+        "parent": "msg_13a464c9f001YELN6CedJAWJNI",
+        "created": 1791979048848,
+        "text_lengths": []
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "gateway_origin": "http://127.0.0.1:34345",
+    "opencode_origin": "http://127.0.0.1:52179",
+    "messages": [
+      {
+        "role": "user",
+        "id": "msg_13a463513001EgPtoAAFFkdFSL",
+        "parent": null,
+        "created": 1791979043490,
+        "text_lengths": [
+          14
+        ]
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a463abd0019BhU152ATMeBOD",
+        "parent": "msg_13a463513001EgPtoAAFFkdFSL",
+        "created": 1791979043517,
+        "text_lengths": []
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a463e34001gFskz2pan8XFnh",
+        "parent": "msg_13a463513001EgPtoAAFFkdFSL",
+        "created": 1791979044405,
+        "text_lengths": [
+          17
+        ]
+      },
+      {
+        "role": "user",
+        "id": "msg_13a463f3e0012hG3PcmWkhdD5h",
+        "parent": null,
+        "created": 1791979045332,
+        "text_lengths": [
+          14
+        ]
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a4641dd001r4WmfpDMM33SUg",
+        "parent": "msg_13a463f3e0012hG3PcmWkhdD5h",
+        "created": 1791979045341,
+        "text_lengths": []
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a464baa001j33dXJaQCch4l5",
+        "parent": "msg_13a463f3e0012hG3PcmWkhdD5h",
+        "created": 1791979047850,
+        "text_lengths": [
+          17
+        ]
+      },
+      {
+        "role": "user",
+        "id": "msg_13a464c9f001YELN6CedJAWJNI",
+        "parent": null,
+        "created": 1791979048839,
+        "text_lengths": [
+          14
+        ]
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a464f90001fwZkGrk5loR4Zy",
+        "parent": "msg_13a464c9f001YELN6CedJAWJNI",
+        "created": 1791979048848,
+        "text_lengths": []
+      },
+      {
+        "role": "user",
+        "id": "msg_13a4659a5001vZ9yKei1TAGMmk",
+        "parent": null,
+        "created": 1791979052179,
+        "text_lengths": [
+          14
+        ]
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a465cae0016wFp2PC9xI0Iqk",
+        "parent": "msg_13a4659a5001vZ9yKei1TAGMmk",
+        "created": 1791979052206,
+        "text_lengths": []
+      },
+      {
+        "role": "assistant",
+        "id": "msg_13a465db7001osDd3NEVSD6UEo",
+        "parent": "msg_13a4659a5001vZ9yKei1TAGMmk",
+        "created": 1791979052472,
+        "text_lengths": [
+          17
+        ]
+      }
+    ]
+  }
+]

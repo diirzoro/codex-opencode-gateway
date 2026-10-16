@@ -13,6 +13,8 @@ import socket
 import subprocess
 import threading
 import time
+import uuid
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,18 +87,31 @@ class OpenCodeService:
         self.restore_passes = 0
         self.restore_puts = 0
         self.restore_errors = []
+        self.connection_method_cache = {}
         self.oauth_pending = {}
+        self.oauth_versions = {}
         self.session_policies = {}
+        self.credential_bindings = {}
+        self.auth_failures = {}
 
     def close(self):
         self.client.close()
 
     def request(self, method, path, data=None, timeout=15, params=None):
         started = time.monotonic()
+        model = data.get("model", {}) if isinstance(data, dict) else {}
+        provider_id = model.get("providerID") if isinstance(model, dict) else None
+        binding = self.credential_bindings.get(provider_id)
         try:
             response = self.client.request(method, path, params={**self.params, **(params or {})}, json=data, timeout=timeout)
             response.raise_for_status()
-            return response.json() if response.content else None
+            result = response.json() if response.content else None
+            failure = result.get("info",{}).get("error",{}) if isinstance(result,dict) and isinstance(result.get("info"),dict) else {}
+            if binding and isinstance(failure,dict) and (failure.get("name")=="ProviderAuthError" or
+                    isinstance(failure.get("data"),dict) and failure["data"].get("statusCode") in {401,403}):
+                self.auth_failures[provider_id] = binding[1]
+                self.invalidate()
+            return result
         except httpx.TimeoutException:
             raise HTTPException(504, "OpenCode request timed out") from None
         except httpx.HTTPStatusError as exc:
@@ -113,6 +128,10 @@ class OpenCodeService:
                     error.detail += " (" + category + ")"
             except ValueError:
                 pass
+            if binding and (exc.response.status_code in {401,403} or getattr(error,"runtime_category",None) in
+                            {"ProviderAuthError","ProviderAuthOauthCallbackFailed","ProviderAuthValidationFailed"}):
+                self.auth_failures[provider_id] = binding[1]
+                self.invalidate()
             raise error from None
         except (httpx.HTTPError, ValueError):
             raise HTTPException(503, "OpenCode runtime request failed") from None
@@ -140,6 +159,7 @@ class OpenCodeService:
         with self.cache_lock:
             self.discovery_revision += 1
             self.core_cache.clear()
+            self.connection_method_cache.clear()
             self.snapshot_cache = None
             self.snapshot_at = 0.0
             self.agent_capability_cache = None
@@ -185,7 +205,11 @@ class OpenCodeService:
                     if cached is not None and time.monotonic() - cached[0] < SNAPSHOT_TTL:
                         return cached[1]
                     revision = self.discovery_revision
-                value = self.request("GET", path)
+                # Provider metadata can be slower to initialize than ordinary runtime calls.
+                # Keep the longer deadline scoped to catalog discovery; agent actions
+                # and other runtime requests retain their existing 15s default.
+                discovery_timeout = 40 if name in {"provider_data", "auth_methods"} else 15
+                value = self.request("GET", path, timeout=discovery_timeout)
                 valid = (isinstance(value, dict) and isinstance(value.get("all"), list)) if name == "provider_data" else (
                     isinstance(value, list) and all(isinstance(a, dict) and isinstance(a.get("name"), str) for a in value)
                     if name == "agents" else isinstance(value, dict))
@@ -321,31 +345,49 @@ def shared_health():
         service.close()
 
 
-def _initialize(service, workspace):
-    """One restoration pass per generation, regardless of which route starts it."""
-    from sqlalchemy import select
+def _initialize(service, workspace, *, db=None):
+    """Restore user-owned keys with legacy workspace fallback per provider."""
+    from sqlalchemy import inspect, select
+    from contextlib import nullcontext
     from ..database import SessionLocal
-    from ..models import ProviderCredential
-    from . import credentials, providers
+    from ..models import ProviderCredential, UserProviderCredential
+    from . import credentials, providers, account_provider_sync
     started = time.monotonic()
     service.restore_passes += 1
-    with SessionLocal() as db:
-        rows = db.scalars(select(ProviderCredential).where(
+    # HTTP callers already own a transaction. Never acquire a second pooled
+    # connection while keeping that transaction (and potentially locks) open.
+    with (nullcontext(db) if db is not None else SessionLocal()) as db:
+        # Migration 0017 is optional until rollout; older databases keep working.
+        account_rows = []
+        if inspect(db.connection()).has_table("user_provider_credentials"):
+            account_rows = list(db.scalars(select(UserProviderCredential).where(
+                UserProviderCredential.user_id == workspace.user_id)))
+        legacy_rows = list(db.scalars(select(ProviderCredential).where(
             ProviderCredential.workspace_id == workspace.id,
-            ProviderCredential.user_id == workspace.user_id))
-        for row in rows:
-            if providers.is_locally_disconnected(db,workspace,row.provider_id):
+            ProviderCredential.user_id == workspace.user_id)))
+        account_ids = {row.provider_id for row in account_rows}
+        if account_provider_sync.prune_revoked(workspace,account_rows,{r.provider_id for r in legacy_rows}):
+            service.refresh_auth()
+        for row in [*account_rows, *(r for r in legacy_rows if r.provider_id not in account_ids)]:
+            # Account keys supersede workspace-local disconnect records.
+            if row.provider_id not in account_ids and providers.is_locally_disconnected(
+                    db, workspace, row.provider_id):
                 continue
             try:
-                providers.restore_credential(service, row.provider_id, credentials.decrypt(row.ciphertext))
+                plaintext = (account_provider_sync.startup_value(workspace,row) if row.provider_id in account_ids
+                             else credentials.decrypt(row.ciphertext))
+                providers.restore_credential(service, row.provider_id, plaintext)
+                if row.provider_id in account_ids:
+                    account_provider_sync.bind(service,row)
                 service.restore_puts += 1
             except Exception:
                 service.restore_errors.append({"provider_id": row.provider_id,
                                                 "detail": "Stored credential could not be restored"})
+        from .session_recovery import reconcile
+        reconcile(db, workspace, service)
     service.timings["credential_restore_ms"] = round((time.monotonic() - started) * 1000, 2)
 
-
-def for_workspace(workspace, *, start=True):
+def for_workspace(workspace, *, start=True, db=None):
     if settings.runtime_mode != "local":
         raise HTTPException(503, "Workspace runtime is disabled")
     key = str(workspace.id)
@@ -363,7 +405,11 @@ def for_workspace(workspace, *, start=True):
         binary = shutil.which(settings.opencode_binary)
         if not binary:
             raise HTTPException(503, "OpenCode executable is not installed")
-        repo = root_for(workspace)
+        if getattr(workspace, "is_account_runtime", False):
+            repo = settings.runtime_root / str(workspace.user_id) / "account-workdir"
+            repo.mkdir(parents=True, exist_ok=True)
+        else:
+            repo = root_for(workspace)
         if not repo.is_dir():
             raise HTTPException(409, "Workspace files are missing")
         context = settings.runtime_root / str(workspace.user_id) / key
@@ -377,9 +423,10 @@ def for_workspace(workspace, *, start=True):
             path.mkdir(exist_ok=True)
             env[name] = str(path)
         from ..database import SessionLocal
+        from contextlib import nullcontext
         from .policy import load, permission_config
-        with SessionLocal() as db:
-            permission = permission_config(load(db))
+        with (nullcontext(db) if db is not None else SessionLocal()) as policy_db:
+            permission = permission_config(load(policy_db))
         password = secrets.token_urlsafe(32)
         env.update(OPENCODE_SERVER_PASSWORD=password, OPENCODE_CONFIG_CONTENT=json.dumps({
             "autoupdate": False, "share": "disabled", "plugin": [], "permission": permission}))
@@ -388,6 +435,7 @@ def for_workspace(workspace, *, start=True):
             port = sock.getsockname()[1]
         log = open(context / "runtime.log", "a", encoding="utf-8")
         service = OpenCodeService(f"http://127.0.0.1:{port}", password, repo)
+        service.workspace_ref = workspace
         service.config_paths.extend(context / "config" / "opencode" / name for name in ("opencode.json", "opencode.jsonc"))
         owner_lock = None
         if os.name != "nt":
@@ -426,11 +474,22 @@ def for_workspace(workspace, *, start=True):
             else:
                 raise HTTPException(504, "OpenCode did not become healthy within the total startup deadline")
             service.timings["health_ready_ms"] = round((time.monotonic() - started) * 1000, 2)
-            _initialize(service, workspace)
+            _initialize(service, workspace, db=db)
             return service
         except Exception:
             stop_workspace(workspace)
             raise
+
+
+def account_workspace(user_id):
+    """Synthetic workspace identifier for a user's dedicated auth-only runtime."""
+    key = uuid.uuid5(uuid.NAMESPACE_URL, "opencode-gateway-account:" + str(user_id))
+    return SimpleNamespace(id=key, user_id=user_id, is_account_runtime=True)
+
+
+def for_account(user_id, *, start=True, db=None):
+    account = account_workspace(user_id)
+    return account, for_workspace(account, start=start, db=db)
 
 
 def stop_workspace(workspace):

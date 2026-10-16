@@ -1,0 +1,57 @@
+{
+  "environment": "disposable loopback Gateway TestClient + actual OpenCode 1.18.32; not TEST VPS",
+  "runtime_provider_count": 223,
+  "initial_displayed_count": 50,
+  "page_size": 50,
+  "required_providers_reported": {
+    "deepseek": true,
+    "google": true,
+    "openai": true,
+    "togetherai": true
+  },
+  "cold_catalog_ms": 3547.21,
+  "warm_catalog_ms": [
+    15.61,
+    26.09,
+    16.69
+  ],
+  "auth_methods": {
+    "deepseek": {
+      "first_ms": 611.88,
+      "warm_ms": 14.32,
+      "methods": 1
+    },
+    "google": {
+      "first_ms": 36.2,
+      "warm_ms": 16.66,
+      "methods": 1
+    },
+    "openai": {
+      "first_ms": 19.99,
+      "warm_ms": 15.79,
+      "methods": 3
+    },
+    "togetherai": {
+      "first_ms": 17.12,
+      "warm_ms": 13.9,
+      "methods": 1
+    }
+  },
+  "upstream_ms": {
+    "process_spawn_ms": 0.29,
+    "GET /global/health": 6.41,
+    "health_ready_ms": 2020.29,
+    "credential_restore_ms": 8.35,
+    "GET /provider": 1478.83,
+    "GET /provider/auth": 6.07,
+    "GET /api/integration/deepseek": 10.47,
+    "GET /api/integration/google": 7.97,
+    "GET /api/integration/togetherai": 4.15
+  },
+  "frontend_browser_ms": null,
+  "targets_met_here": {
+    "warm_catalog_under_2000ms": true,
+    "warm_methods_under_5000ms": true
+  },
+  "catalog_source": "actual installed runtime catalog; fixture-only OPENCODE_DISABLE_MODELS_FETCH=true (bundled metadata, external refresh disabled)"
+}

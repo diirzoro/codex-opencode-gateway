@@ -29,15 +29,25 @@ async def retention_maintenance():
                 import logging
                 logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
 
+async def provider_maintenance():
+    from .services import account_provider_sync
+    while True:
+        await asyncio.sleep(5)
+        await asyncio.to_thread(account_provider_sync.sweep)
+
 @asynccontextmanager
 async def lifespan(app):
     cleanup = asyncio.create_task(retention_maintenance())
+    provider_sync = asyncio.create_task(provider_maintenance())
     try:
         yield
     finally:
         cleanup.cancel()
+        provider_sync.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup
+        with suppress(asyncio.CancelledError):
+            await provider_sync
 
 app = FastAPI(title="OpenCode Gateway API", version="0.1.0", lifespan=lifespan)
 app.include_router(auth.router); app.include_router(profile.router); app.include_router(locations.router); app.include_router(admin.router)
@@ -87,7 +97,7 @@ async def browser_boundary(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-Frame-Options"] = "DENY"
-    if request.url.path.startswith("/api/") or request.url.path == "/config.js":
+    if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     elif request.url.path in {"/", "/index.html"}:
         response.headers["Cache-Control"] = "no-cache"
@@ -128,5 +138,5 @@ def public_file(name):
         return response
     return serve
 
-for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/dashboards.js": "dashboards.js", "/runtime-client.js": "runtime-client.js", "/styles.css": "styles.css", "/config.js": "config.js", "/assets/yemen-hero.svg": "assets/yemen-hero.svg"}.items():
+for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/dashboards.js": "dashboards.js", "/runtime-client.js": "runtime-client.js", "/styles.css": "styles.css"}.items():
     app.add_api_route(url, public_file(name), methods=["GET"], include_in_schema=False)

@@ -1,0 +1,103 @@
+{
+  "hostname": "376d84c57794",
+  "internal_addresses": [
+    "172.26.47.197",
+    "172.31.1.142"
+  ],
+  "scope": "disposable loopback only",
+  "configuration_sources": [
+    "tests/run_isolated_audit.py",
+    "tests/staging_app.py",
+    "backend/app/config.py",
+    "backend/app/services/opencode.py",
+    "/workspace/scratch/bd2189746f7a/gateway/tests/diagnose_agent_environment.py"
+  ],
+  "secret_environment": {
+    "DATABASE_URL": true,
+    "CREDENTIALS_ENCRYPTION_KEY": true,
+    "OPENCODE_SERVER_PASSWORD": false,
+    "HTTP_PROXY": true,
+    "HTTPS_PROXY": true,
+    "NO_PROXY": true
+  },
+  "fastapi": {
+    "host": "127.0.0.1",
+    "port": 40019,
+    "origin": "http://127.0.0.1:40019",
+    "api_base": "http://127.0.0.1:40019/api",
+    "health_status": 200,
+    "transport": "real Uvicorn HTTP; earlier fixture uses in-process https://testserver"
+  },
+  "database": {
+    "engine": "PGlite (not native PostgreSQL)",
+    "host": "127.0.0.1",
+    "port": 58947,
+    "ready": true,
+    "migration": "0018_email_verification"
+  },
+  "opencode": {
+    "executable": "/workspace/scratch/bd2189746f7a/audit-tools/node_modules/opencode-ai/bin/opencode.exe",
+    "version": "1.18.32",
+    "host": "127.0.0.1",
+    "port": 39483,
+    "origin": "http://127.0.0.1:39483",
+    "authenticated_health": true,
+    "unauthenticated_status": 401,
+    "authentication": "generated per-runtime HTTP Basic; password omitted",
+    "command": "opencode serve --pure --hostname 127.0.0.1 --port <allocated> --print-logs --log-level DEBUG",
+    "proxy_inheritance": "runtime may inherit proxy variables; Gateway client trust_env=False"
+  },
+  "roots": {
+    "workspace_root": "/tmp/gateway-isolated-audit-m8l7fsqk/workspaces",
+    "runtime_root": "/tmp/gateway-isolated-audit-m8l7fsqk/runtime",
+    "runtime_directory_exists": true,
+    "workdir_exists": true
+  },
+  "network_namespace_shared": "unavailable",
+  "model": {
+    "provider": "fixture",
+    "model": "fixture",
+    "endpoint": "http://127.0.0.1:39683/v1",
+    "health_status": 200,
+    "auth": "fixture-only value; omitted",
+    "npm": "@ai-sdk/openai-compatible",
+    "streaming": "fixture currently emits chat.completion.chunk",
+    "catalog_model_present": true,
+    "resolved_api": {
+      "id": "fixture",
+      "url": "",
+      "npm": "@ai-sdk/openai-compatible"
+    }
+  },
+  "agent_diagnostic": {
+    "status": 200,
+    "error_name": null,
+    "error_reference": null,
+    "model_requests": [
+      {
+        "path": "/v1/chat/completions",
+        "fields": [
+          "max_tokens",
+          "messages",
+          "model",
+          "stream",
+          "stream_options",
+          "tool_choice",
+          "tools"
+        ],
+        "stream": true,
+        "tool_count": 11
+      }
+    ],
+    "assistant_error": null
+  },
+  "sanitized_fixture_errors": [],
+  "resource_preflight": {
+    "docker": "UNAVAILABLE",
+    "podman": "UNAVAILABLE",
+    "docker_socket": false,
+    "native_postgresql": "UNAVAILABLE: no postgres/initdb or mapped non-root UID",
+    "browser": "BLOCKED: installed Chromium --version exits SIGSEGV (-11)",
+    "github_app_environment": "UNSET; no authorized product installation/user token supplied"
+  }
+}

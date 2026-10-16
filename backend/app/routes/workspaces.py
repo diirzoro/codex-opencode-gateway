@@ -9,12 +9,15 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
-from ..models import ExecutionEvent, Project, ProviderCredential, User, Workspace, WorkspaceSession
-from ..services import credentials, github, opencode, policy, providers, runtime_snapshot, preview, session_lifecycle
+from ..models import ExecutionEvent, Project, ProviderCredential, User, UserProviderCredential, Workspace, WorkspaceSession
+from ..services import credentials, github, opencode, opencode_catalog, policy, providers, runtime_snapshot, preview, session_lifecycle
 from ..services import workspaces as manager
+from ..services import user_provider_credentials
+from ..services import account_provider_sync
 from ..services.entitlements import access_payload, require_advanced
 from .dependencies import require_user, require_workspace_entitlement
 
@@ -56,6 +59,7 @@ class OAuthAuthorize(BaseModel):
     model_config=ConfigDict(extra="forbid")
     method: int=Field(ge=0,le=20)
     inputs: dict[str,str]|None=None
+    reauthorize: bool=False
 
 class OAuthCallback(BaseModel):
     model_config=ConfigDict(extra="forbid")
@@ -73,6 +77,243 @@ def _workspace_and_project(db,user,workspace_id):
 @router.get("/opencode/health")
 def health(user: User=Depends(require_user)):
     return opencode.shared_health()
+
+def _account_catalog_state(db, user, data):
+    """Show only this user's saved connections; shared daemon auth is never trusted."""
+    user_provider_credentials.require_schema(db)
+    rows = user_provider_credentials.list_owned(db, user.id)
+    connected = {row.provider_id for row in rows}
+    services = account_provider_sync.services_for(user.id)
+    return {**data, "connected": sorted(connected), "gateway_disconnected": [],
+            "gateway_auth_status":{r.provider_id:account_provider_sync.public_status(r,services) for r in rows}}
+
+
+def _account_public_catalog(user, path, db, *, agents=False):
+    account, service = opencode.for_account(user.id, db=db)
+    with opencode.workspace_lock(account), service.state_lock:
+        return opencode_catalog.public_catalog(path, agents=agents, service=service)
+
+
+@router.get("/opencode/catalog/providers")
+def account_provider_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Project-independent definitions only; never expose global connected state."""
+    return providers.catalog_page(_account_catalog_state(db, user, _account_public_catalog(user,"/provider",db)), policy.load(db),limit=50)["items"]
+
+
+@router.get("/opencode/catalog/providers/page")
+def account_provider_page(offset: int=Query(default=0,ge=0),limit: int=Query(default=50,ge=1,le=100),
+                          query: str=Query(default='',max_length=200),
+                          user: User=Depends(require_user),db: Session=Depends(get_db)):
+    data=_account_catalog_state(db,user,_account_public_catalog(user,"/provider",db))
+    return providers.catalog_page(data,policy.load(db),offset=offset,limit=limit,query=query)
+
+
+@router.get("/opencode/catalog/providers/search")
+def account_provider_search(query: str=Query(min_length=2,max_length=200),
+                            user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Search OpenCode definitions independently of a project; no auth status."""
+    return providers.search_index(_account_catalog_state(db, user, _account_public_catalog(user,"/provider",db)), query, policy.load(db))
+
+
+@router.get("/opencode/catalog/agents")
+def account_agent_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """List only public agent choices without workspace or private agent configuration."""
+    data = _account_public_catalog(user,"/agent",db, agents=True)
+    return [{"id":row["name"],"name":row["name"],"mode":row.get("mode")}
+            for row in data if isinstance(row,dict)
+            and isinstance(row.get("name"),str) and 0<len(row["name"])<=120
+            and not row.get("hidden") and row.get("mode") in {"primary","all"}]
+
+
+@router.get("/opencode/connections")
+def account_provider_connections(user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Account-scoped connection metadata, without keys or project dependencies."""
+    user_provider_credentials.require_schema(db)
+    return [{"provider_id":row.provider_id,"last4":row.last4,
+             **account_provider_sync.public_status(row,account_provider_sync.services_for(user.id))}
+            for row in user_provider_credentials.list_owned(db,user.id)]
+
+
+@router.get("/opencode/connections/{provider_id}/options")
+def account_provider_options(provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Real OpenCode authentication choices from a temporary isolated process."""
+    require_advanced(db,user)
+    if not 0 < len(provider_id) <= 120:
+        raise HTTPException(422, "Invalid provider identifier")
+    if not policy.provider_allowed(policy.load(db), provider_id):
+        raise HTTPException(403, "Provider disabled by policy")
+    account,service=opencode.for_account(user.id,db=db)
+    with opencode.workspace_lock(account),service.state_lock:
+        data = service._core_value("provider_data", "/provider")
+        entry = providers.resolve_provider(data, provider_id)
+        if entry["id"] != provider_id:
+            raise HTTPException(422, "Use the exact OpenCode provider ID")
+        methods = providers.connection_methods(service, provider_id)
+        return {"provider_id": provider_id,
+                "auth_methods": [{
+                    "type": method.get("type"), "label": str(method.get("label") or "")[:120],
+                    "prompts": [{
+                        "key": str(prompt.get("key") or "")[:120],
+                        "message": str(prompt.get("message") or "")[:240],
+                        "type": prompt.get("type"),
+                        "placeholder": str(prompt.get("placeholder") or "")[:160],
+                        "when": prompt.get("when"),
+                        "options": [{"value": opt.get("value"), "label": opt.get("label")}
+                                    for opt in prompt.get("options", []) if isinstance(opt,dict)]
+                    } for prompt in method.get("prompts", []) if isinstance(prompt,dict)]
+                } for method in methods if isinstance(method,dict)],
+                "models": providers.model_details(data, provider_id, policy.load(db))["models"]}
+
+
+@router.post("/opencode/connections/{provider_id}/credentials")
+def connect_account_provider(provider_id: str,data: ApiKeyCredential,
+                             user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Validate a key without any project and store one credential per account."""
+    user_provider_credentials.require_schema(db)
+    require_advanced(db,user)
+    if not 0 < len(provider_id) <= 120:
+        raise HTTPException(422,"Invalid provider identifier")
+    current_policy = policy.load(db)
+    if not policy.provider_allowed(current_policy,provider_id):
+        raise HTTPException(403,"Provider disabled by policy")
+    if not credentials.available():
+        raise HTTPException(503,"Encrypted credential storage is unavailable")
+    # One user row serializes all provider connections from concurrent requests.
+    db.scalar(select(User).where(User.id==user.id).with_for_update())
+    if user_provider_credentials.find(db,user.id,provider_id) or db.scalar(
+            select(ProviderCredential.id).where(
+                ProviderCredential.user_id==user.id,
+                ProviderCredential.provider_id==provider_id).limit(1)):
+        raise HTTPException(409,"This provider is already connected to your account")
+    # Do not overwrite an existing OAuth connection established in a workspace.
+    for owned in db.scalars(select(Workspace).where(Workspace.user_id == user.id)):
+        if providers.is_locally_connected(db, owned, provider_id):
+            raise HTTPException(409, "This provider is already connected in a workspace; disconnect it before account setup")
+    from ..services.account_provider_runtime import isolated_validation
+    with isolated_validation(user.id,db) as service:
+        live = service.request("GET","/provider")
+        entry = providers.resolve_provider(live,provider_id)
+        if entry["id"] != provider_id:
+            raise HTTPException(422,"Use the exact OpenCode provider ID")
+        methods = providers.connection_methods(service,provider_id)
+        choices = [i for i,method in enumerate(methods) if method.get("type") in {"api","key"}]
+        selected = data.method if data.method is not None else (choices[0] if len(choices)==1 else None)
+        if selected not in choices:
+            raise HTTPException(422,"Select an API key method reported by OpenCode")
+        providers.set_api_key(service,provider_id,data.api_key,data.inputs)
+        service.refresh_auth()
+        validated_model = providers.validate_model(service,provider_id,data.model_id,current_policy)
+    encrypted = credentials.encrypt(json.dumps({"type":"api","key":data.api_key,"metadata":data.inputs or {}}))
+    require_advanced(db,user,start=True)
+    user_provider_credentials.save_encrypted(db,user.id,provider_id,encrypted,data.api_key[-4:])
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409,"This provider is already connected to your account") from None
+    deferred=_refresh_other_user_runtimes(db,user.id,uuid.UUID(int=0),provider_id,encrypted)
+    return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],
+            "deferred_workspace_count":len(deferred),
+            "persisted":True,"validated_model":validated_model}
+
+
+@router.post("/opencode/connections/{provider_id}/oauth/authorize")
+def account_oauth_authorize(provider_id: str,data: OAuthAuthorize,
+                            user: User=Depends(require_user),db: Session=Depends(get_db)):
+    user_provider_credentials.require_schema(db)
+    require_advanced(db,user)
+    if not 0 < len(provider_id) <= 120 or not policy.provider_allowed(policy.load(db),provider_id):
+        raise HTTPException(403,"Provider OAuth is restricted")
+    existing = user_provider_credentials.find(db,user.id,provider_id)
+    if existing is not None:
+        try:
+            allowed = data.reauthorize and account_provider_sync.decode(existing) is not None
+        except Exception:
+            allowed = False
+        if not allowed:
+            raise HTTPException(409,"Provider exists; use explicit OAuth reauthorization or disconnect first")
+    else:
+        reject_account_key_oauth_conflict(db,user.id,provider_id)
+    for owned in db.scalars(select(Workspace).where(Workspace.user_id==user.id)):
+        if existing is None and providers.is_locally_connected(db,owned,provider_id):
+            raise HTTPException(409,"This provider is already connected in a workspace")
+    account,service=opencode.for_account(user.id,db=db)
+    with opencode.workspace_lock(account),service.state_lock:
+        result = providers.oauth_authorize(service,provider_id,data.method,data.inputs)
+        service.oauth_versions[provider_id] = (existing.id,existing.ciphertext) if existing is not None else None
+        return result
+
+
+@router.post("/opencode/connections/{provider_id}/oauth/callback")
+def account_oauth_callback(provider_id: str,data: OAuthCallback,
+                           user: User=Depends(require_user),db: Session=Depends(get_db)):
+    user_provider_credentials.require_schema(db)
+    require_advanced(db,user)
+    if not 0 < len(provider_id) <= 120 or not policy.provider_allowed(policy.load(db),provider_id):
+        raise HTTPException(403,"Provider OAuth is restricted")
+    db.scalar(select(User).where(User.id==user.id).with_for_update())
+    existing = user_provider_credentials.find(db,user.id,provider_id)
+    if existing is None:
+        reject_account_key_oauth_conflict(db,user.id,provider_id)
+    for owned in db.scalars(select(Workspace).where(Workspace.user_id==user.id)):
+        if existing is None and providers.is_locally_connected(db,owned,provider_id):
+            raise HTTPException(409,"This provider is already connected in a workspace")
+    account,service=opencode.for_account(user.id,db=db)
+    with opencode.workspace_lock(account),service.state_lock:
+        if provider_id not in service.oauth_versions:
+            raise HTTPException(409,"Start OAuth authorization again")
+        expected = service.oauth_versions[provider_id]
+        if expected != ((existing.id,existing.ciphertext) if existing is not None else None):
+            raise HTTPException(409,"Credential changed during authorization; start OAuth again")
+        # OpenCode stores OAuth tokens in this user's isolated XDG data folder.
+        # Never read shared daemon auth, include secrets in API responses, or
+        # copy account auth files into project directories.
+        try:
+            accepted=providers.oauth_callback(service,provider_id,data.method,data.code)
+            if not accepted:
+                raise HTTPException(502,"OpenCode did not confirm OAuth")
+            file_data=account_provider_sync.read_auth(account)
+            oauth=file_data.get(provider_id) if isinstance(file_data,dict) else None
+            if not isinstance(oauth,dict) or oauth.get("type")!="oauth":
+                raise ValueError("OAuth credential was not saved")
+            if not isinstance(oauth.get("access"),str) or not isinstance(oauth.get("refresh"),str) or not isinstance(oauth.get("expires"),int):
+                raise ValueError("Incomplete OAuth credential")
+            safe=account_provider_sync.oauth_payload(oauth)
+            encrypted=credentials.encrypt(json.dumps(safe))
+            require_advanced(db,user,start=True)
+            if existing is None:
+                existing=user_provider_credentials.save_encrypted(db,user.id,provider_id,encrypted,"")
+            else:
+                result=db.execute(update(UserProviderCredential).where(
+                    UserProviderCredential.id==expected[0],UserProviderCredential.user_id==user.id,
+                    UserProviderCredential.provider_id==provider_id,UserProviderCredential.ciphertext==expected[1]
+                    ).values(ciphertext=encrypted).execution_options(synchronize_session=False))
+                if result.rowcount!=1:
+                    raise ValueError("Credential changed during OAuth")
+            db.commit()
+            db.refresh(existing)
+            account_provider_sync.bind(service,existing)
+            service.oauth_versions.pop(provider_id,None)
+            service.oauth_pending.pop(provider_id,None)
+        except Exception:
+            db.rollback()
+            service.oauth_versions.pop(provider_id,None)
+            service.oauth_pending.pop(provider_id,None)
+            service.credential_bindings.pop(provider_id,None)
+            try:
+                current=user_provider_credentials.find(db,user.id,provider_id)
+                if current is None:
+                    providers.remove(service,provider_id)
+                else:
+                    providers.restore_credential(service,provider_id,credentials.decrypt(current.ciphertext))
+                    service.refresh_auth()
+                    account_provider_sync.bind(service,current)
+            except Exception: logger.warning("Isolated OAuth cleanup requires attention for user %s", user.id)
+            raise HTTPException(502,"OAuth credential could not be persisted securely") from None
+    deferred=_refresh_other_user_runtimes(db,user.id,uuid.UUID(int=0),provider_id,encrypted)
+    return {"connected":True,"provider_id":provider_id,"persisted":True,
+            "deferred_workspace_count":len(deferred)}
+
 
 @router.get("/opencode/status")
 def runtime_status(user: User=Depends(require_user)):
@@ -159,6 +400,12 @@ def publish_project(project_id: uuid.UUID,data: PublishProject,user: User=Depend
     db.commit()
     return manager.project_payload(project)
 
+@router.get("/workspace-context")
+def restore_workspace_context(workspace_id: uuid.UUID|None=None,session_id: uuid.UUID|None=None,
+                              user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services.workspace_context import restore
+    return restore(db,user,workspace_id,session_id)
+
 @router.get("/workspaces")
 def workspaces(user: User=Depends(require_user),db: Session=Depends(get_db)):
     return [manager.workspace_payload(w) for w in db.scalars(select(Workspace).where(Workspace.user_id==user.id).order_by(Workspace.created_at.desc()))]
@@ -207,6 +454,37 @@ def changes(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session
 @router.get("/workspaces/{workspace_id}/diff")
 def diff(workspace_id: uuid.UUID,path: str|None=Query(default=None,max_length=1000),user: User=Depends(require_user),db: Session=Depends(get_db)):
     return manager.diff(manager.owned(db,Workspace,workspace_id,user.id),path)
+
+@router.get("/workspaces/{workspace_id}/preview/capabilities")
+def workspace_preview_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),
+                                   db: Session=Depends(get_db)):
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    return preview.detect(workspace)
+
+
+@router.get("/workspaces/{workspace_id}/preview/plan")
+def workspace_preview_plan(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services.preview_runner import plan
+    return plan(manager.owned(db,Workspace,workspace_id,user.id))
+
+
+@router.get("/workspaces/{workspace_id}/preview/status")
+def workspace_preview_status(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services.preview_runner import status
+    return status(manager.owned(db,Workspace,workspace_id,user.id))
+
+
+@router.post("/workspaces/{workspace_id}/preview/start")
+def workspace_preview_start(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services.preview_runner import start
+    return start(manager.owned(db,Workspace,workspace_id,user.id))
+
+
+@router.post("/workspaces/{workspace_id}/preview/stop")
+def workspace_preview_stop(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services.preview_runner import stop
+    return stop(manager.owned(db,Workspace,workspace_id,user.id))
+
 
 @router.get("/workspaces/{workspace_id}/preview")
 def workspace_preview(workspace_id: uuid.UUID,path: str=Query(default="index.html",max_length=1000),user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -289,7 +567,7 @@ def new_session(workspace_id: uuid.UUID,data: NewSession,user: User=Depends(requ
     manager.require_quota_headroom(row)
     session_lifecycle.lock_workspace(db,row)
     session_lifecycle.require_slot(db,row)
-    runtime_id=opencode.for_workspace(row).create_session(data.title)
+    runtime_id=opencode.for_workspace(row,db=db).create_session(data.title)
     session=WorkspaceSession(workspace_id=row.id,user_id=user.id,opencode_session_id=runtime_id,title=data.title)
     db.add(session); db.flush(); session_lifecycle.set_state(db,session,"active")
     row.last_activity_at=datetime.now(timezone.utc)
@@ -330,12 +608,15 @@ def session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=D
     row=manager.owned(db,WorkspaceSession,session_id,user.id)
     session_lifecycle.require_visible(db,row)
     workspace=manager.owned(db,Workspace,row.workspace_id,user.id)
-    live=opencode.for_workspace(workspace).request("GET","/session/"+row.opencode_session_id)
+    service=opencode.for_workspace(workspace,db=db)
+    from ..services.session_recovery import reconcile
+    reconcile(db,workspace,service,row)
+    live=service.request("GET","/session/"+row.opencode_session_id)
     return {**providers.public_metadata(live),**session_lifecycle.payload(row,session_lifecycle.state(db,row)),"title":live["title"],"runtime_id":row.opencode_session_id}
 
 def _workspace_service(db,user,workspace_id):
     row=manager.owned(db,Workspace,workspace_id,user.id)
-    return row,opencode.for_workspace(row)
+    return row,opencode.for_workspace(row,db=db)
 
 @router.get("/workspaces/{workspace_id}/runtime")
 def workspace_runtime(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db),refresh: bool=False):
@@ -366,7 +647,7 @@ def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_us
 @router.get("/workspaces/{workspace_id}/providers")
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row,service=_workspace_service(db,user,workspace_id)
-    return providers.catalog(providers.client_catalog(db,row,service.request("GET","/provider")),
+    return providers.catalog(providers.client_catalog(db,row,service._core_value("provider_data","/provider")),
                              providers.auth_methods(service),policy.load(db))
 
 @router.get("/workspaces/{workspace_id}/providers/{provider_id}/models")
@@ -390,14 +671,20 @@ def search_providers(workspace_id: uuid.UUID,query: str=Query(min_length=2,max_l
 @router.get("/workspaces/{workspace_id}/agents")
 def available_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Workspace,workspace_id,user.id)
-    return agent_choices(opencode.for_workspace(row))
+    return agent_choices(opencode.for_workspace(row,db=db))
 
 def agent_choices(service):
-    rows=service.request("GET","/agent")
+    # Reuse the validated runtime catalog already shared by agent discovery.
+    rows=service._core_value("agents", "/agent")
     if not isinstance(rows,list): raise HTTPException(502,"Runtime returned an invalid agent list")
     return [{**providers.public_metadata(r),"id":r["name"],"name":r["name"]} for r in rows
             if isinstance(r,dict) and isinstance(r.get("name"),str) and 0<len(r["name"])<=120
             and not r.get("hidden") and r.get("mode") in {"primary","all"}]
+
+def user_provider_credentials_schema_ready(db):
+    from sqlalchemy import inspect
+    return inspect(db.connection()).has_table("user_provider_credentials")
+
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/credentials")
 def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKeyCredential,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -419,9 +706,19 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
         method=data.method if data.method is not None else (api_methods[0] if len(api_methods)==1 else None)
         if method is None or method >= len(methods) or methods[method].get("type") not in {"api","key"}:
             raise HTTPException(422,"Select an API key authentication method reported by OpenCode; OAuth-only providers require their OAuth flow")
-        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.provider_id==provider_id))
+        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,ProviderCredential.user_id==user.id,ProviderCredential.provider_id==provider_id))
         if row is None and providers.is_connected(service,provider_id) and not providers.is_locally_disconnected(db,workspace,provider_id):
             raise HTTPException(409,"Disconnect the existing runtime connection before replacing its authentication")
+        # Exactly one provider connection per user, including legacy records.
+        # Reject before mutating OpenCode, even on pre-0017 deployments.
+        if user_provider_credentials_schema_ready(db):
+            if user_provider_credentials.find(db, user.id, provider_id) is not None:
+                raise HTTPException(409, "This provider is already connected to your account")
+        existing_legacy = db.scalar(select(ProviderCredential).where(
+            ProviderCredential.user_id == user.id,
+            ProviderCredential.provider_id == provider_id).limit(1))
+        if existing_legacy is not None:
+            raise HTTPException(409, "This provider is already connected to your account")
         service.ensure_auth_idle()
         old_ciphertext=row.ciphertext if row is not None else None
         stage="credential installation"
@@ -439,6 +736,13 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
                 db.add(row)
             row.ciphertext=encrypted
             row.last4=data.api_key[-4:]
+            # Expand-only compatibility: validated keys become account-owned if
+            # migration 0017 exists; legacy workspace record remains intact.
+            # Both records commit atomically in the same DB transaction.
+            from sqlalchemy import inspect
+            if inspect(db.connection()).has_table("user_provider_credentials"):
+                user_provider_credentials.save_encrypted(
+                    db, user.id, provider_id, encrypted, data.api_key[-4:])
             providers.record_connection(db,workspace,provider_id,connected=True)
             db.commit()
         except Exception as exc:
@@ -460,16 +764,140 @@ def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKe
                 except Exception:
                     db.rollback()
                     logger.warning("Failed provider connection could not persist its disconnect state for workspace %s",workspace.id)
+            # Unique(user_id, provider_id) also protects simultaneous requests
+            # from two different workspaces. Do not leak database error details.
+            if isinstance(exc, IntegrityError):
+                raise HTTPException(409, "This provider is already connected to your account") from None
             detail=f"Provider connection failed during {stage}"
             if isinstance(exc,HTTPException): detail+=" — "+str(exc.detail)
             detail+=". No new key was persisted."
             if not rollback_confirmed: detail+=" Runtime credential cleanup could not be confirmed; disconnect before retrying."
             raise HTTPException(exc.status_code if isinstance(exc,HTTPException) else 502,detail) from None
+        if user_provider_credentials_schema_ready(db):
+            _refresh_other_user_runtimes(db, user.id, workspace.id, provider_id, encrypted)
         return {"connected":True,"provider_id":provider_id,"last4":data.api_key[-4:],"persisted":True,"validated_model":validated_model}
+
+def _refresh_other_user_runtimes(db, user_id, current_workspace_id, provider_id, ciphertext):
+    """Install a saved account key in active owned runtimes without stopping sessions.
+
+    Stopped runtimes receive this credential from _initialize on next start.
+    An unavailable or busy running runtime is left unchanged and logged rather
+    than forcibly terminating another active session.
+    """
+    deferred=[]
+    for owned in db.scalars(select(Workspace).where(
+            Workspace.user_id == user_id, Workspace.id != current_workspace_id)):
+        try:
+            with opencode.workspace_lock(owned):
+                try:
+                    service = opencode.for_workspace(owned, start=False)
+                except HTTPException as exc:
+                    if exc.status_code == 409:
+                        # A stopped workspace restores the account credential on next start.
+                        continue
+                    raise
+                with service.state_lock:
+                    account_provider_sync.require_idle(db,owned,service)
+                    # Read the version we actually install; the original fanout
+                    # argument may have been replaced or revoked concurrently.
+                    row = user_provider_credentials.find(db,user_id,provider_id)
+                    if row is None:
+                        continue
+                    providers.restore_credential(service, provider_id, credentials.decrypt(row.ciphertext))
+                    service.refresh_auth()
+                    account_provider_sync.bind(service,row)
+        except Exception:
+            deferred.append(str(owned.id))
+            logger.warning("Provider refresh deferred for workspace %s", owned.id)
+        finally:
+            db.rollback()  # validated credential was committed before fanout
+    return deferred
+
+
+def _scrub_runtime_provider(user_id, runtime_id, provider_id):
+    """Bounded private-file revocation; never traverse another tenant's link."""
+    try:
+        account_provider_sync.remove_auth(user_id,runtime_id,provider_id,runtime_root=settings.runtime_root)
+    except Exception:
+        raise HTTPException(503,"Provider revoked in database; persisted runtime cleanup requires attention") from None
+
+
+def _remove_account_api_provider(db, user, provider_id):
+    """Remove one user's API key from all workspace stores and running runtimes."""
+    from contextlib import ExitStack
+    user_provider_credentials.require_schema(db)
+    workspaces = list(db.scalars(select(Workspace).where(
+        Workspace.user_id == user.id).order_by(Workspace.id)))
+    # Stable lock ordering avoids inconsistent mixed workspace auth states.
+    with ExitStack() as locks:
+        for workspace in workspaces:
+            locks.enter_context(opencode.workspace_lock(workspace))
+        user_provider_credentials.delete_owned(db, user.id, provider_id)
+        for row in list(db.scalars(select(ProviderCredential).where(
+                ProviderCredential.user_id == user.id,
+                ProviderCredential.provider_id == provider_id))):
+            db.delete(row)
+        for workspace in workspaces:
+            providers.record_connection(db, workspace, provider_id, connected=False)
+        db.commit()
+        # Account OAuth and API credentials also live in the user's dedicated
+        # auth runtime. Remove that copy first before touching project runtimes.
+        account = opencode.account_workspace(user.id)
+        with opencode.workspace_lock(account):
+            try:
+                account_service = opencode.for_workspace(account, start=False)
+            except HTTPException as exc:
+                if exc.status_code != 409:
+                    raise
+            else:
+                try:
+                    with account_service.state_lock:
+                        providers.remove(account_service, provider_id)
+                except Exception:
+                    opencode.stop_workspace(account)
+                    # A stopped account runtime will reload only remaining
+                    # encrypted credentials, but its old persisted auth file may
+                    # still contain the revoked provider. Remove it explicitly.
+        _scrub_runtime_provider(user.id,account.id,provider_id)
+        # Revoke authentication in place when safe, preserving active sessions.
+        # If the live runtime refuses removal, stop it: never leave a revoked
+        # credential available for execution after the database commit.
+        for workspace in workspaces:
+            try:
+                try:
+                    service = opencode.for_workspace(workspace, start=False)
+                except HTTPException as exc:
+                    if exc.status_code == 409:
+                        # Revocation also applies to stopped runtimes: startup
+                        # must never discover a revoked key in the old auth file.
+                        _scrub_runtime_provider(user.id,workspace.id,provider_id)
+                        continue
+                    raise
+                with service.state_lock:
+                    providers.remove(service, provider_id)
+                _scrub_runtime_provider(user.id,workspace.id,provider_id)
+            except Exception:
+                try:
+                    opencode.stop_workspace(workspace)
+                    _scrub_runtime_provider(user.id,workspace.id,provider_id)
+                except Exception:
+                    logger.error("Provider revocation could not clear workspace runtime %s", workspace.id)
+                    raise HTTPException(503, "Provider was revoked in storage but runtime cleanup could not be confirmed") from None
+
+
+@router.delete("/opencode/connections/{provider_id}",status_code=204)
+def remove_account_provider_connection(provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if not provider_id or len(provider_id)>120:
+        raise HTTPException(422,"Invalid provider identifier")
+    _remove_account_api_provider(db,user,provider_id)
+
 
 @router.delete("/workspaces/{workspace_id}/providers/{provider_id}",status_code=204)
 def remove_provider_credential(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
     workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    if user_provider_credentials_schema_ready(db) and user_provider_credentials.find(db,user.id,provider_id):
+        _remove_account_api_provider(db,user,provider_id)
+        return
     with opencode.workspace_lock(workspace):
         session_lifecycle.lock_workspace(db,workspace)
         row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace.id,
@@ -495,10 +923,22 @@ def test_provider(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(re
     row,service=_workspace_service(db,user,workspace_id)
     return {"connected":not providers.is_locally_disconnected(db,row,provider_id) and providers.is_connected(service,provider_id)}
 
+def reject_account_key_oauth_conflict(db, user_id, provider_id):
+    """OAuth must not coexist with a restorable account API key for the same provider."""
+    if user_provider_credentials_schema_ready(db) and user_provider_credentials.find(db, user_id, provider_id):
+        raise HTTPException(409, "Account-wide API key exists for this provider; OAuth cannot replace it implicitly")
+    legacy = db.scalar(select(ProviderCredential).where(
+        ProviderCredential.user_id == user_id,
+        ProviderCredential.provider_id == provider_id).limit(1))
+    if legacy is not None:
+        raise HTTPException(409, "Existing API key connection must be disconnected before OAuth")
+
+
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/authorize")
 def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAuthAuthorize,user: User=Depends(require_user),db: Session=Depends(get_db)):
     require_advanced(db,user)
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
+    reject_account_key_oauth_conflict(db,user.id,provider_id)
     _,service=_workspace_service(db,user,workspace_id)
     with service.state_lock:
         return providers.oauth_authorize(service,provider_id,data.method,data.inputs)
@@ -507,16 +947,18 @@ def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAut
 def provider_oauth_callback(workspace_id: uuid.UUID,provider_id: str,data: OAuthCallback,user: User=Depends(require_user),db: Session=Depends(get_db)):
     require_advanced(db,user)
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
+    reject_account_key_oauth_conflict(db,user.id,provider_id)
     workspace,service=_workspace_service(db,user,workspace_id)
     with opencode.workspace_lock(workspace),service.state_lock:
         session_lifecycle.lock_workspace(db,workspace)
         accepted=providers.oauth_callback(service,provider_id,data.method,data.code)
-        # OAuth state belongs to OpenCode. Retire any old Gateway API-key binding.
-        row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace_id,ProviderCredential.provider_id==provider_id))
-        if row is not None:
-            db.delete(row)
+        # OAuth state belongs to OpenCode. Keep the previous encrypted API key
+        # unless the new OAuth connection has actually been accepted.
         if accepted:
             require_advanced(db,user,start=True)
+            row=db.scalar(select(ProviderCredential).where(ProviderCredential.workspace_id==workspace_id,ProviderCredential.user_id==user.id,ProviderCredential.provider_id==provider_id))
+            if row is not None:
+                db.delete(row)
             providers.record_connection(db,workspace,provider_id,connected=True)
         db.commit()
         return {"connected":bool(accepted)}
