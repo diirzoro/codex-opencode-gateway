@@ -146,5 +146,11 @@ Repository: diirzoro/codex-opencode-gateway
 - The checks are **committed but not yet executed**. They supplement, not replace, a disposable PostgreSQL `alembic upgrade head` validation and an isolated rollback test.
 - Readiness gate remains: do not ask the owner to deploy Test until migrations, runner isolation and related tests are validated. Dynamic Preview remains fail-closed and Start Preview remains manual.
 
+## Progress — test review and owner-scoped persistence checks (2026-10-16)
+- Fixed `test_preview_migration_contract.py`: migration filename now resolves via the repository `backend/alembic/versions` directory, not `alembic.versions` from installed Python package. This avoids an import error on CI/Test.
+- Added `test_preview_lease_store.py` with mock transaction tests for owner-bound row locking, restart generation cleanup, idle expiry and refusal to create an unknown lease.
+- Execution status: **tests were NOT run against the repository**. Git checkout was not accessible from the available container; do not claim pass. No Alembic migration was executed on PostgreSQL. No runner or worker was started.
+- Next steps: fetch/clone `updates` on isolated Test, run Python suites, verify `alembic heads` and 0019 upgrade on disposable PostgreSQL, then implement authenticated durable lease transactions and isolated worker provisioning. Keep dynamic `/preview/start` fail-closed until the runner is accepted.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
