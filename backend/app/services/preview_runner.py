@@ -157,6 +157,8 @@ def start(workspace):
                                    "framework": framework, "entrypoint": info["argv"][-1] if framework == "node" else ("main.py" if "main:app" in info["argv"] else "app.py" if "app:app" in info["argv"] else "index.php" if framework == "php" else None), "archive": archive})
         response = client.request("start", {"job_id": _job_id(workspace)})
         # No iframe URL is provided until dedicated browser routing exists.
+        if response.get("state") != "running":
+            raise HTTPException(503, "Preview container did not start")
         return {**response, "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/", "execution_enabled": True}
     except PreviewWorkerUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
