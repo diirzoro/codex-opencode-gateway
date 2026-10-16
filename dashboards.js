@@ -447,14 +447,14 @@
   diffView.id='workspaceFileDiff';changesPanel.append(gitSummary,btn('refreshWorkspaceChanges','Refresh changes','حدّث التغييرات',()=>loadChanges()),changedFiles,diffView,gitActions);
   const previewProjectSelect=document.createElement('select');
   previewProjectSelect.setAttribute('aria-label',tr('Select project to preview','اختر المشروع للمعاينة'));
-  previewProjectSelect.style.cssText='width:100%;min-height:38px;border-radius:8px;padding:5px';
+  previewProjectSelect.style.cssText='display:block;box-sizing:border-box;width:100%;max-width:100%;min-width:0;min-height:40px;border-radius:8px;padding:6px 28px 6px 9px;overflow:hidden;text-overflow:ellipsis;background:var(--input-bg,#fff);color:inherit';
   const previewProjectTargets=new Map();
   previewProjectSelect.addEventListener('change',()=>{
     const target=previewProjectTargets.get(previewProjectSelect.value);
     if(target&&target.workspace.id!==activeWorkspace?.id)openWorkspace(target.project,target.workspace);
   });
   const previewIdentity=textElement('div','','preview-project-identity');
-  previewIdentity.style.cssText='padding:10px 12px;margin:8px 0;border:1px solid var(--border-color,#d4d9e1);border-radius:10px;display:flex;flex-direction:column;gap:4px;overflow-wrap:anywhere';
+  previewIdentity.style.cssText='box-sizing:border-box;min-width:0;width:100%;max-width:100%;padding:10px 12px;margin:8px 0;border:1px solid var(--border-color,#d4d9e1);border-radius:10px;display:flex;flex-direction:column;gap:6px;overflow:hidden;overflow-wrap:anywhere';
   previewIdentity.setAttribute('aria-live','polite');
   function updatePreviewIdentity(){
     const name=activeProject?.repository||activeProject?.name;
@@ -465,6 +465,8 @@
     const details=document.createElement('small');
     details.textContent=(workspaceName?tr('Workspace: ','مساحة العمل: ')+workspaceName:'')+
       (activeProject?.branch?' · '+tr('Branch: ','الفرع: ')+activeProject.branch:'');
+    heading.style.cssText='display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    details.style.cssText='display:block;max-width:100%;overflow-wrap:anywhere';
     previewIdentity.append(heading,details,previewProjectSelect);
     const allowed=Boolean(activeWorkspace?.id&&activeProject?.id);
     if(!allowed){
@@ -495,7 +497,7 @@
     try{
       const state=await api('/api/workspaces/'+id+'/preview/status');
       if(activeWorkspace?.id!==id||previewRevision!==revision)return;
-      previewPath.hidden=false;
+      previewPath.hidden=state.mode!=='static';
       if(state.mode!=='static'){
         try {
           const launched=await api('/api/workspaces/'+id+'/preview/start',{method:'POST'});
@@ -548,8 +550,9 @@
   previewActions.append(btn('startWorkspacePreview','Start preview','ابدأ المعاينة',startPreview),btn('refreshWorkspacePreview','Refresh preview','حدّث المعاينة',startPreview),btn('stopWorkspacePreview','Stop preview','إيقاف المعاينة',stopPreview),fullPreview,newTabPreview);
   const previewIcons=['<path d="m9 5 10 7-10 7Z"/>','<path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/>','<rect x="6" y="6" width="12" height="12" rx="1"/>','<path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/>','<path d="M14 3h7v7M21 3 10 14M10 3H3v18h18v-7"/>'];
   [...previewActions.children].forEach((button,index)=>{const label=button.textContent;button.title=label;button.setAttribute('aria-label',label);button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+previewIcons[index]+'</svg>';});
-  const previewToolbar=textElement('div','','preview-toolbar');previewToolbar.append(previewPath,previewActions);
+  const previewToolbar=textElement('div','','preview-toolbar');previewToolbar.style.cssText='min-width:0;max-width:100%;box-sizing:border-box;flex-wrap:wrap;overflow:hidden';previewToolbar.append(previewPath,previewActions);
   const previewCanvas=textElement('div','','preview-canvas');previewCanvas.append(previewStatus,frame);
+  previewPanel.style.minWidth='0';previewPanel.style.overflowX='hidden';
   previewPanel.append(text('h3','Project Preview','معاينة المشروع'),previewIdentity,previewToolbar,previewCanvas);
   setPreviewState('idle');
   const projectRoot=document.createElement('details');projectRoot.className='sidebar-project-root';projectRoot.open=true;
