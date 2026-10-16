@@ -43,3 +43,7 @@ console.log('1 passed: conversation rail defaults hidden at tablet/mobile widths
 
 for(const dir of ['ltr','rtl']){doc.documentElement.dir=dir;assert.equal(result(1366,workspace,'direction'),'inherit');assert.ok(result(1366,workspace,'grid-template-areas').includes('dashboard chat project'));}
 console.log('2 passed: dashboard and tabbed project panel inherit LTR/RTL grid direction');
+const outerFrame=doc.createElement('div');outerFrame.className='app-frame';const oldSidebar=doc.createElement('aside');oldSidebar.id='app-sidebar';oldSidebar.className='app-sidebar';outerFrame.append(oldSidebar);doc.body.append(outerFrame);const workspacePage=doc.getElementById('workspacePage');workspacePage.classList.add('active');
+assert.equal(result(1366,oldSidebar,'display'),'none');assert.equal(result(1366,outerFrame,'grid-template-columns'),'minmax(0,1fr)');
+workspacePage.classList.remove('active');assert.equal(result(1366,oldSidebar,'display'),'flex');assert.equal(result(1366,outerFrame,'grid-template-columns'),'248px minmax(0,1fr)');
+console.log('2 passed: old shell sidebar/column removed only in Workspace and restored elsewhere');

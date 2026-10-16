@@ -814,7 +814,38 @@
       await originalSession(row);await refreshSessions();return activeSession;
     })();sessionCreating=promise;updateSend();try{return await promise;}finally{if(sessionCreating===promise)sessionCreating=null;updateSend();}
   }
-  newSessionButton.onclick=()=>createSession().catch(error=>toast(error.message));
+  async function chooseNewConversation(initialKind=null){
+    if(!currentUser||sending||pendingSubmission)return;
+    const owner=currentUser.id,dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog';dialog.setAttribute('aria-label',tr('New conversation project','مشروع المحادثة الجديدة'));
+    const choices=textElement('div','','chat-approval-actions'),body=textElement('div'),feedback=textElement('p','','api-message');feedback.setAttribute('role','status');
+    const close=btn('newConversationClose','Cancel','إلغاء',()=>dialog.close());dialog.append(title('New conversation','محادثة جديدة'),close,choices,body,feedback);document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();let revision=0;
+    const valid=()=>dialog.open&&currentUser?.id===owner;
+    async function start(project,workspace){if(!valid())return;choices.querySelectorAll('button').forEach(b=>b.disabled=true);body.querySelectorAll('button').forEach(b=>b.disabled=true);
+      try{if(sending||pendingSubmission)throw new Error(tr('Finish the pending submission first.','أكمل الطلب المعلّق أولًا.'));if(activeWorkspace?.id!==workspace.id)await openWorkspace(project,workspace,{navigate:false});if(!valid()||activeWorkspace?.id!==workspace.id)return;const result=await createSession();if(result&&valid()){dialog.close();await page('workspacePage');}}
+      catch(error){if(valid())feedback.textContent=error.message;}finally{if(valid()){choices.querySelectorAll('button').forEach(b=>b.disabled=false);body.querySelectorAll('button').forEach(b=>b.disabled=false);}}
+    }
+    async function show(kind){const stamp=++revision;body.replaceChildren();feedback.textContent=tr('Loading projects…','جارٍ تحميل المشاريع…');
+      if(kind==='github')body.append(btn('newConversationGithubImport','GitHub · repository / branch','GitHub · المستودع / الفرع',()=>{dialog.close();return openRepositoryPicker(async(project,workspace)=>{if(currentUser?.id===owner&&activeWorkspace?.id===workspace.id)await createSession();});}));
+      else{const form=document.createElement('form'),label=textElement('label',tr('New local project name','اسم المشروع المحلي الجديد')),name=document.createElement('input');name.required=true;name.maxLength=120;label.append(name);const submit=textElement('button',tr('Create local project and conversation','إنشاء مشروع محلي ومحادثة'),'button ghost small');submit.type='submit';form.append(label,submit);body.append(form);
+        form.onsubmit=async event=>{event.preventDefault();if(!valid()||!form.reportValidity()||submit.disabled)return;submit.disabled=true;try{const result=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'blank',project_name:name.value.trim()})});if(valid())await start(result.project,result.workspace);}catch(error){if(valid())feedback.textContent=error.message;}finally{submit.disabled=false;}};
+      }
+      try{const data=await api('/api/dashboard');if(!valid()||stamp!==revision)return;feedback.textContent='';
+        const heading=textElement('p',tr('Or start in an existing project:','أو ابدأ في مشروع موجود:'));body.append(heading);let count=0;
+        for(const project of data.projects||[]){if((project.source_type==='github')!==(kind==='github'))continue;const workspace=project.workspaces?.find(w=>w.status==='ready')||project.workspaces?.[0];if(!workspace)continue;const button=btn('conversation-project-'+project.id,project.repository||project.name,project.repository||project.name,()=>start(project,workspace),'project-folder-link');body.append(button);count++;}
+        if(!count)heading.textContent=tr('No existing projects in this section.','لا توجد مشاريع سابقة في هذا القسم.');
+      }catch(error){if(valid()&&stamp===revision)feedback.textContent=error.message;}
+    }
+    for(const [kind,en,ar] of [['local','Local','محلي'],['github','GitHub','GitHub']])choices.append(btn('conversation-kind-'+kind,en,ar,()=>show(kind),'button ghost small'));
+    if(initialKind==='github'||initialKind==='local')await show(initialKind);
+  }
+  newSessionButton.onclick=()=>chooseNewConversation().catch(error=>toast(error.message));
+  const conversationGithub=btn('conversationGithub','GitHub','GitHub',()=>chooseNewConversation('github').catch(error=>toast(error.message)),'button ghost small');conversationGithub.setAttribute('aria-label',tr('GitHub conversation · repository and branch','محادثة GitHub · المستودع والفرع'));sessionsSummary.append(conversationGithub);
+
+  const projectMenu=document.createElement('details');projectMenu.className='composer-project-menu';projectMenu.id='composerProjectMenu';
+  const projectMenuToggle=document.createElement('summary');projectMenuToggle.setAttribute('aria-label',tr('Projects and connections','المشاريع والربط'));projectMenuToggle.title=tr('Projects and connections','المشاريع والربط');projectMenuToggle.innerHTML='<svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg>';const projectMenuItems=textElement('div');projectMenu.append(projectMenuToggle,projectMenuItems);
+  for(const [kind,en,ar,icon] of [['local','Local project','مشروع محلي','icon-folder'],['github','GitHub','GitHub','icon-github']]){const button=btn('composer-project-'+kind,en,ar,()=>{projectMenu.open=false;return chooseNewConversation(kind).catch(error=>toast(error.message));});button.prepend(textElement('span'));button.firstChild.innerHTML='<svg class="ui-icon" aria-hidden="true"><use href="#'+icon+'"/></svg>';projectMenuItems.append(button);}
+  utilities.append(projectMenu);document.addEventListener('click',event=>{if(projectMenu.open&&!projectMenu.contains(event.target))projectMenu.open=false;});document.addEventListener('keydown',event=>{if(event.key==='Escape')projectMenu.open=false;});window.addEventListener('authentication-cleared',()=>{projectMenu.open=false;});
+
   const submissionCurrent=p=>currentUser?.id===p.owner&&activeWorkspace?.id===p.workspaceId&&activeSession?.id===p.sessionId;
   let sendingPreview=null;
   function clearSendingPreview(){const preview=sendingPreview;sendingPreview=null;preview?.node.remove();}
@@ -894,7 +925,7 @@
       if(activeSession){await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});pendingSubmission=null;retrySubmission.hidden=true;await refreshSessionStatus();await refreshMessages();submissionStatus.textContent=tr('Execution cancelled. Completed actions and files are preserved.','أُلغي التنفيذ. تبقى الإجراءات المكتملة والملفات محفوظة.');}
     }catch(error){cancelRequested=false;toast(error.message);}finally{if(!sending)cancelRequested=false;updateSend();}
   };
-  async function openRepositoryPicker(){
+  async function openRepositoryPicker(onReady=null){
     const dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog';dialog.setAttribute('aria-label',tr('GitHub repository and branch','مستودع وفرع GitHub'));
     const close=btn('repositoryClose','Close','إغلاق',()=>dialog.close()),feedback=textElement('p',tr('Loading authorized repositories…','جارٍ تحميل المستودعات المصرّح بها…'),'api-message');feedback.setAttribute('role','status');
     dialog.append(title('GitHub repository / branch','مستودع GitHub / الفرع'),close,text('p','Your repository stays in GitHub. OpenCode works on a server-side working copy. Commit and push are separate explicit actions.','يبقى المستودع في GitHub. يعمل OpenCode على نسخة عمل بالخادم. Commit وPush إجراءان منفصلان باختيارك.'),feedback);
@@ -917,7 +948,7 @@
         feedback.textContent=tr('Loading branches…','جارٍ تحميل الفروع…');
         try{const branches=await api('/api/github/branches?repository='+encodeURIComponent(selected));if(!dialog.open||stamp!==revision)return;for(const b of branches)branch.add(new Option(b.name,b.name));const preferred=repos.find(r=>r.full_name===selected)?.default_branch;if(branches.some(b=>b.name===preferred))branch.value=preferred;name.value=name.value||selected.split('/').pop();branch.disabled=false;submit.disabled=!branches.length;feedback.textContent='';}catch(error){if(stamp===revision)feedback.textContent=error.message;}
       };
-      form.onsubmit=async event=>{event.preventDefault();if(!form.reportValidity()||submit.disabled)return;submit.disabled=true;feedback.textContent=tr('Preparing a shallow working copy…','جارٍ تجهيز نسخة عمل بتاريخ مختصر…');try{const result=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'github',repository:repository.value,branch:branch.value,project_name:name.value,working_paths:workingPaths.value.split(',').map(path=>path.trim()).filter(Boolean)})});if(!dialog.open)return;dialog.close();await openWorkspace(result.project,result.workspace);}catch(error){if(dialog.open)feedback.textContent=error.message;}finally{submit.disabled=false;}};
+      form.onsubmit=async event=>{event.preventDefault();if(!form.reportValidity()||submit.disabled)return;submit.disabled=true;feedback.textContent=tr('Preparing a shallow working copy…','جارٍ تجهيز نسخة عمل بتاريخ مختصر…');try{const result=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'github',repository:repository.value,branch:branch.value,project_name:name.value,working_paths:workingPaths.value.split(',').map(path=>path.trim()).filter(Boolean)})});if(!dialog.open)return;dialog.close();await openWorkspace(result.project,result.workspace);if(typeof onReady==='function')await onReady(result.project,result.workspace);}catch(error){if(dialog.open)feedback.textContent=error.message;else toast(error.message);}finally{submit.disabled=false;}};
     }catch(error){if(dialog.open)feedback.textContent=error.message;}
   }
   window.openGithubProject=openRepositoryPicker;
