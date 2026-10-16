@@ -226,12 +226,14 @@
   };
   window.renderMessageActivity=(host,rows)=>{
     if(!rows.length)return;
-    const details=document.createElement('details');details.className='message-activity';details.open=!host.querySelector('.message-content')?.textContent.trim();details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')));const list=document.createElement('ul');
-    for(const row of rows){const item=textElement('li',workLabel(row));
-      if(row.command){const command=textElement('code',row.command+(row.command_limited?tr(' (arguments hidden)',' (المعاملات مخفية)'):''),'activity-command');command.dir='ltr';item.append(command);}
-      if(Number.isInteger(row.exit_code))item.append(textElement('small',tr('Exit code: ','رمز الخروج: ')+row.exit_code));
-      if(Number.isFinite(row.duration_ms)&&row.duration_ms>=0)item.append(textElement('small',(row.duration_ms/1000).toFixed(1)+tr(' s',' ث')));
-      for(const file of row.files||[])item.append(textElement('div',file.path+' · '+(row.status==='completed'?activityLabel(operations,file.operation):tr('Requested','مطلوب'))));list.append(item);
+    const details=document.createElement('details');details.className='message-activity';details.open=rows.some(row=>['pending','running','error'].includes(row.status));details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')));const list=document.createElement('ul');
+    for(const row of rows){const item=document.createElement('li'),step=document.createElement('details');step.className='tool-execution';step.dataset.state=row.status;step.open=['pending','running','error'].includes(row.status);
+      const heading=textElement('summary',workLabel(row));step.append(heading);
+      if(row.command){const pre=textElement('pre','','tool-execution-code'),command=textElement('code',row.command+(row.command_limited?tr(' (arguments hidden)',' (المعاملات مخفية)'):''),'activity-command');pre.dir='ltr';pre.append(command);step.append(pre);}
+      const result=textElement('div','','tool-execution-result');
+      if(Number.isInteger(row.exit_code))result.append(textElement('small',tr('Exit code: ','رمز الخروج: ')+row.exit_code));
+      if(Number.isFinite(row.duration_ms)&&row.duration_ms>=0)result.append(textElement('small',(row.duration_ms/1000).toFixed(1)+tr(' s',' ث')));
+      for(const file of row.files||[])result.append(textElement('div',file.path+' · '+(row.status==='completed'?activityLabel(operations,file.operation):tr('Requested','مطلوب'))));step.append(result);item.append(step);list.append(item);
     }details.append(list);host.append(details);
   };
   window.renderActivitySummary=rows=>{
