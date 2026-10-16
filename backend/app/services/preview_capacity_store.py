@@ -54,19 +54,28 @@ def reserve(db: Session, *, user_id, workspace_id, worker_id: str,
 
 
 def release(db: Session, *, user_id, workspace_id, generation: int) -> bool:
-    """Idempotently release a reservation; worker cleanup is a separate duty."""
+    """Release once with the same worker->lease lock order as reservation.
+
+    This releases only the DB slot. The dispatcher MUST revoke preview routing
+    and confirm sandbox destruction before finalizing the transaction.
+    """
+    candidate = db.scalar(select(PreviewRuntimeLease).where(
+        PreviewRuntimeLease.workspace_id == workspace_id,
+        PreviewRuntimeLease.user_id == user_id))
+    if candidate is None or candidate.generation != generation or not candidate.worker_id:
+        return False
+    worker = db.scalar(select(PreviewWorkerCapacity).where(
+        PreviewWorkerCapacity.worker_id == candidate.worker_id).with_for_update())
+    if worker is None:
+        return False
     lease = db.scalar(select(PreviewRuntimeLease).where(
         PreviewRuntimeLease.workspace_id == workspace_id,
         PreviewRuntimeLease.user_id == user_id).with_for_update())
-    if lease is None or lease.generation != generation or not lease.worker_id:
+    if lease is None or lease.generation != generation or lease.worker_id != worker.worker_id:
         return False
-    # Serialize with admission for the same worker. Never decrement below zero.
-    worker = db.scalar(select(PreviewWorkerCapacity).where(
-        PreviewWorkerCapacity.worker_id == lease.worker_id).with_for_update())
-    if worker is None:
-        # Fail closed; preserve worker ID until reconciliation, not silently leak slot.
-        return False
-    worker.active_jobs = max(0, worker.active_jobs - 1)
+    if worker.active_jobs < 1:
+        raise ValueError("Inconsistent worker reservation count; reconciliation required")
+    worker.active_jobs -= 1
     lease.worker_id = None
     db.flush()
     return True
