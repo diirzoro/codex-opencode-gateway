@@ -41,3 +41,24 @@ def available_worker(detected: dict, heartbeat: WorkerHeartbeat | None, *, now: 
         return {"admitted": False, "action": "wait_for_worker", "worker_id": None,
                 "reason": "Preview worker security attestation is stale"}
     return assess_worker(detected, heartbeat.capacity)
+
+
+def select_worker(detected: dict, heartbeats: tuple[WorkerHeartbeat, ...], *, now: datetime) -> dict:
+    """Choose from trusted, healthy workers without reserving capacity.
+
+    Stable preference for the most free memory, then CPU, then worker ID;
+    the later durable scheduler MUST revalidate and reserve atomically.
+    """
+    _utc(now)
+    eligible = []
+    for heartbeat in heartbeats:
+        outcome = available_worker(detected, heartbeat, now=now)
+        if outcome["action"] == "request_durable_lease":
+            worker = heartbeat.capacity
+            eligible.append((worker.memory_free_mb, worker.cpu_free_millicores,
+                             worker.worker_id, outcome))
+    if not eligible:
+        return {"admitted": False, "action": "queue", "worker_id": None,
+                "reason": "No verified Preview worker with sufficient capacity"}
+    eligible.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    return eligible[0][3]
