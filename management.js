@@ -233,7 +233,7 @@
           try{
             if(keyMethod){
               setFeedback(feedback,tr('Installing the credential and validating a real OpenCode model request…','جارٍ تثبيت المفتاح والتحقق منه بطلب نموذج فعلي عبر OpenCode…'));
-              const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
+              const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:null,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
               f.reset();if(!alive()||!contextCurrent())return;
               if(result.connected!==true||result.persisted!==true)throw new Error(tr('OpenCode connection and credential storage were not confirmed.','لم يتم تأكيد اتصال OpenCode وحفظ المفتاح.'));
               dlg.close();toast(result.deferred_workspace_count?tr('Connected, but some running workspaces need refresh.','تم الربط، لكن بعض مساحات العمل النشطة تحتاج تحديثًا.'):tr('Provider connected. It is now available in the workspace composer.','تم ربط المزوّد. أصبح متاحًا الآن في محرر مساحة العمل.'));await reload();
