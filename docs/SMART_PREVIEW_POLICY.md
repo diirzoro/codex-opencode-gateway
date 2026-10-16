@@ -53,7 +53,7 @@ Repository: diirzoro/codex-opencode-gateway
 - Growth aim: attract the first 50 paying subscribers and expand safely; do not advertise unlimited previews.
 
 ## Implementation checklist (updates branch only)
-- [ ] P0: inventory current preview backend/frontend and integration points; retain current working read-only HTML renderer until replacement validated.
+- [x] P0: inventory current preview backend/frontend and integration points; retain current working read-only HTML renderer until replacement validated.
 - [ ] P1: implement robust project detection, validated 50 MB snapshot limits, safe static asset routing, independent origin and tenant tests.
 - [ ] P2: implement build-job interface and per-pool scheduler/leases/queues/status/stop/resume, fail-closed without configured worker.
 - [ ] P3: add separately isolated build worker for supported npm static frameworks, cache signed/owned build artifacts and invalidate by revision; test without leaking dependencies or secrets.
@@ -67,6 +67,12 @@ Repository: diirzoro/codex-opencode-gateway
 - `backend/app/services/preview_snapshot.py` implements source snapshot constraints, not execution.
 - `dashboards.js` includes an embedded Preview iframe and panel with Start/Refresh/Stop.
 - Actual dynamic/npm preview is NOT yet available. This document is a product policy, not an assertion that the design has been implemented.
+
+## Implementation progress (updates only, 2026-10-16)
+- Added `backend/app/services/preview_scheduling.py` to classify static/build/dynamic/conditional projects and publish pool-size metadata without allocating workers.
+- `preview_runner.plan()` and `status()` now expose classification; static and build candidates never consume an active dynamic slot merely because they are detected.
+- Added `backend/tests/test_preview_scheduling.py` with focused unit tests. **Tests have not yet been executed on the Test server or CI; do not mark runtime feature complete.**
+- The actual scheduler, separate-origin static server, isolated npm build worker, automatic pool provisioning, idle leases and dynamic previews remain outstanding.
 
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
