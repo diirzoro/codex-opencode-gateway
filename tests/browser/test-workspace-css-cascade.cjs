@@ -17,7 +17,7 @@ function result(width,element,property){let winner;let order=0;
 }
 for(const width of [390,700,900,1100,1366]){
  const columns=result(width,workspace,'grid-template-columns');
- assert.equal(columns,width<=1100?'minmax(0,1fr)':'var(--conversation-rail-width) minmax(0,1fr) var(--panel-w,400px)');
+ assert.equal(columns,width<=1100?'minmax(0,1fr)':'var(--dashboard-rail-width) minmax(0,1fr) var(--panel-w,400px)');
 }
 workspace.classList.add('panel-docked');doc.getElementById('sessionSidebar').classList.add('open');
 assert.equal(result(900,doc.getElementById('sessionSidebar'),'position'),'fixed');
@@ -38,5 +38,8 @@ console.log('5 passed: light/dark shared edges, Landing inner media, checkout re
 
 assert.equal(result(1366,doc.querySelector('.pricing'),'background'),'var(--panel2)');
 console.log('1 passed: pricing section has a distinct theme-aware background');
-assert.equal(result(900,doc.querySelector('.workspace-conversation-rail')||(()=>{const e=doc.createElement('aside');e.className='workspace-conversation-rail';workspace.prepend(e);return e;})(),'display'),'none');
+assert.equal(result(900,doc.querySelector('.workspace-dashboard-rail')||(()=>{const e=doc.createElement('aside');e.className='workspace-dashboard-rail';workspace.prepend(e);return e;})(),'display'),'none');
 console.log('1 passed: conversation rail defaults hidden at tablet/mobile widths');
+
+for(const dir of ['ltr','rtl']){doc.documentElement.dir=dir;assert.equal(result(1366,workspace,'direction'),'inherit');assert.ok(result(1366,workspace,'grid-template-areas').includes('dashboard chat project'));}
+console.log('2 passed: dashboard and tabbed project panel inherit LTR/RTL grid direction');
