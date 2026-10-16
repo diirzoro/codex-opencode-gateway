@@ -35,7 +35,7 @@ class ContainerSpecTests(unittest.TestCase):
             argv_for(ContainerSpec("sha256:" + "a" * 64, ("python",), "/var/lib/preview-worker/jobs/a/src"))
 
     def test_rejects_control_characters_in_argv(self):
-        for part in ("python\\x00run", "python\\nrun"):
+        for part in ("python\x00run", "python\nrun", "python\tbad", "python\rreturn", "python\x7fdel"):
             with self.subTest(part=part), self.assertRaises(UnsafeContainerSpec):
                 argv_for(ContainerSpec(DIGEST, (part,), "/var/lib/preview-worker/jobs/a/src"))
 
