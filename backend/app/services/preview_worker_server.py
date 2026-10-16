@@ -92,8 +92,12 @@ class WorkerHandler(BaseHTTPRequestHandler):
         with LOCK:
             if operation == "prepare":
                 if job_id in JOBS:
-                    self.reply(409, {"error": "job_exists"})
-                    return
+                    previous = JOBS[job_id]
+                    if previous.get("container_id") and previous.get("state") == "running":
+                        self.reply(409, {"error": "job_already_running"})
+                        return
+                    JOBS.pop(job_id, None)
+                    shutil.rmtree(Path("/var/lib/preview-worker/jobs") / job_id, ignore_errors=True)
                 from .preview_runner import PROFILES
                 framework = request.get("framework")
                 profile = PROFILES.get(framework) if isinstance(framework, str) else None
@@ -182,6 +186,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     if cid:
                         self.server.provisioner.stop(cid, job_id)
                     job["state"] = "stopped"
+                    job["container_id"] = None
                     result = {"state": "stopped", "job_id": job_id}
                 self.reply(200, result)
             except (PreviewProvisioningError, OSError, ValueError):
