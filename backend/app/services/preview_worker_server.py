@@ -120,6 +120,25 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     if len(snapshot) > 50 * 1024 * 1024:
                         raise ValueError("oversized snapshot")
                     root = Path("/var/lib/preview-worker/jobs") / job_id
+                    if root.exists():
+                        # The Worker process may have restarted while a
+                        # previous sandbox snapshot remained on disk.
+                        if root.is_symlink() or not root.is_dir():
+                            self.reply(409, {"error": "unsafe_job_directory"})
+                            return
+                        try:
+                            old_id = self.server.provisioner._call((
+                                "inspect", "--format", "{{.Id}}",
+                                "preview-" + job_id))
+                        except PreviewProvisioningError:
+                            old_id = None
+                        if old_id:
+                            try:
+                                self.server.provisioner.stop(old_id, job_id)
+                            except PreviewProvisioningError:
+                                self.reply(409, {"error": "stale_job_in_use"})
+                                return
+                        shutil.rmtree(root)
                     root.mkdir(mode=0o700)
                     try:
                         source = root / "src"
