@@ -92,5 +92,12 @@ Repository: diirzoro/codex-opencode-gateway
 - No container has been provisioned, no npm/python project has been started, and no production code/deployment was touched. These tests are committed but **not yet executed in Test/CI**.
 - Next: inspect/test existing runtime integration, implement durable pool membership plus resource-based admission (separate from active worker count), then add isolated build worker and expiry reaper. Do not run customer commands on Gateway host.
 
+## Progress — package preparation detection (2026-10-16, updates only)
+- Added `backend/app/services/preview_package_manager.py`: read-only identification of npm, pnpm, yarn, and bun lockfiles. Missing/ambiguous lockfiles fail closed; no install/build command is run.
+- `preview_runner.plan()` and `status()` expose `package_preparation` for detected Node-family projects.
+- Added `backend/tests/test_preview_package_manager.py` covering recognized, missing, and ambiguous lockfiles. Tests are committed **but have not yet run on Test/CI**.
+- Pending: durable scheduler, verified isolated build worker and dependency preparation, safe artifact routing, actual npm/Python builds, and idle cleanup. No Preview runtime was enabled.
+- Product scope: AI agent background/pause behavior is deferred as a separate workstream; Preview must not control agent execution.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
