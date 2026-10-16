@@ -5,7 +5,7 @@ A lease stores allocation identity, never provider credentials or project files.
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, CheckConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, CheckConstraint, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from ..database import Base
 
@@ -15,10 +15,11 @@ class PreviewRuntimeLease(Base):
     __table_args__ = (
         CheckConstraint("state IN ('queued','starting','running','stopped','failed','expired')", name="ck_preview_lease_state"),
         Index("ix_preview_lease_state_seen", "state", "last_user_activity_at"),
+        UniqueConstraint("workspace_id", name="uq_preview_lease_workspace"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), unique=True, index=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     state: Mapped[str] = mapped_column(String(20), default="stopped", nullable=False)
     worker_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
