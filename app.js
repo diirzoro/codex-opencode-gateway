@@ -54,7 +54,7 @@ const api=async(path,options={})=>{
  invalidateProviderMutation(path,options.method);return body;
 };
 function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');setTimeout(()=>$('#toast').classList.remove('show'),3500)}
-function clearAuthenticatedState(){
+function clearAuthenticatedState(destination='authPage'){
  authenticationRevision++;for(const controller of authenticatedRequests)controller.abort();authenticatedRequests.clear();
  window.authSession?.stop();window.workspaceRuntime?.clear();stopEvents();eventCursors.clear();
  currentUser=null;activeWorkspace=activeProject=activeSession=null;workspaceSelectionRevision++;sessionSelectionRevision++;messageRenderRevision++;
@@ -66,7 +66,7 @@ function clearAuthenticatedState(){
  for(const id of ['profileStatus','profileTrial','profileUsername','profileEmail','profilePhone','profileLocation','profileTrialDates']){const field=$('#'+id);if(field?.firstChild?.nodeType===3)field.firstChild.textContent='';else if(field)field.textContent='';}
  for(const row of $$('.signout-row'))row.remove();
  for(const select of $$('#agentSelect,#providerSelect,#modelSelect')){select.replaceChildren(new Option(select.id==='agentSelect'?(lang==='ar'?'افتراضي OpenCode':'OpenCode default'):'',''));select.disabled=true;}
- pendingIdea='';window.dispatchEvent(new Event('authentication-cleared'));updateNavigation();showPage('authPage');
+ pendingIdea='';window.dispatchEvent(new Event('authentication-cleared'));updateNavigation();showPage(destination);
 }
 window.logoutSession=async()=>{try{await api('/api/auth/logout',{method:'POST',signal:AbortSignal.timeout(5000)});}finally{clearAuthenticatedState();}};
 window.workspaceRetentionNotice=cache=>{
@@ -386,7 +386,7 @@ const authReady=(async()=>{
  catch(error){
   if(error.status===401){
    let hadWorkspace=false;try{hadWorkspace=Boolean(localStorage.getItem('og-workspace'));}catch(ignored){}
-   window.authRestoreExpired=hadWorkspace||error.message!=='Authentication required';clearAuthenticatedState();
+   window.authRestoreExpired=hadWorkspace||error.message!=='Authentication required';clearAuthenticatedState('landing');
    if(error.message==='Account reactivation required'){
     try{
      window.reactivationAccount=await api('/api/auth/reactivation',{allowAnonymous:true});window.passwordRecoveryActive=true;
@@ -412,7 +412,7 @@ async function restoreWorkspaceContext(){
 }
 const navigationReady=authReady.then(async()=>{
  await interfaceReady;if(window.passwordRecoveryActive)return;
- if(!currentUser){await page(location.hash.startsWith('#social=')||window.authRestoreExpired?'authPage':'landing');return;}
+ if(!currentUser){await page(location.hash.startsWith('#social=')?'authPage':'landing');return;}
  window.__navRestored=true;
  if(['admin','owner'].includes(currentUser.role)){await page('adminPage');return;}
  await openWorkspaceAfterLogin();
