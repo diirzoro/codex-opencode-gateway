@@ -512,7 +512,16 @@ applyPrefs();
     }
     const authPage=document.getElementById('authPage'),card=authPage.querySelector('.auth-card');
     const authDialog=element('dialog','','action-form-dialog auth-action-dialog');authDialog.id='authDialog';authDialog.setAttribute('aria-label',tr('Account access','الدخول للحساب'));
-    const columns=element('div','','auth-dialog-columns'),workflow=authPage.querySelector('.auth-workflow');if(workflow)columns.append(workflow);columns.append(card);authDialog.append(columns);authPage.append(authDialog);
+    const columns=element('div','','auth-dialog-columns'),workflow=authPage.querySelector('.auth-workflow');
+    if(workflow){
+      const benefits=element('details','','auth-benefits'),summary=element('summary');
+      summary.dataset.i18n='authBenefitsToggle';summary.textContent=t('authBenefitsToggle');
+      benefits.append(summary,workflow);columns.append(benefits);
+      const compact=matchMedia('(max-width:820px)');
+      const fitBenefits=()=>{benefits.open=!compact.matches;};
+      compact.addEventListener('change',fitBenefits);fitBenefits();
+    }
+    columns.append(card);authDialog.append(columns);authPage.append(authDialog);
     const closeBtn=card.querySelector('.close');if(closeBtn){closeBtn.type='button';closeBtn.setAttribute('aria-label',tr('Close','إغلاق'));closeBtn.onclick=()=>authDialog.close();}
     const syncAuth=()=>{if(authPage.classList.contains('active')&&!window.passwordRecoveryActive){if(!authDialog.open)authDialog.showModal();}else if(authDialog.open)authDialog.close();};
     window.openAuthLogin=()=>{showPage('authPage');$('[data-auth-tab=login]').click();syncAuth();};
@@ -542,8 +551,8 @@ applyPrefs();
 /* Password managers own passwords; Remember stores identity text only. */
 Object.assign(copy.en,{rememberIdentity:'Remember email / username only',socialGithub:'Continue with GitHub',socialGoogle:'Continue with Google'});
 Object.assign(copy.ar,{rememberIdentity:'تذكّر البريد / اسم المستخدم فقط',socialGithub:'المتابعة باستخدام GitHub',socialGoogle:'المتابعة باستخدام Google'});
-Object.assign(copy.en,{benefitsTitle:'Everything for your project',b1t:'Use OpenCode online',b1d:'Work with your coding workspace directly from the browser.',b2t:'Connect your GitHub project',b2d:'Link your repository and keep working with your existing source.',b3t:'Secure provider connections',b3d:'Connect supported AI providers while credentials stay server-side.',b4t:'30-day Core trial',b4d:'Full core access with 50 MB per local project.',b5t:'One 30-day trial',b5d:'Verify your email to begin your only 30-day trial.',b6t:'One workspace for your project',b6d:'Keep files, sessions and reviews in a single place.',authHeadline:'Start your 30-day Core trial',authSubhead:'Sign in to continue your projects. There is no second trial.',brandName:'OpenCode Gateway'});
-Object.assign(copy.ar,{benefitsTitle:'كل ما يحتاجه مشروعك',b1t:'استخدم OpenCode عبر الإنترنت',b1d:'اعمل في مساحة الترميز مباشرة من المتصفح.',b2t:'اربط مشروع GitHub',b2d:'اربط مستودعك وتابع العمل بمصدرك الحالي.',b3t:'اتصالات مزوّدين آمنة',b3d:'اربط مزوّدي الذكاء الاصطناعي المدعومين وتبقى بيانات الاعتماد على الخادم.',b4t:'تجربة الأساس 30 يومًا',b4d:'وصول أساسي كامل مع 50 MB لكل مشروع محلي.',b5t:'تجربة واحدة لمدة 30 يوماً',b5d:'تبدأ التجربة الوحيدة بعد تفعيل البريد الإلكتروني.',b6t:'مساحة عمل واحدة لمشروعك',b6d:'اجمع الملفات والجلسات والمراجعات في مكان واحد.',authHeadline:'ابدأ تجربة الأساس المجانية لمدة 30 يومًا',authSubhead:'سجّل الدخول لمتابعة مشاريعك. لا توجد تجربة إضافية بعد الثلاثين يومًا.',brandName:'OpenCode Gateway'});
+Object.assign(copy.en,{benefitsTitle:'Your workspace, wherever you are',authBenefitsToggle:'Why OpenCode Gateway?',b1t:'OpenCode without installation',b1d:'Work from your browser, even on work devices that do not allow software installation.',b2t:'GitHub projects on any device',b2d:'Open and edit your repositories from a computer or phone, without downloading them to your device.',b3t:'Your providers, your API keys',b3d:'Connect your own API keys and choose OpenAI, Anthropic, Gemini or DeepSeek.',b4t:'Try your project free for 30 days',b4d:'A real workspace, with no platform subscription fees during the trial. Starts after email verification.',forgotPassword:'Forgot password?',resendVerification:'Resend verification email',brandName:'OpenCode Gateway'});
+Object.assign(copy.ar,{benefitsTitle:'مساحة عملك، أينما كنت',authBenefitsToggle:'لماذا OpenCode Gateway؟',b1t:'OpenCode دون تثبيت',b1d:'اعمل من المتصفح، حتى على أجهزة العمل التي تمنع تثبيت البرامج.',b2t:'مشاريع GitHub من أي جهاز',b2d:'افتح مستودعاتك وعدّلها من الكمبيوتر أو الهاتف، دون تنزيلها على جهازك.',b3t:'مزوّدوك بمفاتيحك',b3d:'اربط مفاتيح API الخاصة بك، واختر OpenAI أو Anthropic أو Gemini أو DeepSeek.',b4t:'جرّب مشروعك مجانًا 30 يومًا',b4d:'مساحة عمل حقيقية، دون رسوم اشتراك للمنصة خلال التجربة. تبدأ بعد تأكيد بريدك.',forgotPassword:'نسيت كلمة المرور؟',resendVerification:'إعادة إرسال رسالة التفعيل',brandName:'OpenCode Gateway'});
 try{const remembered=localStorage.getItem('og-login-identity');if(remembered){$('#loginIdentity').value=remembered;$('#rememberIdentity').checked=true;}}catch(error){}
 let socialOptions;
 async function loadSocialOptions(){

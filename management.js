@@ -548,7 +548,7 @@
     }
     recovery.append(button(tr('Back to login','رجوع للدخول'),()=>closeRecovery().catch(error=>toast(error.message))));window.scrollTo(0,0);
   }
-  const forgot=$('#authPage .auth-form .text-link');if(forgot){forgot.disabled=false;forgot.textContent=tr('Forgot password?','نسيت كلمة المرور؟');forgot.onclick=()=>recover()}
+  const forgot=$('#authForgotPassword');if(forgot){forgot.disabled=false;forgot.textContent=tr('Forgot password?','نسيت كلمة المرور؟');forgot.onclick=()=>recover()}
   window.renderManagement=render;
   window.openManagement=open;
   if(resetToken)recover(true).catch(error=>toast(error.message));
