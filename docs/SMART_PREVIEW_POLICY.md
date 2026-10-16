@@ -99,5 +99,12 @@ Repository: diirzoro/codex-opencode-gateway
 - Pending: durable scheduler, verified isolated build worker and dependency preparation, safe artifact routing, actual npm/Python builds, and idle cleanup. No Preview runtime was enabled.
 - Product scope: AI agent background/pause behavior is deferred as a separate workstream; Preview must not control agent execution.
 
+## Progress — verified-worker capacity admission (2026-10-16)
+- Added `backend/app/services/preview_admission.py` with conservative isolated worker admission decisions. Static previews bypass dynamic slots; unsupported or unknown frameworks fail closed; worker workloads require a reachable, isolated, security-verified worker with measured free CPU/RAM/disk and an available concurrency slot.
+- Added `backend/tests/test_preview_admission.py` covering absence of workers, insufficient resources, invalid registry data, static HTML, Next.js ambiguity and valid admission decisions.
+- **Admission only returns eligibility for a future durable lease; it does not allocate a container, persist reservations, install npm, or execute user code.** All new unit tests await execution on Test/CI.
+- Next essential steps: trusted worker registry with fresh heartbeats, atomic durable reservation/queues, isolated build runner provisioning, timeout reaper and authenticated separate-origin routing; perform Test security checks before turning on start.
+- Agent background/pause/resume is tracked separately in `docs/AGENT_BACKGROUND_EXECUTION_ROADMAP.md` and remains pending until Preview is complete.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
