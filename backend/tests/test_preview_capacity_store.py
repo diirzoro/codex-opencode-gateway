@@ -6,6 +6,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from app.services import preview_capacity_store
+from app.services.preview_host_gate import HostTelemetry
 
 NOW = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
 
@@ -24,6 +25,7 @@ class FakeDB:
 
 class PreviewCapacityStoreTests(unittest.TestCase):
     def setUp(self):
+        self.host = HostTelemetry(4096, 2800, 81920, 15000, 0, True)
         self.owner = uuid4()
         self.workspace = uuid4()
         self.worker = SimpleNamespace(worker_id="verified-1", isolated=True, security_verified=True,
@@ -34,11 +36,18 @@ class PreviewCapacityStoreTests(unittest.TestCase):
         self.lease = SimpleNamespace(user_id=self.owner, workspace_id=self.workspace,
                                      state="queued", generation=3, worker_id=None)
 
+    def test_missing_host_measurement_refuses_allocation(self):
+        db = FakeDB()
+        self.assertFalse(preview_capacity_store.reserve(
+            db, user_id=self.owner, workspace_id=self.workspace, worker_id="verified-1",
+            generation=3, framework="vite", now=NOW))
+        self.assertEqual(db.flushes, 0)
+
     def test_slot_reserved_once(self):
         db = FakeDB(self.worker, self.lease)
         self.assertTrue(preview_capacity_store.reserve(
             db, user_id=self.owner, workspace_id=self.workspace, worker_id="verified-1",
-            generation=3, framework="vite", now=NOW))
+            generation=3, framework="vite", now=NOW, host_telemetry=self.host))
         self.assertEqual(self.worker.active_jobs, 1)
         self.assertEqual(self.lease.state, "starting")
         self.assertEqual(self.lease.worker_id, "verified-1")
@@ -49,14 +58,14 @@ class PreviewCapacityStoreTests(unittest.TestCase):
         db = FakeDB(self.worker, self.lease)
         self.assertFalse(preview_capacity_store.reserve(
             db, user_id=self.owner, workspace_id=self.workspace, worker_id="verified-1",
-            generation=3, framework="vite", now=NOW))
+            generation=3, framework="vite", now=NOW, host_telemetry=self.host))
         self.assertEqual(self.worker.active_jobs, 0)
 
     def test_generation_mismatch_cannot_reserve(self):
         db = FakeDB(self.worker, self.lease)
         self.assertFalse(preview_capacity_store.reserve(
             db, user_id=self.owner, workspace_id=self.workspace, worker_id="verified-1",
-            generation=2, framework="vite", now=NOW))
+            generation=2, framework="vite", now=NOW, host_telemetry=self.host))
 
     def test_release_requires_cleanup_acknowledgement(self):
         self.lease.worker_id = "verified-1"
@@ -102,7 +111,7 @@ class PreviewCapacityStoreTests(unittest.TestCase):
         db = FakeDB(self.worker, self.lease)
         self.assertFalse(preview_capacity_store.reserve(
             db, user_id=self.owner, workspace_id=self.workspace, worker_id="verified-1",
-            generation=3, framework="python", now=NOW))
+            generation=3, framework="python", now=NOW, host_telemetry=self.host))
         self.assertEqual(db.flushes, 0)
 
 
