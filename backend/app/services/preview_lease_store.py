@@ -40,6 +40,10 @@ def apply_transition(db: Session, *, user_id, workspace_id, event: str,
     if row is None:
         raise LookupError("Preview lease not found")
     old = _from_row(row)
+    if event == "start" and row.worker_id is not None:
+        raise ValueError("Previous Preview worker must be destroyed and released before restart")
+    if event in {"stop", "idle_expired", "failed"} and row.worker_id is not None:
+        raise ValueError("Revoke routing and confirm worker cleanup before finalizing stop")
     updated = transition(old, event, now=now)
     row.state = updated.state
     row.last_user_activity_at = updated.last_user_activity_at
