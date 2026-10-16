@@ -4,6 +4,7 @@ Never execute this from the Gateway API process. Provisioner must verify
 trusted image digests, host mount ownership, daemon access and network policy.
 """
 from dataclasses import dataclass
+import re
 
 @dataclass(frozen=True)
 class ContainerSpec:
