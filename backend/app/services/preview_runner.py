@@ -203,7 +203,7 @@ def fetch_asset(workspace, path: str):
                 raise HTTPException(502, "Invalid HTML encoding") from exc
             base = '<base href="' + escape(prefix, quote=True) + '">'
             page = page.replace("<head>", "<head>" + base, 1) if "<head>" in page else base + page
-            page = re.sub(r'((?:src|href)\\s*=\\s*["\\'])/(?!/)', lambda m: m.group(1) + prefix, page)
+            page = re.sub(r"""((?:src|href)\s*=\s*["'])/(?!/)""", lambda m: m.group(1) + prefix, page)
             body = page.encode("utf-8")
         return Response(content=body, status_code=status_code, media_type=media_type,
                         headers={"Cache-Control": "no-store",
