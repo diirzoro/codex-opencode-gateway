@@ -10,7 +10,7 @@ Repository: diirzoro/codex-opencode-gateway
 - No Playwright. Do not install or use Playwright in Preview.
 
 ## Product behavior
-1. Preview opens INSIDE the existing Workspace Preview panel. The panel stays open until the user closes it manually.
+1. Preview starts ONLY when the customer explicitly clicks the existing **Start Preview** button inside Workspace. Opening Workspace, opening the Preview tab, framework detection, plan/status polling, saving files, or automatic reconnect must NEVER launch a preview or consume a worker. Preview opens INSIDE the existing Workspace Preview panel. The panel stays open until the user closes it manually.
 2. Static output can remain visible without an active runner. For dynamic previews, after **5 minutes of inactivity** STOP the server-side execution lease while keeping the panel open with an explicit inactive/stopped state. Do NOT restart automatically: only a new explicit Preview/Start request by the user can create a fresh lease. On user request, revalidate authorization, workspace revision and available capacity before starting. Closing the panel stops the owned execution session; it must not end the chat or coding session.
 3. Local projects: target a 50 MB maximum **source snapshot** per preview. Validate actual uncompressed total, file count, depth, per-file sizes, symlinks and special files. This is NOT a memory/CPU limit and is not a guarantee all 50 MB projects can build.
 4. GitHub projects: show changed files and diffs, real preview of the checked-out working tree/branch where supported, and optional external link if one already exists. A thumbnail can be captured by a separately approved method in the future but is not required. Never fabricate a visual result, auto-commit, auto-push or deploy.
@@ -105,6 +105,12 @@ Repository: diirzoro/codex-opencode-gateway
 - **Admission only returns eligibility for a future durable lease; it does not allocate a container, persist reservations, install npm, or execute user code.** All new unit tests await execution on Test/CI.
 - Next essential steps: trusted worker registry with fresh heartbeats, atomic durable reservation/queues, isolated build runner provisioning, timeout reaper and authenticated separate-origin routing; perform Test security checks before turning on start.
 - Agent background/pause/resume is tracked separately in `docs/AGENT_BACKGROUND_EXECUTION_ROADMAP.md` and remains pending until Preview is complete.
+
+## Progress — explicit start enforcement (2026-10-16, updates only)
+- Added `request_start(..., explicit_start=...)` to `preview_admission.py`. Preview admission is denied for any non-explicit action; it can only produce an eligibility decision, not launch a worker.
+- Added unit tests for HTML/Vite/Python to ensure no auto-start and for explicit build admission.
+- This does NOT yet wire a secure worker or start endpoint to the admission layer. Backend dynamic start remains fail-closed (503); no automatic Preview activation was introduced.
+- No production code or deployment changed; Test/CI tests still need running.
 
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
