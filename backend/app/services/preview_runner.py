@@ -149,6 +149,17 @@ def start(workspace):
         raise HTTPException(422, "No executable Preview profile for this workspace")
     try:
         client = _worker()
+        # Opening Preview twice must not re-upload a snapshot over a live job.
+        # Return the existing tenant-owned workspace relay instead.
+        try:
+            existing = client.request("status", {"job_id": _job_id(workspace)})
+            if existing.get("state") == "running":
+                return {"state": "running",
+                        "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/",
+                        "execution_enabled": True, "reused": True}
+        except PreviewWorkerUnavailable as exc:
+            if "unregistered_job" not in str(exc):
+                raise
         with tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024) as spool:
             export(workspace, spool)
             spool.seek(0)
