@@ -712,7 +712,9 @@ body:has(#workspacePage.active) #app-sidebar{display:none!important}
 #workspacePage .conversation-menu:not([open])>.session-actions{display:none}
 #workspacePage .conversation-menu>.session-actions{position:absolute;inset-inline-end:0;top:100%;z-index:10;display:grid;min-width:150px;padding:6px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px #0001}
 #workspacePage .conversation-menu>.session-actions button{text-align:start;justify-content:start}
-#workspacePage #sessionSidebar .workspace-panel-modes{flex-wrap:wrap}
+#workspacePage #sessionSidebar .workspace-panel-modes{flex-wrap:nowrap;gap:2px;min-width:0}
+#workspacePage #sessionSidebar .workspace-panel-modes button{min-width:0;white-space:nowrap;padding:6px 3px;font-size:11px;flex:1 1 0}
+#workspacePage #sessionSidebar .workspace-panel-modes #closeSessions{flex:0 0 22px;width:22px;min-width:22px;padding:3px}
 
 #workspacePage #sessionSidebar>.workspace-project-groups{flex:0 0 auto;min-width:0}
 #workspacePage .project-source-group{margin-top:14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}
@@ -915,3 +917,12 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 :root #workspacePage .composer-project-menu>div button{display:flex;align-items:center;gap:8px;padding:9px 10px;border:0;border-radius:6px;background:transparent;text-align:start;color:var(--text);font-size:13px}
 :root #workspacePage .composer-project-menu>div button:hover{background:var(--panel2)}
 :root #workspacePage .composer-project-menu>div svg{width:18px;height:18px;flex:none}
+
+/* Scoped new-conversation source menu, anchored above the conversation heading. */
+:root #workspacePage .workspace-conversations>h3{position:relative;min-width:0}
+:root #workspacePage .session-source-menu{position:absolute;inset-inline-end:0;top:calc(100% + 6px);z-index:40;min-width:172px;padding:5px;display:grid;gap:3px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow)}
+:root #workspacePage .session-source-menu[hidden]{display:none!important}
+:root #workspacePage .session-source-option{display:block;width:100%;text-align:start;padding:9px 11px;border:0;border-radius:7px;background:transparent;color:var(--text);font-size:13px}
+:root #workspacePage .session-source-option:hover,:root #workspacePage .session-source-option:focus-visible{background:var(--panel2)}
+/* Keep the compact agent/provider/model picker above the composer. */
+@container workspace-chat (max-width:680px){:root #workspacePage .composer-picks{bottom:calc(100% + 8px);top:auto;z-index:30}}
