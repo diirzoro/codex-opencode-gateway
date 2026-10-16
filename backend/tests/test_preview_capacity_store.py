@@ -94,7 +94,7 @@ class PreviewCapacityStoreTests(unittest.TestCase):
         db = FakeDB(self.lease, self.worker, self.lease)
         with self.assertRaises(ValueError):
             preview_capacity_store.release(
-                db, user_id=self.owner, workspace_id=self.workspace, generation=3)
+                db, user_id=self.owner, workspace_id=self.workspace, generation=3, cleanup_confirmed=True)
         self.assertEqual(self.lease.worker_id, "verified-1")
 
     def test_exhausted_worker_refuses_new_job(self):
