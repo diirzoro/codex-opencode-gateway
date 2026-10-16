@@ -5,16 +5,15 @@ This suite does not connect to production or Test PostgreSQL.
 import unittest
 from unittest.mock import patch
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine
 from sqlalchemy.schema import CreateTable
 
 from app.models.preview import PreviewRuntimeLease
 from app.models.workspace import WorkspaceSession
-from alembic.versions import __path__ as _versions_path
 import importlib.util
 from pathlib import Path
 
-MIGRATION = Path(next(iter(_versions_path))) / "0019_preview_runtime_leases.py"
+MIGRATION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0019_preview_runtime_leases.py"
 
 
 class PreviewMigrationContractTests(unittest.TestCase):
