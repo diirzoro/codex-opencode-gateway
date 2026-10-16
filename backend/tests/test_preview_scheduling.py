@@ -1,7 +1,7 @@
 """Fast unit checks for Smart Preview metadata; runs without worker or npm."""
 import unittest
 
-from app.services.preview_scheduling import classify
+from app.services.preview_scheduling import classify, idle_expired, DYNAMIC_IDLE_TIMEOUT_SECONDS
 
 
 class SmartPreviewClassificationTests(unittest.TestCase):
@@ -34,6 +34,14 @@ class SmartPreviewClassificationTests(unittest.TestCase):
         self.assertEqual(result["pool_target_users"], 50)
         self.assertEqual(result["pool_max_users"], 100)
         self.assertFalse(result["consumes_dynamic_slot_now"])
+
+    def test_dynamic_idle_requires_explicit_restart(self):
+        state = classify({"framework": "python"})
+        self.assertEqual(state["dynamic_idle_timeout_seconds"], 300)
+        self.assertTrue(state["idle_restart_requires_explicit_user_request"])
+        self.assertEqual(DYNAMIC_IDLE_TIMEOUT_SECONDS, 300)
+        self.assertFalse(idle_expired(last_activity_monotonic=10.0, now_monotonic=309.9))
+        self.assertTrue(idle_expired(last_activity_monotonic=10.0, now_monotonic=310.0))
 
     def test_unknown_fails_closed(self):
         result = classify({"framework": "something-new"})
