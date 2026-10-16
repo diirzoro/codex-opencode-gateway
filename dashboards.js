@@ -534,6 +534,16 @@
       }
     }catch(error){if(activeWorkspace?.id===id&&previewRevision===revision){clearPreview();setPreviewState('error');previewStatus.textContent=error.message;}}
   }
+  async function refreshPreview(){
+    if(!frame.hidden && frame.getAttribute('src')){
+      const current=new URL(frame.getAttribute('src'),location.href);
+      current.searchParams.set('_preview_refresh',String(Date.now()));
+      frame.src=current.pathname+current.search;
+      previewStatus.textContent=tr('Refreshing running preview…','جارٍ تحديث المعاينة الحالية…');
+      return;
+    }
+    await startPreview();
+  }
   async function stopPreview(){
     clearPreview();const revision=previewRevision,id=activeWorkspace?.id;
     previewStatus.textContent=tr('Preview stopped.','تم إيقاف المعاينة.');
@@ -543,12 +553,19 @@
   }
   const previewActions=textElement('div','','preview-actions');
   const fullPreview=btn('expandWorkspacePreview','Full screen','تكبير للشاشة',async()=>{if(frame.hidden){toast(tr('Start the preview first.','ابدأ المعاينة أولًا.'));return;}await frame.requestFullscreen();});
-  const newTabPreview=btn('openWorkspacePreviewTab','Open in new tab','فتح في تبويب جديد',()=>{if(frame.hidden){toast(tr('Start the preview first.','ابدأ المعاينة أولًا.'));return;}
-    const encoded=frame.srcdoc.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    const html='<!doctype html><html><head><meta charset="utf-8"><title>Project preview</title><meta name="referrer" content="no-referrer"></head><body style="margin:0;height:100vh"><iframe title="Project preview" sandbox="allow-scripts" referrerpolicy="no-referrer" style="width:100%;height:100%;border:0" srcdoc="'+encoded+'"></iframe></body></html>';
-    const url=URL.createObjectURL(new Blob([html],{type:'text/html'})),link=document.createElement('a');link.href=url;link.target='_blank';link.rel='noopener noreferrer';link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);
+  const newTabPreview=btn('openWorkspacePreviewTab','Open in new tab','فتح في تبويب جديد',()=>{
+    if(frame.hidden){toast(tr('Start the preview first.','ابدأ المعاينة أولًا.'));return;}
+    const escapeAttr=value=>String(value).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const path=frame.getAttribute('src');
+    // Always preserve the iframe sandbox in a new tab. Never navigate directly
+    // to customer-generated HTML under the Gateway origin.
+    const source=path?'src="'+escapeAttr(path)+'"':'srcdoc="'+escapeAttr(frame.srcdoc)+'"';
+    const html='<!doctype html><html><head><meta charset="utf-8"><title>Project preview</title><meta name="referrer" content="no-referrer"></head><body style="margin:0;height:100vh"><iframe title="Project preview" sandbox="allow-scripts" referrerpolicy="no-referrer" style="width:100%;height:100%;border:0" '+source+'></iframe></body></html>';
+    const url=URL.createObjectURL(new Blob([html],{type:'text/html'})),link=document.createElement('a');
+    link.href=url;link.target='_blank';link.rel='noopener noreferrer';link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
   });
-  previewActions.append(btn('startWorkspacePreview','Start preview','ابدأ المعاينة',startPreview),btn('refreshWorkspacePreview','Refresh preview','حدّث المعاينة',startPreview),btn('stopWorkspacePreview','Stop preview','إيقاف المعاينة',stopPreview),fullPreview,newTabPreview);
+  previewActions.append(btn('startWorkspacePreview','Start preview','ابدأ المعاينة',startPreview),btn('refreshWorkspacePreview','Refresh preview','حدّث المعاينة',refreshPreview),btn('stopWorkspacePreview','Stop preview','إيقاف المعاينة',stopPreview),fullPreview,newTabPreview);
   const previewIcons=['<path d="m9 5 10 7-10 7Z"/>','<path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/>','<rect x="6" y="6" width="12" height="12" rx="1"/>','<path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/>','<path d="M14 3h7v7M21 3 10 14M10 3H3v18h18v-7"/>'];
   [...previewActions.children].forEach((button,index)=>{const label=button.textContent;button.title=label;button.setAttribute('aria-label',label);button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+previewIcons[index]+'</svg>';});
   const previewToolbar=textElement('div','','preview-toolbar');previewToolbar.style.cssText='min-width:0;max-width:100%;box-sizing:border-box;flex-wrap:wrap;overflow:hidden';previewToolbar.append(previewPath,previewActions);
