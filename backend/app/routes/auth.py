@@ -56,13 +56,17 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
         user.status = 'active'
         user.last_login_at = now
         response.delete_cookie(social_login.SIGNUP_COOKIE, path='/api/auth', secure=settings.cookie_secure, httponly=True, samesite='strict')
-    # Fail closed before writing any pending account if outbound mail is absent.
-    if not verified_social and not email_verification.smtp_ready():
+    verification_required = email_verification.required_for_registration()
+    if not verified_social and not verification_required:
+        user.status = "active"
+        user.last_login_at = now
+    # Mail delivery remains mandatory when the verification policy is enabled.
+    if not verified_social and verification_required and not email_verification.smtp_ready():
         raise HTTPException(503, "Email verification is unavailable; registration cannot proceed")
     db.add(user)
     try:
         db.flush()
-        if not verified_social:
+        if not verified_social and verification_required:
             token = email_verification.create_pending(db, user)
             db.flush()
             email_verification.send_link(email, token)
@@ -74,7 +78,7 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
         db.rollback()
         raise
     db.refresh(user)
-    if verified_social:
+    if verified_social or not verification_required:
         set_session(response, db, user)
     return user_payload(user)
 
