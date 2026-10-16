@@ -167,8 +167,9 @@
     const promise=(async()=>{try{const s=await api('/api/workspaces/'+workspaceId+'/storage');if(activeWorkspace?.id===workspaceId){storageData=s;renderStorage();}}catch(error){if(activeWorkspace?.id===workspaceId)storageChip.textContent='';}})();
     storagePending={id:workspaceId,promise};try{return await promise;}finally{if(storagePending?.promise===promise)storagePending=null;}
   }
+  let dashboardNavReady=false;
   syncWorkspacePolling=function(){
-    placeDashboardNav();
+    if(dashboardNavReady)placeDashboardNav();
     const needed=activeWorkspace&&!document.hidden&&q('workspacePage').classList.contains('active');
     if(!needed){clearInterval(storageTimer);storageTimer=null;return;}
     if(!storageTimer)storageTimer=setInterval(()=>loadStorage().catch(()=>{}),15000);
@@ -562,7 +563,7 @@
   const closeDashboard=btn('closeWorkspaceDashboard','Close dashboard','إغلاق لوحة التحكم',()=>dashboardMenu.close(),'icon');closeDashboard.textContent='×';dashboardMenu.append(closeDashboard);document.body.append(dashboardMenu);
   dashboardMenu.addEventListener('close',placeDashboardNav);
   dashboardNav.addEventListener('click',event=>{if(event.target.closest('button')&&dashboardMenu.open)dashboardMenu.close();});
-  const dashboardToggle=btn('openWorkspaceDashboard','Dashboard','لوحة التحكم',()=>{if(!currentUser)return;dashboardMenu.append(dashboardNav);dashboardMenu.showModal();},'workspace-dashboard-toggle');dashboardToggle.innerHTML='<svg class="ui-icon" aria-hidden="true"><use href="#icon-menu"/></svg>';dashboardToggle.setAttribute('aria-label',tr('Open dashboard menu','فتح قائمة لوحة التحكم'));dashboardToggle.title=tr('Dashboard','لوحة التحكم');projectbar.prepend(dashboardToggle);
+  const dashboardToggle=btn('openWorkspaceDashboard','Dashboard','لوحة التحكم',()=>{if(!currentUser)return;dashboardMenu.append(dashboardNav);dashboardMenu.showModal();},'workspace-dashboard-toggle');dashboardToggle.innerHTML='<svg class="ui-icon" aria-hidden="true"><use href="#icon-menu"/></svg>';dashboardToggle.setAttribute('aria-label',tr('Open dashboard menu','فتح قائمة لوحة التحكم'));dashboardToggle.title=tr('Dashboard','لوحة التحكم');projectbar.prepend(dashboardToggle);dashboardNavReady=true;placeDashboardNav();
 
   let panelMode='conversations',changesStamp=0;
   async function loadChanges(){
