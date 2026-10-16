@@ -53,12 +53,14 @@ def reserve(db: Session, *, user_id, workspace_id, worker_id: str,
     return True
 
 
-def release(db: Session, *, user_id, workspace_id, generation: int) -> bool:
+def release(db: Session, *, user_id, workspace_id, generation: int, cleanup_confirmed: bool = False) -> bool:
     """Release once with the same worker->lease lock order as reservation.
 
     This releases only the DB slot. The dispatcher MUST revoke preview routing
     and confirm sandbox destruction before finalizing the transaction.
     """
+    if cleanup_confirmed is not True:
+        raise ValueError("Preview worker destruction and route revocation must be confirmed")
     candidate = db.scalar(select(PreviewRuntimeLease).where(
         PreviewRuntimeLease.workspace_id == workspace_id,
         PreviewRuntimeLease.user_id == user_id))
