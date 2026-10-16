@@ -57,6 +57,8 @@ Repository: diirzoro/codex-opencode-gateway
 - [x] P0: inventory current preview backend/frontend and integration points; retain current working read-only HTML renderer until replacement validated.
 - [ ] P1: implement robust project detection, validated 50 MB snapshot limits, safe static asset routing, independent origin and tenant tests.
 - [ ] P2: implement build-job interface and per-pool scheduler/leases/queues/status/stop/resume, fail-closed without configured worker.
+- [ ] P2a: implement durable per-pool membership and **actual resource-aware capacity admission**, with measured CPU/RAM/disk, separate active build/runtime concurrency, backpressure queues, and safe rejection when capacity is insufficient. Logical pool counts must NOT create containers or claim physical capacity.
+- [ ] P2b: connect admitted preview jobs to verified isolated Preview Workers for npm/Node and Python as appropriate; enforce per-project isolation and quotas, 5-minute idle shutdown and explicit restart, without affecting OpenCode agent tasks. Verify on Test before any public enablement.
 - [ ] P3: add separately isolated build worker for supported npm static frameworks, cache signed/owned build artifacts and invalidate by revision; test without leaking dependencies or secrets.
 - [ ] P4: implement Workspace embedded UX, manual close, refresh, graceful idle stop and resume, GitHub diff/working-tree integration.
 - [ ] P5: enable dynamic Node/SSR/Python profiles ONLY after dedicated worker security acceptance and resource benchmarks.
