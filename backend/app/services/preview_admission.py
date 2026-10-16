@@ -53,3 +53,16 @@ def assess_worker(detected: dict, worker: WorkerCapacity | None) -> dict:
                 "reason": "Worker execution slots or measured capacity exhausted"}
     return {"admitted": True, "action": "request_durable_lease", "worker_id": worker.worker_id,
             "reason": "Eligible for atomic durable reservation; not yet started"}
+
+
+def request_start(detected: dict, worker: WorkerCapacity | None, *, explicit_start: bool) -> dict:
+    """Guard admission behind an explicit user Preview action.
+
+    Internal callers must pass a server-derived explicit action flag, never a
+    value supplied by a GET/status request or client-provided JSON field.
+    This is a policy check, not authentication, leasing, or execution.
+    """
+    if explicit_start is not True:
+        return {"admitted": False, "action": "await_user_start", "worker_id": None,
+                "reason": "Preview only starts when the user clicks Start Preview"}
+    return assess_worker(detected, worker)
