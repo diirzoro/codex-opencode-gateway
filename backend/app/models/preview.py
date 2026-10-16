@@ -36,6 +36,10 @@ class PreviewRuntimeLease(Base):
 class PreviewWorkerCapacity(Base):
     """Trusted internal capacity registry, never populated by browser input."""
     __tablename__ = "preview_worker_capacities"
+    __table_args__ = (
+        CheckConstraint("active_jobs >= 0 AND max_jobs >= 0 AND active_jobs <= max_jobs", name="ck_preview_worker_slots"),
+        CheckConstraint("cpu_free_millicores >= 0 AND memory_free_mb >= 0 AND disk_free_mb >= 0", name="ck_preview_worker_resources"),
+    )
     worker_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     isolated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     security_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
