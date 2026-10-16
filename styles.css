@@ -936,3 +936,8 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 :root #workspacePage .reference-workspace #sessionSidebar .conversation-menu[open]>.session-actions{position:relative;inset:auto;min-width:0;max-width:100%;box-shadow:none}
 :root #workspacePage .reference-workspace #sessionSidebar .conversation-row:has(.conversation-menu[open]){flex-wrap:wrap}
 :root #workspacePage .reference-workspace #sessionSidebar .conversation-menu[open]{flex-basis:100%}
+
+/* Floating conversation actions: do not expand the conversation row or its scroll area. */
+:root #workspacePage .reference-workspace #sessionSidebar .conversation-row:has(.conversation-menu[open]){flex-wrap:nowrap}
+:root #workspacePage .reference-workspace #sessionSidebar .conversation-menu[open]{flex-basis:auto}
+:root #workspacePage .reference-workspace #sessionSidebar .conversation-menu[open]>.session-actions{position:fixed;inset:auto;z-index:1000;width:190px;max-width:calc(100vw - 16px);padding:6px;box-shadow:var(--shadow);background:var(--panel);border:1px solid var(--line);border-radius:12px}
