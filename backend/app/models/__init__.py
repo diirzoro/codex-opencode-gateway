@@ -18,3 +18,6 @@ __all__ = [
 
 from .management import BillingMethod, AccountAudit, PasswordReset
 __all__ += ["BillingMethod", "AccountAudit", "PasswordReset"]
+
+from .preview import PreviewRuntimeLease
+__all__ += ["PreviewRuntimeLease"]
