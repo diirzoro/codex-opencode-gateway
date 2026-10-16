@@ -119,5 +119,12 @@ Repository: diirzoro/codex-opencode-gateway
 - This is **not yet persisted in PostgreSQL or connected to the actual Preview runner**. It starts NO containers and executes NO npm/Python. Tests committed but not yet executed on Test/CI.
 - Remaining: persistent per-owner leases and admission transactions, isolated worker + cleanup reaper, safe origin routing, UI integration and end-to-end staging verification.
 
+## Progress — Preview PostgreSQL lease schema staging (2026-10-16, updates only)
+- Added `backend/app/models/preview.py` with a planned `PreviewRuntimeLease` schema: workspace/owner binding, state, worker/pool identity, revision, generation and activity timestamps. This is **not imported into models metadata yet** and no schema migration has been added or executed.
+- Added `backend/tests/test_preview_model_contract.py` testing schema separation from OpenCode sessions and unique workspace binding (not yet executed).
+- The database migration head and existing migration sequencing MUST be confirmed before writing the Alembic migration and importing the model into `app.models`. Do not ship a migration guessed from an unknown revision.
+- **NOT READY FOR TEST DEPLOYMENT YET.** Requirements before informing owner to deploy Test: verify migration chain, integrate ORM and transaction-safe lease repository, run the unit tests, verify DB migration upgrade and downgrade in disposable staging, and ensure disabled-runner behavior remains 503.
+- When ready for Test, provide explicit steps and settings for Test only, separate from Live; never modify .env secrets or workflow configuration by assumption.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
