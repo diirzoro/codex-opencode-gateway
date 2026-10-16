@@ -21,6 +21,15 @@ class ContainerSpecTests(unittest.TestCase):
         with self.assertRaises(UnsafeContainerSpec):
             argv_for(ContainerSpec("python:latest", ("python",), "/var/lib/preview-worker/jobs/a/src"))
 
+    def test_rejects_mount_option_injection(self):
+        for path in (
+            "/var/lib/preview-worker/jobs/a/src,consistency=delegated",
+            "/var/lib/preview-worker/jobs/a/../src",
+            "/var/lib/preview-worker/jobs/a/src/extra",
+        ):
+            with self.subTest(path=path), self.assertRaises(UnsafeContainerSpec):
+                argv_for(ContainerSpec(DIGEST, ("python",), path))
+
     def test_rejects_untrusted_mount(self):
         with self.assertRaises(UnsafeContainerSpec):
             argv_for(ContainerSpec(DIGEST, ("python",), "/etc/src"))
