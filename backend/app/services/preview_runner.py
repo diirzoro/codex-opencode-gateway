@@ -4,11 +4,11 @@ Plans are advisory inputs to a future dedicated runner, never shell commands on
 this host. Execution remains unavailable until an isolated runner is verified.
 """
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import Protocol
 from fastapi import HTTPException
 from . import preview, preview_scheduling, preview_package_manager, workspaces
 from .preview_readiness import PreviewReadiness
+from .preview_launch_profiles import LaunchProfile, PROFILES
 
 # Fixed security contract: clients cannot loosen these limits via API input.
 LIMITS={"cpu_cores":1,"memory_mb":768,"disk_mb":1024,"processes":128,
@@ -34,28 +34,6 @@ def plan(workspace):
             "blockers":[] if framework=='html' else ["A dedicated isolated runner and authenticated separate-origin routing are not configured or verified.",
                 "Build dependencies require a separately controlled preparation stage; runtime egress must remain restricted."],
             "message":"No project code was executed. Non-web projects need a supported output/log runner." if not web else "No application server was started."}
-
-
-@dataclass(frozen=True)
-class LaunchProfile:
-    """Runner-side argv, never executed by the Gateway or supplied by a client.
-
-    Dependencies must already be prepared in the sandbox. No shell interpolation,
-    automatic package download or user-selected host command is permitted.
-    """
-    family: str
-    argv: tuple[str, ...]
-    internal_port: int = 8080
-
-
-PROFILES = {
-    "nextjs": LaunchProfile("node", ("./node_modules/.bin/next", "dev", "--hostname", "0.0.0.0", "--port", "8080")),
-    "vite": LaunchProfile("node", ("./node_modules/.bin/vite", "--host", "0.0.0.0", "--port", "8080", "--strictPort")),
-    "angular": LaunchProfile("node", ("./node_modules/.bin/ng", "serve", "--host", "0.0.0.0", "--port", "8080")),
-    "nuxt": LaunchProfile("node", ("./node_modules/.bin/nuxt", "dev", "--host", "0.0.0.0", "--port", "8080")),
-    "django": LaunchProfile("python", ("python", "manage.py", "runserver", "0.0.0.0:8080", "--noreload")),
-    "laravel": LaunchProfile("php", ("php", "artisan", "serve", "--host=0.0.0.0", "--port=8080")),
-}
 
 
 class IsolatedRunner(Protocol):
