@@ -22,6 +22,7 @@ from threading import RLock
 from .preview_docker_provisioner import DockerProvisioner, PreviewProvisioningError
 from .preview_worker_archive import extract_into_sandbox
 from .preview_container_spec import ContainerSpec
+from .preview_launch_profiles import PROFILES, LaunchProfile
 
 MAX_BODY = 72 * 1024 * 1024
 JOB_NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}' + chr(36))
@@ -116,18 +117,14 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         return
                     JOBS.pop(job_id, None)
                     shutil.rmtree(Path("/var/lib/preview-worker/jobs") / job_id, ignore_errors=True)
-                from .preview_runner import PROFILES
                 framework = request.get("framework")
                 profile = PROFILES.get(framework) if isinstance(framework, str) else None
                 selected = request.get("entrypoint")
                 if framework == "python" and selected in ("main.py", "app.py"):
-                    from .preview_runner import LaunchProfile
                     profile = LaunchProfile("python", ("python", "-m", "uvicorn", selected[:-3] + ":app", "--host", "0.0.0.0", "--port", "8080"))
                 elif framework == "node" and selected in ("server.js", "index.js"):
-                    from .preview_runner import LaunchProfile
                     profile = LaunchProfile("node", ("node", selected))
                 elif framework == "php" and selected == "index.php":
-                    from .preview_runner import LaunchProfile
                     profile = LaunchProfile("php", ("php", "-S", "0.0.0.0:8080"))
                 if profile is None or not isinstance(request.get("archive"), str):
                     self.reply(400, {"error": "unsupported_framework"})
