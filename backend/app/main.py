@@ -96,7 +96,19 @@ async def browser_boundary(request: Request, call_next):
         await asyncio.to_thread(workspace_cache.end_upload, upload_db, response.status_code < 400)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["X-Frame-Options"] = "DENY"
+    owned_preview = (getattr(request.state, "owned_preview_response", False) is True
+        and request.method == "GET"
+        and re.fullmatch(r"/api/workspaces/[0-9a-f-]{36}/preview/live/.*", request.url.path)
+        and response.headers.get("Content-Security-Policy") == "sandbox allow-scripts")
+    if owned_preview:
+        # Opaque-origin sandbox is retained. Only our own application can frame
+        # an owned preview; authentication/errors and every other page deny it.
+        if "X-Frame-Options" in response.headers:
+            del response.headers["X-Frame-Options"]
+        response.headers["Content-Security-Policy"] = "sandbox allow-scripts; frame-ancestors 'self'"
+        response.headers["Referrer-Policy"] = "no-referrer"
+    else:
+        response.headers["X-Frame-Options"] = "DENY"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     elif request.url.path in {"/", "/index.html"}:

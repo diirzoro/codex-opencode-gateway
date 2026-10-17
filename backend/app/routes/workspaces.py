@@ -4,7 +4,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, Request
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
@@ -487,10 +487,14 @@ def workspace_preview_stop(workspace_id: uuid.UUID,user: User=Depends(require_us
 
 
 @router.get("/workspaces/{workspace_id}/preview/live/{asset_path:path}")
-def workspace_preview_live(workspace_id: uuid.UUID,asset_path: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+def workspace_preview_live(workspace_id: uuid.UUID,asset_path: str,request: Request,user: User=Depends(require_user),db: Session=Depends(get_db)):
     from ..services.preview_runner import fetch_asset
     workspace=manager.owned(db,Workspace,workspace_id,user.id)
-    return fetch_asset(workspace, "/" + asset_path)
+    response=fetch_asset(workspace, "/" + asset_path)
+    # Mark only the authenticated, owned and sandboxed preview response.
+    # Middleware must not infer embedding permission from a URL alone.
+    request.state.owned_preview_response=True
+    return response
 
 
 @router.get("/workspaces/{workspace_id}/preview")
