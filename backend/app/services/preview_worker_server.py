@@ -14,6 +14,7 @@ import shutil
 import uuid
 import json
 import os
+import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import RLock
@@ -26,6 +27,7 @@ MAX_BODY = 72 * 1024 * 1024
 JOB_NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}' + chr(36))
 LOCK = RLock()
 JOBS = {}
+LOGGER = logging.getLogger('preview.worker')
 
 
 def register_local_job(job_id: str, image: str, argv: tuple[str, ...]):
@@ -68,6 +70,22 @@ class WorkerHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        # Handler errors otherwise abort the TCP connection and surface as
+        # RemoteDisconnected in the Gateway, with no actionable error code.
+        # Log only the operation and exception class; never request payloads.
+        try:
+            self._dispatch_post()
+        except (BrokenPipeError, ConnectionResetError):
+            LOGGER.warning("Preview worker client disconnected while replying")
+        except Exception as exc:
+            LOGGER.exception("Preview worker handler failed at %s (%s)",
+                             self.path.split("?", 1)[0][:64], type(exc).__name__)
+            try:
+                self.reply(503, {"error": "worker_internal_error"})
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
+    def _dispatch_post(self):
         authorized = self.headers.get("Authorization", "")
         expected = "Bearer " + self.server.token
         if not hmac.compare_digest(authorized, expected):
