@@ -186,3 +186,12 @@ Repository: diirzoro/codex-opencode-gateway
 
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
+
+
+## 2026-10-17 — Actual start diagnostic checkpoint
+- Code commit `06424730a61df70a8d693acd489ef62b80b81ef4` (updates only). Added bounded finite Docker/Worker failure codes and safe reference correlation; raw stderr/exception messages are never returned. Local pinned images only (--pull never), unchanged rootless/resource/network/read-only/non-root safeguards.
+- Source-only prepare is not dependency preparation. Framework entrypoints missing from the snapshot explicitly return dependency_preparation_required. No npm/pip installation on Gateway or unrestricted worker network was introduced. Builds, artifact cache, separate-origin routing and actual Docker acceptance remain open.
+- 32 targeted unit/real-loopback-HTTP tests passed; Docker adapter mocked. No local Docker/socket/SSH identity, no real container or new browser Preview acceptance. See living handoff section37.
+- VPS diagnostic: `sudo python3 backend/scripts/diagnose_preview_worker_test.py` is read-only; add `--smoke` to explicitly start/fetch/stop one new disposable Node fixture through TEST Worker. Requires existing `/etc/opencode-preview-worker-test.env` and dedicated `/run/preview-worker/docker.sock`; never print the token. Do not run the installer/refresh script merely for diagnosis, because it also writes configuration.
+- TEST code-only worker update, when owner performs it from a clean updates checkout: copy preview_diagnostics.py, preview_docker_provisioner.py, preview_worker_client.py and preview_worker_server.py to the existing `/opt/opencode-preview-test/app/services/` and restart only `opencode-preview-worker-test.service`. Existing Test Gateway deployment must also receive preview_worker_client.py to show the new finite messages in its UI. No changes to .env, systemd unit files, Docker daemon settings or workflows are needed for this diagnostic patch.
+- Current VPS start root cause remains undetermined pending operator output. Existing successful auth/prepare smoke and CI are not proof of working Smart Preview.
