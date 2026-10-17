@@ -587,7 +587,24 @@
   const changesSection=document.createElement('details');changesSection.className='workspace-side-section workspace-change-group';changesSection.open=false;changesSection.append(text('summary','Project changes','تغييرات المشروع'),changesPanel);
   projectRoot.append(filesSection,changesSection);
   let exportSource;
-  function projectKindControls(){const github=activeProject?.source_type==='github';changesSection.hidden=!github;if(exportSource)exportSource.hidden=github;gitActions.hidden=!github;gitActions.querySelector('#commitButton').hidden=!github;gitActions.querySelector('#pushButton').hidden=!github;}
+  const sourceDownloads=new Set();
+  async function downloadProjectSource(workspace,project){
+    const owner=currentUser?.id,id=workspace?.id;
+    if(!owner||!id||sourceDownloads.has(id))return;
+    sourceDownloads.add(id);
+    try{
+      toast(tr('Preparing project ZIP…','جارٍ تجهيز ملف المشروع ZIP…'));
+      const response=await fetch('/api/workspaces/'+encodeURIComponent(id)+'/export',{credentials:'same-origin'});
+      if(currentUser?.id!==owner)return;
+      if(!response.ok){let detail='';try{detail=(await response.json()).detail;}catch(error){}throw new Error(typeof detail==='string'&&detail?detail:tr('Project download failed.','تعذر تنزيل المشروع.'));}
+      if(!response.headers.get('Content-Type')?.includes('application/zip'))throw new Error(tr('The server did not return a project ZIP. Sign in and retry.','لم يُرجع الخادم ملف ZIP للمشروع. سجل الدخول وأعد المحاولة.'));
+      const blob=await response.blob();if(currentUser?.id!==owner)return;
+      const url=URL.createObjectURL(blob),link=document.createElement('a');
+      link.href=url;link.download=String(project?.name||project?.repository||'project').replace(/[\\/\x00-\x1f\x7f]/g,'-').slice(0,100)+'.zip';
+      document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+    }finally{sourceDownloads.delete(id);}
+  }
+  function projectKindControls(){const github=activeProject?.source_type==='github';changesSection.hidden=!github;if(exportSource){exportSource.hidden=!activeWorkspace;exportSource.disabled=!activeWorkspace;}gitActions.hidden=!github;gitActions.querySelector('#commitButton').hidden=!github;gitActions.querySelector('#pushButton').hidden=!github;}
 
   function updateProjectIdentity(){updatePreviewIdentity();projectKindControls();projectName.textContent=activeProject?.repository||activeProject?.name||tr('Project','المشروع');projectKind.textContent=activeProject?.source_type==='github'?tr('GitHub working copy','نسخة عمل GitHub'):tr('Local project','مشروع محلي');projectBranch.textContent=tr('Branch: ','الفرع: ')+(activeProject?.branch||'—');projectBranch.hidden=!activeProject?.branch;}
   const projectGroups=textElement('div','','workspace-project-groups'),projectBuckets=new Map();
@@ -605,7 +622,8 @@
     const identity=textElement('span','','sidebar-project-identity');identity.append(textElement('strong',project.repository||project.name),textElement('small',project.source_type==='github'?tr('GitHub working copy','نسخة عمل GitHub'):tr('Local project','مشروع محلي')));summary.append(icon,identity);
     const body=textElement('div','','section-body'),tree=textElement('div','','files-tree'),status=textElement('p','','muted-small');
     const open=btn('project-folder-'+project.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace));open.className='project-folder-link';
-    body.append(open,tree,status);folder.append(summary,body);let loaded=false,pending=false;
+    const download=btn('download-project-'+project.id,'Download ZIP','تنزيل ZIP',()=>downloadProjectSource(workspace,project));
+    body.append(open,download,tree,status);folder.append(summary,body);let loaded=false,pending=false;
     const owner=currentUser?.id,context={workspaceId:workspace.id,owner,root:tree,status,detachedProject:true};
     folder.addEventListener('toggle',async()=>{
       if(!folder.open||loaded||pending||currentUser?.id!==owner)return;
@@ -687,8 +705,8 @@
   refreshGit=async()=>{await loadChanges();q('manageProviders')?.remove();};
   q('commitButton').onclick=async()=>{if(!activeWorkspace||activeProject?.source_type!=='github')return;const message=await window.requestInput(tr('Commit message','رسالة الالتزام'));if(!message?.trim())return;try{await api('/api/workspaces/'+activeWorkspace.id+'/git/commit',{method:'POST',body:JSON.stringify({message:message.trim()})});await loadChanges();}catch(error){toast(error.message);}};
   const syncGit=btn('syncWorkspaceGit','Pull / Sync (fast-forward only)','Pull / Sync (تقديم سريع فقط)',async()=>{if(!activeWorkspace)return;if(!await window.confirmAction(tr('Fetch the selected GitHub branch and fast-forward only? Uncommitted/divergent work is preserved.','جلب فرع GitHub المختار والتقديم السريع فقط؟ تُحفظ الأعمال غير المحفوظة أو المتباعدة.')))return;await api('/api/workspaces/'+activeWorkspace.id+'/git/sync',{method:'POST'});await loadChanges();await loadFiles();});syncGit.hidden=true;
-  exportSource=btn('exportWorkspaceSource','Download source','تنزيل ملفات المشروع',()=>{if(activeWorkspace&&activeProject?.source_type!=='github')window.location.assign('/api/workspaces/'+activeWorkspace.id+'/export');});
-  filesSummary.append(exportSource);projectKindControls();
+  exportSource=btn('exportWorkspaceSource','Download ZIP','تنزيل المشروع ZIP',()=>downloadProjectSource(activeWorkspace,activeProject));
+  projectRoot.insertBefore(exportSource,filesSection);projectKindControls();
   const reviewPR=textElement('a',tr('Review PR / Merge in GitHub','مراجعة PR / Merge في GitHub'),'button ghost small');reviewPR.target='_blank';reviewPR.rel='noopener noreferrer';reviewPR.hidden=true;
   gitActions.append(syncGit,reviewPR,textElement('small',tr('Commit saves locally. Push updates GitHub. PR and merge are reviewed in GitHub; nothing is sent automatically.','Commit يحفظ محليًا. Push يحدّث GitHub. تُراجع PR وMerge في GitHub؛ لا إرسال تلقائي.')));
   let providers=[],chosenAgent='',chosenProvider='',chosenModel='',discovery=0,modelRequest=0,runtimeReady=false,agentsReady=false,modelsReady=false;
