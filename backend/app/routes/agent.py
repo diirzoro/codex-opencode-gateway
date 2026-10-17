@@ -655,6 +655,38 @@ def routine_request(workspace, part):
     if raw is None and part['tool'] in {'list','glob','grep'}: raw=''
     return routine_project_path(workspace,raw)
 
+def non_destructive_project_request(workspace, part):
+    """Owner-approved default: ordinary reads and genuinely new source files only.
+
+    Existing file changes still need explicit consent. Recheck under the workspace
+    lock before replying; never infer creation from the permission label alone.
+    """
+    if not routine_request(workspace,part): return False
+    tool=part['tool']
+    # Recursive content search cannot prove that hidden secrets are excluded.
+    if tool in {'read','list','glob','todoread','todowrite'}: return True
+    inp=(part.get('state') or {}).get('input') or {}
+    if tool=='write':
+        targets=[inp.get('filePath') or inp.get('path')]
+    elif tool=='apply_patch':
+        patch=inp.get('patchText')
+        lines=patch.strip().splitlines()[1:-1]
+        targets=[]
+        for line in lines:
+            match=re.fullmatch(r'\*\*\* Add File: (.+)',line)
+            if match: targets.append(match[1])
+            elif not line.startswith('+'): return False
+        if len(set(targets))!=len(targets): return False
+    else: return False
+    for raw in targets:
+        # routine_request already validates every path and rejects protected paths.
+        path=Path(raw)
+        if not path.is_absolute(): path=workspaces.root_for(workspace)/path
+        try:
+            if path.exists() or path.is_symlink(): return False
+        except OSError: return False
+    return bool(targets)
+
 def approval_fingerprint(permission, patterns, tool=None):
     return hashlib.sha256(json.dumps([permission, tool, sorted(patterns)], ensure_ascii=False).encode()).hexdigest()
 
@@ -711,14 +743,15 @@ def permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Sessi
         if allowed and reviewable and routine_enabled(db,session.id):
             try: routine=routine_request(workspace,part)
             except HTTPException: routine=False
-        if fingerprint in remembered or routine:
+        non_destructive=allowed and reviewable and non_destructive_project_request(workspace,part)
+        if fingerprint in remembered or routine or non_destructive:
             # Exact reviewed requests only, scoped to this owned conversation.
             # Recheck current platform policy on every repeat; never use runtime "always".
             from urllib.parse import quote
             session_lifecycle.lock_workspace(db,workspace)
             _,_,current_tools=policy.provider_sets(policy.load(db))
             current_allowed=permission!='external_directory' and (not current_tools or permission in current_tools)
-            if not current_allowed or (fingerprint not in remembered_approvals(db,session.id) and not (routine and routine_enabled(db,session.id))):
+            if not current_allowed or (fingerprint not in remembered_approvals(db,session.id) and not (routine and routine_enabled(db,session.id)) and not (non_destructive and non_destructive_project_request(workspace,part))):
                 db.rollback()
             else:
                 try: result=service.request('POST','/permission/'+quote(pending['id'],safe='')+'/reply',{'reply':'once'})
@@ -729,7 +762,7 @@ def permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Sessi
                 if result is not True: raise HTTPException(502,'Runtime did not confirm the repeated approval')
                 db.execute(update(WorkspaceSession).where(WorkspaceSession.id==session.id,
                     WorkspaceSession.status=='waiting_approval').values(status='submitted').execution_options(synchronize_session=False))
-                event(db,session.id,'approval_decision',{'reply':'routine' if routine else 'similar','automatic':True,'fingerprint':fingerprint})
+                event(db,session.id,'approval_decision',{'reply':'new_file_or_read' if non_destructive else 'routine' if routine else 'similar','automatic':True,'fingerprint':fingerprint})
                 continue
         owned.append({'id':pending['id'],'permission':permission,'patterns':details,'reviewable':reviewable,
                       'rememberable':rememberable,'fingerprint':fingerprint})

@@ -394,6 +394,8 @@
   let approvalRenderRevision=0,approvalSignature='';
   async function renderApprovals(rows,sessionId){
     const revision=++approvalRenderRevision;
+    // A runtime request has one identity; never duplicate its controls.
+    rows=[...new Map(rows.map(request=>[request.id,request])).values()];
     const owner=currentUser?.id;approvalOwner=owner;approvalSession=sessionId;
     if(!activeSession||activeSession.id!==sessionId){approvalSignature='';inlineApprovals.hidden=true;inlineApprovals.replaceChildren();approvalsList.hidden=true;approvalsList.replaceChildren();return;}
     const metadata=await Promise.allSettled([api('/api/sessions/'+sessionId+'/permissions/routine'),api('/api/sessions/'+sessionId+'/permissions/remembered')]);
@@ -410,11 +412,19 @@
       label.append(toggle,textElement('span',tr('Allow routine project-file work; ask before running commands','السماح بأعمال ملفات المشروع المعتادة؛ الموافقة قبل تشغيل الأوامر')));approvalsList.append(label);
     }catch(error){}
     approvalsList.append(textElement('p',tr('Review permission requests directly in the conversation.','راجع طلبات الموافقة مباشرة داخل الدردشة.')));
+    if(routineToggle&&!routineData.enabled&&rows.some(request=>request.reviewable&&['read','list','glob','grep','write','edit'].includes(request.permission))){
+      const notice=textElement('section','','chat-approval routine-permission-notice');
+      notice.append(textElement('strong',tr('Allow existing project-file edits for this conversation','السماح بتعديل ملفات المشروع الموجودة لهذه المحادثة')));
+      notice.append(textElement('p',tr('Ordinary reads and new files proceed automatically. Optionally allow edits to existing project files too. Commands, scripts, deletion and protected paths still require review.','القراءة وإنشاء الملفات الجديدة تتم مباشرة. يمكنك السماح أيضًا بتعديل الملفات الموجودة. الأوامر والسكربتات والحذف والمسارات المحمية تبقى للمراجعة.')));
+      const routineButton=textElement('button',tr('Allow routine files and continue','السماح بأعمال الملفات والمتابعة'),'button ghost small routine-permission-shortcut');routineButton.type='button';
+      routineButton.onclick=async()=>{if(activeSession?.id!==sessionId||currentUser?.id!==owner||routineToggle.disabled)return;routineButton.disabled=true;routineToggle.checked=true;try{await routineToggle.onchange();}finally{routineButton.disabled=false;}};
+      notice.append(routineButton,textElement('small',tr('This conversation only. Revoke in Connections → Workspace.','لهذه المحادثة فقط. الإلغاء من الاتصالات ← مساحة العمل.')));inlineApprovals.append(notice);
+    }
     for(const request of rows){const key=owner+':'+sessionId+':'+request.id;
       const section=textElement('section','','chat-approval');section.append(textElement('strong',tr('Permission requested: ','طلب موافقة: ')+(toolNames[request.permission]?toolName(request.permission):(request.permission||tr('Operation','عملية')))),textElement('pre',(request.patterns||[]).join('\n')));
       if(!request.reviewable)section.append(textElement('p',tr('Full details are unavailable. Reject this request.','التفاصيل الكاملة غير متاحة. ارفض هذا الطلب.')));
       const buttons=textElement('div','','chat-approval-actions');
-      for(const [reply,en,ar,icon] of [['reject','Reject','رفض','×'],['once','Allow once','موافقة مرة واحدة','✓'],['similar','Allow matching repeats','موافقة على الكل المماثل','✓✓']]){
+      for(const [reply,en,ar,icon] of [['reject','Reject','رفض','×'],['once','Allow once','موافقة مرة واحدة','✓'],['similar','Allow this exact request again','السماح بتكرار هذا الطلب فقط','✓✓']]){
         const button=textElement('button','','button ghost small');button.type='button';button.dataset.reply=reply;
         const mark=textElement('span','','approval-symbol');mark.innerHTML={"reject":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/></svg>","once":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M20 6 9 17l-5-5\"/></svg>","similar":"<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M18 6 7 17l-5-5\"/><path d=\"m22 10-7.5 7.5L13 16\"/></svg>"}[reply];button.append(mark,textElement('span',tr(en,ar)));button.disabled=approvalBusy.has(key)||(reply!=='reject'&&!request.reviewable)||(reply==='similar'&&!request.rememberable);
         button.onclick=async()=>{if(approvalBusy.has(key)||activeSession?.id!==sessionId||currentUser?.id!==owner)return;approvalBusy.add(key);buttons.querySelectorAll('button').forEach(b=>b.disabled=true);
@@ -422,12 +432,7 @@
           catch(error){if(currentUser?.id===owner)toast(error.message);}finally{approvalBusy.delete(key);if(activeSession?.id===sessionId&&currentUser?.id===owner)await loadApprovals().catch(()=>{});}
         };buttons.append(button);
       }
-      section.append(buttons,textElement('small',tr('Matching repeats applies only to the same reviewed request in this conversation.','موافقة الكل المماثل تخص الطلب نفسه الذي راجعته في هذه المحادثة فقط.')));
-      if(routineToggle&&!routineData.enabled&&request.reviewable&&['read','list','glob','grep','write','edit'].includes(request.permission)){
-        const routineButton=textElement('button',tr('Allow routine project files for this conversation','السماح بأعمال ملفات المشروع المعتادة لهذه المحادثة'),'routine-permission-shortcut');routineButton.type='button';
-        routineButton.onclick=async()=>{if(activeSession?.id!==sessionId||currentUser?.id!==owner||routineToggle.disabled||approvalBusy.has(key))return;routineButton.disabled=true;routineToggle.checked=true;try{await routineToggle.onchange();}finally{routineButton.disabled=false;}};
-        section.append(routineButton,textElement('small',tr('Optional: routine file reads, additions and edits only. Commands, file deletion and protected paths still require approval. Revoke in Connections → Workspace.','اختياري: لقراءة وإنشاء وتعديل ملفات المشروع فقط. تشغيل الأوامر وحذف الملفات والمسارات المحمية تتطلب موافقة. يمكنك إلغاؤه من الاتصالات ← مساحة العمل.')));
-      }
+      section.append(buttons,textElement('small',tr('This repeat approval covers only the exact reviewed request in this conversation.','هذا السماح بالتكرار يخص الطلب المطابق الذي راجعته في هذه المحادثة فقط.')));
       inlineApprovals.append(section);
     }
     inlineApprovals.hidden=!rows.length;if(rows.length)q('agentFeed').append(inlineApprovals);
