@@ -6,7 +6,7 @@ const copy={
 };
 function applyPrefs(){document.documentElement.lang=lang;document.documentElement.dir=lang==='ar'?'rtl':'ltr';document.documentElement.classList.toggle('dark',dark);$$('[data-i18n]').forEach(el=>{if(copy[lang][el.dataset.i18n])el.textContent=copy[lang][el.dataset.i18n]});$$('[data-i18n-placeholder]').forEach(el=>el.placeholder=copy[lang][el.dataset.i18nPlaceholder]||'');$$('#langBtn,.lang-mirror').forEach(el=>el.textContent=lang==='ar'?'EN':'AR');localStorage.setItem('og-lang',lang);localStorage.setItem('og-theme',dark?'dark':'light')}
 let currentUser=null, activeWorkspace=null, activeSession=null, activeProject=null, eventStream=null, permissionTimer=null;
-let navigationRevision=0,workspaceSelectionRevision=0,permissionPending=null,permissionProgressPending=false,sessionSelectionRevision=0,messageRenderRevision=0;
+let navigationRevision=0,workspaceSelectionRevision=0,permissionPending=null,permissionProgressPending=false,permissionFailureNotice=null,sessionSelectionRevision=0,messageRenderRevision=0;
 const eventCursors=new Map();
 let authenticationRevision=0;
 const authenticatedRequests=new Set();
@@ -384,16 +384,22 @@ async function refreshMessages(){
 function startEvents(){if(!activeSession)return;stopEvents();const sessionId=activeSession.id,owner=currentUser?.id,key=String(owner)+':'+sessionId;let cursor=eventCursors.get(key)||0;try{cursor=Math.max(cursor,Number(sessionStorage.getItem('og-events:'+key))||0)}catch(error){}const stream=new EventSource(`/api/sessions/${sessionId}/events?after=${cursor}`);eventStream=stream;stream.addEventListener('authentication_expired',()=>{if(eventStream===stream&&currentUser?.id===owner)clearAuthenticatedState();});for(const kind of ['activity','submitted','analyzing','reading_files','editing','running_command','running_tests','waiting_approval','approval_decision','failed','completed','cancelled'])stream.addEventListener(kind,event=>{if(eventStream!==stream||activeSession?.id!==sessionId||currentUser?.id!==owner)return;const id=Number(event.lastEventId);if(id&&id<=(eventCursors.get(key)||cursor))return;if(id){cursor=id;eventCursors.set(key,id);try{sessionStorage.setItem('og-events:'+key,String(id))}catch(error){}}let data={};if(kind==='activity'){try{data=JSON.parse(event.data);}catch(error){return;}}window.renderWorkspaceEventLine?.(kind,data);window.dispatchEvent(new CustomEvent('workspace-execution-event',{detail:{sessionId,kind}}));});stream.onopen=()=>{if(eventStream===stream)window.dispatchEvent(new CustomEvent('workspace-execution-event',{detail:{sessionId,kind:'connected'}}))};stream.onerror=()=>{if(eventStream===stream&&activeSession?.id===sessionId)$('#runtimeStatus').textContent='Reconnecting to event stream'};syncPermissionPolling()}
 async function refreshPermissions(){
  if(!activeSession)return [];
- const sessionId=activeSession.id;
- if(permissionPending?.id===sessionId)return permissionPending.promise;
+ const sessionId=activeSession.id,owner=currentUser?.id;
+ if(permissionPending?.id===sessionId&&permissionPending.owner===owner)return permissionPending.promise;
  const promise=(async()=>{try{
   const requests=await api(`/api/sessions/${sessionId}/permissions`);
-  if(activeSession?.id!==sessionId)return [];
+  if(activeSession?.id!==sessionId||currentUser?.id!==owner)return [];
+  permissionFailureNotice=null;
   if(window.renderWorkspaceApprovals){await window.renderWorkspaceApprovals(requests,sessionId);await window.refreshWorkspaceQuestions?.();return requests;}
   const box=$('#approvalBox');box.replaceChildren();
   for(const request of requests){const row=textElement('div',`${t('approval')}: ${request.permission} `);row.append(textElement('pre',(request.patterns||[]).join('\n')));for(const [label,reply] of [[t('allowOnce'),'once'],[t('deny'),'reject']]){const button=textElement('button',label);button.disabled=reply==='once'&&!request.reviewable;button.onclick=async()=>{try{await api(`/api/sessions/${sessionId}/permissions/${request.id}`,{method:'POST',body:JSON.stringify({reply})});await refreshPermissions()}catch(error){toast(error.message)}};row.append(button)}box.append(row)}return requests;
- }catch(error){if(activeSession?.id===sessionId){stopEvents();toast(error.message);}throw error;}})();
- permissionPending={id:sessionId,promise};
+ }catch(error){if(activeSession?.id===sessionId&&currentUser?.id===owner){
+  // Keep live execution updates and existing approval cards. A failed lookup
+  // is not an empty permission list and must never approve or resume anything.
+  const key=owner+':'+sessionId+':'+String(error.status||'')+':'+String(error.message).replace(/\[reference [a-f0-9]{12}\]/g,'');
+  if(permissionFailureNotice!==key){permissionFailureNotice=key;toast(error.message);}
+ }throw error;}})();
+ permissionPending={id:sessionId,owner,promise};
  try{return await promise;}finally{if(permissionPending?.promise===promise)permissionPending=null;}
 }
 $('#promptForm').onsubmit=event=>event.preventDefault();
