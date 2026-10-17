@@ -6,9 +6,11 @@ client intentionally cannot enable preview unless an operator configures it.
 """
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from .preview_diagnostics import MESSAGES
 
 class PreviewWorkerUnavailable(RuntimeError):
     pass
@@ -58,15 +60,23 @@ class PreviewWorkerClient:
                 "unsupported_framework", "invalid_snapshot",
                 "worker_operation_failed", "application_not_ready",
                 "unsafe_job_directory", "stale_job_in_use",
+                "worker_internal_error", *MESSAGES,
             }
+            reference = None
             try:
-                error = json.loads(exc.read(1024)).get("error")
+                diagnostic = json.loads(exc.read(1024))
+                error = diagnostic.get("error")
+                candidate = diagnostic.get('reference')
+                if isinstance(candidate, str) and re.fullmatch(r'[0-9a-f]{12,32}', candidate):
+                    reference = candidate
             except (ValueError, OSError, AttributeError):
                 error = None
             if error not in allowed:
                 error = "HTTP " + str(exc.code)
+            message = MESSAGES.get(error, '')
             raise PreviewWorkerUnavailable(
-                f"Preview worker {operation} failed: {error}"
+                f"Preview worker {operation} failed: {error}" + (': ' + message if message else '') +
+                (' [reference ' + reference + ']' if reference else '')
             ) from exc
         except (OSError, ValueError) as exc:
             raise PreviewWorkerUnavailable(

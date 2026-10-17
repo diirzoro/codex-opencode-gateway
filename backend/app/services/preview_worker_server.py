@@ -23,6 +23,7 @@ from .preview_docker_provisioner import DockerProvisioner, PreviewProvisioningEr
 from .preview_worker_archive import extract_into_sandbox
 from .preview_container_spec import ContainerSpec
 from .preview_launch_profiles import PROFILES, LaunchProfile
+from .preview_diagnostics import MESSAGES
 
 MAX_BODY = 72 * 1024 * 1024
 JOB_NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}' + chr(36))
@@ -79,10 +80,13 @@ class WorkerHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             LOGGER.warning("Preview worker client disconnected while replying")
         except Exception as exc:
-            LOGGER.exception("Preview worker handler failed at %s (%s)",
-                             self.path.split("?", 1)[0][:64], type(exc).__name__)
+            # Do not log exception values/tracebacks: daemon errors may contain
+            # private paths, app arguments or registry credentials.
+            reference = uuid.uuid4().hex[:12]
+            LOGGER.error("Preview worker handler failed class=%s reference=%s",
+                         type(exc).__name__, reference)
             try:
-                self.reply(503, {"error": "worker_internal_error"})
+                self.reply(503, {"error": "worker_internal_error", "reference": reference})
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
 
@@ -190,6 +194,13 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     if job["state"] != "ready":
                         self.reply(409, {"error": "job_already_started"})
                         return
+                    # Source archives deliberately exclude node_modules. A
+                    # copied snapshot is not an installed/built application.
+                    entrypoint = job['spec'].argv[0]
+                    if entrypoint.startswith('./node_modules/') and not (Path(job['spec'].project_mount) / entrypoint).is_file():
+                        self.reply(503, {'error': 'dependency_preparation_required',
+                                         'message': MESSAGES['dependency_preparation_required']})
+                        return
                     job["state"] = "launching"
                     try:
                         cid = self.server.provisioner.launch_smoke(job_id, job["spec"])
@@ -205,6 +216,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     for _ in range(12):
                         try:
                             if self.server.provisioner.status(cid, job_id) != "running":
+                                job['failure_code'] = 'application_exited_early'
                                 break
                             response = self.server.provisioner.fetch(
                                 cid, job_id, job["family"], "/")
@@ -220,7 +232,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                             self.server.provisioner.stop(cid, job_id)
                         except PreviewProvisioningError:
                             pass
-                        self.reply(503, {"error": "application_not_ready"})
+                        self.reply(503, {"error": job.get('failure_code', 'application_not_ready')})
                         return
                     result = {"state": "running", "job_id": job_id, "container_id": cid, "url": None}
                 elif operation == "status":
@@ -245,8 +257,11 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     job["container_id"] = None
                     result = {"state": "stopped", "job_id": job_id}
                 self.reply(200, result)
-            except (PreviewProvisioningError, OSError, ValueError):
-                self.reply(503, {"error": "worker_operation_failed"})
+            except (PreviewProvisioningError, OSError, ValueError) as exc:
+                code = exc.code if isinstance(exc, PreviewProvisioningError) else 'worker_operation_failed'
+                reference = uuid.uuid4().hex[:12]
+                LOGGER.error('Preview worker operation=%s code=%s reference=%s', operation, code, reference)
+                self.reply(503, {"error": code, "message": MESSAGES[code], "reference": reference})
 
 
 def main():

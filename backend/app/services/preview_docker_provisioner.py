@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .preview_container_spec import ContainerSpec, argv_for
+from .preview_diagnostics import MESSAGES, docker_failure_code
+from .preview_container_spec import UnsafeContainerSpec
 
 CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
 JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -18,7 +20,10 @@ Run = Callable[..., subprocess.CompletedProcess]
 
 
 class PreviewProvisioningError(RuntimeError):
-    pass
+    def __init__(self, message, *, code='worker_operation_failed', operation=None):
+        self.code = code if code in MESSAGES else 'worker_operation_failed'
+        self.operation = operation
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -34,9 +39,15 @@ class DockerProvisioner:
                 (self.docker_binary, *args), capture_output=True, text=True,
                 check=True, timeout=timeout,
             )
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError,
-                OSError) as exc:
-            raise PreviewProvisioningError("Worker Docker operation failed") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise PreviewProvisioningError(MESSAGES['docker_operation_timed_out'],
+                code='docker_operation_timed_out', operation=args[0]) from exc
+        except subprocess.CalledProcessError as exc:
+            code = docker_failure_code(exc.stderr)
+            raise PreviewProvisioningError(MESSAGES[code], code=code, operation=args[0]) from exc
+        except OSError as exc:
+            code = 'docker_binary_missing' if isinstance(exc, FileNotFoundError) else 'docker_operation_failed'
+            raise PreviewProvisioningError(MESSAGES[code], code=code, operation=args[0]) from exc
         return completed.stdout.strip()
 
     def launch_smoke(self, job_id: str, spec: ContainerSpec) -> str:
@@ -50,9 +61,13 @@ class DockerProvisioner:
         expected = f"/var/lib/preview-worker/jobs/{job_id}/src"
         if spec.project_mount != expected:
             raise PreviewProvisioningError("Worker job does not own requested snapshot")
-        base = argv_for(spec)
+        try:
+            base = argv_for(spec)
+        except UnsafeContainerSpec as exc:
+            raise PreviewProvisioningError(MESSAGES['invalid_container_spec'],
+                code='invalid_container_spec', operation='run') from exc
         # docker run --detach returns a container id and does not publish ports.
-        args = ("run", "--detach", "--name", f"preview-{job_id}",
+        args = ("run", "--detach", "--pull", "never", "--name", f"preview-{job_id}",
                 "--label", "opencode.preview.managed=true",
                 "--label", f"opencode.preview.job={job_id}", *base[2:])
         # The run --rm contract removes stopped containers. Worker must separately
