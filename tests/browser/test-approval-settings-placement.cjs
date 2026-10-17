@@ -9,5 +9,11 @@ const c={lang:'en',approvalRenderRevision:0,approvalSignature:'',toolNames:{read
  const previousCard=c.inlineApprovals.firstChild;await c.renderApprovals([{id:'request',permission:'edit',patterns:['src/app.js'],reviewable:true,rememberable:true}],'session');assert.equal(c.inlineApprovals.firstChild,previousCard);
  await settings.querySelector('#clearRememberedApprovals').onclick();assert.ok(calls.some(([path,method])=>path==='/api/sessions/session/permissions/remembered'&&method==='DELETE'));
  const before=calls.length;c.currentUser={id:'other'};await settings.querySelector('#clearRememberedApprovals').onclick();assert.equal(calls.length,before);
- console.log('5 passed: settings/remembered controls outside chat, pending permission inline, revocation retained, stale-account revocation blocked (jsdom/controlled API)');
+ c.currentUser={id:'owner'};c.api=async(path,options={})=>{calls.push([path,options.method,options.body]);return path.endsWith('/routine')?{enabled:false}:{count:0};};
+ await c.renderApprovals([{id:'routine-request',permission:'edit',patterns:['index.html'],reviewable:true,rememberable:true}],'session');
+ const shortcut=c.inlineApprovals.querySelector('.routine-permission-shortcut');assert.ok(shortcut);const beforeEnable=calls.filter(x=>x[1]==='PUT').length;assert.equal(beforeEnable,0);
+ await shortcut.onclick();const puts=calls.filter(x=>x[1]==='PUT');assert.equal(puts.length,1);assert.equal(puts[0][0],'/api/sessions/session/permissions/routine');assert.deepEqual(JSON.parse(puts[0][2]),{enabled:true});assert.equal(calls.filter(x=>x[1]==='POST').length,0);
+ c.currentUser={id:'other'};await shortcut.onclick();assert.equal(calls.filter(x=>x[1]==='PUT').length,1);
+ c.currentUser={id:'owner'};await c.renderApprovals([{id:'command',permission:'bash',patterns:['npm install'],reviewable:true,rememberable:true}],'session');assert.equal(c.inlineApprovals.querySelector('.routine-permission-shortcut'),null);
+ console.log('9 PASSED / 0 FAILED / 0 SKIPPED: original inline/settings controls, stable cards, revocation/owner guards, explicit routine opt-in with no permission POST, no command shortcut (jsdom/controlled API)');
 })().catch(e=>{console.error(e);process.exitCode=1;});

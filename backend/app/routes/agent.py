@@ -594,12 +594,7 @@ def permission_tool_part(service, session, pending):
         for p in row.get('parts',[]) if p.get('type')=='tool' and p.get('callID')==reference['callID']),None)
     return part
 
-def routine_request(workspace, part):
-    if not part or part.get('tool') not in {'read','list','glob','grep','write','edit','todowrite','todoread'}: return False
-    if part['tool'] in {'todowrite','todoread'}: return True
-    inp=(part.get('state') or {}).get('input') or {}
-    raw=inp.get('filePath') or inp.get('path')
-    if raw is None and part['tool'] in {'list','glob','grep'}: raw=''
+def routine_project_path(workspace, raw):
     if not isinstance(raw,str): return False
     try:
         path=Path(raw);root=workspaces.root_for(workspace).resolve()
@@ -607,9 +602,41 @@ def routine_request(workspace, part):
             if not path.is_relative_to(root): return False
             raw=path.relative_to(root).as_posix()
         if any(p.startswith('.env') or p.lower().endswith(('.pem','.key')) for p in Path(raw).parts): return False
+        if any(ord(char)<32 for char in raw): return False
+        if '.github/workflows' in Path(raw).as_posix() or Path(raw).name in {'opencode.json','opencode.jsonc'} or '.opencode' in Path(raw).parts: return False
         workspaces.safe_path(workspace,raw)
     except (HTTPException,ValueError): return False
     return True
+
+def routine_file_patch(workspace, patch):
+    """Only recognize bounded native file additions/edits; never shell patches.
+
+    Unknown grammar, deletion and movement require a separate reviewed approval.
+    Every target is checked, including later hunks; patch contents are not executed.
+    """
+    if not isinstance(patch,str) or not patch or len(patch)>200_000 or '\x00' in patch: return False
+    lines=patch.strip().splitlines()
+    if len(lines)<3 or lines[0]!='*** Begin Patch' or lines[-1]!='*** End Patch': return False
+    operation=None;targets=0
+    for line in lines[1:-1]:
+        match=re.fullmatch(r'\*\*\* (Add|Update) File: (.+)',line)
+        if match:
+            if not routine_project_path(workspace,match[2]): return False
+            operation=match[1];targets+=1
+            if targets>50: return False
+        elif operation=='Add' and line.startswith('+'): continue
+        elif operation=='Update' and (line.startswith((' ','+','-','@@')) or line=='*** End of File'): continue
+        else: return False
+    return targets>0
+
+def routine_request(workspace, part):
+    if not part or part.get('tool') not in {'read','list','glob','grep','write','edit','apply_patch','todowrite','todoread'}: return False
+    if part['tool'] in {'todowrite','todoread'}: return True
+    inp=(part.get('state') or {}).get('input') or {}
+    if part['tool']=='apply_patch': return routine_file_patch(workspace,inp.get('patchText'))
+    raw=inp.get('filePath') or inp.get('path')
+    if raw is None and part['tool'] in {'list','glob','grep'}: raw=''
+    return routine_project_path(workspace,raw)
 
 def approval_fingerprint(permission, patterns, tool=None):
     return hashlib.sha256(json.dumps([permission, tool, sorted(patterns)], ensure_ascii=False).encode()).hexdigest()

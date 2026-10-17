@@ -17,7 +17,7 @@ function result(width,element,property){let winner;let order=0;
 }
 for(const width of [390,700,900,1100,1366]){
  const columns=result(width,workspace,'grid-template-columns');
- assert.equal(columns,width<=1100?'minmax(0,1fr)':'var(--dashboard-rail-width) minmax(0,1fr) var(--panel-w,400px)');
+ assert.equal(columns,width<=1100?'minmax(0,1fr)':'var(--dashboard-rail-width) minmax(0,1fr) var(--panel-w,var(--dashboard-rail-width))');
 }
 workspace.classList.add('panel-docked');doc.getElementById('sessionSidebar').classList.add('open');
 assert.equal(result(900,doc.getElementById('sessionSidebar'),'position'),'fixed');
@@ -51,3 +51,12 @@ console.log('2 passed: old shell sidebar/column removed only in Workspace and re
 const approvals=doc.createElement('div');approvals.className='chat-approvals';const card=doc.createElement('section');card.className='chat-approval';const allow=doc.createElement('button');allow.dataset.reply='once';card.append(allow);approvals.append(card);workspacePage.append(approvals);
 assert.equal(result(1366,card,'border-radius'),'12px');assert.equal(result(1366,card,'border'),'1px solid var(--line)');assert.equal(result(1366,allow,'background'),'var(--soft)');
 console.log('3 passed: actual approval card has rounded quiet frame and distinct allow-once action');
+
+// Current approved pane width follows the Dashboard rail; the old 400px fixture
+// failed against the unchanged baseline too. Keep that layout while testing edits.
+const newConversation=doc.createElement('dialog');newConversation.className='new-conversation-dialog';doc.body.append(newConversation);
+assert.equal(result(390,newConversation,'position'),'fixed');
+assert.equal(result(390,newConversation,'width'),'min(360px,calc(100vw - 24px))');
+assert.equal(result(390,doc.getElementById('promptInput'),'max-height'),'120px');
+assert.equal(result(1366,doc.getElementById('promptInput'),'min-height'),'40px');
+console.log('4 passed: compact nonmodal picker and bounded composer at mobile/desktop widths (CSS cascade, not pixels)');

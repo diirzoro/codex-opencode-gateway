@@ -1,0 +1,12 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),{JSDOM}=require('jsdom');
+const win=new JSDOM('<form><textarea id="promptInput"></textarea></form>').window,input=win.document.getElementById('promptInput');
+Object.defineProperty(input,'scrollHeight',{get:()=>input.value.length>200?900:55});
+const source=fs.readFileSync('app.js','utf8'),line=source.split('\n').find(row=>row.startsWith("const promptInput=$('#promptInput');"));
+const c={window:win,$:selector=>win.document.querySelector(selector)};vm.createContext(c);vm.runInContext(line,c);
+assert.equal(input.style.height,'40px');
+input.value='x'.repeat(1000);input.dispatchEvent(new win.Event('input'));assert.equal(input.style.height,'120px');
+input.value='';win.resizeWorkspaceComposer();assert.equal(input.style.height,'40px');
+input.value='short draft';input.dispatchEvent(new win.Event('focus'));assert.equal(input.style.height,'55px');
+input.value='';win.dispatchEvent(new win.Event('resize'));assert.equal(input.style.height,'40px');
+const css=fs.readFileSync('styles.css','utf8');assert.ok(css.includes('min-height:40px;height:44px;max-height:120px'));assert.ok(!css.includes('.reference-workspace .prompt-box textarea{height:62px}'));
+console.log('6 PASSED / 0 FAILED / 0 SKIPPED: empty, long text cap, cleared value, restored draft, resize and scoped CSS (jsdom; not pixel acceptance)');
