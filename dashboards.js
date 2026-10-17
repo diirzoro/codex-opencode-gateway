@@ -265,19 +265,33 @@
   const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Attach a file to this workspace','أرفق ملفًا في مساحة العمل');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);controls.insertBefore(newTask,agent);
   const attachmentList=textElement('div','','composer-attachments');attachmentList.id='composerAttachments';attachmentList.setAttribute('aria-live','polite');q('promptInput').before(attachmentList);
   let attachments=[];let attachmentRevision=0;let attachmentModels=[];
+  const fileSupport=document.createElement('details');fileSupport.className='composer-file-support';
+  const fileSupportTitle=textElement('summary'),fileSupportBody=textElement('div');fileSupport.append(fileSupportTitle,fileSupportBody);attachmentList.before(fileSupport);
+  function renderFileSupport(){
+    const model=attachmentModels.find(row=>row.id===q('modelSelect').value),inputs=model?.capabilities?.input||{};
+    fileSupportTitle.textContent=tr('Supported attachments','المرفقات المدعومة');
+    fileSupportBody.replaceChildren(textElement('p',tr('Text/code (UTF-8 or UTF-16 BOM), CSV, Markdown, JSON and DOCX main text. Text limit: 16,000 characters per file / 20,000 combined.','النصوص والأكواد (UTF-8 أو UTF-16 مع BOM)، وCSV وMarkdown وJSON ونص DOCX. الحد النصي: ١٦ ألف حرف للملف / ٢٠ ألفًا للمرفقات مجتمعة.')));
+    for(const [kind,en,ar] of [['image','Images (PNG/JPEG/WebP/GIF)','الصور (PNG/JPEG/WebP/GIF)'],['pdf','PDF','PDF']]){
+      const state=inputs[kind],status=state===true?tr('Supported by selected model','يدعمها النموذج المختار'):state===false?tr('The selected agent/model is not equipped to read this type. Choose a compatible model.','الوكيل/النموذج المختار غير مهيأ لقراءة هذا النوع. اختر نموذجًا متوافقًا.'):tr('Capability not reported; support is unverified.','القدرة غير مُعلنة؛ الدعم غير مؤكد.');
+      fileSupportBody.append(textElement('p',tr(en,ar)+': '+status));
+    }
+    fileSupportBody.append(textElement('small',tr('Other formats need an available reader tool. DOCX extraction does not read embedded images or macros.','الصيغ الأخرى تحتاج أداة قراءة متاحة. استخراج DOCX لا يقرأ الصور المضمّنة أو الماكرو.')));
+    attach.title=tr('Attach a file. Expand Supported attachments to check the selected model.','أرفق ملفًا. افتح المرفقات المدعومة لمعرفة قدرات النموذج المختار.');
+  }
   function attachmentSupport(item){
     const type=item.type||item.mime||'',name=item.name.toLowerCase();
     const category=type.startsWith('image/')||/\.(png|jpe?g|webp|gif)$/.test(name)?'image':type==='application/pdf'||name.endsWith('.pdf')?'pdf':null;
     const model=attachmentModels.find(row=>row.id===q('modelSelect').value);
     const supported=category?(model?.capabilities?.input||{})[category]:undefined;
-    if(supported===false)return {blocked:true,message:tr('The selected model cannot receive this '+category+' attachment. Select a compatible model.','النموذج المحدد لا يدعم هذا المرفق ('+category+'). اختر نموذجًا متوافقًا.')};
+    if(supported===false)return {blocked:true,message:category==='image'?tr('The selected agent/model is not equipped to read images. Select a vision-capable model.','الوكيل/النموذج المختار غير مهيأ لقراءة الصور. اختر نموذجًا يدعم الصور.'):tr('The selected agent/model cannot read PDF. Select a compatible model.','الوكيل/النموذج المختار لا يدعم قراءة PDF. اختر نموذجًا متوافقًا.')};
     if(supported===true)return {blocked:false,message:''};
-    if(category||/\.(docx?|xlsx?|pptx?|odt|ods|odp)$/.test(name))return {blocked:false,message:tr('Support is not confirmed for the selected agent/model; reading may require an available tool or skill.','دعم الملف غير مؤكد للوكيل/النموذج المحدد؛ قد تتطلب قراءته أداة أو مهارة متاحة.')};
+    if(name.endsWith('.docx'))return {blocked:false,message:tr('DOCX main text is extracted for the agent; embedded images are not read.','يُستخرج نص DOCX للوكيل؛ لا تُقرأ الصور المضمّنة.')};
+    if(category||/\.(doc|xlsx?|pptx?|odt|ods|odp)$/.test(name))return {blocked:false,message:tr('Support is not confirmed for the selected agent/model; reading may require an available tool or skill.','دعم الملف غير مؤكد للوكيل/النموذج المحدد؛ قد تتطلب قراءته أداة أو مهارة متاحة.')};
     return {blocked:false,message:''};
   }
   const clearAttachments=()=>{attachmentRevision++;for(const item of attachments)if(item.preview)URL.revokeObjectURL(item.preview);attachments=[];attachmentList.replaceChildren();};
   const renderAttachments=()=>{
-    attachmentList.replaceChildren();for(const item of attachments){const card=textElement('div','','composer-attachment');
+    renderFileSupport();attachmentList.replaceChildren();for(const item of attachments){const card=textElement('div','','composer-attachment');
       if(item.preview){const image=document.createElement('img');image.src=item.preview;image.alt='';card.append(image);}
       const label=textElement('span',item.name);label.dir='auto';label.append(textElement('small',item.error|| (item.path?item.type+' · '+Math.ceil(item.size/1024)+' KB':tr('Uploading…','جارٍ الرفع…'))));
       const support=attachmentSupport(item);if(support.message)label.append(textElement('small',support.message));

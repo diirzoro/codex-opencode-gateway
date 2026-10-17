@@ -263,14 +263,8 @@ async def execute(session_id,service,runtime_id,data,message_id):
         workspace=await asyncio.to_thread(begin_execution,session_id,message_id,data.request_id,service.generation)
         if workspace is None:return
         payload={"messageID":message_id,"system":EXECUTION_REPORTING,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
-        for item in attachment_metadata(workspace, data.attachments):
-            path=workspaces.safe_path(workspace,item['path'])
-            # Native file parts for formats OpenCode consumes directly. Other
-            # files remain explicit workspace paths for its file/tool context.
-            if item['mime'] in {'text/plain','application/pdf','image/png','image/jpeg','image/webp','image/gif'}:
-                payload['parts'].append({'type':'file','url':path.as_uri(),'filename':item['name'],'mime':item['mime']})
-            else:
-                payload['parts'].append({'type':'text','text':'Attached workspace file: '+json.dumps(item['path'])+'\nUse the selected agent’s available tools or skills to read this file. Verify that its contents can be extracted before answering about them. If no available tool can read this format, immediately explain that limitation and request a supported format. Do not infer contents from the filename or claim to have read an unreadable file.'})
+        from ..services import attachment_reader
+        payload['parts'].extend(attachment_reader.parts(workspace,attachment_metadata(workspace,data.attachments)))
         if data.agent_id: payload["agent"]=data.agent_id
         request_task=asyncio.create_task(asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),payload,600))
         observer=asyncio.create_task(monitor_activity(session_id,service,runtime_id,message_id,workspace,data.request_id,request_task))
@@ -326,6 +320,8 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
     if providers.is_locally_disconnected(db,workspace,data.provider_id):
         raise HTTPException(409,"Provider is disconnected in this workspace; explicitly reconnect it before sending")
     attached=attachment_metadata(workspace,data.attachments)
+    from ..services import attachment_reader
+    attachment_reader.parts(workspace,attached)  # Validate/extract before durable admission.
     receipt={"status":"submitted","session_id":str(session.id),"request_id":str(data.request_id)}
     message_id=session_lifecycle.new_message_id()
     session.status="submitted"
@@ -352,11 +348,7 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         if data.model_id not in provider.get("models",{}): raise HTTPException(422,"Model is unavailable")
         # Availability remains OpenCode-owned; entitlement classifies actual use.
         model=provider['models'][data.model_id]
-        inputs=(model.get('capabilities') or {}).get('input') or {}
-        for item in attached:
-            category='image' if item['mime'].startswith('image/') else 'pdf' if item['mime']=='application/pdf' else None
-            if category and inputs.get(category) is False:
-                raise HTTPException(422, 'The selected OpenCode model does not support this attachment type; select a compatible model')
+        attachment_reader.ensure_model_inputs(model,attached)
         costs=model.get('cost') or {}
         free_model=costs.get('input')==0 and costs.get('output')==0
         own_key=db.scalar(select(ProviderCredential.id).where(ProviderCredential.workspace_id==workspace.id,
@@ -443,7 +435,8 @@ def enqueue_message(session_id: uuid.UUID,data: MessageRequest,user: User=Depend
         raise HTTPException(403,'Provider or model is disabled by platform policy')
     if session_lifecycle.receipt(db,session_id,data.request_id):raise HTTPException(409,'Request ID already belongs to a submitted message')
     # Queueing never sends a model request, changes Todo or grants permission.
-    attachment_metadata(workspace,data.attachments)
+    from ..services import attachment_reader
+    attachment_reader.parts(workspace,attachment_metadata(workspace,data.attachments))
     row=message_queue.add(db,session.id,data)
     return {'status':row['state'],'request_id':row['request_id']}
 
