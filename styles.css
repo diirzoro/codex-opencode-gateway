@@ -947,3 +947,14 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 :root #workspacePage .reference-workspace #sessionSidebar .conversation-row:has(.conversation-menu[open]){flex-wrap:nowrap}
 :root #workspacePage .reference-workspace #sessionSidebar .conversation-menu[open]{flex-basis:auto}
 :root #workspacePage .reference-workspace #sessionSidebar .conversation-menu[open]>.session-actions{position:fixed;inset:auto;z-index:1000;width:190px;max-width:calc(100vw - 16px);padding:6px;box-shadow:var(--shadow);background:var(--panel);border:1px solid var(--line);border-radius:12px}
+
+/* Long customer prompts: compact disclosure; agent responses stay unchanged. */
+:root #workspacePage #agentFeed .user-message-fold{width:min(100%,680px);margin-inline-start:auto;box-sizing:border-box;padding:12px 16px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text);text-align:start;box-shadow:none;min-width:0}
+:root #workspacePage #agentFeed .user-message-fold>summary{list-style:none;cursor:pointer;font:inherit;white-space:normal;overflow-wrap:anywhere}
+:root #workspacePage #agentFeed .user-message-fold>summary::-webkit-details-marker{display:none}
+:root #workspacePage #agentFeed .user-message-preview{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden;white-space:pre-wrap;line-height:1.65;font-size:inherit}
+:root #workspacePage #agentFeed .user-message-fold .user-message-more,:root #workspacePage #agentFeed .user-message-fold .user-message-less{display:block;color:var(--muted);font-size:13px;line-height:1.5;margin-top:6px}
+:root #workspacePage #agentFeed .user-message-fold .user-message-less{display:none;margin-top:0;margin-bottom:8px}
+:root #workspacePage #agentFeed .user-message-fold[open] .user-message-preview,:root #workspacePage #agentFeed .user-message-fold[open] .user-message-more{display:none}
+:root #workspacePage #agentFeed .user-message-fold[open] .user-message-less{display:block}
+:root #workspacePage #agentFeed .user-message-fold>summary:focus-visible{outline:2px solid var(--primary);outline-offset:4px;border-radius:4px}

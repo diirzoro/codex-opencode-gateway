@@ -315,6 +315,15 @@ function workspaceMessagePresentation(row,latest,status){
  const state=status==='waiting_approval'?'waiting_approval':status==='failed'||row.state==='failed'?'failed':status==='cancelled'?'cancelled':status==='submitted'?'working':row.state==='working'&&latest?'working':'completed';
  return {hasText,activity,state,omit:!latest&&state==='completed'&&!activity.length,feedback:latest||state!=='completed'};
 }
+function foldLongUserMessage(node,content,text,expanded=false){
+ if(text.length<=600&&text.split('\n').length<=7)return;
+ const fold=document.createElement('details');fold.className='user-message-fold';fold.open=expanded;
+ const summary=document.createElement('summary');
+ const preview=textElement('span',Array.from(text).slice(0,360).join('').trimEnd()+'…','user-message-preview');
+ const more=textElement('span',lang==='ar'?'عرض المزيد':'Show more','user-message-more');
+ const less=textElement('span',lang==='ar'?'عرض أقل':'Show less','user-message-less');
+ summary.append(preview,more,less);node.replaceChild(fold,content);fold.append(summary,content);
+}
 async function refreshMessages(){
  if(!activeSession)return;
  const sessionId=activeSession.id,owner=currentUser?.id,revision=++messageRenderRevision;
@@ -324,7 +333,7 @@ async function refreshMessages(){
   const feed=$('#agentFeed');
   const snapshot=JSON.stringify([owner,sessionId,lang,activeSession.execution_status,rows]);
   if(feed.messageSnapshot===snapshot){window.renderActivitySummary?.(rows);return;}
-  workspaceLatestControl(feed);const followingLatest=feed.workspaceFollow.following;const previousOffset=feed.scrollTop;feed.replaceChildren();const seen=new Set();let previousPrompt='',previousAttachments=[];
+  workspaceLatestControl(feed);const followingLatest=feed.workspaceFollow.following;const previousOffset=feed.scrollTop;const expandedUserMessages=new Set([...feed.querySelectorAll('.user-message-fold[open]')].map(el=>el.closest('[data-message-id]')?.dataset.messageId).filter(Boolean));feed.replaceChildren();const seen=new Set();let previousPrompt='',previousAttachments=[];
   const latestAssistant=rows.filter(row=>row.role==='assistant').at(-1);
   for(const row of rows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
@@ -338,6 +347,7 @@ async function refreshMessages(){
    if(row.id)node.dataset.messageId=row.id;
    const hasText=presentation.hasText;
    const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text);node.append(content);
+   if(row.role==='user')foldLongUserMessage(node,content,row.text||'',expandedUserMessages.has(String(row.id)));
    if(row.role==='assistant'&&!hasText&&presentation.feedback){const state=presentation.state;
     const labels={waiting_approval:['Waiting for your approval…','بانتظار موافقتك…'],failed:['The agent could not finish this request. Review the activity below before retrying.','تعذر على الوكيل إكمال الطلب. راجع النشاط أدناه قبل إعادة المحاولة.'],cancelled:['Execution stopped.','تم إيقاف التنفيذ.'],working:['The agent is working…','الوكيل يعمل الآن…'],completed:['Tool step completed.','اكتملت خطوة الأدوات.']};
     if(latest&&state==='completed')labels.completed=['The agent finished without a text reply. Review the tool results below.','انتهى الوكيل دون رد نصي. راجع نتائج الأدوات أدناه.'];
