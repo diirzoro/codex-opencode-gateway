@@ -55,6 +55,22 @@ class Runtime:
     owner_lock: object = None
 
 
+def request_operation(method, path):
+    """Finite diagnostic label, never an upstream URL, ID or query string."""
+    verb=method.upper() if isinstance(method,str) else "OTHER"
+    if verb not in {"GET","POST","PUT","PATCH","DELETE"}:verb="OTHER"
+    parts=path.split("?",1)[0].strip("/").split("/") if isinstance(path,str) else []
+    fixed={"global/health":"health","provider":"providers","provider/auth":"provider_methods",
+           "agent":"agents","config":"config","session":"sessions","session/status":"session_status",
+           "permission":"permissions","question":"questions"}
+    label=fixed.get("/".join(parts))
+    if label is None and len(parts)>=2 and parts[0]=="session":
+        if len(parts)==2:label="session"
+        elif len(parts)==3 and parts[2] in {"message","todo","diff","abort","prompt_async"}:label="session_"+parts[2]
+    if label is None and len(parts)==2 and parts[0]=="auth":label="provider_auth"
+    return verb.lower()+"_"+(label or "other")
+
+
 class OpenCodeService:
     def __init__(self, url, password=None, directory=None):
         self.params = {"directory": str(directory)} if directory else {}
@@ -128,6 +144,12 @@ class OpenCodeService:
                     error.detail += " (" + category + ")"
             except ValueError:
                 pass
+            reference=uuid.uuid4().hex[:12]
+            error.runtime_reference=reference
+            error.detail += " [reference " + reference + "]"
+            logger.warning("OpenCode upstream error operation=%s status=%d category=%s reference=%s",
+                           request_operation(method,path),exc.response.status_code,
+                           getattr(error,"runtime_category","unclassified"),reference)
             if binding and (exc.response.status_code in {401,403} or getattr(error,"runtime_category",None) in
                             {"ProviderAuthError","ProviderAuthOauthCallbackFailed","ProviderAuthValidationFailed"}):
                 self.auth_failures[provider_id] = binding[1]
