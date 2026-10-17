@@ -109,6 +109,46 @@ except HTTPError as exc:
     if exc.code != 404 or payload.get("error") != "unregistered_job":
         raise SystemExit("Preview Worker auth/protocol failed: HTTP " + str(exc.code))
 print("Preview Worker authenticated loopback protocol: OK")
+
+# A real, tiny PAX source archive exercises the exact prepare handler;
+# a status-only health check cannot detect errors in archive extraction.
+import base64
+import io
+import tarfile
+import uuid
+job_id = "preview-probe-" + uuid.uuid4().hex[:12]
+source = b"console.log('preview-probe');\n"
+archive = io.BytesIO()
+with tarfile.open(fileobj=archive, mode="w", format=tarfile.PAX_FORMAT) as tar:
+    member = tarfile.TarInfo("server.js")
+    member.size = len(source)
+    tar.addfile(member, io.BytesIO(source))
+prepare = {
+    "job_id": job_id,
+    "framework": "node",
+    "entrypoint": "server.js",
+    "archive": base64.b64encode(archive.getvalue()).decode("ascii")
+}
+def worker_call(op, data):
+    payload = json.dumps(data, separators=(",", ":")).encode()
+    request = Request(
+        "http://127.0.0.1:8791/v1/" + op,
+        data=payload,
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+        method="POST"
+    )
+    with urlopen(request, timeout=12) as response:
+        return json.load(response)
+try:
+    response = worker_call("prepare", prepare)
+    if response.get("state") != "ready":
+        raise SystemExit("Preview Worker prepare smoke check did not return ready")
+finally:
+    try:
+        worker_call("stop", {"job_id": job_id})
+    except (OSError, ValueError):
+        pass
+print("Preview Worker real prepare smoke check: OK")
 PY
 echo "TEST worker code and pinned Node/Python/PHP images are configured."
 echo "Note: application dependency installation and browser routing still require integration."
