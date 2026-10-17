@@ -14,3 +14,11 @@ c.activeSession={execution_status:'completed'};c.window.renderWorkspaceEventLine
 const stale=new Element('article');c.window.renderMessageActivity(stale,[{tool:'bash',status:'running',command:'npm run build'}]);const ended=stale.children[0].children[1].children[0].children[0];assert.equal(ended.open,false);assert.match(ended.children[0].textContent,/Execution ended/);
 const todoOnly=new Element('article');c.window.renderMessageActivity(todoOnly,[{tool:'todowrite',status:'completed'}]);assert.equal(todoOnly.children.length,0);c.window.renderWorkspaceEventLine('activity',{tool:'todowrite',status:'running'});assert.equal(c.activity.dataset.state,'completed');
 console.log('3 passed: terminal status wins over late activity, stale native tool closes without claiming success, Todo is not duplicated');
+const missing=new Element('article');c.window.renderMessageActivity(missing,[{tool:'read',status:'error',error_kind:'file_not_found'}]);
+const missingResult=missing.children[0].children[1].children[0].children[0].children[1];
+assert.match(missingResult.children[0].textContent,/not found.*Check the project/);
+const unknown=new Element('article');c.window.renderMessageActivity(unknown,[{tool:'bash',status:'error',error_kind:'unrecognized'}]);
+assert.match(unknown.children[0].children[1].children[0].children[0].children[1].children[0].textContent,/cause is not yet known/);
+console.log('2 passed: known failure explanation/next step and honest unknown-cause fallback');
+
+c.activeSession={execution_status:'failed'};c.window.renderActivitySummary([{role:'user'},{role:'assistant',activity:[{tool:'bash',status:'error',error_kind:'timeout'}]}]);assert.match(c.activitySummary.textContent,/Reported tool failures: Run command.*error details/);console.log('1 passed: final activity summary includes reported failure and details pointer');

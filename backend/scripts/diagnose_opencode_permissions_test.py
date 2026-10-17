@@ -3,6 +3,7 @@
 import argparse
 import base64
 import json
+import re
 from pathlib import Path
 import subprocess
 import urllib.error
@@ -11,7 +12,7 @@ import urllib.request
 import uuid
 
 FIELDS={'success','error','errors','issues','name','code','message','data','detail','type'}
-CATEGORIES={'ValidationError','ZodError','UnknownError','NotFoundError','ProviderAuthError'}
+CATEGORIES={'ValidationError','ZodError','UnknownError','NotFoundError','ProviderAuthError','Error','BadRequestError','HTTPError','InvalidRequestError','PermissionDeniedError','SessionNotFoundError','PermissionNotFoundError','InstanceDisposedError'}
 CODES={'invalid_type','invalid_value','invalid_union','invalid_string','too_small','too_big',
        'unrecognized_keys','custom','invalid_format','invalid_literal'}
 PATHS={'query','param','params','body','directory','sessionID','permissionID','permission',
@@ -28,7 +29,19 @@ def summarize(payload):
     if isinstance(error,dict):
         name=error.get('name')
         if isinstance(name,str) and name in CATEGORIES:output['category']=name
-    candidates=[payload,error] if isinstance(error,dict) else [payload]
+    data=payload.get('data')
+    if isinstance(data,dict):output['data_fields']=sorted(key if key in FIELDS else '[other]' for key in data)[:12]
+    candidates=[payload]+([error] if isinstance(error,dict) else [])+([data] if isinstance(data,dict) else [])
+    # Zod errors can encode the issue list as JSON inside data.message. Parse
+    # locally and expose ONLY the same finite code/path allowlists.
+    if isinstance(data,dict) and isinstance(data.get('message'),str):
+        message=data['message'][:32768].lower()
+        hints={'permission','session','directory','context','instance','disposed','validation',
+               'invalid','expected','undefined','missing','pattern','regex','json','body','header','url','size','limit','busy'}
+        output['message_hints']=sorted(word for word in hints if re.search(r'\b'+word+r'\b',message))
+        try:decoded=json.loads(data['message'])
+        except ValueError:decoded=None
+        if isinstance(decoded,list):candidates.append({'issues':decoded})
     output['issues']=[]
     for item in candidates:
         issues=item.get('issues',item.get('errors',[]))

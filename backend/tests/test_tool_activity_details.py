@@ -96,3 +96,24 @@ def test_reporting_does_not_auto_replay_failed_dispatch(monkeypatch):
     data=SimpleNamespace(request_id='request',text='Fix it',provider_id='owned',model_id='model',agent_id=None,attachments=[])
     asyncio.run(agent.execute('session',service,'runtime',data,'message'))
     assert len(calls)==1 and results==['failed']
+
+
+def test_failed_tool_reports_only_safe_classification(monkeypatch,tmp_path):
+    monkeypatch.setattr(agent.workspaces,'root_for',lambda workspace:tmp_path)
+    signatures={'ENOENT: secret/path file not found':'file_not_found',
+                'EACCES permission denied secret':'permission_denied',
+                'command not found: secret':'command_not_found',
+                'user rejected secret':'approval_rejected',
+                'deadline exceeded secret':'timeout',
+                'unsupported file type secret':'unsupported_format',
+                'private-token server output':'tool_failed'}
+    for raw,kind in signatures.items():
+        row=agent.safe_tool_activity([part(status='error',error=raw)],object())[0]
+        assert row['error_kind']==kind
+        assert 'secret' not in str(row) and 'private-token' not in str(row)
+
+
+def test_success_does_not_invent_an_error_and_missing_error_is_explicit(monkeypatch,tmp_path):
+    monkeypatch.setattr(agent.workspaces,'root_for',lambda workspace:tmp_path)
+    assert 'error_kind' not in agent.safe_tool_activity([part()],object())[0]
+    assert agent.safe_tool_activity([part(status='error',error={'message':'private'})],object())[0]['error_kind']=='tool_failed'

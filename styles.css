@@ -958,3 +958,10 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 :root #workspacePage #agentFeed .user-message-fold[open] .user-message-preview,:root #workspacePage #agentFeed .user-message-fold[open] .user-message-more{display:none}
 :root #workspacePage #agentFeed .user-message-fold[open] .user-message-less{display:block}
 :root #workspacePage #agentFeed .user-message-fold>summary:focus-visible{outline:2px solid var(--primary);outline-offset:4px;border-radius:4px}
+
+/* Durable follow-up queue; separate from OpenCode's real Todo list. */
+#workspacePage .composer-message-queue{margin:0 0 6px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;font-size:12px;max-height:180px;overflow:auto}
+#workspacePage .composer-message-queue>summary{cursor:pointer}
+#workspacePage .composer-message-queue small{color:var(--muted)}
+#workspacePage .queued-message{padding:6px 0;border-bottom:1px solid var(--line)}
+#workspacePage .queued-message p{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0;max-height:80px;overflow:auto}

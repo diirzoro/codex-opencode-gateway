@@ -241,6 +241,10 @@
       const heading=textElement('summary',workLabel(row));step.append(heading);
       if(row.command){const pre=textElement('pre','','tool-execution-code'),command=textElement('code',row.command+(row.command_limited?tr(' (arguments hidden)',' (المعاملات مخفية)'):''),'activity-command');pre.dir='ltr';pre.append(command);step.append(pre);}
       const result=textElement('div','','tool-execution-result');
+      if(row.status==='error'){
+        const explanations={file_not_found:['The requested file/path was not found. Check the project and filename before retrying.','الملف أو المسار المطلوب غير موجود. تحقق من المشروع واسم الملف قبل إعادة المحاولة.'],permission_denied:['Access was denied. Review the requested path and permissions; do not bypass protection.','رُفض الوصول. راجع المسار والصلاحيات دون تجاوز الحماية.'],approval_rejected:['The requested operation was rejected. It was not authorized to continue.','رُفضت الموافقة على العملية؛ لم يُسمح لها بالمتابعة.'],command_not_found:['The required executable was not found in this runtime.','برنامج تشغيل الأمر المطلوب غير موجود في هذه البيئة.'],timeout:['The tool exceeded its time limit. Inspect its result before retrying.','تجاوزت الأداة المهلة. تحقق من نتيجتها قبل إعادة المحاولة.'],unsupported_format:['The tool cannot read this file format. Use a supported format or an authorized reader.','الأداة لا تدعم صيغة هذا الملف. استخدم صيغة مدعومة أو أداة قراءة مناسبة.'],tool_failed:['The tool reported a failure without a recognized safe explanation. Review its exit code and runtime diagnostics; the cause is not yet known.','أبلغت الأداة عن فشل دون سبب آمن مُصنّف. راجع رمز الخروج وتشخيص البيئة؛ السبب لم يُحدّد بعد.']};
+        result.append(textElement('p',tr(...(explanations[row.error_kind]||explanations.tool_failed)),'tool-error-explanation'));
+      }
       if(Number.isInteger(row.exit_code))result.append(textElement('small',tr('Exit code: ','رمز الخروج: ')+row.exit_code));
       if(Number.isFinite(row.duration_ms)&&row.duration_ms>=0)result.append(textElement('small',(row.duration_ms/1000).toFixed(1)+tr(' s',' ث')));
       for(const file of row.files||[])result.append(textElement('div',file.path+' · '+(row.status==='completed'?activityLabel(operations,file.operation):tr('Requested','مطلوب'))));step.append(result);item.append(step);list.append(item);
@@ -248,12 +252,12 @@
   };
   window.renderActivitySummary=rows=>{
     if(typeof activeSession!=='undefined'&&['completed','failed','cancelled'].includes(activeSession?.execution_status))window.renderWorkspaceEventLine(activeSession.execution_status);
-    const files=new Set(),inspected=new Set();
+    const files=new Set(),inspected=new Set(),failures=new Set();
     const currentRows=rows.slice(rows.findLastIndex(row=>row.role==='user')+1);
-    for(const row of currentRows)for(const entry of row.activity||[]){if(entry.status==='completed')for(const file of entry.files||[])(file.operation==='inspected'?inspected:files).add(file.path);}
+    for(const row of currentRows)for(const entry of row.activity||[]){if(entry.status==='error')failures.add(toolName(entry.tool));if(entry.status==='completed')for(const file of entry.files||[])(file.operation==='inspected'?inspected:files).add(file.path);}
     const changed=files.size?tr('Reported file changes: ','تغييرات الملفات المُعلنة: ')+[...files].slice(0,20).join(', '):'';
     const read=inspected.size?tr('Files inspected: ','الملفات التي فُحصت: ')+[...inspected].slice(0,20).join(', '):'';
-    keepChatActivity();const summary=[changed,read].filter(Boolean).join(' · ');if(activitySummary.textContent!==summary)activitySummary.textContent=summary;window.refreshWorkspaceTodos?.();
+    keepChatActivity();const failed=failures.size?tr('Reported tool failures: ','أخطاء الأدوات المُعلنة: ')+[...failures].join(', ')+tr(' — see the error details above.',' — راجع تفاصيل الخطأ أعلاه.'):'';const summary=[changed,read,failed].filter(Boolean).join(' · ');if(activitySummary.textContent!==summary)activitySummary.textContent=summary;window.refreshWorkspaceTodos?.();
   };
   const agent=q('agentSelect');agent.title=tr('Agent','الوكيل');controls.insertBefore(agent,q('providerSelect'));
   const newTask=textElement('button','','icon-btn');newTask.id='composerNewTask';newTask.type='button';newTask.title=tr('New task','مهمة جديدة');newTask.setAttribute('aria-label',tr('New task','مهمة جديدة'));newTask.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>';newTask.onclick=async()=>{if(!activeWorkspace){toast(tr('Open a workspace first.','افتح مساحة عمل أولاً.'));return;}try{await createSession();toast(tr('New task started in this workspace.','بدأت مهمة جديدة في مساحة العمل.'));}catch(error){toast(error.message)}};
@@ -310,7 +314,7 @@
   const newSessionButton=pane.querySelector('.new-session');
   const search=document.createElement('input');search.type='search';search.id='workspaceSessionSearch';search.placeholder=tr('Search sessions','ابحث في الجلسات');search.setAttribute('aria-label','Search sessions');
   search.oninput=()=>renderRuntimeSessions(sessionRows);
-  const sessionTabs=textElement('div','','session-filters');let sessionFilter='all',sessionRows=[],sessionListPending=null,sessionCreating=null,sending=false,pendingSubmission=null,cancelRequested=false,statusPending=null;
+  const sessionTabs=textElement('div','','session-filters');let sessionFilter='all',sessionRows=[],sessionListPending=null,sessionCreating=null,sending=false,queuing=false,queueCount=0,queueSignature='',queueRevision=0,pendingSubmission=null,cancelRequested=false,statusPending=null;
   for(const [value,en,ar] of [['all','All','الكل'],['active','Active','نشطة'],['closed','Previous / Closed','سابقة / مغلقة'],['archived','Archived','مؤرشفة']]){const tab=btn('sessions-'+value,en,ar,()=>{sessionFilter=value;for(const b of sessionTabs.children)b.setAttribute('aria-pressed',String(b===tab));renderRuntimeSessions(sessionRows);});tab.setAttribute('aria-pressed',String(value===sessionFilter));sessionTabs.append(tab);}
   const closeSessionButton=btn('closeActiveSession','Close / Disconnect','إغلاق / فصل',()=>sessionAction(activeSession,'close'));
   const submissionStatus=textElement('p','','muted-small');submissionStatus.setAttribute('role','status');q('promptForm').before(submissionStatus);
@@ -744,7 +748,9 @@
     const busy=['submitted','waiting_approval'].includes(activeSession?.execution_status);
     renderAttachments();
     attach.disabled=!workAccess||sending||Boolean(pendingSubmission)||busy;attachmentList.querySelectorAll('button').forEach(button=>button.disabled=sending||Boolean(pendingSubmission));
-    q('sendMessage').disabled=sending||Boolean(pendingSubmission)||busy||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
+    q('sendMessage').disabled=sending||queuing||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
+    q('sendMessage').title=busy||queueCount?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
+    q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
     newSessionButton.disabled=newTask.disabled=!workAccess||busy||sending||Boolean(sessionCreating)||Boolean(pendingSubmission);
     closeSessionButton.disabled=!activeSession||sending||Boolean(pendingSubmission);
     q('stopAgent').disabled=(!busy&&!sending&&!pendingSubmission)||Boolean(cancelRequested);
@@ -925,7 +931,7 @@
     if(admin()){await page('adminPage');return;}
     if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));
     if(!await usableWorkspace(workspace)){toast(tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.'));if(navigate)await page('workspaceHomePage');return;}
-    if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}detailLoads.delete(workspace.id);stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);sessionRows=[];retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
+    if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}detailLoads.delete(workspace.id);stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;window.resetWorkspaceQueue?.();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);sessionRows=[];retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
     discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewStatus.textContent=tr('Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
     renderWorkspaceEmpty();q('promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode'),''));updateSend();
@@ -942,13 +948,13 @@
       if(!pendingSubmission&&!['submitted','waiting_approval'].includes(row.execution_status)){
         try{sessionStorage.removeItem('og-submit:'+owner+':'+sessionId);}catch(error){}
       }
-      sessionRows=sessionRows.map(s=>s.id===row.id?{...s,...row}:s);renderRuntimeSessions(sessionRows);updateSend();return row;
+      sessionRows=sessionRows.map(s=>s.id===row.id?{...s,...row}:s);renderRuntimeSessions(sessionRows);updateSend();await refreshMessageQueue();return row;
     })();statusPending={sessionId,promise};try{return await promise;}finally{if(statusPending?.promise===promise)statusPending=null;}
   }
   window.refreshWorkspaceSessionStatus=refreshSessionStatus;
   let eventRefreshTimer=null;
   window.addEventListener('authentication-cleared',()=>{
-    if(drawer())closePane();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
+    if(drawer())closePane();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);window.refreshWorkspaceQueue?.();clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
     pendingSubmission=null;sending=cancelRequested=false;sessionRows=[];providers=[];chosenAgent=chosenProvider=chosenModel='';
     runtimeReady=agentsReady=modelsReady=workAccess=false;entitlement=null;workspaceDays.hidden=workspaceAccess.hidden=true;workspaceDays.textContent='';workspaceAccess.replaceChildren();homeAccess.replaceChildren();retrySubmission.hidden=retryModels.hidden=true;
     storageData=null;submissionStatus.textContent=storageChip.textContent=activityStage.textContent=activitySummary.textContent='';
@@ -964,11 +970,11 @@
     // Resolve access for this selection without delaying the page shell.
     if(!workAccess)await refreshEntitlement();
     if(!workAccess){toast(tr('Subscribe to resume this conversation.','اشترك لاستئناف هذه المحادثة.'));return;}
-    activityStage.textContent=activitySummary.textContent='';await originalSession(session);if(activeSession?.id!==session.id)return;if(drawer())closePane();
+    window.resetWorkspaceQueue?.();activityStage.textContent=activitySummary.textContent='';await originalSession(session);if(activeSession?.id!==session.id)return;if(drawer())closePane();
     sessionRows=sessionRows.map(row=>row.id===session.id?{...row,...activeSession}:row);
     let saved=null;try{saved=JSON.parse(sessionStorage.getItem('og-submit:'+currentUser.id+':'+session.id)||'null');}catch(error){}
     if(saved?.request_id){pendingSubmission={...saved,owner:currentUser.id,workspaceId:activeWorkspace.id,sessionId:session.id,recovered:true};retrySubmission.hidden=false;submissionStatus.textContent=tr('Checking the previous submission; it will not be resent automatically.','جارٍ التحقق من الطلب السابق؛ لن يُعاد إرساله تلقائيًا.');await submitPending();}
-    renderRuntimeSessions(sessionRows);updateSend();if(panelMode==='changes'&&!shell.classList.contains('sessions-collapsed'))loadChanges();loadApprovals().catch(()=>{});
+    renderRuntimeSessions(sessionRows);updateSend();window.refreshWorkspaceQueue?.();if(panelMode==='changes'&&!shell.classList.contains('sessions-collapsed'))loadChanges();loadApprovals().catch(()=>{});
   };
   async function createSession({checked=false,title:conversationTitle=''}={}){
     if(sessionCreating)return sessionCreating;
@@ -1040,6 +1046,58 @@
   for(const [kind,en,ar,icon] of [['local','Local project','مشروع محلي','icon-folder'],['github','GitHub','GitHub','icon-github']]){const button=btn('composer-project-'+kind,en,ar,()=>{projectMenu.open=false;return chooseNewConversation(kind,projectMenuToggle).catch(error=>toast(error.message));});button.prepend(textElement('span'));button.firstChild.innerHTML='<svg class="ui-icon" aria-hidden="true"><use href="#'+icon+'"/></svg>';projectMenuItems.append(button);}
   utilities.append(projectMenu);document.addEventListener('click',event=>{if(projectMenu.open&&!projectMenu.contains(event.target))projectMenu.open=false;});document.addEventListener('keydown',event=>{if(event.key==='Escape')projectMenu.open=false;});window.addEventListener('authentication-cleared',()=>{projectMenu.open=false;});
 
+  const queueView=document.createElement('details');queueView.className='composer-message-queue';queueView.hidden=true;queueView.setAttribute('aria-label',tr('Queued messages','الرسائل المنتظرة'));attachmentList.before(queueView);
+  let queuePolling=false;
+  const queueCurrent=(owner,id)=>currentUser?.id===owner&&activeSession?.id===id;
+  async function refreshMessageQueue(){
+    if(queuePolling)return;
+    const owner=currentUser?.id,id=activeSession?.id,revision=++queueRevision;
+    if(!id){queueCount=0;queueView.hidden=true;queueView.replaceChildren();queueSignature='';return;}
+    queuePolling=true;
+    try{
+      const data=await api('/api/sessions/'+id+'/queue');
+      if(revision!==queueRevision||!queueCurrent(owner,id))return;
+      queueCount=(data.items||[]).filter(item=>item.state!=='failed').length;
+      const signature=JSON.stringify([owner,id,lang,data]);
+      if(signature!==queueSignature){
+        const open=queueSignature&&queueView.open;queueView.replaceChildren();queueView.open=Boolean(open);queueView.hidden=!data.items?.length;
+        queueView.append(textElement('summary',tr('Queued messages: ','الرسائل المنتظرة: ')+queueCount));
+        queueView.append(textElement('small',data.paused?tr('Paused after stop/failure. Resume explicitly when ready.','الطابور متوقف بعد الإيقاف أو الفشل. استأنفه عندما تكون جاهزًا.'):tr('Runs in order after the current task. Pending approvals still block execution.','تُنفّذ بالترتيب بعد المهمة الحالية، مع انتظار الموافقات المطلوبة.')));
+        for(const item of data.items||[]){
+          const row=textElement('div','','queued-message'),text=textElement('p',item.text);row.append(text);
+          const label=item.state==='failed'?tr('Not dispatched; review and resend.','تعذر الإرسال؛ راجع الرسالة وأعد إرسالها.'):item.state==='claimed'?tr('Preparing submission…','جارٍ تجهيز الإرسال…'):tr('Waiting in queue','بانتظار التنفيذ');row.append(textElement('small',label));
+          const remove=textElement('button',tr('Remove','إزالة'),'button ghost small');remove.type='button';remove.disabled=item.state==='claimed';
+          remove.onclick=async()=>{if(!queueCurrent(owner,id)||remove.disabled)return;remove.disabled=true;try{await api('/api/sessions/'+id+'/queue/'+encodeURIComponent(item.request_id),{method:'DELETE'});queueSignature='';await refreshMessageQueue();}catch(error){if(queueCurrent(owner,id))toast(error.message);}finally{remove.disabled=false;}};row.append(remove);queueView.append(row);
+        }
+        if(data.paused&&queueCount){const resume=textElement('button',tr('Resume queued messages','استئناف الرسائل المنتظرة'),'button ghost small');resume.type='button';resume.onclick=async()=>{if(!queueCurrent(owner,id))return;resume.disabled=true;try{await api('/api/sessions/'+id+'/queue/dispatch',{method:'POST',body:JSON.stringify({resume:true})});await refreshSessionStatus();}catch(error){if(queueCurrent(owner,id))toast(error.message);}finally{resume.disabled=false;}};queueView.append(resume);}
+        queueSignature=signature;
+      }
+      updateSend();
+      if(queueCount&&activeSession.execution_status==='completed')await api('/api/sessions/'+id+'/queue/dispatch',{method:'POST',body:JSON.stringify({resume:false})});
+    }catch(error){/* Keep known queue entries on discovery failure; never resend. */}finally{queuePolling=false;}
+  }
+  window.refreshWorkspaceQueue=refreshMessageQueue;
+  window.resetWorkspaceQueue=()=>{queueRevision++;queueCount=0;queueSignature='';queueView.hidden=true;queueView.replaceChildren();};
+  window.addEventListener('authentication-cleared',window.resetWorkspaceQueue);
+  async function queueFollowup(payload,owner,id){
+    if(queuing||!queueCurrent(owner,id))return;queuing=true;updateSend();
+    const prompt=payload.text;
+    try{
+      // Persist only a digest + id for uncertain retries, never message text.
+      const bytes=new TextEncoder().encode(JSON.stringify({...payload,request_id:null}));
+      const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(value=>value.toString(16).padStart(2,'0')).join('');
+      const key='og-queue:'+owner+':'+id;let previous=null;try{previous=JSON.parse(sessionStorage.getItem(key));}catch(error){}
+      if(previous?.digest===digest)payload.request_id=previous.request_id;
+      try{sessionStorage.setItem(key,JSON.stringify({digest,request_id:payload.request_id}));}catch(error){}
+      if(!queueCurrent(owner,id))return;
+      await api('/api/sessions/'+id+'/queue',{method:'POST',body:JSON.stringify(payload)});
+      if(!queueCurrent(owner,id))return;
+      try{sessionStorage.removeItem(key);}catch(error){}
+      sentAttachments(payload);if(q('promptInput').value.trim()===prompt){q('promptInput').value='';window.resizeWorkspaceComposer?.();}
+      submissionStatus.textContent=tr('Added to this conversation’s queue.','أُضيفت إلى طابور هذه المحادثة.');await refreshMessageQueue();
+    }catch(error){if(queueCurrent(owner,id)){submissionStatus.textContent=error.message;toast(error.message);}}
+    finally{queuing=false;updateSend();}
+  }
   const submissionCurrent=p=>currentUser?.id===p.owner&&activeWorkspace?.id===p.workspaceId&&activeSession?.id===p.sessionId;
   let sendingPreview=null;
   function clearSendingPreview(){const preview=sendingPreview;sendingPreview=null;preview?.node.remove();}
@@ -1076,11 +1134,14 @@
     }catch(error){if(submissionCurrent(pending)){retrySubmission.hidden=false;submissionStatus.textContent=error.message;toast(error.message);}}
     finally{sending=false;updateSend();}
   }
-  window.workspaceSubmissionBlocked=()=>sending||Boolean(pendingSubmission)||['submitted','waiting_approval'].includes(activeSession?.execution_status);
+  window.workspaceSubmissionBlocked=()=>sending||queuing||Boolean(pendingSubmission)||['submitted','waiting_approval'].includes(activeSession?.execution_status);
   q('promptForm').onsubmit=async event=>{
-    event.preventDefault();if(window.workspaceSubmissionBlocked()||!activeWorkspace)return;const unsupported=attachments.map(attachmentSupport).find(item=>item.blocked);if(unsupported){submissionStatus.textContent=unsupported.message;return;}if(attachments.some(a=>!a.path||a.error)){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
+    event.preventDefault();if(sending||queuing||pendingSubmission||!activeWorkspace)return;const unsupported=attachments.map(attachmentSupport).find(item=>item.blocked);if(unsupported){submissionStatus.textContent=unsupported.message;return;}if(attachments.some(a=>!a.path||a.error)){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
     const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
+    if(activeSession&&(['submitted','waiting_approval'].includes(activeSession.execution_status)||queueCount)){
+      await queueFollowup({request_id:crypto.randomUUID(),text:prompt,provider_id:provider,model_id:model,attachments:attachments.map(item=>({path:item.path})),...(selectedAgent?{agent_id:selectedAgent}:{})},owner,activeSession.id);return;
+    }
     // Synchronous lock precedes entitlement, creation, runtime and network waits.
     sending=true;cancelRequested=false;updateSend();submissionStatus.textContent=tr('Submitting…','جارٍ الإرسال…');showSendingPreview(prompt);
     try{

@@ -76,6 +76,22 @@ def command_activity_label(command):
     return None
 
 
+def safe_tool_error(state):
+    """Classify known tool failure signatures; never return raw errors/output."""
+    raw=state.get('error')
+    if not isinstance(raw,str):return 'tool_failed'
+    raw=raw[:16000].lower()
+    for kind,signatures in (
+        ('approval_rejected',('permissionrejected','user rejected','rejected by user')),
+        ('file_not_found',('enoent','no such file or directory','file not found')),
+        ('permission_denied',('eacces','permission denied','access denied')),
+        ('command_not_found',('command not found','executable not found')),
+        ('timeout',('timed out','timeout exceeded','deadline exceeded')),
+        ('unsupported_format',('unsupported file type','unsupported format')),
+    ):
+        if any(signature in raw for signature in signatures):return kind
+    return 'tool_failed'
+
 def safe_tool_activity(parts, workspace):
     """Allowlisted execution metadata; no reasoning, tool output or shell payloads."""
     output=[]
@@ -109,6 +125,7 @@ def safe_tool_activity(parts, workspace):
                 path=filename(entry.get('relativePath') or entry.get('filePath'))
                 operation={'add':'created','update':'changed','delete':'deleted','move':'moved'}.get(entry.get('type'))
                 if path and operation: files.append({'path':path,'operation':operation})
+        if status=='error':item['error_kind']=safe_tool_error(state)
         if files: item['files']=files
         if tool.lower() in {'bash','shell'}:
             command=command_activity_label(inp.get('command'))
@@ -215,6 +232,8 @@ def finish_execution(db,session_id,kind,states=(),data=None,request_id=None,acti
     if changed:
         from ..services.workspace_cache import touch
         touch(db, current.workspace_id, current.user_id)
+        if kind in {'failed','cancelled'}:
+            db.add(ExecutionEvent(session_id=session_id,kind='queue_paused',data='{}'))
         for activity in activities:
             db.add(ExecutionEvent(session_id=session_id,kind='activity',data=json.dumps(activity)))
         for state in states:
@@ -272,6 +291,7 @@ async def execute(session_id,service,runtime_id,data,message_id):
         await asyncio.to_thread(complete_execution,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'},request_id=data.request_id)
     finally:
         if tasks.get(str(session_id)) is asyncio.current_task(): tasks.pop(str(session_id),None)
+        await dispatch_queued(session_id)
 
 @router.post("/{session_id}/messages",status_code=202)
 async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -286,6 +306,9 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         db.rollback()
         if saved["fingerprint"]!=fingerprint: raise HTTPException(409,"Submission ID belongs to a different message")
         return {**saved["receipt"],"replayed":True}
+    from ..services import message_queue
+    if message_queue.queued_request(db,session.id,data.request_id) and message_queue.paused(db,session.id):
+        db.rollback();raise HTTPException(409,'Queued messages are paused; explicitly resume before dispatch')
     if session_lifecycle.state(db,session)!="active": raise HTTPException(409,"Open this session before sending")
     session_lifecycle.require_slot(db,workspace,session.id)
     from ..services import workspaces as manager
@@ -362,6 +385,100 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
     tasks[str(session_id)]=asyncio.create_task(execute(session.id,service,session.opencode_session_id,data,message_id))
     return receipt
 
+_queue_dispatching=set()
+
+async def dispatch_queued(session_id,resume=False):
+    key=str(session_id)
+    if key in _queue_dispatching:return {'status':'waiting'}
+    _queue_dispatching.add(key)
+    try:
+        from ..services import message_queue
+        from ..services.entitlements import access_payload
+        from ..security.sessions import normal_access_ready
+        with SessionLocal() as db:
+            session=db.get(WorkspaceSession,session_id)
+            if not session or session.status not in ({'completed','failed','cancelled'} if resume else {'completed'}):return {'status':'waiting'}
+            user=db.get(User,session.user_id)
+            if not user or not normal_access_ready(user) or not access_payload(db,user)['allowed']:
+                return {'status':'paused'}
+            session,workspace=context(db,user,session_id)
+            if session_lifecycle.state(db,session)!='active':return {'status':'paused'}
+            session_lifecycle.lock_workspace(db,workspace);db.refresh(session)
+            if session.status in session_lifecycle.BUSY:return {'status':'waiting'}
+            if session_lifecycle.state(db,session)!='active':return {'status':'paused'}
+            rows=message_queue.entries(db,session_id)
+            queued=next((row for row in rows if row['state'] in {'queued','claimed'}),None)
+            if queued is None:return {'status':'empty'}
+            if message_queue.paused(db,session_id) and not resume:return {'status':'paused'}
+            if resume:db.add(ExecutionEvent(session_id=session_id,kind='queue_resumed',data='{}'))
+            data=MessageRequest.model_validate(queued['payload'])
+            message_queue.record(db,session_id,data.request_id,'queue_claimed')
+            try:
+                # Existing idempotency receipt and workspace admission lock prevent
+                # duplicate runtime dispatch after a retry/process restart.
+                receipt=await send(session_id,data,user,db)
+            except Exception:
+                db.rollback()
+                db.add(ExecutionEvent(session_id=session_id,kind='queue_paused',data='{}'))
+                message_queue.record(db,session_id,data.request_id,'queue_failed')
+                return {'status':'paused'}
+            message_queue.record(db,session_id,data.request_id,'queue_dispatched')
+            return receipt
+    except Exception:
+        # Never leak provider/input errors or retry/interrupt an executing turn.
+        return {'status':'paused'}
+    finally:_queue_dispatching.discard(key)
+
+@router.post("/{session_id}/queue",status_code=202)
+def enqueue_message(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services import message_queue
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace);db.refresh(session)
+    if session_lifecycle.state(db,session)!='active':raise HTTPException(409,'Open this conversation before queueing')
+    previous=next((row for row in message_queue.entries(db,session.id) if row['request_id']==str(data.request_id)),None)
+    if previous is not None:
+        row=message_queue.add(db,session.id,data)
+        return {'status':row['state'],'request_id':row['request_id']}
+    if not policy.provider_allowed(policy.load(db),data.provider_id) or not policy.model_allowed(policy.load(db),data.model_id):
+        raise HTTPException(403,'Provider or model is disabled by platform policy')
+    if session_lifecycle.receipt(db,session_id,data.request_id):raise HTTPException(409,'Request ID already belongs to a submitted message')
+    # Queueing never sends a model request, changes Todo or grants permission.
+    attachment_metadata(workspace,data.attachments)
+    row=message_queue.add(db,session.id,data)
+    return {'status':row['state'],'request_id':row['request_id']}
+
+@router.get("/{session_id}/queue")
+def queued_messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services import message_queue
+    session,workspace=context(db,user,session_id)
+    rows=message_queue.entries(db,session.id)
+    return {'paused':session.status in {'failed','cancelled'} or message_queue.paused(db,session.id),'items':[
+        {'request_id':row['request_id'],'text':_sanitize(row['payload']['text'],workspace),
+         'state':row['state']} for row in rows if row['state'] in {'queued','claimed','failed'}]}
+
+@router.delete("/{session_id}/queue/{request_id}")
+def remove_queued_message(session_id: uuid.UUID,request_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services import message_queue
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace);db.refresh(session)
+    rows=message_queue.entries(db,session.id)
+    entry=next((row for row in rows if row['request_id']==str(request_id) and row['state'] in {'queued','failed'}),None)
+    if entry is None:raise HTTPException(404,'Queued message not found')
+    if str(session_id) in _queue_dispatching:raise HTTPException(409,'Queue dispatch is in progress; refresh before removing')
+    # send() commits admission before preflight, so inspect its durable receipt.
+    if entry['state']!='failed' and session_lifecycle.receipt(db,session_id,request_id):raise HTTPException(409,'Message has already entered execution')
+    message_queue.record(db,session.id,request_id,'queue_removed')
+    return {'status':'cancelled'}
+
+class QueueDispatch(BaseModel):
+    resume: bool=False
+
+@router.post("/{session_id}/queue/dispatch")
+async def dispatch_queued_message(session_id: uuid.UUID,data: QueueDispatch,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    context(db,user,session_id)
+    db.rollback()
+    return await dispatch_queued(session_id,resume=data.resume)
+
 @router.get("/{session_id}/submissions/{request_id}")
 def submission_receipt(session_id: uuid.UUID,request_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,_=context(db,user,session_id)
@@ -424,6 +541,7 @@ def session_diff(session_id: uuid.UUID,user: User=Depends(require_user),db: Sess
 def stop(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
     session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    db.add(ExecutionEvent(session_id=session.id,kind="queue_paused",data="{}"))
     cancel(db,session,workspace)
     db.commit()
     return {"status":session.status}
