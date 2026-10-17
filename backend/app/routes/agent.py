@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
@@ -452,6 +452,23 @@ def cancel(db,session,workspace):
             raise HTTPException(502,"Runtime did not confirm cancellation")
     session.status="cancelled"
     db.add(ExecutionEvent(session_id=session.id,kind="cancelled",data="{}"))
+
+class RenameSession(BaseModel):
+    title: str=Field(min_length=1,max_length=120)
+
+    @field_validator("title",mode="before")
+    @classmethod
+    def trim_title(cls,value):
+        return value.strip() if isinstance(value,str) else value
+
+@router.patch("/{session_id}")
+def rename_session(session_id: uuid.UUID,data: RenameSession,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    session_lifecycle.require_visible(db,session)
+    session.title=data.title
+    db.commit()
+    return session_lifecycle.payload(session,session_lifecycle.state(db,session))
 
 @router.post("/{session_id}/open")
 def open_session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):

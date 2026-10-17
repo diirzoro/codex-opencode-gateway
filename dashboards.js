@@ -496,7 +496,7 @@
     for(let index=3;index<5;index++)buttons[index].disabled=state!=='ready';
     previewPanel.setAttribute('aria-busy',String(state==='loading'));
   }
-  function clearPreview(){previewRevision++;frame.hidden=true;frame.srcdoc='';frame.removeAttribute('src');setPreviewState('idle');}
+  function clearPreview(){previewRevision++;frame.hidden=true;frame.removeAttribute('srcdoc');frame.removeAttribute('src');setPreviewState('idle');}
   async function startPreview(){
     updatePreviewIdentity();
     if(!activeWorkspace?.id||!activeProject?.id){setPreviewState('blocked');return;}
@@ -567,7 +567,7 @@
     const path=frame.getAttribute('src');
     // Always preserve the iframe sandbox in a new tab. Never navigate directly
     // to customer-generated HTML under the Gateway origin.
-    const source=path?'src="'+escapeAttr(path)+'"':'srcdoc="'+escapeAttr(frame.srcdoc)+'"';
+    const source=path?'src="'+escapeAttr(new URL(path,location.href).href)+'"':'srcdoc="'+escapeAttr(frame.srcdoc)+'"';
     const html='<!doctype html><html><head><meta charset="utf-8"><title>Project preview</title><meta name="referrer" content="no-referrer"></head><body style="margin:0;height:100vh"><iframe title="Project preview" sandbox="allow-scripts" referrerpolicy="no-referrer" style="width:100%;height:100%;border:0" '+source+'></iframe></body></html>';
     const url=URL.createObjectURL(new Blob([html],{type:'text/html'})),link=document.createElement('a');
     link.href=url;link.target='_blank';link.rel='noopener noreferrer';link.click();
@@ -755,6 +755,7 @@
       const current=row.id===activeSession?.id,item=textElement('div','','conversation-row'+(current?' current':''));
       const name=btn('conversation-'+row.id,row.title,row.title,()=>openConversation(row));name.className='conversation-name';name.title=row.title;if(current)name.setAttribute('aria-current','true');
       const menu=document.createElement('details');menu.className='conversation-menu';const more=textElement('summary','⋯');more.setAttribute('aria-label',tr('Conversation actions: ','خيارات المحادثة: ')+row.title);menu.append(more);const actions=textElement('div','','session-actions');
+      actions.append(btn('rename-session-'+row.id,'Rename','تغيير الاسم',()=>renameConversation(row)));
       if(row.lifecycle==='active')actions.append(btn('close-session-'+row.id,'Close / Disconnect','إغلاق / فصل',()=>sessionAction(row,'close')));
       else if(row.lifecycle==='archived')actions.append(btn('restore-session-'+row.id,'Restore','استعادة',()=>sessionAction(row,'restore')));
       else actions.append(btn('archive-session-'+row.id,'Archive','أرشفة',()=>sessionAction(row,'archive')));
@@ -795,6 +796,20 @@
       if(!activeSession){const open=rows.find(row=>row.lifecycle==='active');if(open)await selectSession(open);}updateSend();return rows;})();
     sessionListPending={workspaceId,promise};try{return await promise;}finally{if(sessionListPending?.promise===promise)sessionListPending=null;}
   };
+  async function renameConversation(row){
+    const owner=currentUser?.id;
+    if(!row||!owner)return;
+    const result=await window.requestForm(tr('Rename conversation','تغيير اسم المحادثة'),[
+      {name:'title',label:tr('Conversation name','اسم المحادثة'),value:row.title,required:true,maxLength:120}
+    ]);
+    if(!result||currentUser?.id!==owner)return;
+    const title=result.title.trim();if(!title||title===row.title)return;
+    const updated=await api('/api/sessions/'+encodeURIComponent(row.id),{method:'PATCH',body:JSON.stringify({title})});
+    if(currentUser?.id!==owner)return;
+    sessionRows=sessionRows.map(session=>session.id===row.id?{...session,...updated}:session);
+    if(activeSession?.id===row.id)activeSession={...activeSession,...updated};
+    renderRuntimeSessions(sessionRows);
+  }
   async function sessionAction(row,action){
     if(!row||sending||pendingSubmission)return;
     if(action==='delete'&&!await window.confirmAction(tr('Delete from client history? OpenCode history and project files are preserved.','حذف من سجل العميل؟ يبقى سجل OpenCode وملفات المشروع محفوظة.')))return;
