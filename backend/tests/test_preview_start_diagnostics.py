@@ -124,3 +124,21 @@ def test_client_does_not_expose_worker_supplied_messages_or_reference():
     with patch('urllib.request.urlopen',side_effect=urllib.error.HTTPError('http://127.0.0.1',503,'error',{},io.BytesIO(raw))):
         with pytest.raises(PreviewWorkerUnavailable) as error:PreviewWorkerClient('http://127.0.0.1:8791','x'*40).request('start',{'job_id':'job1'})
     assert 'SECRET' not in str(error.value)
+
+
+
+def test_browser_lease_is_read_only_and_checked_inside_worker_lock(loopback):
+    import hashlib
+    adapter=Adapter();client=loopback(adapter)
+    client.request('start',{'job_id':'job1'})
+    status=client.request('status',{'job_id':'job1'})
+    lease=hashlib.sha256(CID.encode()).hexdigest()
+    assert status['browser_lease']==lease and 'container_id' not in status
+    assert client.request('fetch',{'job_id':'job1','path':'/nested/page','browser_lease':lease})['status']==200
+    with pytest.raises(PreviewWorkerUnavailable,match='stale_preview_lease'):
+        client.request('fetch',{'job_id':'job1','path':'/','browser_lease':'a'*64})
+    # Session revoke/Stop invalidates reads; status never creates a new container.
+    client.request('stop',{'job_id':'job1'})
+    assert client.request('status',{'job_id':'job1'})['browser_lease'] is None
+    with pytest.raises(PreviewWorkerUnavailable,match='not_running'):
+        client.request('fetch',{'job_id':'job1','path':'/','browser_lease':lease})

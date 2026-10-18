@@ -107,7 +107,9 @@ def status(workspace):
         result = client.request("status", {"job_id": _job_id(workspace)}) if client else {}
     except PreviewWorkerUnavailable:
         result = {}
+    import os
     return {**base, "launch": launch_options(workspace),
+            "browser_access_required": bool(os.environ.get('PREVIEW_PUBLIC_ORIGIN')),
             "runner_available": client is not None,
             "state": result.get("state", base["state"]),
             "url": result.get("url"), "logs": [],
@@ -162,7 +164,7 @@ def stop(workspace):
         raise HTTPException(503, str(exc)) from exc
 
 
-def fetch_asset(workspace, path: str):
+def fetch_asset(workspace, path: str, *, relay_prefix: str | None = None, browser_lease: str | None = None):
     """Proxy a bounded GET asset from the tenant-owned running preview."""
     import base64
     from fastapi import Response
@@ -170,7 +172,10 @@ def fetch_asset(workspace, path: str):
     if len(path) > 2048 or not path.startswith("/"):
         raise HTTPException(400, "Invalid preview asset path")
     try:
-        result = _worker().request("fetch", {"job_id": _job_id(workspace), "path": path})
+        payload = {"job_id": _job_id(workspace), "path": path}
+        if browser_lease is not None:
+            payload['browser_lease'] = browser_lease
+        result = _worker().request("fetch", payload)
         body = base64.b64decode(result["body"], validate=True)
         if len(body) > 262144:
             raise ValueError("Oversized preview response")
@@ -185,7 +190,7 @@ def fetch_asset(workspace, path: str):
         if media_type == "text/html" and status_code < 400:
             from html import escape
             import re
-            prefix = "/api/workspaces/" + _job_id(workspace) + "/preview/live/"
+            prefix = relay_prefix or "/api/workspaces/" + _job_id(workspace) + "/preview/live/"
             try:
                 page = body.decode("utf-8")
             except UnicodeError as exc:

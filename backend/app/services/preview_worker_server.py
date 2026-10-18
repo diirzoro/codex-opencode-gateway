@@ -6,6 +6,7 @@ path from the HTTP caller. Registered jobs must first be provisioned via
 the local trusted worker operator; unregistered Start requests fail closed.
 """
 import hmac
+import hashlib
 import base64
 import io
 import re
@@ -238,11 +239,17 @@ class WorkerHandler(BaseHTTPRequestHandler):
                 elif operation == "status":
                     cid = job["container_id"]
                     state = self.server.provisioner.status(cid, job_id) if cid else job["state"]
-                    result = {"state": state, "job_id": job_id, "url": None}
+                    result = {"state": state, "job_id": job_id, "url": None,
+                              "browser_lease": hashlib.sha256(cid.encode()).hexdigest() if cid and state == 'running' else None}
                 elif operation == "fetch":
                     cid = job["container_id"]
                     if not cid or job["state"] != "running":
                         self.reply(409, {"error": "not_running"})
+                        return
+                    expected = request.get('browser_lease')
+                    if expected is not None and (not isinstance(expected,str) or
+                        not hmac.compare_digest(expected,hashlib.sha256(cid.encode()).hexdigest())):
+                        self.reply(409, {'error':'stale_preview_lease'})
                         return
                     result = self.server.provisioner.fetch(
                         cid, job_id, job["family"], request.get("path", "/"))

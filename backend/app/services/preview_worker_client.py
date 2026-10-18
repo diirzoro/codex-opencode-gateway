@@ -59,7 +59,7 @@ class PreviewWorkerClient:
                 "job_already_started", "unregistered_job", "not_running",
                 "unsupported_framework", "invalid_snapshot",
                 "worker_operation_failed", "application_not_ready",
-                "unsafe_job_directory", "stale_job_in_use",
+                "unsafe_job_directory", "stale_job_in_use", "stale_preview_lease",
                 "worker_internal_error", *MESSAGES,
             }
             reference = None

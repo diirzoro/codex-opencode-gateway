@@ -520,6 +520,12 @@
     previewPanel.setAttribute('aria-busy',String(state==='loading'));
   }
   function clearPreview(){previewRevision++;frame.hidden=true;frame.removeAttribute('srcdoc');frame.removeAttribute('src');setPreviewState('idle');}
+  async function previewBrowserURL(id){
+    const access=await api('/api/workspaces/'+id+'/preview/access',{method:'POST'});
+    const url=new URL(access.url),gateway=new URL(location.href);
+    if(url.protocol!=='https:'||url.hostname===gateway.hostname||url.username||url.password||!url.pathname.startsWith('/preview/'))throw new Error(tr('A separate secure Preview origin is required.','يلزم عنوان HTTPS مستقل للمعاينة.'));
+    return url.href;
+  }
   async function startPreview(){
     updatePreviewIdentity();
     if(!activeWorkspace?.id||!activeProject?.id){setPreviewState('blocked');return;}
@@ -535,8 +541,10 @@
           const launched=await api('/api/workspaces/'+id+'/preview/start',{method:'POST'});
           if(activeWorkspace?.id!==id||previewRevision!==revision)return;
           if(launched.url){
-            frame.src=launched.url;frame.hidden=false;setPreviewState('ready');
-            previewStatus.textContent=tr('Running application preview','معاينة التطبيق تعمل');
+            const browserURL=state.browser_access_required?await previewBrowserURL(id):launched.url;
+            if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+            frame.src=browserURL;frame.hidden=false;setPreviewState('ready');
+            previewStatus.textContent=state.browser_access_required?tr('Running application preview · Read link lasts up to 5 minutes; Refresh renews access.','معاينة التطبيق تعمل · رابط القراءة صالح حتى 5 دقائق؛ زر التحديث يجدّد الوصول.'):tr('Running application preview','معاينة التطبيق تعمل');
             return;
           }
           throw new Error(tr('Container started, but no preview URL was returned.','بدأت الحاوية دون رابط معاينة صالح.'));
@@ -568,9 +576,18 @@
   async function refreshPreview(){
     if(!frame.hidden && frame.getAttribute('src')){
       const current=new URL(frame.getAttribute('src'),location.href);
-      current.searchParams.set('_preview_refresh',String(Date.now()));
-      frame.src=current.pathname+current.search;
+      if(current.hostname===new URL(location.href).hostname){
+        current.searchParams.set('_preview_refresh',String(Date.now()));frame.src=current.href;
+        previewStatus.textContent=tr('Refreshing running preview…','جارٍ تحديث المعاينة الحالية…');return;
+      }
+      const id=activeWorkspace?.id,revision=previewRevision;
       previewStatus.textContent=tr('Refreshing running preview…','جارٍ تحديث المعاينة الحالية…');
+      try{
+        const url=await previewBrowserURL(id);
+        if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+        frame.src=url;
+        previewStatus.textContent=tr('Running application preview · Read link lasts up to 5 minutes; Refresh renews access.','معاينة التطبيق تعمل · رابط القراءة صالح حتى 5 دقائق؛ زر التحديث يجدّد الوصول.');
+      }catch(error){if(activeWorkspace?.id===id&&previewRevision===revision)previewStatus.textContent=error.message;}
       return;
     }
     await startPreview();

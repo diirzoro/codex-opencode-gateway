@@ -486,6 +486,14 @@ def workspace_preview_stop(workspace_id: uuid.UUID,user: User=Depends(require_us
     return stop(manager.owned(db,Workspace,workspace_id,user.id))
 
 
+@router.post("/workspaces/{workspace_id}/preview/access")
+def workspace_preview_access(workspace_id: uuid.UUID, request: Request,
+                             user: User=Depends(require_user), db: Session=Depends(get_db)):
+    from ..services import preview_access
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    return preview_access.mint(workspace,getattr(request.state,'auth_session',None),user)
+
+
 @router.get("/workspaces/{workspace_id}/preview/live/{asset_path:path}")
 def workspace_preview_live(workspace_id: uuid.UUID,asset_path: str,request: Request,user: User=Depends(require_user),db: Session=Depends(get_db)):
     from ..services.preview_runner import fetch_asset
