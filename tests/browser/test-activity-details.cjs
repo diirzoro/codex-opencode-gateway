@@ -18,7 +18,14 @@ const missing=new Element('article');c.window.renderMessageActivity(missing,[{to
 const missingResult=missing.children[0].children[1].children[0].children[0].children[1];
 assert.match(missingResult.children[0].textContent,/not found.*Check the project/);
 const unknown=new Element('article');c.window.renderMessageActivity(unknown,[{tool:'bash',status:'error',error_kind:'unrecognized'}]);
-assert.match(unknown.children[0].children[1].children[0].children[0].children[1].children[0].textContent,/cause is not yet known/);
+assert.match(unknown.children[0].children[1].children[0].children[0].children[1].children[0].textContent,/did not provide a recognized cause.*inspect this failure/);
 console.log('2 passed: known failure explanation/next step and honest unknown-cause fallback');
 
 c.activeSession={execution_status:'failed'};c.window.renderActivitySummary([{role:'user'},{role:'assistant',activity:[{tool:'bash',status:'error',error_kind:'timeout'}]}]);assert.match(c.activitySummary.textContent,/Reported tool failures: Run command.*error details/);console.log('1 passed: final activity summary includes reported failure and details pointer');
+
+for(const [kind,english] of [['interrupted',/interrupted before it finished/],['invalid_arguments',/correct the arguments/],['tool_unavailable',/unavailable or disabled/],['dependency_missing',/isolated runtime/],['network_unavailable',/could not reach/]]){
+ const host=new Element('article');c.window.renderMessageActivity(host,[{tool:'glob',status:'error',error_kind:kind,duration_ms:140500}]);
+ const result=host.children[0].children[1].children[0].children[0].children[1];assert.match(result.children[0].textContent,english);assert.equal(result.children[1].textContent,'140.5 s');assert.ok(!result.children.some(node=>node.textContent.includes('Exit code')));
+}
+console.log('5 passed: interruption, invalid arguments, unavailable tool, missing dependency and network explanations without invented exit codes');
+c.tr=(en,ar)=>ar;const arabic=new Element('article');c.window.renderMessageActivity(arabic,[{tool:'glob',status:'error',error_kind:'interrupted'}]);assert.match(arabic.children[0].children[1].children[0].children[0].children[1].children[0].textContent,/توقف تنفيذ الأداة قبل اكتماله/);console.log('1 passed: Arabic interruption explanation');

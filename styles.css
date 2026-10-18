@@ -965,8 +965,3 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 #workspacePage .composer-message-queue small{color:var(--muted)}
 #workspacePage .queued-message{padding:6px 0;border-bottom:1px solid var(--line)}
 #workspacePage .queued-message p{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0;max-height:80px;overflow:auto}
-
-#workspacePage .composer-file-support{font-size:12px;color:var(--muted);margin:0 0 5px}
-#workspacePage .composer-file-support>summary{cursor:pointer;width:fit-content}
-#workspacePage .composer-file-support>div{max-height:150px;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:8px}
-#workspacePage .composer-file-support p{margin:4px 0;overflow-wrap:anywhere}

@@ -1,6 +1,7 @@
 """Execution visibility must never publish arbitrary shell arguments or output."""
 import asyncio
 import os
+import pytest
 from types import SimpleNamespace
 
 os.environ.setdefault('DATABASE_URL','postgresql+psycopg://test:test@127.0.0.1/test')
@@ -117,3 +118,35 @@ def test_success_does_not_invent_an_error_and_missing_error_is_explicit(monkeypa
     monkeypatch.setattr(agent.workspaces,'root_for',lambda workspace:tmp_path)
     assert 'error_kind' not in agent.safe_tool_activity([part()],object())[0]
     assert agent.safe_tool_activity([part(status='error',error={'message':'private'})],object())[0]['error_kind']=='tool_failed'
+
+
+@pytest.mark.parametrize('error,kind',[
+    ({'name':'AbortError','message':'private-token'},'interrupted'),
+    ('Error: Tool execution aborted','interrupted'),
+    ({'name':'ToolError','data':{'message':'The operation was aborted.'}},'interrupted'),
+    ({'data':{'error':{'code':'EACCES','message':'secret path'}}},'permission_denied'),
+    ({'cause':{'code':'ENOENT','message':'secret file'}},'file_not_found'),
+    ({'name':'TimeoutError','message':'secret operation'},'timeout'),
+    ({'code':'ETIMEDOUT'},'timeout'),
+    ({'message':'Invalid input: private parameter'},'invalid_arguments'),
+    ({'name':'ZodError','data':{'message':'secret input'}},'invalid_arguments'),
+    ({'message':'Tool is disabled: secret'},'tool_unavailable'),
+    ({'message':'Cannot find module private-module'},'dependency_missing'),
+    ({'cause':{'code':'ECONNREFUSED'}},'network_unavailable'),
+    ({'code':'ENOTFOUND','message':'private-host'},'network_unavailable'),
+    ({'message':'File does not exist: secret'},'file_not_found'),
+    ({'unexpected':'private-token'},'tool_failed'),
+])
+def test_native_nested_failures_are_classified_without_leaking_details(monkeypatch,tmp_path,error,kind):
+    monkeypatch.setattr(agent.workspaces,'root_for',lambda workspace:tmp_path)
+    native={'type':'tool','tool':'glob','id':'safe-call','state':{'status':'error','error':error}}
+    row=agent.safe_tool_activity([native],object())[0]
+    assert row['error_kind']==kind
+    assert 'private' not in str(row) and 'secret' not in str(row)
+    assert 'exit_code' not in row
+
+
+def test_only_error_fields_are_inspected_not_arbitrary_tool_output():
+    assert agent.safe_tool_error({'error':{'message':'private'},'output':'permission denied'})=='tool_failed'
+    assert agent.safe_tool_error({'metadata':{'output':'timed out','error':{'code':'EACCES'}}})=='permission_denied'
+    assert agent.safe_tool_error({'error':{'data':{'data':{'data':{'data':{'message':'permission denied'}}}}}})=='tool_failed'
