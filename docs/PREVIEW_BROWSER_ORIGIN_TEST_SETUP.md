@@ -69,3 +69,32 @@ React/Vite/Next dependency installation/build, Python dependencies, persistent e
 ## Read-only preflight after approval
 
 Run backend/scripts/preflight_preview_origin_test.py as root on the VPS before filling the upstream/TLS placeholders. It reads ONLY the TEST Gateway PID/environment metadata and selected TEST/new-host Nginx directives; captures nginx -T in memory without printing its full configuration. It reports the existing TEST loopback proxy origin, database host/port/name without user/password/query, encryption-key presence only, certificate/key paths (private key CONTENTS never read), valid SAN coverage, DNS addresses and pg_dump/certbot availability. It makes no database calls, downloads or service/config/DNS/file changes. No secrets or full command/environment/production server blocks are printed. Results are required to produce the final Test configuration and choose the minimal TLS step; do not guess ports, reuse production settings or repeat the successful Preview asset probe.
+
+
+## Actual owner VPS inventory — 2026-10-18
+
+The checksum-verified read-only preflight returned:
+- TEST Gateway PID327035; cwd /home/tahir/opencode-gateway-test/backend.
+- TEST proxy upstream **http://127.0.0.1:8001**; nginx configuration validates.
+- TEST DB **opencode_gateway_test**,127.0.0.1:5432. pg_dump and certbot already installed; no installation needed.
+- Credential encryption key present (value never printed); PREVIEW_PUBLIC_ORIGIN not set.
+- Existing TEST certificate /etc/letsencrypt/live/test.opencode-gateway.codes/fullchain.pem does **not** cover the proposed Preview hostname; do not reuse it or expand/replace Live certificates.
+- test.opencode-gateway.codes resolves to **162.35.127.135**; preview-test.opencode-gateway.codes has **no DNS record** at this observation.
+
+Immediate external prerequisite: owner creates only A record preview-test ->162.35.127.135 (TTL300/Auto, DNS-only during issuance). No DNS connector is available; it has NOT been created by the assistant. No further runtime/container test is needed to establish this prerequisite. After record creation, verify actual resolution once, including absence of an unverified AAAA/proxy target, before issuing the new certificate.
+
+Concrete staged configuration files (not installed):
+- docs/examples/preview-test-http.conf: new hostname HTTP80 serves ONLY the isolated ACME webroot /var/lib/opencode-preview-acme-test; other URLs404.
+- docs/examples/preview-test-https.conf: dedicated certificate under its own exact cert-name preview-test.opencode-gateway.codes; only GET/HEAD Preview routes proxy to the observed TEST upstream127.0.0.1:8001; cookies/Authorization stripped, access/error URI logs off, no cache. Other routes404. Neither configuration edits any existing Test/Live server block or opens Worker/Docker ports.
+
+Use a dedicated late-sorting site filename such as zz-opencode-preview-test and verify that nginx -T actually includes it before any reload. Do not overwrite an unknown existing file/symlink, assume an include directory is active, or mark syntax valid without running the VPS nginx -t. Back up any earlier assistant-managed version privately before replacing it. Rollback removes/restores ONLY that dedicated managed site and approved TEST-only Environment drop-in/Worker file, tests Nginx configuration, then reloads; never restores a production config or database.
+
+Certificate issuance uses **certonly --webroot**, not the Nginx installer or standalone server. It writes only the new challenge/certificate, keeping existing server blocks running. After HTTP-only site inclusion and challenge routing are verified, intended command is:
+
+    sudo certbot certonly --webroot -w /var/lib/opencode-preview-acme-test --cert-name preview-test.opencode-gateway.codes -d preview-test.opencode-gateway.codes
+
+Do not run it before DNS/challenge readiness, repeatedly retry a failed ACME validation, select a different/Live cert-name, or accept certificate expansion. Verify the exact resulting new certificate paths/SAN/expiry before the HTTPS configuration is installed. Plan renewal deploy reload only for this new domain; do not edit existing Live renewal configuration. Official reference: https://eff-certbot.readthedocs.io/en/stable/using.html#webroot.
+
+Reuse the EXISTING Promote updates to test workflow's mandatory backup rather than inventing another DB mechanism: inspected workflow creates a private TEST code archive, asserts database name opencode_gateway_test, pg_dumps it, validates pg_restore -l and emits STAGING_BACKUP_OK before deploying/migrating/restarting TEST. Verify the actual new workflow run reports that backup; source inspection is not proof the next backup already exists. Do not edit the workflow or run a second manual database migration. The future release also needs the section53 dedicated Worker file update/lease contract and the approved non-secret Environment setting; code-only publication with the setting absent retains legacy behavior and cannot by itself fix401.
+
+Owner DNS action and actual VPS nginx/TLS/worker/environment operations are still pending. No certificate was issued, no Nginx file installed/reloaded, no environment set, no service restarted or new TEST deployment initiated by this documentation/config preparation. Prior101 application and9 preflight tests reused; these templates still require actual VPS nginx validation.
