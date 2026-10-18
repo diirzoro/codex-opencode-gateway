@@ -184,6 +184,12 @@ Repository: diirzoro/codex-opencode-gateway
 - Outstanding before real Smart Preview: dedicated sandbox worker on isolated infrastructure, trusted registration and private authenticated control channel, snapshot validation in runner, package preparation, separate-origin protected proxy, durable lifecycle/reaper and tested Start/Stop integration. None should be bypassed by asking OpenCode to run `node server.js`.
 - No deployment, no Live/master changes, no claim of full Preview completion.
 
+## Current checkpoint — 2026-10-18
+
+TEST now uses a verified dedicated HTTPS Preview origin and the existing isolated Node runner. Owner-operated QA confirms root/styles, JavaScript counter, nested navigation/return, Refresh, New Tab and Stop; screenshots support the rendered root, nested page and New Tab. See living handoff section56 for the exact evidence and distinction between visual and owner-reported checks. Earlier dated progress entries are historical; do not treat their pending DNS/start messages as current instructions.
+
+Master source promotion a32f9e2 preserved all master workflow blobs and did not deploy Live. Reusable source versus environment-local settings is mapped in [Preview configuration transfer](PREVIEW_CONFIGURATION_TRANSFER.md). Do not copy TEST origin, credentials, ports or service overrides to Live. Full framework support, measured global admission, five-minute cleanup/reaper, durable engine lifecycle and two-account security acceptance remain unverified. Owner requested finishing GitHub first; further server changes/cleanup/backup are deferred until then.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
 

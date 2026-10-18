@@ -1,12 +1,12 @@
 # TEST Preview browser origin — approval and validation gate
 
-Status: owner approved TEST-only infrastructure/configuration on 2026-10-18. Code prepared; NOT configured/deployed/accepted. Do not run this document as a shell script.
+Status (2026-10-18): configured on TEST; owner-reported browser acceptance PASSED for the built-ins Node QA project. Root, styles, nested navigation/return and New Tab have screenshot evidence; counter, Refresh and Stop were reported working by the owner. This does not certify all frameworks or security/resource gates. See living handoff sections56–58 and [environment transfer guide](PREVIEW_CONFIGURATION_TRANSFER.md). Do not run this document as a shell script.
 
 ## Confirmed cause (2026-10-18)
 
 Owner's existing QA container returned HTTP200 for /, /style.css, /app.js and /nested/page, with correct HTML/CSS/JavaScript types. TEST Gateway then logged401 for cross-site script, style and iframe requests. The current opaque sandbox cannot rely on the normal SameSite=Strict login cookie for these requests. Test workflow39112535467 successfully deployed48f9b41; the cause is no longer an undeployed-logging assumption.
 
-## Prepared application change
+## Implemented application change
 
 Keep the normal host-only HttpOnly/SameSite=Strict account cookie and iframe sandbox allow-scripts (no allow-same-origin). A separately configured HTTPS Preview hostname serves only GET/HEAD /preview/<grant>/<path>. No login, account API, static Gateway shell, docs or writes are served on it. Grants are opaque, encrypted with a domain-separated key derived from the existing credential-encryption master; no new key or production secret is installed. They expire in at most300seconds AND at the original login idle/absolute deadline. Refresh explicitly obtains another grant without starting the container. Viewing assets does not extend the login idle clock.
 
@@ -16,9 +16,9 @@ A grant URL is a PRIVATE short-lived bearer credential: anyone to whom it is cop
 
 The new transport is opt-in: without PREVIEW_PUBLIC_ORIGIN, existing static/legacy Preview behavior is unchanged (including its known cross-site401 limitation). This allows code-only TEST publication without silently enabling or requiring unconfigured infrastructure. A configured origin activates grant minting; missing key/old Worker then fails closed.
 
-## Owner approval recorded; actual TEST values still required
+## Scope and verified TEST configuration
 
-No .env, DNS, certificates, Nginx, service settings, workflows, Docker daemon or Live changes have been made. Proposed TEST-only hostname: preview-test.opencode-gateway.codes. Owner explicitly approved its use, TEST-only DNS/TLS/new Nginx virtual host, TEST Gateway Environment entry PREVIEW_PUBLIC_ORIGIN=https://preview-test.opencode-gateway.codes and dedicated TEST Worker update/restart. Do not ask for the same approval again. No .env edit is required. This preserves the previously approved separate-origin architecture.
+The owner approved and executed TEST-only DNS/TLS, a dedicated Nginx host, Gateway service Environment entry PREVIEW_PUBLIC_ORIGIN=https://preview-test.opencode-gateway.codes and dedicated TEST Worker file update/restart. These changes are now active; no .env, workflow or main Docker configuration was edited. Existing TEST/Live certificates were not replaced. Later Live linkage authorization is separate from this TEST inventory and has not been executed; do not copy TEST addresses/credentials into Live.
 
 After approval, verify actual TEST upstream host/port/configuration and available TLS certificate locations before producing/installing final Nginx configuration; do not reuse production ports or guess addresses. DNS must resolve to the verified TEST ingress. TLS must cover the new hostname. Do not modify an existing Live server block/certificate. The example below is a review template with unresolved upstream/certificate placeholders, NOT an install-ready file.
 
@@ -51,7 +51,9 @@ server {
 
 Do not add an anonymous proxy route to the old /api/.../preview/live path or expose the private Worker8791/Docker socket. All application auth/ownership/grant checks must run. Do not add allow-same-origin or relax the normal login cookie.
 
-## TEST activation order, after approval and verified backup
+## Reference activation order for a fresh TEST installation
+
+The existing TEST installation has already completed these steps. Do not rerun installers, certificate issuance or service changes merely because this checklist exists. Use the current inventory before any new action.
 
 1. Verify TEST-only code/DB backups and rollback reference; preserve all projects/history. Do not dump credentials to output.
 2. Review final DNS/TLS/new virtual-host configuration against the actual TEST upstream and log/cache requirements. Record exact changes before applying.
@@ -71,7 +73,7 @@ React/Vite/Next dependency installation/build, Python dependencies, persistent e
 Run backend/scripts/preflight_preview_origin_test.py as root on the VPS before filling the upstream/TLS placeholders. It reads ONLY the TEST Gateway PID/environment metadata and selected TEST/new-host Nginx directives; captures nginx -T in memory without printing its full configuration. It reports the existing TEST loopback proxy origin, database host/port/name without user/password/query, encryption-key presence only, certificate/key paths (private key CONTENTS never read), valid SAN coverage, DNS addresses and pg_dump/certbot availability. It makes no database calls, downloads or service/config/DNS/file changes. No secrets or full command/environment/production server blocks are printed. Results are required to produce the final Test configuration and choose the minimal TLS step; do not guess ports, reuse production settings or repeat the successful Preview asset probe.
 
 
-## Actual owner VPS inventory — 2026-10-18
+## Original pre-activation inventory — historical, 2026-10-18
 
 The checksum-verified read-only preflight returned:
 - TEST Gateway PID327035; cwd /home/tahir/opencode-gateway-test/backend.
@@ -81,9 +83,9 @@ The checksum-verified read-only preflight returned:
 - Existing TEST certificate /etc/letsencrypt/live/test.opencode-gateway.codes/fullchain.pem does **not** cover the proposed Preview hostname; do not reuse it or expand/replace Live certificates.
 - test.opencode-gateway.codes resolves to **162.35.127.135**; preview-test.opencode-gateway.codes has **no DNS record** at this observation.
 
-Immediate external prerequisite: owner creates only A record preview-test ->162.35.127.135 (TTL300/Auto, DNS-only during issuance). No DNS connector is available; it has NOT been created by the assistant. No further runtime/container test is needed to establish this prerequisite. After record creation, verify actual resolution once, including absence of an unverified AAAA/proxy target, before issuing the new certificate.
+Subsequent verified activation: the owner added preview-test A ->162.35.127.135; VPS resolution succeeded. A dedicated certificate was issued for preview-test.opencode-gateway.codes, expiring2027-01-16. Local direct TLS hostname verification passed and HTTPS root returned404 as designed. Both dedicated Nginx configuration and TEST Gateway origin are active. Do not issue a second certificate or create another worker/engine for this already completed step.
 
-Concrete staged configuration files (not installed):
+Concrete configuration files (owner installed and validated the dedicated TEST host):
 - docs/examples/preview-test-http.conf: new hostname HTTP80 serves ONLY the isolated ACME webroot /var/lib/opencode-preview-acme-test; other URLs404.
 - docs/examples/preview-test-https.conf: dedicated certificate under its own exact cert-name preview-test.opencode-gateway.codes; only GET/HEAD Preview routes proxy to the observed TEST upstream127.0.0.1:8001; cookies/Authorization stripped, access/error URI logs off, no cache. Other routes404. Neither configuration edits any existing Test/Live server block or opens Worker/Docker ports.
 
@@ -97,4 +99,4 @@ Do not run it before DNS/challenge readiness, repeatedly retry a failed ACME val
 
 Reuse the EXISTING Promote updates to test workflow's mandatory backup rather than inventing another DB mechanism: inspected workflow creates a private TEST code archive, asserts database name opencode_gateway_test, pg_dumps it, validates pg_restore -l and emits STAGING_BACKUP_OK before deploying/migrating/restarting TEST. Verify the actual new workflow run reports that backup; source inspection is not proof the next backup already exists. Do not edit the workflow or run a second manual database migration. The future release also needs the section53 dedicated Worker file update/lease contract and the approved non-secret Environment setting; code-only publication with the setting absent retains legacy behavior and cannot by itself fix401.
 
-Owner DNS action and actual VPS nginx/TLS/worker/environment operations are still pending. No certificate was issued, no Nginx file installed/reloaded, no environment set, no service restarted or new TEST deployment initiated by this documentation/config preparation. Prior101 application and9 preflight tests reused; these templates still require actual VPS nginx validation.
+Completed release: Promote updates to test run39128202304 deployed8761c1e; backup/deployment/public HTTPS steps succeeded. Owner verified nginx syntax, direct TLS, the updated TEST Worker and the Gateway process origin setting. Existing application101 and preflight9 targeted tests remain prior evidence, not new executions. Actual browser evidence and remaining gates are recorded in handoff section56. Master source promotion a32f9e2 did not deploy Live. Preserve existing per-environment workflows and secrets; see the transfer guide before planning Live activation.
