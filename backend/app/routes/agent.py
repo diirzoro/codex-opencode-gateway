@@ -6,6 +6,7 @@ import asyncio, hashlib, json, re, shlex, time, uuid, mimetypes
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
 from ..models import User, Workspace, WorkspaceSession, ExecutionEvent, ProviderCredential, AccountAudit
 from ..services import workspaces, opencode, policy, providers, session_lifecycle
+from ..services.agent_presentation import public_assistant_text, reply_instructions, preview_actions
 from .dependencies import require_user, require_workspace_entitlement
 from ..services.entitlements import require_advanced
 
@@ -207,6 +209,7 @@ class MessageRequest(BaseModel):
     provider_id: str=Field(min_length=1,max_length=120,pattern=r"^[A-Za-z0-9_.-]+$")
     model_id: str=Field(min_length=1,max_length=200)
     agent_id: str|None=Field(default=None,min_length=1,max_length=120)
+    response_language: Literal['ar','en']|None=None
 
 class Approval(BaseModel):
     reply: str=Field(pattern="^(once|similar|reject)$")
@@ -275,7 +278,7 @@ async def execute(session_id,service,runtime_id,data,message_id,model_inputs=Non
     try:
         workspace=await asyncio.to_thread(begin_execution,session_id,message_id,data.request_id,service.generation)
         if workspace is None:return
-        payload={"messageID":message_id,"system":EXECUTION_REPORTING,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
+        payload={"messageID":message_id,"system":reply_instructions(data,EXECUTION_REPORTING),"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
         from ..services import attachment_reader
         payload['parts'].extend(attachment_reader.parts(workspace,attachment_metadata(workspace,data.attachments),model_inputs))
         if data.agent_id: payload["agent"]=data.agent_id
@@ -306,6 +309,7 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
     signature=data.model_dump(mode="json",exclude={"request_id"})
     # Empty attachments preserve pre-hotfix receipt fingerprints on browser retry.
     if not signature.get('attachments'): signature.pop('attachments',None)
+    if signature.get('response_language') is None:signature.pop('response_language',None)
     fingerprint=hashlib.sha256(json.dumps(signature,sort_keys=True).encode()).hexdigest()
     session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
     saved=session_lifecycle.receipt(db,session_id,data.request_id)
@@ -504,15 +508,23 @@ def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=
             saved=json.loads(recorded.data);attachments[saved['message_id']]=saved.get('attachments',[])
             if isinstance(saved.get('text'),str): submitted_text[saved['message_id']]=saved['text']
         except (ValueError,KeyError): pass
+    prompts={item.get('info',{}).get('id'):submitted_text.get(item.get('info',{}).get('id'),
+        '\n'.join(p.get('text','') for p in item.get('parts',[]) if p.get('type')=='text'))
+        for item in result if item.get('info',{}).get('role')=='user'}
     output=[]; hidden=session_lifecycle.hidden_messages(db,session.id); seen=set()
     for item in result:
-        text="\n".join(p.get("text","") for p in item.get("parts",[]) if p.get("type")=="text")[:50000]
+        text="\n".join(p.get("text","") for p in item.get("parts",[]) if p.get("type")=="text")
         info=item.get("info",{}); identifier=info.get("id")
         if identifier in hidden or (identifier and identifier in seen): continue
         seen.add(identifier)
         if info.get('role')=='user': text=submitted_text.get(identifier,text)
+        else:text=public_assistant_text(text)
+        text=text[:50000]
+        activity=safe_tool_activity(item.get('parts',[]),workspace)
+        completed=bool(info.get('time',{}).get('completed')) and not info.get('error')
         output.append({"id":identifier,"role":info.get("role"),"text":_sanitize(text,workspace),
-                       "attachments":attachments.get(identifier,[]),"activity":safe_tool_activity(item.get('parts',[]),workspace),
+                       "attachments":attachments.get(identifier,[]),"activity":activity,
+                       "actions":preview_actions(workspace,session.id,identifier,prompts.get(info.get('parentID'),'') or '',activity,completed) if info.get('role')=='assistant' else [],
                        "state":"failed" if info.get("error") else "completed" if info.get("time",{}).get("completed") else "working"})
     return output
 
