@@ -490,7 +490,12 @@ def workspace_preview_stop(workspace_id: uuid.UUID,user: User=Depends(require_us
 def workspace_preview_live(workspace_id: uuid.UUID,asset_path: str,request: Request,user: User=Depends(require_user),db: Session=Depends(get_db)):
     from ..services.preview_runner import fetch_asset
     workspace=manager.owned(db,Workspace,workspace_id,user.id)
-    response=fetch_asset(workspace, "/" + asset_path)
+    # Preserve application routing/query parameters (including repeated values).
+    # Starlette's path parameter excludes the query string.
+    path = "/" + asset_path
+    if request.url.query:
+        path += "?" + request.url.query
+    response=fetch_asset(workspace, path)
     # Mark only the authenticated, owned and sandboxed preview response.
     # Middleware must not infer embedding permission from a URL alone.
     request.state.owned_preview_response=True

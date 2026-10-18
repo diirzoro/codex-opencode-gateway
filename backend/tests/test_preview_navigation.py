@@ -79,3 +79,51 @@ def test_failed_route_never_marks_embedding_allowed(monkeypatch,failure):
     with pytest.raises(HTTPException):workspaces.workspace_preview_live(WID,'',request,SimpleNamespace(id='owner'),Mock())
     assert not getattr(request.state,'owned_preview_response',False)
     if failure=='ownership':fetch.assert_not_called()
+
+
+@pytest.mark.parametrize("path,asset,expected", [
+    ("/nested/page", "style.css", "nested/style.css"),
+    ("/nested/page/", "app.js", "nested/page/app.js"),
+    ("/nested/page?item=1&item=2", "../app.js", "app.js"),
+])
+def test_nested_document_keeps_its_resolution_base(monkeypatch,path,asset,expected):
+    from urllib.parse import urljoin
+    import re
+    worker=Mock()
+    html='<HEAD lang="en"><title>Nested</title></HEAD><script src="'+asset+'"></script>'
+    worker.request.return_value={'status':200,'type':'text/html','body':base64.b64encode(html.encode()).decode()}
+    monkeypatch.setattr(preview_runner,'_worker',lambda:worker)
+    response=preview_runner.fetch_asset(SimpleNamespace(id=WID),path)
+    body=response.body.decode()
+    base=re.search(r'<base href="([^"]+)">',body).group(1).replace('&amp;','&')
+    assert urljoin(base,asset)==PREFIX+expected
+    assert body.index('<base ') < body.index('<title>')
+    worker.request.assert_called_once_with('fetch',{'job_id':str(WID),'path':path})
+
+
+def test_live_route_preserves_encoded_and_repeated_query(monkeypatch):
+    query=b'tag=a%2Fb&tag=c&mode=preview'
+    request=Request({'type':'http','method':'GET','path':PREFIX+'nested/page','query_string':query,'headers':[]})
+    workspace=SimpleNamespace(id=WID)
+    monkeypatch.setattr(workspaces.manager,'owned',Mock(return_value=workspace))
+    fetch=Mock(return_value=HTMLResponse('OK'));monkeypatch.setattr(preview_runner,'fetch_asset',fetch)
+    workspaces.workspace_preview_live(WID,'nested/page',request,SimpleNamespace(id='owner'),Mock())
+    fetch.assert_called_once_with(workspace,'/nested/page?'+query.decode())
+
+
+@pytest.mark.parametrize("status",[401,403,404,503])
+def test_preview_failure_diagnostic_is_finite_and_keeps_security(status,caplog):
+    app=FastAPI();app.middleware('http')(browser_boundary)
+    @app.get('/{path:path}')
+    def endpoint():
+        return HTMLResponse('private failure body',status_code=status)
+    with TestClient(app) as client:
+        response=client.get(PREFIX+'private-filename?key=secret-query',headers={
+            'Cookie':'private-cookie','Sec-Fetch-Site':'cross-site',
+            'Sec-Fetch-Dest':'private-untrusted-header'})
+    import re
+    reference=response.headers['x-preview-reference']
+    assert re.fullmatch('[0-9a-f]{12}',reference)
+    assert f'status={status} site=cross-site destination=other reference={reference}' in caplog.text
+    assert all(value not in caplog.text for value in ('private-filename','secret-query','private-cookie','private-untrusted-header','private failure body'))
+    assert response.headers['x-frame-options']=='DENY'
