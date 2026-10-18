@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
@@ -76,6 +76,22 @@ def command_activity_label(command):
     return None
 
 
+def safe_tool_error(state):
+    """Classify known tool failure signatures; never return raw errors/output."""
+    raw=state.get('error')
+    if not isinstance(raw,str):return 'tool_failed'
+    raw=raw[:16000].lower()
+    for kind,signatures in (
+        ('approval_rejected',('permissionrejected','user rejected','rejected by user')),
+        ('file_not_found',('enoent','no such file or directory','file not found')),
+        ('permission_denied',('eacces','permission denied','access denied')),
+        ('command_not_found',('command not found','executable not found')),
+        ('timeout',('timed out','timeout exceeded','deadline exceeded')),
+        ('unsupported_format',('unsupported file type','unsupported format')),
+    ):
+        if any(signature in raw for signature in signatures):return kind
+    return 'tool_failed'
+
 def safe_tool_activity(parts, workspace):
     """Allowlisted execution metadata; no reasoning, tool output or shell payloads."""
     output=[]
@@ -109,6 +125,7 @@ def safe_tool_activity(parts, workspace):
                 path=filename(entry.get('relativePath') or entry.get('filePath'))
                 operation={'add':'created','update':'changed','delete':'deleted','move':'moved'}.get(entry.get('type'))
                 if path and operation: files.append({'path':path,'operation':operation})
+        if status=='error':item['error_kind']=safe_tool_error(state)
         if files: item['files']=files
         if tool.lower() in {'bash','shell'}:
             command=command_activity_label(inp.get('command'))
@@ -215,6 +232,8 @@ def finish_execution(db,session_id,kind,states=(),data=None,request_id=None,acti
     if changed:
         from ..services.workspace_cache import touch
         touch(db, current.workspace_id, current.user_id)
+        if kind in {'failed','cancelled'}:
+            db.add(ExecutionEvent(session_id=session_id,kind='queue_paused',data='{}'))
         for activity in activities:
             db.add(ExecutionEvent(session_id=session_id,kind='activity',data=json.dumps(activity)))
         for state in states:
@@ -244,14 +263,8 @@ async def execute(session_id,service,runtime_id,data,message_id):
         workspace=await asyncio.to_thread(begin_execution,session_id,message_id,data.request_id,service.generation)
         if workspace is None:return
         payload={"messageID":message_id,"system":EXECUTION_REPORTING,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
-        for item in attachment_metadata(workspace, data.attachments):
-            path=workspaces.safe_path(workspace,item['path'])
-            # Native file parts for formats OpenCode consumes directly. Other
-            # files remain explicit workspace paths for its file/tool context.
-            if item['mime'] in {'text/plain','application/pdf','image/png','image/jpeg','image/webp','image/gif'}:
-                payload['parts'].append({'type':'file','url':path.as_uri(),'filename':item['name'],'mime':item['mime']})
-            else:
-                payload['parts'].append({'type':'text','text':'Attached workspace file: '+json.dumps(item['path'])+'\nUse the selected agent’s available tools or skills to read this file. Verify that its contents can be extracted before answering about them. If no available tool can read this format, immediately explain that limitation and request a supported format. Do not infer contents from the filename or claim to have read an unreadable file.'})
+        from ..services import attachment_reader
+        payload['parts'].extend(attachment_reader.parts(workspace,attachment_metadata(workspace,data.attachments)))
         if data.agent_id: payload["agent"]=data.agent_id
         request_task=asyncio.create_task(asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),payload,600))
         observer=asyncio.create_task(monitor_activity(session_id,service,runtime_id,message_id,workspace,data.request_id,request_task))
@@ -272,6 +285,7 @@ async def execute(session_id,service,runtime_id,data,message_id):
         await asyncio.to_thread(complete_execution,session_id,'failed',data={'reason':'Runtime request failed or timed out; inspect session before retrying'},request_id=data.request_id)
     finally:
         if tasks.get(str(session_id)) is asyncio.current_task(): tasks.pop(str(session_id),None)
+        await dispatch_queued(session_id)
 
 @router.post("/{session_id}/messages",status_code=202)
 async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -286,6 +300,9 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         db.rollback()
         if saved["fingerprint"]!=fingerprint: raise HTTPException(409,"Submission ID belongs to a different message")
         return {**saved["receipt"],"replayed":True}
+    from ..services import message_queue
+    if message_queue.queued_request(db,session.id,data.request_id) and message_queue.paused(db,session.id):
+        db.rollback();raise HTTPException(409,'Queued messages are paused; explicitly resume before dispatch')
     if session_lifecycle.state(db,session)!="active": raise HTTPException(409,"Open this session before sending")
     session_lifecycle.require_slot(db,workspace,session.id)
     from ..services import workspaces as manager
@@ -303,6 +320,8 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
     if providers.is_locally_disconnected(db,workspace,data.provider_id):
         raise HTTPException(409,"Provider is disconnected in this workspace; explicitly reconnect it before sending")
     attached=attachment_metadata(workspace,data.attachments)
+    from ..services import attachment_reader
+    attachment_reader.parts(workspace,attached)  # Validate/extract before durable admission.
     receipt={"status":"submitted","session_id":str(session.id),"request_id":str(data.request_id)}
     message_id=session_lifecycle.new_message_id()
     session.status="submitted"
@@ -329,11 +348,7 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         if data.model_id not in provider.get("models",{}): raise HTTPException(422,"Model is unavailable")
         # Availability remains OpenCode-owned; entitlement classifies actual use.
         model=provider['models'][data.model_id]
-        inputs=(model.get('capabilities') or {}).get('input') or {}
-        for item in attached:
-            category='image' if item['mime'].startswith('image/') else 'pdf' if item['mime']=='application/pdf' else None
-            if category and inputs.get(category) is False:
-                raise HTTPException(422, 'The selected OpenCode model does not support this attachment type; select a compatible model')
+        attachment_reader.ensure_model_inputs(model,attached)
         costs=model.get('cost') or {}
         free_model=costs.get('input')==0 and costs.get('output')==0
         own_key=db.scalar(select(ProviderCredential.id).where(ProviderCredential.workspace_id==workspace.id,
@@ -361,6 +376,101 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         raise
     tasks[str(session_id)]=asyncio.create_task(execute(session.id,service,session.opencode_session_id,data,message_id))
     return receipt
+
+_queue_dispatching=set()
+
+async def dispatch_queued(session_id,resume=False):
+    key=str(session_id)
+    if key in _queue_dispatching:return {'status':'waiting'}
+    _queue_dispatching.add(key)
+    try:
+        from ..services import message_queue
+        from ..services.entitlements import access_payload
+        from ..security.sessions import normal_access_ready
+        with SessionLocal() as db:
+            session=db.get(WorkspaceSession,session_id)
+            if not session or session.status not in ({'completed','failed','cancelled'} if resume else {'completed'}):return {'status':'waiting'}
+            user=db.get(User,session.user_id)
+            if not user or not normal_access_ready(user) or not access_payload(db,user)['allowed']:
+                return {'status':'paused'}
+            session,workspace=context(db,user,session_id)
+            if session_lifecycle.state(db,session)!='active':return {'status':'paused'}
+            session_lifecycle.lock_workspace(db,workspace);db.refresh(session)
+            if session.status in session_lifecycle.BUSY:return {'status':'waiting'}
+            if session_lifecycle.state(db,session)!='active':return {'status':'paused'}
+            rows=message_queue.entries(db,session_id)
+            queued=next((row for row in rows if row['state'] in {'queued','claimed'}),None)
+            if queued is None:return {'status':'empty'}
+            if message_queue.paused(db,session_id) and not resume:return {'status':'paused'}
+            if resume:db.add(ExecutionEvent(session_id=session_id,kind='queue_resumed',data='{}'))
+            data=MessageRequest.model_validate(queued['payload'])
+            message_queue.record(db,session_id,data.request_id,'queue_claimed')
+            try:
+                # Existing idempotency receipt and workspace admission lock prevent
+                # duplicate runtime dispatch after a retry/process restart.
+                receipt=await send(session_id,data,user,db)
+            except Exception:
+                db.rollback()
+                db.add(ExecutionEvent(session_id=session_id,kind='queue_paused',data='{}'))
+                message_queue.record(db,session_id,data.request_id,'queue_failed')
+                return {'status':'paused'}
+            message_queue.record(db,session_id,data.request_id,'queue_dispatched')
+            return receipt
+    except Exception:
+        # Never leak provider/input errors or retry/interrupt an executing turn.
+        return {'status':'paused'}
+    finally:_queue_dispatching.discard(key)
+
+@router.post("/{session_id}/queue",status_code=202)
+def enqueue_message(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services import message_queue
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace);db.refresh(session)
+    if session_lifecycle.state(db,session)!='active':raise HTTPException(409,'Open this conversation before queueing')
+    previous=next((row for row in message_queue.entries(db,session.id) if row['request_id']==str(data.request_id)),None)
+    if previous is not None:
+        row=message_queue.add(db,session.id,data)
+        return {'status':row['state'],'request_id':row['request_id']}
+    if not policy.provider_allowed(policy.load(db),data.provider_id) or not policy.model_allowed(policy.load(db),data.model_id):
+        raise HTTPException(403,'Provider or model is disabled by platform policy')
+    if session_lifecycle.receipt(db,session_id,data.request_id):raise HTTPException(409,'Request ID already belongs to a submitted message')
+    # Queueing never sends a model request, changes Todo or grants permission.
+    from ..services import attachment_reader
+    attachment_reader.parts(workspace,attachment_metadata(workspace,data.attachments))
+    row=message_queue.add(db,session.id,data)
+    return {'status':row['state'],'request_id':row['request_id']}
+
+@router.get("/{session_id}/queue")
+def queued_messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services import message_queue
+    session,workspace=context(db,user,session_id)
+    rows=message_queue.entries(db,session.id)
+    return {'paused':session.status in {'failed','cancelled'} or message_queue.paused(db,session.id),'items':[
+        {'request_id':row['request_id'],'text':_sanitize(row['payload']['text'],workspace),
+         'state':row['state']} for row in rows if row['state'] in {'queued','claimed','failed'}]}
+
+@router.delete("/{session_id}/queue/{request_id}")
+def remove_queued_message(session_id: uuid.UUID,request_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services import message_queue
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace);db.refresh(session)
+    rows=message_queue.entries(db,session.id)
+    entry=next((row for row in rows if row['request_id']==str(request_id) and row['state'] in {'queued','failed'}),None)
+    if entry is None:raise HTTPException(404,'Queued message not found')
+    if str(session_id) in _queue_dispatching:raise HTTPException(409,'Queue dispatch is in progress; refresh before removing')
+    # send() commits admission before preflight, so inspect its durable receipt.
+    if entry['state']!='failed' and session_lifecycle.receipt(db,session_id,request_id):raise HTTPException(409,'Message has already entered execution')
+    message_queue.record(db,session.id,request_id,'queue_removed')
+    return {'status':'cancelled'}
+
+class QueueDispatch(BaseModel):
+    resume: bool=False
+
+@router.post("/{session_id}/queue/dispatch")
+async def dispatch_queued_message(session_id: uuid.UUID,data: QueueDispatch,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    context(db,user,session_id)
+    db.rollback()
+    return await dispatch_queued(session_id,resume=data.resume)
 
 @router.get("/{session_id}/submissions/{request_id}")
 def submission_receipt(session_id: uuid.UUID,request_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -424,6 +534,7 @@ def session_diff(session_id: uuid.UUID,user: User=Depends(require_user),db: Sess
 def stop(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     session,workspace=context(db,user,session_id)
     session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    db.add(ExecutionEvent(session_id=session.id,kind="queue_paused",data="{}"))
     cancel(db,session,workspace)
     db.commit()
     return {"status":session.status}
@@ -452,6 +563,23 @@ def cancel(db,session,workspace):
             raise HTTPException(502,"Runtime did not confirm cancellation")
     session.status="cancelled"
     db.add(ExecutionEvent(session_id=session.id,kind="cancelled",data="{}"))
+
+class RenameSession(BaseModel):
+    title: str=Field(min_length=1,max_length=120)
+
+    @field_validator("title",mode="before")
+    @classmethod
+    def trim_title(cls,value):
+        return value.strip() if isinstance(value,str) else value
+
+@router.patch("/{session_id}")
+def rename_session(session_id: uuid.UUID,data: RenameSession,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    session,workspace=context(db,user,session_id)
+    session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
+    session_lifecycle.require_visible(db,session)
+    session.title=data.title
+    db.commit()
+    return session_lifecycle.payload(session,session_lifecycle.state(db,session))
 
 @router.post("/{session_id}/open")
 def open_session(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -594,12 +722,7 @@ def permission_tool_part(service, session, pending):
         for p in row.get('parts',[]) if p.get('type')=='tool' and p.get('callID')==reference['callID']),None)
     return part
 
-def routine_request(workspace, part):
-    if not part or part.get('tool') not in {'read','list','glob','grep','write','edit','todowrite','todoread'}: return False
-    if part['tool'] in {'todowrite','todoread'}: return True
-    inp=(part.get('state') or {}).get('input') or {}
-    raw=inp.get('filePath') or inp.get('path')
-    if raw is None and part['tool'] in {'list','glob','grep'}: raw=''
+def routine_project_path(workspace, raw):
     if not isinstance(raw,str): return False
     try:
         path=Path(raw);root=workspaces.root_for(workspace).resolve()
@@ -607,9 +730,73 @@ def routine_request(workspace, part):
             if not path.is_relative_to(root): return False
             raw=path.relative_to(root).as_posix()
         if any(p.startswith('.env') or p.lower().endswith(('.pem','.key')) for p in Path(raw).parts): return False
+        if any(ord(char)<32 for char in raw): return False
+        if '.github/workflows' in Path(raw).as_posix() or Path(raw).name in {'opencode.json','opencode.jsonc'} or '.opencode' in Path(raw).parts: return False
         workspaces.safe_path(workspace,raw)
     except (HTTPException,ValueError): return False
     return True
+
+def routine_file_patch(workspace, patch):
+    """Only recognize bounded native file additions/edits; never shell patches.
+
+    Unknown grammar, deletion and movement require a separate reviewed approval.
+    Every target is checked, including later hunks; patch contents are not executed.
+    """
+    if not isinstance(patch,str) or not patch or len(patch)>200_000 or '\x00' in patch: return False
+    lines=patch.strip().splitlines()
+    if len(lines)<3 or lines[0]!='*** Begin Patch' or lines[-1]!='*** End Patch': return False
+    operation=None;targets=0
+    for line in lines[1:-1]:
+        match=re.fullmatch(r'\*\*\* (Add|Update) File: (.+)',line)
+        if match:
+            if not routine_project_path(workspace,match[2]): return False
+            operation=match[1];targets+=1
+            if targets>50: return False
+        elif operation=='Add' and line.startswith('+'): continue
+        elif operation=='Update' and (line.startswith((' ','+','-','@@')) or line=='*** End of File'): continue
+        else: return False
+    return targets>0
+
+def routine_request(workspace, part):
+    if not part or part.get('tool') not in {'read','list','glob','grep','write','edit','apply_patch','todowrite','todoread'}: return False
+    if part['tool'] in {'todowrite','todoread'}: return True
+    inp=(part.get('state') or {}).get('input') or {}
+    if part['tool']=='apply_patch': return routine_file_patch(workspace,inp.get('patchText'))
+    raw=inp.get('filePath') or inp.get('path')
+    if raw is None and part['tool'] in {'list','glob','grep'}: raw=''
+    return routine_project_path(workspace,raw)
+
+def non_destructive_project_request(workspace, part):
+    """Owner-approved default: ordinary reads and genuinely new source files only.
+
+    Existing file changes still need explicit consent. Recheck under the workspace
+    lock before replying; never infer creation from the permission label alone.
+    """
+    if not routine_request(workspace,part): return False
+    tool=part['tool']
+    # Recursive content search cannot prove that hidden secrets are excluded.
+    if tool in {'read','list','glob','todoread','todowrite'}: return True
+    inp=(part.get('state') or {}).get('input') or {}
+    if tool=='write':
+        targets=[inp.get('filePath') or inp.get('path')]
+    elif tool=='apply_patch':
+        patch=inp.get('patchText')
+        lines=patch.strip().splitlines()[1:-1]
+        targets=[]
+        for line in lines:
+            match=re.fullmatch(r'\*\*\* Add File: (.+)',line)
+            if match: targets.append(match[1])
+            elif not line.startswith('+'): return False
+        if len(set(targets))!=len(targets): return False
+    else: return False
+    for raw in targets:
+        # routine_request already validates every path and rejects protected paths.
+        path=Path(raw)
+        if not path.is_absolute(): path=workspaces.root_for(workspace)/path
+        try:
+            if path.exists() or path.is_symlink(): return False
+        except OSError: return False
+    return bool(targets)
 
 def approval_fingerprint(permission, patterns, tool=None):
     return hashlib.sha256(json.dumps([permission, tool, sorted(patterns)], ensure_ascii=False).encode()).hexdigest()
@@ -667,14 +854,15 @@ def permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Sessi
         if allowed and reviewable and routine_enabled(db,session.id):
             try: routine=routine_request(workspace,part)
             except HTTPException: routine=False
-        if fingerprint in remembered or routine:
+        non_destructive=allowed and reviewable and non_destructive_project_request(workspace,part)
+        if fingerprint in remembered or routine or non_destructive:
             # Exact reviewed requests only, scoped to this owned conversation.
             # Recheck current platform policy on every repeat; never use runtime "always".
             from urllib.parse import quote
             session_lifecycle.lock_workspace(db,workspace)
             _,_,current_tools=policy.provider_sets(policy.load(db))
             current_allowed=permission!='external_directory' and (not current_tools or permission in current_tools)
-            if not current_allowed or (fingerprint not in remembered_approvals(db,session.id) and not (routine and routine_enabled(db,session.id))):
+            if not current_allowed or (fingerprint not in remembered_approvals(db,session.id) and not (routine and routine_enabled(db,session.id)) and not (non_destructive and non_destructive_project_request(workspace,part))):
                 db.rollback()
             else:
                 try: result=service.request('POST','/permission/'+quote(pending['id'],safe='')+'/reply',{'reply':'once'})
@@ -685,7 +873,7 @@ def permissions(session_id: uuid.UUID,user: User=Depends(require_user),db: Sessi
                 if result is not True: raise HTTPException(502,'Runtime did not confirm the repeated approval')
                 db.execute(update(WorkspaceSession).where(WorkspaceSession.id==session.id,
                     WorkspaceSession.status=='waiting_approval').values(status='submitted').execution_options(synchronize_session=False))
-                event(db,session.id,'approval_decision',{'reply':'routine' if routine else 'similar','automatic':True,'fingerprint':fingerprint})
+                event(db,session.id,'approval_decision',{'reply':'new_file_or_read' if non_destructive else 'routine' if routine else 'similar','automatic':True,'fingerprint':fingerprint})
                 continue
         owned.append({'id':pending['id'],'permission':permission,'patterns':details,'reviewable':reviewable,
                       'rememberable':rememberable,'fingerprint':fingerprint})

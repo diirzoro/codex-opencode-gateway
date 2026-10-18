@@ -10,7 +10,7 @@ Repository: diirzoro/codex-opencode-gateway
 - No Playwright. Do not install or use Playwright in Preview.
 
 ## Product behavior
-1. Preview opens INSIDE the existing Workspace Preview panel. The panel stays open until the user closes it manually.
+1. Preview starts ONLY when the customer explicitly clicks the existing **Start Preview** button inside Workspace. Opening Workspace, opening the Preview tab, framework detection, plan/status polling, saving files, or automatic reconnect must NEVER launch a preview or consume a worker. Preview opens INSIDE the existing Workspace Preview panel. The panel stays open until the user closes it manually.
 2. Static output can remain visible without an active runner. For dynamic previews, after **5 minutes of inactivity** STOP the server-side execution lease while keeping the panel open with an explicit inactive/stopped state. Do NOT restart automatically: only a new explicit Preview/Start request by the user can create a fresh lease. On user request, revalidate authorization, workspace revision and available capacity before starting. Closing the panel stops the owned execution session; it must not end the chat or coding session.
 3. Local projects: target a 50 MB maximum **source snapshot** per preview. Validate actual uncompressed total, file count, depth, per-file sizes, symlinks and special files. This is NOT a memory/CPU limit and is not a guarantee all 50 MB projects can build.
 4. GitHub projects: show changed files and diffs, real preview of the checked-out working tree/branch where supported, and optional external link if one already exists. A thumbnail can be captured by a separately approved method in the future but is not required. Never fabricate a visual result, auto-commit, auto-push or deploy.
@@ -54,9 +54,11 @@ Repository: diirzoro/codex-opencode-gateway
 - Growth aim: attract the first 50 paying subscribers and expand safely; do not advertise unlimited previews.
 
 ## Implementation checklist (updates branch only)
-- [ ] P0: inventory current preview backend/frontend and integration points; retain current working read-only HTML renderer until replacement validated.
+- [x] P0: inventory current preview backend/frontend and integration points; retain current working read-only HTML renderer until replacement validated.
 - [ ] P1: implement robust project detection, validated 50 MB snapshot limits, safe static asset routing, independent origin and tenant tests.
 - [ ] P2: implement build-job interface and per-pool scheduler/leases/queues/status/stop/resume, fail-closed without configured worker.
+- [ ] P2a: implement durable per-pool membership and **actual resource-aware capacity admission**, with measured CPU/RAM/disk, separate active build/runtime concurrency, backpressure queues, and safe rejection when capacity is insufficient. Logical pool counts must NOT create containers or claim physical capacity.
+- [ ] P2b: connect admitted preview jobs to verified isolated Preview Workers for npm/Node and Python as appropriate; enforce per-project isolation and quotas, 5-minute idle shutdown and explicit restart, without affecting OpenCode agent tasks. Verify on Test before any public enablement.
 - [ ] P3: add separately isolated build worker for supported npm static frameworks, cache signed/owned build artifacts and invalidate by revision; test without leaking dependencies or secrets.
 - [ ] P4: implement Workspace embedded UX, manual close, refresh, graceful idle stop and resume, GitHub diff/working-tree integration.
 - [ ] P5: enable dynamic Node/SSR/Python profiles ONLY after dedicated worker security acceptance and resource benchmarks.
@@ -69,6 +71,12 @@ Repository: diirzoro/codex-opencode-gateway
 - `dashboards.js` includes an embedded Preview iframe and panel with Start/Refresh/Stop.
 - Actual dynamic/npm preview is NOT yet available. This document is a product policy, not an assertion that the design has been implemented.
 
+## Implementation progress (updates only, 2026-10-16)
+- Added `backend/app/services/preview_scheduling.py` to classify static/build/dynamic/conditional projects and publish pool-size metadata without allocating workers.
+- `preview_runner.plan()` and `status()` now expose classification; static and build candidates never consume an active dynamic slot merely because they are detected.
+- Added `backend/tests/test_preview_scheduling.py` with focused unit tests. **Tests have not yet been executed on the Test server or CI; do not mark runtime feature complete.**
+- The actual scheduler, separate-origin static server, isolated npm build worker, automatic pool provisioning, idle leases and dynamic previews remain outstanding.
+
 ## Session and terminal inactivity policy (agreed 2026-10-16)
 - **Gateway user login:** 15 minutes of genuine user inactivity expires the authenticated web session and requires a new login. Existing server-side session policy in `backend/app/security/sessions.py` already specifies `IDLE_TIMEOUT = timedelta(minutes=15)`; verify frontend activity acknowledgements are based on actual interaction, not background polling. Idle expiration does NOT remove projects, messages, or stored data.
 - **Preview-owned npm / terminal processes:** after **5 minutes (300 seconds)** without meaningful activity, stop the preview-owned shell/process, clean up its process group and release the sandbox slot. Only a new explicit user request can start a new one. Repeated terminal output without active customer interaction does not count as activity indefinitely.
@@ -77,5 +85,113 @@ Repository: diirzoro/codex-opencode-gateway
 - A user logout/session expiry revokes preview access and should asynchronously release that user's owned preview resources. Do not make cleanup a prerequisite for secure session revocation.
 - Five-minute cleanup and authenticated idle policy must be validated on Test before enabling execution. Current code has policy metadata only; an actual worker/terminal lease reaper is not yet implemented.
 
+## Progress update — 2026-10-16 (updates branch)
+- Confirmed agent offline/pause/resume behavior is a **separate product feature**, not part of Preview. Do not suspend/cancel agent execution when Preview becomes idle; preserve independent OpenCode task ownership and lifecycle.
+- Added `plan_pools(user_count, users_per_pool=50)` to `preview_scheduling.py`: computes the number of logical pools needed at thresholds 50/100, validates inputs, and explicitly refuses to claim any worker provisioned or capacity verified.
+- Added tests for zero/50/51 users, configurable 100-user pools and invalid inputs.
+- No container has been provisioned, no npm/python project has been started, and no production code/deployment was touched. These tests are committed but **not yet executed in Test/CI**.
+- Next: inspect/test existing runtime integration, implement durable pool membership plus resource-based admission (separate from active worker count), then add isolated build worker and expiry reaper. Do not run customer commands on Gateway host.
+
+## Progress — package preparation detection (2026-10-16, updates only)
+- Added `backend/app/services/preview_package_manager.py`: read-only identification of npm, pnpm, yarn, and bun lockfiles. Missing/ambiguous lockfiles fail closed; no install/build command is run.
+- `preview_runner.plan()` and `status()` expose `package_preparation` for detected Node-family projects.
+- Added `backend/tests/test_preview_package_manager.py` covering recognized, missing, and ambiguous lockfiles. Tests are committed **but have not yet run on Test/CI**.
+- Pending: durable scheduler, verified isolated build worker and dependency preparation, safe artifact routing, actual npm/Python builds, and idle cleanup. No Preview runtime was enabled.
+- Product scope: AI agent background/pause behavior is deferred as a separate workstream; Preview must not control agent execution.
+
+## Progress — verified-worker capacity admission (2026-10-16)
+- Added `backend/app/services/preview_admission.py` with conservative isolated worker admission decisions. Static previews bypass dynamic slots; unsupported or unknown frameworks fail closed; worker workloads require a reachable, isolated, security-verified worker with measured free CPU/RAM/disk and an available concurrency slot.
+- Added `backend/tests/test_preview_admission.py` covering absence of workers, insufficient resources, invalid registry data, static HTML, Next.js ambiguity and valid admission decisions.
+- **Admission only returns eligibility for a future durable lease; it does not allocate a container, persist reservations, install npm, or execute user code.** All new unit tests await execution on Test/CI.
+- Next essential steps: trusted worker registry with fresh heartbeats, atomic durable reservation/queues, isolated build runner provisioning, timeout reaper and authenticated separate-origin routing; perform Test security checks before turning on start.
+- Agent background/pause/resume is tracked separately in `docs/AGENT_BACKGROUND_EXECUTION_ROADMAP.md` and remains pending until Preview is complete.
+
+## Progress — explicit start enforcement (2026-10-16, updates only)
+- Added `request_start(..., explicit_start=...)` to `preview_admission.py`. Preview admission is denied for any non-explicit action; it can only produce an eligibility decision, not launch a worker.
+- Added unit tests for HTML/Vite/Python to ensure no auto-start and for explicit build admission.
+- This does NOT yet wire a secure worker or start endpoint to the admission layer. Backend dynamic start remains fail-closed (503); no automatic Preview activation was introduced.
+- No production code or deployment changed; Test/CI tests still need running.
+
+## Progress — preview lease state machine (2026-10-16, updates only)
+- Added `backend/app/services/preview_leases.py`: pure, fail-closed lifecycle for queued/starting/running/stopped/expired/failed, explicit user Start, safe Stop, and five-minute idle expiry.
+- Status polling does not count as user activity. Expired/stopped previews require a new explicit Start request; neither tab opening nor reconnect can restart them.
+- Added `backend/tests/test_preview_leases.py` for manual transitions, 300-second expiry, inactivity refresh from explicit activity only, blocked auto-resume, and timezone checks.
+- This is **not yet persisted in PostgreSQL or connected to the actual Preview runner**. It starts NO containers and executes NO npm/Python. Tests committed but not yet executed on Test/CI.
+- Remaining: persistent per-owner leases and admission transactions, isolated worker + cleanup reaper, safe origin routing, UI integration and end-to-end staging verification.
+
+## Progress — Preview PostgreSQL lease schema staging (2026-10-16, updates only)
+- Added `backend/app/models/preview.py` with a planned `PreviewRuntimeLease` schema: workspace/owner binding, state, worker/pool identity, revision, generation and activity timestamps. This is **not imported into models metadata yet** and no schema migration has been added or executed.
+- Added `backend/tests/test_preview_model_contract.py` testing schema separation from OpenCode sessions and unique workspace binding (not yet executed).
+- The database migration head and existing migration sequencing MUST be confirmed before writing the Alembic migration and importing the model into `app.models`. Do not ship a migration guessed from an unknown revision.
+- **NOT READY FOR TEST DEPLOYMENT YET.** Requirements before informing owner to deploy Test: verify migration chain, integrate ORM and transaction-safe lease repository, run the unit tests, verify DB migration upgrade and downgrade in disposable staging, and ensure disabled-runner behavior remains 503.
+- When ready for Test, provide explicit steps and settings for Test only, separate from Live; never modify .env secrets or workflow configuration by assumption.
+
+## Progress — durable lease transition preparation (2026-10-16, updates only)
+- Added `backend/app/services/preview_lease_store.py` as a **dormant** owner-scoped row-locking transaction layer for future PostgreSQL Preview leases. It enforces state transitions, increments generations on explicit re-start, and never allocates containers.
+- Corrected `preview_leases.py` to reject user activity received *after* a running lease has already been idle for 300 seconds (late heartbeats cannot revive an expired preview). Added a regression test.
+- The `PreviewRuntimeLease` ORM model has **not** been registered in `app.models` and the migration chain has not yet been verified. Do not call the new persistence layer until a migration and dedicated database tests are prepared and passed.
+- IMPORTANT: This checkpoint is **not deploy-ready**. Confirm the repository's current Alembic revision via a full migrations directory listing or `alembic heads` in a disposable Test-only checkout before adding migrations. Avoid guessed revision IDs and Live database actions.
+- Still pending: trusted worker registry, atomic worker capacity reservation, isolated npm/Python runner, cleanup reaper, separate-origin routing, end-to-end tests and deployment authorization.
+
+## Progress — Alembic revision 0019 (2026-10-16, updates only)
+- Verified the actual `backend/alembic/versions` directory: latest revision `0018_email_verification`, preceded by `0017_user_provider_credentials`.
+- Added `0019_preview_runtime_leases.py` with `down_revision = "0018_email_verification"`, creating an owner/workspace-bound preview lease table, named unique workspace constraint, state check constraint and lookup indices.
+- Registered `PreviewRuntimeLease` in `app.models`, aligned ORM constraint with the migration, and updated model contract tests.
+- **No migration has been executed** and no Test database has been modified. Before Test deployment, run `alembic heads`, `alembic upgrade head` against disposable Test database, test rollback in a disposable copy, and execute unit tests. Do not run downgrade on the shared Test or Live database.
+- No isolated Preview Worker is enabled. `/preview/start` still intentionally fails closed for dynamic runtimes. The user alone starts Preview by clicking the existing Start Preview button.
+- Remaining: tested transactional lease store integration, trusted worker heartbeat/registry, isolated runner, authenticated routing, idle reaper and full Test E2E. Not yet ready for release.
+
+## Progress — migration contract checks (2026-10-16, updates only)
+- Added `backend/tests/test_preview_migration_contract.py` to verify the 0019 revision parent, compare the migration's column names with the ORM model and confirm the Preview schema remains independent from `workspace_sessions`. Tests use mocked Alembic operations and a local SQL dialect and do not modify any deployed database.
+- The checks are **committed but not yet executed**. They supplement, not replace, a disposable PostgreSQL `alembic upgrade head` validation and an isolated rollback test.
+- Readiness gate remains: do not ask the owner to deploy Test until migrations, runner isolation and related tests are validated. Dynamic Preview remains fail-closed and Start Preview remains manual.
+
+## Progress — test review and owner-scoped persistence checks (2026-10-16)
+- Fixed `test_preview_migration_contract.py`: migration filename now resolves via the repository `backend/alembic/versions` directory, not `alembic.versions` from installed Python package. This avoids an import error on CI/Test.
+- Added `test_preview_lease_store.py` with mock transaction tests for owner-bound row locking, restart generation cleanup, idle expiry and refusal to create an unknown lease.
+- Execution status: **tests were NOT run against the repository**. Git checkout was not accessible from the available container; do not claim pass. No Alembic migration was executed on PostgreSQL. No runner or worker was started.
+- Next steps: fetch/clone `updates` on isolated Test, run Python suites, verify `alembic heads` and 0019 upgrade on disposable PostgreSQL, then implement authenticated durable lease transactions and isolated worker provisioning. Keep dynamic `/preview/start` fail-closed until the runner is accepted.
+
+## Progress — worker heartbeat and candidate selection (2026-10-16)
+- Added `preview_worker_registry.py`: 30-second freshness bounds on worker heartbeat and isolation attestation; reject stale/future reports and continue failing closed when no worker is available.
+- Added `select_worker()` to select an eligible worker candidate using measured available RAM/CPU, without allocating capacity or executing any project code. Added regression tests for stale workers and exhausted candidates.
+- **Still advisory**: no trusted worker registry database, worker provisioning, atomic reservation or authenticated Preview routing is wired. Tests committed but not executed on Test/CI.
+- Manual Start Preview remains mandatory. The Preview panel stays open on idle stop; no agent task is stopped.
+- Separate launch decision for temporary email verification: see `docs/REMAINING_WORK_AGENDA.md`. Do not conflate email settings with Preview capabilities.
+
+## Progress — two implementation steps (2026-10-16, updates only)
+1. Added `PreviewWorkerCapacity` model and Alembic `0020_preview_worker_capacity.py` (following 0019) with private worker resource fields, heartbeat/attestation timestamps, slot-count and nonnegative-capacity constraints. Model registered in SQLAlchemy metadata. Migration has NOT been applied.
+2. Added dormant `preview_capacity_store.py` with worker-first row lock and generation/owner-bound lease lock, atomic transaction-scoped slot reservation, stale worker rejection and idempotent release. Added `test_preview_capacity_store.py` with reservation/slot exhaustion/generation/staleness/release tests. This is not exposed via API or wired to real workers.
+- **Safety gate:** the caller must own transaction and use independently authenticated worker heartbeats; do not accept worker identity/capacity from browser. Slot release requires actual worker destruction and route revocation before commit. No preview execution or npm/Python install enabled. Tests committed but NOT run on Test/CI.
+- Remaining: disposable PostgreSQL migration 0019->0020 test, concurrent transaction tests on PostgreSQL, trusted worker registry ingestion, isolated worker provisioning, cleanup reaper, authenticated routing and workspace Start integration. Do not deploy or announce production readiness.
+
+## Progress — reservation lifecycle hardening (updates only, 2026-10-16)
+- Fixed `preview_lease_store.apply_transition()` so a new Start cannot erase a still-attached worker reservation, and Stop/idle expiry/failure cannot be marked final while a worker is attached. This prevents losing resource tracking but requires the future dispatcher to first revoke preview access, destroy the isolated worker and release its slot.
+- Added unit regressions for blocked restart/Stop with attached worker and stale-generation/inconsistent-slot release. Keep the same worker-first lock order on reservation and release.
+- **Still not real concurrency validation**: tests are committed but not executed, and actual concurrent PostgreSQL transactions, crash recovery and process cleanup are unverified. No Preview code execution or Test/Live deployment occurred.
+- Next: implement trusted isolated worker lifecycle with cleanup acknowledgments and PostgreSQL concurrency tests in a disposable Test environment, then UI Start integration. Do NOT connect unsafe preview execution to Gateway host.
+
+## Finalization checkpoint — 2026-10-16
+- Hardened `preview_capacity_store.release()` to require explicit `cleanup_confirmed=True` from a trusted dispatcher after sandbox destruction and routing revocation; client input must never supply that flag. Added regression test.
+- Created `docs/PREVIEW_TEST_DEPLOYMENT_CHECKLIST.md` with Test-only migration and unit-test commands, disposable PostgreSQL verification, concurrency/security checks, and strict enabling criteria.
+- **Status remains INCOMPLETE / NOT DEPLOYABLE as working dynamic Preview.** No isolated worker exists, no npm/Python runtime has been launched, tests have not been executed in Test, and production is unchanged. Avoid claiming completion or asking owner to promote branches.
+- The next hands-on prerequisite is a trusted isolated sandbox worker and disposable Test PostgreSQL environment. Implementation and testing require access to those environments; complete and verify before enabling the existing manual Start button.
+
+## Progress — honest Preview readiness signaling (2026-10-16, updates)
+- Updated `preview_runner.start()` to return structured HTTP 503 `PREVIEW_WORKER_NOT_READY` with detected framework and `execution_started=false`, `retry_automatically=false`. This is an intentional fail-closed state, not a successful preview launch. Workspace UI must distinguish it from agent Bash tool approval/execution failure.
+- Aligned policy resource ceilings with build-admission minimums (1 CPU core, 768 MB RAM and 1024 MB ephemeral disk estimates); verified physical capacity and resource limits still require a secure worker.
+- Added `backend/tests/test_preview_runner_readiness.py` for structured blocking and minimum resource agreement; **not run on Test yet**.
+- Outstanding before real Smart Preview: dedicated sandbox worker on isolated infrastructure, trusted registration and private authenticated control channel, snapshot validation in runner, package preparation, separate-origin protected proxy, durable lifecycle/reaper and tested Start/Stop integration. None should be bypassed by asking OpenCode to run `node server.js`.
+- No deployment, no Live/master changes, no claim of full Preview completion.
+
 ## Maintenance rule for all coding agents
 Read this policy before changing Preview. Preserve all approved constraints. Amend this document whenever product decisions or implementation status change, after validating actual code and tests; do not mark a checkbox complete merely because code was proposed.
+
+
+## 2026-10-17 — Actual start diagnostic checkpoint
+- Code commit `06424730a61df70a8d693acd489ef62b80b81ef4` (updates only). Added bounded finite Docker/Worker failure codes and safe reference correlation; raw stderr/exception messages are never returned. Local pinned images only (--pull never), unchanged rootless/resource/network/read-only/non-root safeguards.
+- Source-only prepare is not dependency preparation. Framework entrypoints missing from the snapshot explicitly return dependency_preparation_required. No npm/pip installation on Gateway or unrestricted worker network was introduced. Builds, artifact cache, separate-origin routing and actual Docker acceptance remain open.
+- 32 targeted unit/real-loopback-HTTP tests passed; Docker adapter mocked. No local Docker/socket/SSH identity, no real container or new browser Preview acceptance. See living handoff section37.
+- VPS diagnostic: `sudo python3 backend/scripts/diagnose_preview_worker_test.py` is read-only; add `--smoke` to explicitly start/fetch/stop one new disposable Node fixture through TEST Worker. Requires existing `/etc/opencode-preview-worker-test.env` and dedicated `/run/preview-worker/docker.sock`; never print the token. Do not run the installer/refresh script merely for diagnosis, because it also writes configuration.
+- TEST code-only worker update, when owner performs it from a clean updates checkout: copy preview_diagnostics.py, preview_docker_provisioner.py, preview_worker_client.py and preview_worker_server.py to the existing `/opt/opencode-preview-test/app/services/` and restart only `opencode-preview-worker-test.service`. Existing Test Gateway deployment must also receive preview_worker_client.py to show the new finite messages in its UI. No changes to .env, systemd unit files, Docker daemon settings or workflows are needed for this diagnostic patch.
+- Current VPS start root cause remains undetermined pending operator output. Existing successful auth/prepare smoke and CI are not proof of working Smart Preview.

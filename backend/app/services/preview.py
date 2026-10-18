@@ -84,7 +84,7 @@ def detect(workspace):
         ("artisan", "laravel"), ("composer.json", "php"),
         ("Cargo.toml", "rust"), ("go.mod", "go"), ("pubspec.yaml", "flutter"),
         ("pom.xml", "java"), ("build.gradle", "java"),
-        ("index.html", "html"),
+        ("server.js", "node"), ("index.html", "html"),
     )
     found = []
     manifest = {}
@@ -125,6 +125,10 @@ def detect(workspace):
     elif "go.mod" in files: kind = "go"
     elif "pubspec.yaml" in files: kind = "flutter"
     elif "pom.xml" in files or "build.gradle" in files: kind = "java"
+    # A dependency-free Node HTTP server needs no package.json. Prefer this
+    # explicit server entry over index.html so its routes reach the isolated
+    # runner. A generic index.js may be a browser asset, so is not sufficient.
+    elif "server.js" in files: kind = "node"
     elif "index.html" in files: kind = "html"
     else: kind = "unknown"
     return {

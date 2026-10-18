@@ -17,6 +17,21 @@ from ..config import settings
 TOKEN_TTL = timedelta(hours=24)
 
 
+def required_for_registration() -> bool:
+    """Deployment-controlled launch switch; default secure/verified.
+
+    Set EMAIL_VERIFICATION_REQUIRED=false explicitly for early acquisition.
+    Invalid values fail closed instead of disabling verification.
+    """
+    value = os.getenv("EMAIL_VERIFICATION_REQUIRED", "true").strip().lower()
+    if value in {"true", "1", "yes", "on"}:
+        return True
+    if value in {"false", "0", "no", "off"}:
+        return False
+    raise RuntimeError("EMAIL_VERIFICATION_REQUIRED must be true or false")
+
+
+
 def smtp_ready():
     return bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_FROM") and os.getenv("SMTP_USERNAME")
                 and os.getenv("SMTP_PASSWORD"))

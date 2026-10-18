@@ -4,7 +4,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, Request
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
@@ -484,6 +484,30 @@ def workspace_preview_start(workspace_id: uuid.UUID,user: User=Depends(require_u
 def workspace_preview_stop(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     from ..services.preview_runner import stop
     return stop(manager.owned(db,Workspace,workspace_id,user.id))
+
+
+@router.post("/workspaces/{workspace_id}/preview/access")
+def workspace_preview_access(workspace_id: uuid.UUID, request: Request,
+                             user: User=Depends(require_user), db: Session=Depends(get_db)):
+    from ..services import preview_access
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    return preview_access.mint(workspace,getattr(request.state,'auth_session',None),user)
+
+
+@router.get("/workspaces/{workspace_id}/preview/live/{asset_path:path}")
+def workspace_preview_live(workspace_id: uuid.UUID,asset_path: str,request: Request,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services.preview_runner import fetch_asset
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    # Preserve application routing/query parameters (including repeated values).
+    # Starlette's path parameter excludes the query string.
+    path = "/" + asset_path
+    if request.url.query:
+        path += "?" + request.url.query
+    response=fetch_asset(workspace, path)
+    # Mark only the authenticated, owned and sandboxed preview response.
+    # Middleware must not infer embedding permission from a URL alone.
+    request.state.owned_preview_response=True
+    return response
 
 
 @router.get("/workspaces/{workspace_id}/preview")

@@ -9,7 +9,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
 from .routes import workspaces, agent, github, dashboard, plans, billing, management, homepage
-from .services import workspace_cache, customer_lifecycle
+from .services import workspace_cache, customer_lifecycle, preview_access
+from .routes import preview_public
 
 async def retention_maintenance():
     # Retention bookkeeping must not delay the HTML shell or authentication.
@@ -49,9 +50,12 @@ async def lifespan(app):
         with suppress(asyncio.CancelledError):
             await provider_sync
 
+preview_access.install_access_log_redaction()
+
 app = FastAPI(title="OpenCode Gateway API", version="0.1.0", lifespan=lifespan)
 app.include_router(auth.router); app.include_router(profile.router); app.include_router(locations.router); app.include_router(admin.router)
 app.include_router(workspaces.router)
+app.include_router(preview_public.router)
 app.include_router(agent.router)
 app.include_router(github.router)
 app.include_router(dashboard.router)
@@ -68,6 +72,10 @@ _CROSS_SITE_EXEMPT = {"/api/github/webhook"}
 
 @app.middleware("http")
 async def browser_boundary(request: Request, call_next):
+    if preview_access.is_preview_host(request) and (
+        request.method not in {'GET','HEAD'} or not request.url.path.startswith('/preview/')):
+        return JSONResponse({'detail':'Not found'},status_code=404,
+                            headers={'Cache-Control':'no-store','X-Frame-Options':'DENY'})
     origin = request.headers.get("origin")
     if request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path not in _CROSS_SITE_EXEMPT:
         if request.headers.get("sec-fetch-site") == "cross-site":
@@ -96,7 +104,45 @@ async def browser_boundary(request: Request, call_next):
         await asyncio.to_thread(workspace_cache.end_upload, upload_db, response.status_code < 400)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["X-Frame-Options"] = "DENY"
+    # Correlate failed Preview documents/assets without recording URLs, query
+    # parameters, cookies, source, user IDs or arbitrary incoming header values.
+    if (request.method == "GET" and response.status_code >= 400
+        and re.fullmatch(r"/api/workspaces/[0-9a-f-]{36}/preview/live/.*", request.url.path)):
+        import logging
+        import uuid
+        reference = uuid.uuid4().hex[:12]
+        site = request.headers.get("sec-fetch-site", "missing")
+        dest = request.headers.get("sec-fetch-dest", "missing")
+        site = site if site in {"same-origin", "same-site", "cross-site", "none", "missing"} else "other"
+        dest = dest if dest in {"iframe", "document", "script", "style", "image", "empty", "missing"} else "other"
+        logging.getLogger(__name__).warning(
+            "Preview relay failed status=%d site=%s destination=%s reference=%s",
+            response.status_code, site, dest, reference)
+        response.headers["X-Preview-Reference"] = reference
+    owned_preview = (getattr(request.state, "owned_preview_response", False) is True
+        and request.method == "GET"
+        and re.fullmatch(r"/api/workspaces/[0-9a-f-]{36}/preview/live/.*", request.url.path)
+        and response.headers.get("Content-Security-Policy") == "sandbox allow-scripts")
+    public_preview = (preview_access.is_preview_host(request)
+        and getattr(request.state,'public_preview_response',False) is True
+        and request.method in {'GET','HEAD'}
+        and request.url.path.startswith('/preview/'))
+    if public_preview:
+        if 'X-Frame-Options' in response.headers:
+            del response.headers['X-Frame-Options']
+        if 'Set-Cookie' in response.headers:
+            del response.headers['Set-Cookie']
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Cache-Control'] = 'no-store'
+    elif owned_preview:
+        # Opaque-origin sandbox is retained. Only our own application can frame
+        # an owned preview; authentication/errors and every other page deny it.
+        if "X-Frame-Options" in response.headers:
+            del response.headers["X-Frame-Options"]
+        response.headers["Content-Security-Policy"] = "sandbox allow-scripts; frame-ancestors 'self'"
+        response.headers["Referrer-Policy"] = "no-referrer"
+    else:
+        response.headers["X-Frame-Options"] = "DENY"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     elif request.url.path in {"/", "/index.html"}:
