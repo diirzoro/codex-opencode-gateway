@@ -993,7 +993,13 @@
     discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewStatus.textContent=tr('Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
     renderWorkspaceEmpty();q('promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode'),''));updateSend();
-    if(!navigate){syncWorkspacePolling();return;}
+    if(!navigate){
+      syncWorkspacePolling();
+      // Conversation navigation keeps the page mounted. Restart discovery for
+      // this workspace after resetting its choices; no page() re-entry needed.
+      if(q('workspacePage').classList.contains('active'))refreshChoices().catch(error=>toast(error.message));
+      return;
+    }
     await page('workspacePage');
     window.authSession?.workspaceOpened();
 
