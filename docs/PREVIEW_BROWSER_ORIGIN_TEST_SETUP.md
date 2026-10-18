@@ -1,6 +1,6 @@
 # TEST Preview browser origin — approval and validation gate
 
-Status: code prepared, NOT configured/deployed/accepted. Do not run this document as a shell script.
+Status: owner approved TEST-only infrastructure/configuration on 2026-10-18. Code prepared; NOT configured/deployed/accepted. Do not run this document as a shell script.
 
 ## Confirmed cause (2026-10-18)
 
@@ -16,9 +16,9 @@ A grant URL is a PRIVATE short-lived bearer credential: anyone to whom it is cop
 
 The new transport is opt-in: without PREVIEW_PUBLIC_ORIGIN, existing static/legacy Preview behavior is unchanged (including its known cross-site401 limitation). This allows code-only TEST publication without silently enabling or requiring unconfigured infrastructure. A configured origin activates grant minting; missing key/old Worker then fails closed.
 
-## Owner approval needed before infrastructure/configuration changes
+## Owner approval recorded; actual TEST values still required
 
-No .env, DNS, certificates, Nginx, service settings, workflows, Docker daemon or Live changes have been made. Proposed TEST-only hostname: preview-test.opencode-gateway.codes. Owner must approve its use and the TEST Gateway Environment entry PREVIEW_PUBLIC_ORIGIN=https://preview-test.opencode-gateway.codes. No .env edit is required. This preserves the previously approved separate-origin architecture.
+No .env, DNS, certificates, Nginx, service settings, workflows, Docker daemon or Live changes have been made. Proposed TEST-only hostname: preview-test.opencode-gateway.codes. Owner explicitly approved its use, TEST-only DNS/TLS/new Nginx virtual host, TEST Gateway Environment entry PREVIEW_PUBLIC_ORIGIN=https://preview-test.opencode-gateway.codes and dedicated TEST Worker update/restart. Do not ask for the same approval again. No .env edit is required. This preserves the previously approved separate-origin architecture.
 
 After approval, verify actual TEST upstream host/port/configuration and available TLS certificate locations before producing/installing final Nginx configuration; do not reuse production ports or guess addresses. DNS must resolve to the verified TEST ingress. TLS must cover the new hostname. Do not modify an existing Live server block/certificate. The example below is a review template with unresolved upstream/certificate placeholders, NOT an install-ready file.
 
@@ -64,3 +64,8 @@ Do not add an anonymous proxy route to the old /api/.../preview/live path or exp
 ## Still outside this fix
 
 React/Vite/Next dependency installation/build, Python dependencies, persistent engine setup, admission/concurrency, reaper/storage cleanup and account-wide quota remain separate open work. The existing relay supports bounded GET resources only, not POST/WebSocket/HMR; unknown frameworks/startup commands are not invented. Module/root-path/application-specific routing needs real framework acceptance before claiming support. No customer app runs on Gateway host.
+
+
+## Read-only preflight after approval
+
+Run backend/scripts/preflight_preview_origin_test.py as root on the VPS before filling the upstream/TLS placeholders. It reads ONLY the TEST Gateway PID/environment metadata and selected TEST/new-host Nginx directives; captures nginx -T in memory without printing its full configuration. It reports the existing TEST loopback proxy origin, database host/port/name without user/password/query, encryption-key presence only, certificate/key paths (private key CONTENTS never read), valid SAN coverage, DNS addresses and pg_dump/certbot availability. It makes no database calls, downloads or service/config/DNS/file changes. No secrets or full command/environment/production server blocks are printed. Results are required to produce the final Test configuration and choose the minimal TLS step; do not guess ports, reuse production settings or repeat the successful Preview asset probe.
