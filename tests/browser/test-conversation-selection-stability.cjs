@@ -1,0 +1,24 @@
+// Actual conversation renderer in jsdom; deterministic scroll/focus and mutation checks.
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),{JSDOM}=require('jsdom');
+const source=fs.readFileSync('dashboards.js','utf8');
+function fixture(){
+ const {window}=new JSDOM('<section id="pane"><div id="body"><div id="sessionList"></div></div></section>'),{document}=window;
+ const node=(tag,text='',cls='')=>Object.assign(document.createElement(tag),{textContent:text,className:cls});
+ const c={window,document,currentUser:{id:'owner'},lang:'en',activeSession:{id:'old'},sessionsCount:node('span'),sessionRows:[],sessionFilter:'all',search:{value:''},q:id=>document.getElementById(id),
+  tr:(en,ar)=>c.lang==='ar'?ar:en,textElement:node,btn:(id,en,ar,action)=>{const b=node('button',c.tr(en,ar));b.id=id;b.onclick=action;return b;},
+  updateSend(){},openConversation(){},renameConversation(){},sessionAction(){}};
+ vm.createContext(c);vm.runInContext(source.slice(source.indexOf('  function renderRuntimeSessions('),source.indexOf("  document.addEventListener('click',event=>{",source.indexOf('  function renderRuntimeSessions('))),c);
+ const rows=[{id:'old',title:'Old',created_at:'2026-10-01',lifecycle:'closed'},{id:'new',title:'New',created_at:'2026-10-03',lifecycle:'active'},{id:'middle',title:'Middle',created_at:'2026-10-02',lifecycle:'closed'}];
+ return {c,document,rows,list:document.getElementById('sessionList')};
+}
+let passed=0;
+{const f=fixture();f.c.renderRuntimeSessions(f.rows);assert.deepEqual([...f.list.querySelectorAll('.conversation-row')].map(row=>row.dataset.sessionId),['new','middle','old']);assert.equal(f.document.querySelector('[aria-current]').id,'conversation-old');passed++;}
+{const f=fixture();f.c.renderRuntimeSessions(f.rows);const nodes=[...f.list.children],button=f.document.getElementById('conversation-old');button.focus();f.list.scrollTop=210;f.document.getElementById('body').scrollTop=73;f.c.activeSession={id:'middle'};f.c.renderRuntimeSessions(f.rows);assert.deepEqual([...f.list.children],nodes);assert.equal(f.list.scrollTop,210);assert.equal(f.document.getElementById('body').scrollTop,73);assert.equal(f.document.activeElement,button);assert.equal(f.document.querySelector('[aria-current]').id,'conversation-middle');assert.equal(button.hasAttribute('aria-current'),false);passed++;}
+{const f=fixture();f.c.renderRuntimeSessions(f.rows);const replace=f.list.replaceChildren.bind(f.list);let replacements=0;f.list.replaceChildren=(...args)=>{replacements++;replace(...args);};for(let i=0;i<5;i++)f.c.renderRuntimeSessions(f.rows.map(row=>({...row,status:i%2?'submitted':'completed'})));assert.equal(replacements,0);passed++;}
+{const f=fixture();f.c.renderRuntimeSessions(f.rows);f.list.scrollTop=190;f.document.getElementById('pane').scrollTop=64;const replace=f.list.replaceChildren.bind(f.list);f.list.replaceChildren=(...args)=>{replace(...args);f.list.scrollTop=0;f.document.getElementById('pane').scrollTop=0;};f.c.renderRuntimeSessions(f.rows.map(row=>row.id==='old'?{...row,title:'Renamed'}:row));assert.equal(f.list.scrollTop,190);assert.equal(f.document.getElementById('pane').scrollTop,64);assert.equal(f.document.getElementById('conversation-old').textContent,'Renamed');passed++;}
+{const f=fixture();f.rows.forEach(row=>row.created_at=null);f.c.renderRuntimeSessions(f.rows);const names=[...f.list.children].map(row=>row.dataset.sessionId);f.c.activeSession={id:'new'};f.c.renderRuntimeSessions([...f.rows].reverse());assert.deepEqual([...f.list.children].map(row=>row.dataset.sessionId),names);passed++;}
+{const f=fixture();f.c.renderRuntimeSessions(f.rows);f.c.lang='ar';f.c.renderRuntimeSessions(f.rows);assert.equal(f.document.getElementById('rename-session-old').textContent,'تغيير الاسم');assert.equal(f.document.querySelector('[aria-current]').id,'conversation-old');passed++;}
+{const f=fixture();f.c.renderRuntimeSessions(f.rows);f.list.replaceChildren();f.c.renderRuntimeSessions(f.rows);assert.equal(f.list.querySelectorAll('.conversation-row').length,3);passed++;}
+{const f=fixture();f.c.renderRuntimeSessions(f.rows);const button=f.document.getElementById('conversation-old');f.c.currentUser={id:'other'};f.c.renderRuntimeSessions(f.rows);assert.notEqual(f.document.getElementById('conversation-old'),button);passed++;}
+{const f=fixture();f.c.renderRuntimeSessions(f.rows);f.c.search.value='not present';f.c.renderRuntimeSessions(f.rows);assert.equal(f.list.querySelectorAll('.conversation-row').length,0);assert.match(f.list.textContent,/No sessions/);f.c.search.value='';f.c.renderRuntimeSessions(f.rows);assert.equal(f.list.querySelectorAll('.conversation-row').length,3);passed++;}
+console.log(`${passed} PASSED / 0 FAILED / 0 SKIPPED: no active pinning, stable nodes/order/scroll/focus on selection and polling, structural updates, language/account/filter guards`);

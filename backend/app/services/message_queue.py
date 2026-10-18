@@ -22,6 +22,7 @@ def entries(db,session_id):
 
 def add(db,session_id,payload):
     data=payload.model_dump(mode='json');key=data['request_id']
+    if data.get('response_language') is None:data.pop('response_language',None)
     fingerprint=hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest()
     rows=entries(db,session_id)
     previous=next((row for row in rows if row['request_id']==key),None)

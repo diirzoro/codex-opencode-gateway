@@ -116,7 +116,7 @@ def status(workspace):
             "reason": None if result else "No prepared Preview job is available"}
 
 
-def start(workspace):
+def start(workspace, *, fresh=False):
     import base64
     import tempfile
     from .preview_snapshot import export
@@ -134,9 +134,13 @@ def start(workspace):
         try:
             existing = client.request("status", {"job_id": _job_id(workspace)})
             if existing.get("state") == "running":
-                return {"state": "running",
-                        "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/",
-                        "execution_enabled": True, "reused": True}
+                if not fresh:
+                    return {"state": "running",
+                            "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/",
+                            "execution_enabled": True, "reused": True}
+                stopped=client.request("stop", {"job_id": _job_id(workspace)})
+                if stopped.get('state')!='stopped':
+                    raise PreviewWorkerUnavailable('Preview stop did not confirm shutdown; fresh preview was not started')
         except PreviewWorkerUnavailable as exc:
             if "unregistered_job" not in str(exc):
                 raise

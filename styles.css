@@ -966,7 +966,6 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 #workspacePage .queued-message{padding:6px 0;border-bottom:1px solid var(--line)}
 #workspacePage .queued-message p{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0;max-height:80px;overflow:auto}
 
-#workspacePage .composer-file-support{font-size:12px;color:var(--muted);margin:0 0 5px}
-#workspacePage .composer-file-support>summary{cursor:pointer;width:fit-content}
-#workspacePage .composer-file-support>div{max-height:150px;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:8px}
-#workspacePage .composer-file-support p{margin:4px 0;overflow-wrap:anywhere}
+#workspacePage .message-preview-action{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+#workspacePage .message-preview-action small{color:var(--muted);overflow-wrap:anywhere}
+#workspacePage .conversation-name[aria-busy=true]::after{content:'…';margin-inline-start:6px;color:var(--muted)}

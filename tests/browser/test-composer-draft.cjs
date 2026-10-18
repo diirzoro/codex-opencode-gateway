@@ -7,7 +7,7 @@ const sendBlock=source.slice(source.indexOf('  async function submitPending(){')
 function setup(){
  const window=new JSDOM('<form id="promptForm"><textarea id="promptInput"></textarea><select id="providerSelect"><option selected>provider</option></select><select id="modelSelect"><option selected>model</option></select></form>',{url:'https://test.example'}).window;
  const document=window.document,calls=[];
- const c={window,document,crypto:webcrypto,sessionStorage:window.sessionStorage,
+ const c={window,document,lang:'en',crypto:webcrypto,sessionStorage:window.sessionStorage,
   currentUser:{id:'owner'},activeWorkspace:{id:'workspace'},activeSession:{id:'session',execution_status:'completed'},
   pendingSubmission:null,sending:false,queuing:false,cancelRequested:false,queueCount:0,
   attachments:[],runtimeReady:true,modelsReady:true,workAccess:true,agent:{value:'build'},sendingPreview:null,

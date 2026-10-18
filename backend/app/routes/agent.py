@@ -6,6 +6,7 @@ import asyncio, hashlib, json, re, shlex, time, uuid, mimetypes
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db, SessionLocal
 from ..models import User, Workspace, WorkspaceSession, ExecutionEvent, ProviderCredential, AccountAudit
 from ..services import workspaces, opencode, policy, providers, session_lifecycle
+from ..services.agent_presentation import public_assistant_text, reply_instructions, preview_actions
 from .dependencies import require_user, require_workspace_entitlement
 from ..services.entitlements import require_advanced
 
@@ -77,16 +79,29 @@ def command_activity_label(command):
 
 
 def safe_tool_error(state):
-    """Classify known tool failure signatures; never return raw errors/output."""
-    raw=state.get('error')
-    if not isinstance(raw,str):return 'tool_failed'
-    raw=raw[:16000].lower()
+    """Read bounded native error fields; publish only a finite explanation code."""
+    chunks=[]
+    def inspect(value,depth=0):
+        if depth>3 or len(chunks)>=12:return
+        if isinstance(value,str):chunks.append(value[:2000].lower())
+        elif isinstance(value,dict):
+            for key in ('code','name','message','reason','data','cause','error'):
+                inspect(value.get(key),depth+1)
+    inspect(state.get('error'))
+    metadata=state.get('metadata')
+    if isinstance(metadata,dict):inspect(metadata.get('error'))
+    raw=' '.join(chunks)[:16000]
     for kind,signatures in (
         ('approval_rejected',('permissionrejected','user rejected','rejected by user')),
-        ('file_not_found',('enoent','no such file or directory','file not found')),
-        ('permission_denied',('eacces','permission denied','access denied')),
-        ('command_not_found',('command not found','executable not found')),
-        ('timeout',('timed out','timeout exceeded','deadline exceeded')),
+        ('interrupted',('aborterror','tool execution aborted','operation was aborted','execution interrupted','tool execution cancelled','tool execution canceled')),
+        ('command_not_found',('command not found','executable not found','spawn enoent')),
+        ('file_not_found',('enoent','no such file or directory','file not found','file does not exist','path does not exist')),
+        ('permission_denied',('eacces','eperm','permission denied','access denied','operation not permitted')),
+        ('timeout',('timeouterror','timed out','timeout exceeded','deadline exceeded','etimedout')),
+        ('invalid_arguments',('invalid tool arguments','invalid arguments','invalid input','validationerror','zoderror')),
+        ('tool_unavailable',('tool not found','unknown tool','tool is disabled','tool is not available','tool unavailable')),
+        ('dependency_missing',('cannot find module','module not found','modulenotfounderror','err_module_not_found')),
+        ('network_unavailable',('econnrefused','enotfound','eai_again','connection refused','network is unreachable','enetunreach')),
         ('unsupported_format',('unsupported file type','unsupported format')),
     ):
         if any(signature in raw for signature in signatures):return kind
@@ -194,6 +209,7 @@ class MessageRequest(BaseModel):
     provider_id: str=Field(min_length=1,max_length=120,pattern=r"^[A-Za-z0-9_.-]+$")
     model_id: str=Field(min_length=1,max_length=200)
     agent_id: str|None=Field(default=None,min_length=1,max_length=120)
+    response_language: Literal['ar','en']|None=None
 
 class Approval(BaseModel):
     reply: str=Field(pattern="^(once|similar|reject)$")
@@ -258,13 +274,13 @@ def complete_execution(session_id,kind,**kwargs):
     with SessionLocal() as db:finish_execution(db,session_id,kind,**kwargs)
 
 
-async def execute(session_id,service,runtime_id,data,message_id):
+async def execute(session_id,service,runtime_id,data,message_id,model_inputs=None):
     try:
         workspace=await asyncio.to_thread(begin_execution,session_id,message_id,data.request_id,service.generation)
         if workspace is None:return
-        payload={"messageID":message_id,"system":EXECUTION_REPORTING,"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
+        payload={"messageID":message_id,"system":reply_instructions(data,EXECUTION_REPORTING),"parts":[{"type":"text","text":data.text}],"model":{"providerID":data.provider_id,"modelID":data.model_id}}
         from ..services import attachment_reader
-        payload['parts'].extend(attachment_reader.parts(workspace,attachment_metadata(workspace,data.attachments)))
+        payload['parts'].extend(attachment_reader.parts(workspace,attachment_metadata(workspace,data.attachments),model_inputs))
         if data.agent_id: payload["agent"]=data.agent_id
         request_task=asyncio.create_task(asyncio.to_thread(service.request,"POST",service.session_path(runtime_id,"/message"),payload,600))
         observer=asyncio.create_task(monitor_activity(session_id,service,runtime_id,message_id,workspace,data.request_id,request_task))
@@ -293,6 +309,7 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
     signature=data.model_dump(mode="json",exclude={"request_id"})
     # Empty attachments preserve pre-hotfix receipt fingerprints on browser retry.
     if not signature.get('attachments'): signature.pop('attachments',None)
+    if signature.get('response_language') is None:signature.pop('response_language',None)
     fingerprint=hashlib.sha256(json.dumps(signature,sort_keys=True).encode()).hexdigest()
     session_lifecycle.lock_workspace(db,workspace); db.refresh(session)
     saved=session_lifecycle.receipt(db,session_id,data.request_id)
@@ -348,7 +365,8 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
         if data.model_id not in provider.get("models",{}): raise HTTPException(422,"Model is unavailable")
         # Availability remains OpenCode-owned; entitlement classifies actual use.
         model=provider['models'][data.model_id]
-        attachment_reader.ensure_model_inputs(model,attached)
+        inputs=(model.get('capabilities') or {}).get('input') or {}
+        model_inputs={key:inputs[key] for key in ('image','pdf') if isinstance(inputs,dict) and type(inputs.get(key)) is bool}
         costs=model.get('cost') or {}
         free_model=costs.get('input')==0 and costs.get('output')==0
         own_key=db.scalar(select(ProviderCredential.id).where(ProviderCredential.workspace_id==workspace.id,
@@ -374,7 +392,7 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
     except Exception:
         db.rollback(); finish_execution(db,session_id,"failed",data={"reason":"Runtime preflight failed; no new message was dispatched"},request_id=data.request_id)
         raise
-    tasks[str(session_id)]=asyncio.create_task(execute(session.id,service,session.opencode_session_id,data,message_id))
+    tasks[str(session_id)]=asyncio.create_task(execute(session.id,service,session.opencode_session_id,data,message_id,model_inputs))
     return receipt
 
 _queue_dispatching=set()
@@ -490,15 +508,23 @@ def messages(session_id: uuid.UUID,user: User=Depends(require_user),db: Session=
             saved=json.loads(recorded.data);attachments[saved['message_id']]=saved.get('attachments',[])
             if isinstance(saved.get('text'),str): submitted_text[saved['message_id']]=saved['text']
         except (ValueError,KeyError): pass
+    prompts={item.get('info',{}).get('id'):submitted_text.get(item.get('info',{}).get('id'),
+        '\n'.join(p.get('text','') for p in item.get('parts',[]) if p.get('type')=='text'))
+        for item in result if item.get('info',{}).get('role')=='user'}
     output=[]; hidden=session_lifecycle.hidden_messages(db,session.id); seen=set()
     for item in result:
-        text="\n".join(p.get("text","") for p in item.get("parts",[]) if p.get("type")=="text")[:50000]
+        text="\n".join(p.get("text","") for p in item.get("parts",[]) if p.get("type")=="text")
         info=item.get("info",{}); identifier=info.get("id")
         if identifier in hidden or (identifier and identifier in seen): continue
         seen.add(identifier)
         if info.get('role')=='user': text=submitted_text.get(identifier,text)
+        else:text=public_assistant_text(text)
+        text=text[:50000]
+        activity=safe_tool_activity(item.get('parts',[]),workspace)
+        completed=bool(info.get('time',{}).get('completed')) and not info.get('error')
         output.append({"id":identifier,"role":info.get("role"),"text":_sanitize(text,workspace),
-                       "attachments":attachments.get(identifier,[]),"activity":safe_tool_activity(item.get('parts',[]),workspace),
+                       "attachments":attachments.get(identifier,[]),"activity":activity,
+                       "actions":preview_actions(workspace,session.id,identifier,prompts.get(info.get('parentID'),'') or '',activity,completed) if info.get('role')=='assistant' else [],
                        "state":"failed" if info.get("error") else "completed" if info.get("time",{}).get("completed") else "working"})
     return output
 

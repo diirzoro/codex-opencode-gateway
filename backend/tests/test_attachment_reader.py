@@ -102,13 +102,19 @@ def test_other_project_and_sensitive_attachment_paths_remain_blocked(root):
             agent.attachment_metadata(SimpleNamespace(),[agent.AttachmentRequest(path=path)])
 
 @pytest.mark.parametrize('category,support', [('image',False),('pdf',False),('image',True),('image',None),('pdf',True)])
-def test_native_model_support_is_checked_without_inventing_unknown_capability(category,support):
-    model={'capabilities':{'input':{category:support}}}
-    rows=[{'mime':'image/png' if category=='image' else 'application/pdf'}]
+def test_model_capability_notice_without_sending_unsupported_content(root,category,support):
+    image=category=='image'
+    row=attach(root,'photo.png' if image else 'report.pdf',b'\x89PNG\r\n\x1a\n' if image else b'%PDF-1.7','image/png' if image else 'application/pdf')
+    parts=reader.parts(SimpleNamespace(),[row],{category:support})
     if support is False:
-        with pytest.raises(HTTPException) as error:reader.ensure_model_inputs(model,rows)
-        assert error.value.status_code==422 and ('images' if category=='image' else 'PDF') in error.value.detail
-    else:reader.ensure_model_inputs(model,rows)
+        assert parts[0]['type']=='text'
+        assert 'cannot read '+category in parts[0]['text']
+        assert 'Tell the user this limitation clearly in their language' in parts[0]['text']
+        assert 'contents were not sent' in parts[0]['text']
+        assert str(root) not in str(parts)
+    else:
+        assert parts[0]['type']=='file' and parts[0]['url']==(root/row['name']).as_uri()
+
 
 @pytest.mark.parametrize('role',['build','plan','custom-agent'])
 def test_all_agent_roles_receive_extracted_document_text_in_actual_execute(root,monkeypatch,role):
@@ -132,3 +138,33 @@ def test_all_agent_roles_receive_extracted_document_text_in_actual_execute(root,
 def test_disappeared_docx_is_a_clear_read_error_not_an_internal_exception(root):
     with pytest.raises(HTTPException) as error:reader.docx_text(root/'missing.docx')
     assert error.value.status_code==422 and 'could not be read safely' in error.value.detail
+
+
+@pytest.mark.parametrize('role',['build','plan','custom-agent'])
+@pytest.mark.parametrize('mime,filename,content',[
+    ('image/png','picture.png',b'\x89PNG\r\n\x1a\n'),
+    ('application/pdf','report.pdf',b'%PDF-1.7'),
+])
+def test_unsupported_native_attachment_is_explained_in_same_agent_turn(root,monkeypatch,role,mime,filename,content):
+    import asyncio
+    import uuid
+    workspace=SimpleNamespace();row=attach(root,filename,content,mime)
+    monkeypatch.setattr(agent,'begin_execution',lambda *args:workspace)
+    monkeypatch.setattr(agent,'attachment_metadata',lambda *args:[row])
+    monkeypatch.setattr(agent,'complete_execution',lambda *args,**kwargs:None)
+    async def noop(*args):return
+    monkeypatch.setattr(agent,'monitor_activity',noop);monkeypatch.setattr(agent,'dispatch_queued',noop)
+    calls=[]
+    service=SimpleNamespace(generation=1,session_path=lambda *args:'/message',request=lambda method,path,payload,timeout:calls.append(payload) or {'info':{'role':'assistant','time':{'completed':1}},'parts':[]})
+    data=SimpleNamespace(request_id=uuid.uuid4(),text='اقرأ المرفق',provider_id='owned',model_id='text-model',agent_id=role,attachments=[])
+    asyncio.run(agent.execute(uuid.uuid4(),service,'runtime',data,'message',{'image':False,'pdf':False}))
+    assert len(calls)==1 and calls[0]['agent']==role
+    assert calls[0]['parts'][0]=={'type':'text','text':'اقرأ المرفق'}
+    assert all(part['type']=='text' for part in calls[0]['parts'])
+    assert 'contents were not sent' in calls[0]['parts'][1]['text']
+    assert (root/filename).read_bytes()==content
+
+
+def test_unsupported_model_does_not_bypass_native_file_validation(root):
+    with pytest.raises(HTTPException):
+        reader.parts(SimpleNamespace(),[attach(root,'fake.png',b'not an image','image/png')],{'image':False})

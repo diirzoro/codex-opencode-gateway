@@ -354,6 +354,7 @@ async function refreshMessages(){
     const feedback=textElement('p',labels[state][lang==='ar'?1:0],'agent-progress-note');feedback.setAttribute('role','status');node.append(feedback);
    }if(row.role==='user'&&row.attachments?.length){const attached=textElement('div','','message-attachments');for(const file of row.attachments){const label=textElement('span',file.name+' · '+Math.ceil(file.size/1024)+' KB');label.dir='auto';label.title=file.path;attached.append(label);}node.append(attached);}
    window.renderMessageActivity?.(node,presentation.activity);
+   if(row.role==='assistant')window.renderWorkspaceMessageActions?.(node,row.actions,{owner,sessionId,messageId:row.id});
    if(row.role==='assistant'&&!hasText){feed.append(node);continue;}
    const bar=document.createElement('div');bar.className='feed-actions';bar.setAttribute('role','group');bar.setAttribute('aria-label',lang==='ar'?'إجراءات الرسالة':'Message actions');
    if(row.role==='user')bar.append(feedAction('repeat',row.text,row.attachments),feedAction('edit',row.text,row.attachments));

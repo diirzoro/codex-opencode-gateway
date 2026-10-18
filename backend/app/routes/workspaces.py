@@ -475,9 +475,10 @@ def workspace_preview_status(workspace_id: uuid.UUID,user: User=Depends(require_
 
 
 @router.post("/workspaces/{workspace_id}/preview/start")
-def workspace_preview_start(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+def workspace_preview_start(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db),fresh: bool=False):
     from ..services.preview_runner import start
-    return start(manager.owned(db,Workspace,workspace_id,user.id))
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    return start(workspace,fresh=True) if fresh else start(workspace)
 
 
 @router.post("/workspaces/{workspace_id}/preview/stop")
