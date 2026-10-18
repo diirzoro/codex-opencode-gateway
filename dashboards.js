@@ -1060,6 +1060,29 @@
   for(const [kind,en,ar,icon] of [['local','Local project','مشروع محلي','icon-folder'],['github','GitHub','GitHub','icon-github']]){const button=btn('composer-project-'+kind,en,ar,()=>{projectMenu.open=false;return chooseNewConversation(kind,projectMenuToggle).catch(error=>toast(error.message));});button.prepend(textElement('span'));button.firstChild.innerHTML='<svg class="ui-icon" aria-hidden="true"><use href="#'+icon+'"/></svg>';projectMenuItems.append(button);}
   utilities.append(projectMenu);document.addEventListener('click',event=>{if(projectMenu.open&&!projectMenu.contains(event.target))projectMenu.open=false;});document.addEventListener('keydown',event=>{if(event.key==='Escape')projectMenu.open=false;});window.addEventListener('authentication-cleared',()=>{projectMenu.open=false;});
 
+  // Separate the submitted text from the next draft before any network wait.
+  // Input revisions protect even an identical new draft (or deliberate deletion).
+  let composerDraftRevision=0;
+  q('promptInput').addEventListener('input',()=>composerDraftRevision++);
+  function takeComposerDraft(isCurrent){
+    const input=q('promptInput'),value=input.value,revision=composerDraftRevision;
+    let confirmed=false,restored=false;
+    input.value='';window.resizeWorkspaceComposer?.();
+    return {
+      restore(){
+        if(!confirmed&&!restored&&isCurrent()&&composerDraftRevision===revision&&input.value===''){
+          input.value=value;restored=true;window.resizeWorkspaceComposer?.();
+        }
+      },
+      confirm(){
+        confirmed=true;
+        if(restored&&isCurrent()&&composerDraftRevision===revision&&input.value===value){
+          input.value='';window.resizeWorkspaceComposer?.();
+        }
+      }
+    };
+  }
+
   const queueView=document.createElement('details');queueView.className='composer-message-queue';queueView.hidden=true;queueView.setAttribute('aria-label',tr('Queued messages','الرسائل المنتظرة'));attachmentList.before(queueView);
   let queuePolling=false;
   const queueCurrent=(owner,id)=>currentUser?.id===owner&&activeSession?.id===id;
@@ -1095,7 +1118,7 @@
   window.addEventListener('authentication-cleared',window.resetWorkspaceQueue);
   async function queueFollowup(payload,owner,id){
     if(queuing||!queueCurrent(owner,id))return;queuing=true;updateSend();
-    const prompt=payload.text;
+    const draft=takeComposerDraft(()=>queueCurrent(owner,id));
     try{
       // Persist only a digest + id for uncertain retries, never message text.
       const bytes=new TextEncoder().encode(JSON.stringify({...payload,request_id:null}));
@@ -1107,10 +1130,10 @@
       await api('/api/sessions/'+id+'/queue',{method:'POST',body:JSON.stringify(payload)});
       if(!queueCurrent(owner,id))return;
       try{sessionStorage.removeItem(key);}catch(error){}
-      sentAttachments(payload);if(q('promptInput').value.trim()===prompt){q('promptInput').value='';window.resizeWorkspaceComposer?.();}
+      sentAttachments(payload);draft.confirm();
       submissionStatus.textContent=tr('Added to this conversation’s queue.','أُضيفت إلى طابور هذه المحادثة.');await refreshMessageQueue();
     }catch(error){if(queueCurrent(owner,id)){submissionStatus.textContent=error.message;toast(error.message);}}
-    finally{queuing=false;updateSend();}
+    finally{draft.restore();queuing=false;updateSend();}
   }
   const submissionCurrent=p=>currentUser?.id===p.owner&&activeWorkspace?.id===p.workspaceId&&activeSession?.id===p.sessionId;
   let sendingPreview=null;
@@ -1143,7 +1166,7 @@
       if(!result){if(!submissionCurrent(pending))return;result=await api('/api/sessions/'+pending.sessionId+'/messages',{method:'POST',body:JSON.stringify(pending.payload)});}
       if(!submissionCurrent(pending))return;
       sentAttachments(pending.payload);pendingSubmission=null;retrySubmission.hidden=true;submissionStatus.textContent=tr('Submission confirmed.','تم تأكيد الطلب.');
-      if(pending.payload&&q('promptInput').value.trim()===pending.payload.text){q('promptInput').value='';window.resizeWorkspaceComposer?.();}
+      pending.draft?.confirm();
       await refreshSessionStatus();await refreshMessages();
     }catch(error){if(submissionCurrent(pending)){retrySubmission.hidden=false;submissionStatus.textContent=error.message;toast(error.message);}}
     finally{sending=false;updateSend();}
@@ -1157,6 +1180,7 @@
       await queueFollowup({request_id:crypto.randomUUID(),text:prompt,provider_id:provider,model_id:model,attachments:attachments.map(item=>({path:item.path})),...(selectedAgent?{agent_id:selectedAgent}:{})},owner,activeSession.id);return;
     }
     // Synchronous lock precedes entitlement, creation, runtime and network waits.
+    const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);
     sending=true;cancelRequested=false;updateSend();submissionStatus.textContent=tr('Submitting…','جارٍ الإرسال…');showSendingPreview(prompt);
     try{
       await refreshEntitlement();if(!workAccess||cancelRequested||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
@@ -1164,13 +1188,13 @@
       if(!activeSession||cancelRequested||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
       const requestId=crypto.randomUUID(),sessionId=activeSession.id;if(sendingPreview)sendingPreview.sessionId=sessionId;
       const payload={request_id:requestId,text:prompt,provider_id:provider,model_id:model,attachments:attachments.map(a=>({path:a.path})),...(selectedAgent?{agent_id:selectedAgent}:{})};
-      const pending={request_id:requestId,sessionId,workspaceId,owner,payload};pendingSubmission=pending;
+      const pending={request_id:requestId,sessionId,workspaceId,owner,payload,draft};pendingSubmission=pending;
       try{sessionStorage.setItem('og-submit:'+owner+':'+sessionId,JSON.stringify({request_id:requestId}));}catch(error){}
       const result=await api('/api/sessions/'+sessionId+'/messages',{method:'POST',body:JSON.stringify(payload)});
       if(!submissionCurrent(pending))return;
       clearSendingPreview();
       sentAttachments(payload);pendingSubmission=null;retrySubmission.hidden=true;activeSession.execution_status=result.status;updateSend();
-      if(q('promptInput').value.trim()===prompt){q('promptInput').value='';window.resizeWorkspaceComposer?.();}submissionStatus.textContent=tr('Submission confirmed.','تم تأكيد الطلب.');
+      draft.confirm();submissionStatus.textContent=tr('Submission confirmed.','تم تأكيد الطلب.');
       await refreshSessionStatus();await refreshMessages();
     }catch(error){
       if(activeWorkspace?.id===workspaceId&&currentUser?.id===owner){
@@ -1185,7 +1209,7 @@
         if(pendingSubmission){retrySubmission.hidden=false;submissionStatus.textContent=tr('Submission result is uncertain. Check or retry this same request.','نتيجة الإرسال غير مؤكدة. تحقق أو أعد هذا الطلب نفسه.');}
         else submissionStatus.textContent=error.message;toast(error.message);
       }
-    }finally{clearSendingPreview();sending=false;cancelRequested=false;updateSend();}
+    }finally{draft.restore();clearSendingPreview();sending=false;cancelRequested=false;updateSend();}
   };
   q('stopAgent').onclick=async()=>{
     if(cancelRequested)return;cancelRequested=true;updateSend();
