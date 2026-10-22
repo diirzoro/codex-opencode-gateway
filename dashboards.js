@@ -72,15 +72,20 @@
       root.append(btn('retrySettings','Retry','إعادة المحاولة',()=>loadConnections()));
     });
     const githubJob=loadConnectionsGithub();
-    const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Selected workspace runtime','وقت تشغيل مساحة العمل المختارة'),text('p','Loading workspace state…','جارٍ تحميل حالة مساحة العمل…'));
+    const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Native OpenCode discovery (TEST)','اكتشاف OpenCode المباشر (TEST)'),text('p','Loading native agents…','جارٍ تحميل الوكلاء مباشرة…'));
+    // Connections page: read native agent discovery through Nginx, not the Python
+    // workspace runtime. This describes the independent TEST native service only.
     const runtimeJob=(async()=>{
-      await (window.workspaceContextReady||Promise.resolve());
-      if(!activeWorkspace){runtime.lastElementChild.textContent=tr('Select a workspace to inspect its runtime.','اختر مساحة عمل لفحص وقت تشغيلها.');return;}
-      const selected=activeWorkspace;
-      if(!await usableWorkspace(selected)){runtime.lastElementChild.textContent=tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.');return;}
-      const workspaceId=selected.id,state=await window.workspaceRuntime.loadAgents(workspaceId);
-      if(activeWorkspace?.id===workspaceId)runtime.lastElementChild.textContent='OpenCode '+(state.health?.version||'')+' · '+(state.health?.healthy?tr('Ready','جاهز'):tr('Unavailable','غير متاح'));
-    })();
+      const response=await fetch('/native-probe/agent',{credentials:'same-origin',cache:'no-store'});
+      if(!response.ok)throw new Error('Native agents HTTP '+response.status);
+      const agents=await response.json();
+      if(!Array.isArray(agents))throw new Error('Invalid native agents response');
+      if(runtime.isConnected)runtime.lastElementChild.textContent=
+        tr('Native OpenCode agents via Nginx: ','وكلاء OpenCode المباشرين عبر Nginx: ')+agents.length;
+    })().catch(error=>{
+      if(runtime.isConnected)runtime.lastElementChild.textContent=
+        tr('Native agent discovery unavailable: ','تعذر استدعاء الوكلاء مباشرة: ')+error.message;
+    });
     const results=await Promise.allSettled([providersJob,githubJob,runtimeJob]);
     for(const result of results)if(result.status==='rejected')toast(result.reason.message);
   }
