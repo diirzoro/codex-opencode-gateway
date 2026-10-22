@@ -437,7 +437,10 @@
     document.addEventListener('click',event=>{if(!comboWrap.contains(event.target)){optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}},{signal:controller.signal});
     box.append(button(tr('Refresh OpenCode state','حدّث حالة OpenCode'),()=>metadataReady?refresh(true):initialize()));
     async function initialize(){
-      message(snapshot?tr('Refreshing OpenCode providers…','جارٍ تحديث مزوّدي OpenCode…'):tr('Loading OpenCode providers…','جارٍ تحميل مزوّدي OpenCode…'));renderOptions();renderConnected();
+      message(snapshot?tr('Refreshing OpenCode providers…','جارٍ تحديث OpenCode…'):tr('Loading OpenCode providers…','جارٍ تحميل مزوّدي OpenCode…'));renderOptions();renderConnected();
+      // Start Native discovery immediately, without waiting for projects/workspace metadata.
+      // Only account-wide discovery can do this; an explicitly selected workspace retains its own policy.
+      const earlyNative=body.dataset.connectionWorkspace?null:refresh();
       try{
         const [owned,projectRows]=await Promise.all([api('/api/workspaces'),api('/api/projects'),window.workspaceContextReady||Promise.resolve()]);
         if(!alive())return;workspaces=owned;projects=projectRows;metadataReady=true;
@@ -447,7 +450,7 @@
         const selected=workspaces.find(w=>w.id===body.dataset.connectionWorkspace);
         workspaceId=selected?.id||'';view.workspaceId=workspaceId;picker.value=workspaceId;picker.disabled=false;
         base='/api/workspaces/'+workspaceId+'/providers/';
-        if(!workspaceId){await refresh();return;}
+        if(!workspaceId){await (earlyNative||refresh());return;}
         snapshot=window.workspaceRuntime.peek(workspaceId);renderOptions();await refresh();
       }catch(error){if(alive())message(error.message,true);}
     }
