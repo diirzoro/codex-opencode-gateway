@@ -1,5 +1,7 @@
 # Native OpenCode 1.18.32 — Batch 1 (22 October 2026)
 
+**Current deployment follow-up:** use [NATIVE_TEST_COORDINATED_RELEASE.md](NATIVE_TEST_COORDINATED_RELEASE.md) and its operator-only comparison/stage/activate/rollback tool. Do not deploy this batch through the three-file UI workflow. The historical manual proposal below is superseded by that coordinated procedure; no actual TEST deployment by Work is claimed.
+
 Published source: `c0d830bc3abb374d9f5699c445b0195032aba39a`, exact tested tree `54e1728e397c36631029c8bd44fdf3973d3767c8`.
 
 Owner-approved replacement for the earlier V2 plan. Use the existing `opencode-native-test.service` on `127.0.0.2:4097`; no V2/Docker installation, second engine, AI proxy or custom queue. Exactly two implementation tasks: native sessions/messages/models and native SSE/tools/Todo/questions/permissions/abort. Existing Dashboard/Workspace/Preview layout and database/history are preserved.

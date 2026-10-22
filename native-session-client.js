@@ -1,6 +1,6 @@
 /* OpenCode 1.18.32 wire adapter and existing-UI presentation, not an execution engine. */
 (() => {
-  let identity='',configuration=null,stream=null;const rows=new Map(),snapshots=new Map(),statuses=new Map();
+  let identity='',configuration=null,stream=null;const rows=new Map(),snapshots=new Map(),statuses=new Map(),statusEvents=new Map(),statusReads=new Map();let epoch=0;
   const owner=()=>String(currentUser?.id||'');
   const active=()=>configuration?.enabled===true&&identity===owner();
   const current=(id,user)=>activeSession?.id===id&&owner()===user;
@@ -11,7 +11,7 @@
     if(owner()!==user)throw Error('Authenticated account changed');
     return configuration.enabled;
   }
-  function clear(){stream?.close();stream=null;identity='';configuration=null;rows.clear();snapshots.clear();statuses.clear();}
+  function clear(){epoch++;stream?.close();stream=null;identity='';configuration=null;rows.clear();snapshots.clear();statuses.clear();statusEvents.clear();statusReads.clear();}
   function remember(row){rows.set(row.id,row);return row;}
   async function context(id){if(rows.has(id))return rows.get(id);return remember(await api('/api/native-test/sessions/'+encodeURIComponent(id)));}
   const url=(workspace,path)=>'/native-session/'+encodeURIComponent(workspace)+'/'+path;
@@ -53,6 +53,13 @@
     if(tail==='queue'||tail.startsWith('submissions/'))throw Error('This native version has no Gateway queue or submission receipt. Check native history before resending.');
     throw Error('This history action is not migrated to native TEST yet; conversation data was preserved.');
   }
+  async function synchronizeStatus(row,id,valid=()=>true){
+    const generation=epoch,user=owner(),seen=statusEvents.get(id)||0,sequence=(statusReads.get(id)||0)+1;
+    statusReads.set(id,sequence);
+    const live=await native(row.workspace_id,'session/status');
+    if(epoch!==generation||owner()!==user||statusReads.get(id)!==sequence||(statusEvents.get(id)||0)!==seen||!valid())return;
+    statuses.set(id,live[row.runtime_id]?.type&&live[row.runtime_id].type!=='idle'?'submitted':'idle');
+  }
   async function start(){
     stop();const id=activeSession?.id,user=owner();if(!id)return;
     const row=await context(id);if(!current(id,user))return;
@@ -76,6 +83,7 @@
       let e;try{e=JSON.parse(event.data);}catch{return;}
       const p=e.properties||{},session=p.sessionID||p.info?.sessionID||p.part?.sessionID||p.info?.id;
       if(session&&session!==row.runtime_id)return;
+      if(['session.status','session.idle','session.error'].includes(e.type))statusEvents.set(id,(statusEvents.get(id)||0)+1);
       if(e.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
       if(e.type==='session.idle')statuses.set(id,'idle');
       if(e.type==='session.error')statuses.set(id,'failed');
@@ -85,7 +93,12 @@
       if(e.type.startsWith('todo.'))dirty.todos=true;
       if(Object.values(dirty).some(Boolean))schedule();
     };
-    source.onopen=()=>{if(current(id,user)&&stream===source){dirty={messages:true,status:true,controls:true,todos:true};schedule();}};
+    source.onopen=async()=>{
+      if(!current(id,user)||stream!==source)return;
+      try{await synchronizeStatus(row,id,()=>current(id,user)&&stream===source);}
+      catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
+      if(current(id,user)&&stream===source){dirty={messages:true,status:true,controls:true,todos:true};schedule();}
+    };
     source.onerror=()=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent='Reconnecting to native OpenCode';};
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);close();};
   }
@@ -95,8 +108,10 @@
     const parts=[{type:'text',text},...files.map(f=>({type:'file',mime:f.mime||({'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','pdf':'application/pdf'}[f.path.split('.').at(-1)]||'application/octet-stream'),url:row.file_base+f.path.split('/').map(encodeURIComponent).join('/'),filename:f.path.split('/').at(-1)}))];
     await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
       model:{providerID,modelID},...(row.model?.providerID===providerID&&row.model?.id===modelID&&row.model.variant?{variant:row.model.variant}:{}),...(agent?{agent}:{}),parts});
-    const live=await native(row.workspace_id,'session/status');
-    statuses.set(id,live[row.runtime_id]?.type&&live[row.runtime_id].type!=='idle'?'submitted':'idle');
+    // A failed status lookup cannot undo a native 204 acknowledgment or invite
+    // an accidental resend of an already accepted prompt. SSE/history reconcile.
+    try{await synchronizeStatus(row,id);}
+    catch(error){if(active())$('#runtimeStatus').textContent=error.message;}
   }
   async function permissions(box,provided){
     const id=activeSession?.id,user=owner();if(!id||!box)return;const pending=provided||await requests('permission',id);if(!current(id,user))return;
