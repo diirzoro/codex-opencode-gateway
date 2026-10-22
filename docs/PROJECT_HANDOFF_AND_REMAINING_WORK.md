@@ -1,3 +1,15 @@
+# CURRENT OWNER OVERRIDE — native OpenCode 1.18.32, Batch 1 (22 October 2026)
+
+Owner explicitly approved replacing the failed V2 direction with the existing `opencode-native-test.service` (127.0.0.2:4097), with loopback discovery18097/session-SSE18098. Do not restore V2/Docker or create another engine, message processor, queue or service. Exactly TWO tasks in this batch: native sessions/messages/model selection and native SSE/tools/Todo/questions/permissions/abort. Preserve existing UI/Preview/accounts/projects/data; old conversation behavior may change, but no database/session deletion is authorized. Work on `updates` only; master/LIVE/workflows untouched.
+
+Source is opt-in via OPENCODE_NATIVE_TEST_ENABLED and explicit TEST owner ID. Gateway only admits identity/Project+Workspace+session ownership and derives native directory; Nginx carries original AI JSON/SSE. Enabling this mode blocks legacy per-workspace runtime spawn, Python agent/queue dispatch and credential-copy sweep. Flag is disabled by default until TEST-only Nginx and local file reconciliation succeeds. Native global events and shared storage remain pilot-only; no customer isolation claim.
+
+**Source/local verification, not deployed TEST completion:** real isolated 1.18.32 native session/prompt/SSE/model/tool permission/rejection/question/Todo/abort scenarios passed using a deterministic loopback test model. Eight focused ownership/gate checks and native-client sustained-stream/session-filter tests passed. Full backend515 passed/35 skipped/2 failed; the same two failures reproduce on baseline a032f701 (Preview fixture and old credential-restore fixture). Existing browser regression results and exact boundaries are in [NATIVE_SESSION_BATCH1.md](NATIVE_SESSION_BATCH1.md). Temporary tests are removed after use at owner's request; permanent security tests preserved.
+
+**No SSH/deployment performed:** SSH has no configured identity/agent/host here. Existing TEST proxy is localhost-only; browser named redirects and permission/question locations require actual config review/application by the operator. Do not overwrite working TEST source/config. See [NATIVE_SESSION_TEST_NGINX.conf](NATIVE_SESSION_TEST_NGINX.conf) (proposal only) and the batch document for activation, acceptance and data-preserving rollback. Actual TEST prompt/SSE, external paid models and OS/customer isolation remain UNVERIFIED. Source commit is recorded in the companion checkpoint after publication.
+
+---
+
 # OpenCode Gateway — Living Project Handoff and Completion Register
 
 **Updated:** 2026-10-14  

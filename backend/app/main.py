@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
 from .routes import workspaces, agent, github, dashboard, plans, billing, management, homepage
 from .services import workspace_cache, customer_lifecycle, preview_access
-from .routes import preview_public
+from .routes import preview_public, native_sessions
 
 async def retention_maintenance():
     # Retention bookkeeping must not delay the HTML shell or authentication.
@@ -34,7 +34,8 @@ async def provider_maintenance():
     from .services import account_provider_sync
     while True:
         await asyncio.sleep(5)
-        await asyncio.to_thread(account_provider_sync.sweep)
+        if not native_sessions.enabled():
+            await asyncio.to_thread(account_provider_sync.sweep)
 
 @asynccontextmanager
 async def lifespan(app):
@@ -54,6 +55,7 @@ preview_access.install_access_log_redaction()
 
 app = FastAPI(title="OpenCode Gateway API", version="0.1.0", lifespan=lifespan)
 app.include_router(auth.router); app.include_router(profile.router); app.include_router(locations.router); app.include_router(admin.router)
+app.include_router(native_sessions.router)
 app.include_router(workspaces.router)
 app.include_router(preview_public.router)
 app.include_router(agent.router)
@@ -154,7 +156,7 @@ async def browser_boundary(request: Request, call_next):
     return response
 
 # Explicit public assets only. Never mount the repository, docs or runtime root.
-_VERSIONED_ASSETS = {"app.js", "enhancements.js", "management.js", "dashboards.js", "runtime-client.js", "styles.css"}
+_VERSIONED_ASSETS = {"app.js", "enhancements.js", "management.js", "dashboards.js", "runtime-client.js", "native-session-client.js", "styles.css"}
 
 @lru_cache(maxsize=32)
 def _asset_digest(name, modified, size):
@@ -168,6 +170,8 @@ def public_file(name):
     def serve(request: Request):
         if name == "index.html":
             html = (frontend / name).read_text(encoding="utf-8")
+            if native_sessions.enabled():
+                html=html.replace('<script defer src="runtime-client.js', '<script defer src="native-session-client.js?v=native-test"></script>\n  <script defer src="runtime-client.js')
             # Content versions change automatically when any script/style changes.
             html = re.sub(r'(src|href)="([\w.-]+)\?v=[^"]*"',
                           lambda match: f'{match[1]}="{match[2]}?v={asset_version(match[2])}"'
@@ -184,5 +188,5 @@ def public_file(name):
         return response
     return serve
 
-for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/dashboards.js": "dashboards.js", "/runtime-client.js": "runtime-client.js", "/styles.css": "styles.css"}.items():
+for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/dashboards.js": "dashboards.js", "/runtime-client.js": "runtime-client.js", "/native-session-client.js": "native-session-client.js", "/styles.css": "styles.css"}.items():
     app.add_api_route(url, public_file(name), methods=["GET"], include_in_schema=False)

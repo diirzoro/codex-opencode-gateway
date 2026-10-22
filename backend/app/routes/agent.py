@@ -20,6 +20,11 @@ from .dependencies import require_user, require_workspace_entitlement
 from ..services.entitlements import require_advanced
 
 router=APIRouter(prefix="/api/sessions",tags=["agent"],dependencies=[Depends(require_workspace_entitlement)])
+def require_legacy_transport():
+    from .native_sessions import enabled
+    if enabled():raise HTTPException(409,"Use native TEST sessions; the Python execution and queue pipeline is disabled")
+
+router.dependencies.append(Depends(require_legacy_transport))
 tasks={}
 
 EXECUTION_REPORTING = """Execution reporting for this Gateway conversation:

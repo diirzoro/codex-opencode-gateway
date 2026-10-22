@@ -16,3 +16,7 @@
 - Run tests and explain blockers; do not claim CI or production success without proof.
 
 For every change: **read → implement → test → document → commit on updates**.
+
+### Latest owner-authorized native TEST batch (22 October 2026)
+
+Use the existing native **OpenCode 1.18.32**, not the superseded V2/Docker plan. Read docs/NATIVE_SESSION_BATCH1.md and the current override at the top of the handoff. Gateway authorizes identity/owned mappings only; Nginx carries native JSON/SSE; do not build another engine/queue. Native mode remains explicit single-owner TEST opt-in pending actual Nginx/working-file reconciliation and acceptance. No per-workspace process or old credential copying in native mode. Preserve the old source for rollback until native TEST acceptance; no database/project/history deletion. Temporary task tests must be removed after use, while existing security regressions remain. SSH is authorized if a configured connection is actually available; do not claim server access or print secrets. Do not change master/LIVE/workflows or Preview in this batch.

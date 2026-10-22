@@ -37,6 +37,8 @@ function invalidateProviderMutation(path,method='GET'){
  }
 }
 const api=async(path,options={})=>{
+ if(window.nativeSession&&/^\/api\/(?:sessions(?:\/|\?|$)|workspaces\/[^/]+\/sessions)/.test(path))await window.nativeSession.ready();
+ if(window.nativeSession?.active()){const routed=await window.nativeSession.route(path,options);if(routed)return routed.value;}
  const revision=authenticationRevision,controller=new AbortController();authenticatedRequests.add(controller);
  const onAbort=()=>controller.abort();options.signal?.addEventListener('abort',onAbort,{once:true});if(options.signal?.aborted)controller.abort();
  let response;
@@ -49,7 +51,7 @@ const api=async(path,options={})=>{
  if(revision!==authenticationRevision)throw new Error('Authenticated session changed');
  if(!response.ok){
   if(response.status===401&&!options.allowAnonymous&&currentUser)clearAuthenticatedState();
-  const error=new Error(Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):(body.detail||'Request failed'));error.status=response.status;throw error;
+  const error=new Error(Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):(body.detail||(path.startsWith('/native-session/')?'OpenCode HTTP '+response.status:'Request failed')));error.status=response.status;throw error;
  }
  invalidateProviderMutation(path,options.method);return body;
 };
@@ -127,8 +129,9 @@ window.authSession=(()=>{
 function showPage(id){navigationRevision++;document.documentElement.classList.remove('bootstrapping');if(['admin','owner'].includes(currentUser?.role)&&['workspaceHomePage','connectionsPage','workspacePage','onboarding','clientPage','accountPage','billingPage'].includes(id))id='adminPage';$('#welcomeSidebar').classList.remove('visible');$('#sessionSidebar').classList.remove('open');overlay(false);$$('.page').forEach(p=>p.classList.toggle('active',p.id===id||(id==='authPage'&&p.id==='landing')));$('#siteHeader').style.display=id==='landing'?'flex':'none';window.scrollTo(0,0);syncPermissionPolling()}
 async function page(id){await authReady;await interfaceReady;if(protectedPages.has(id)&&!currentUser){showPage('authPage');window.loadManagement().catch(error=>toast(error.message));return}if(id==='adminPage'&&!['admin','owner'].includes(currentUser?.role)){toast('Administrator access required');return}showPage(id);if(['authPage','landing'].includes(id))window.loadManagement().catch(error=>toast(error.message));try{if(id==='accountPage'){renderProfile(await api('/api/profile'));await loadProjects()}if(id==='adminPage')await loadAdminUsers();if(id==='workspacePage'&&!activeWorkspace&&!window.workspaceRestoring){showPage('onboarding')}}catch(error){if(currentUser)toast(error.message)}}
 function updateNavigation(){$$('[data-go="adminPage"]').forEach(el=>el.hidden=!['admin','owner'].includes(currentUser?.role))}
-function stopEvents(){eventStream?.close();eventStream=null;if(permissionTimer)clearInterval(permissionTimer);permissionTimer=null}
+function stopEvents(){window.nativeSession?.stop();eventStream?.close();eventStream=null;if(permissionTimer)clearInterval(permissionTimer);permissionTimer=null}
 function syncPermissionPolling(){
+ if(window.nativeSession?.active()){if(permissionTimer)clearInterval(permissionTimer);permissionTimer=null;return;}
  const needed=Boolean(currentUser&&activeSession&&!document.hidden&&$('#workspacePage')?.classList.contains('active'));
  if(!needed){if(permissionTimer)clearInterval(permissionTimer);permissionTimer=null;return;}
  if(!permissionTimer)permissionTimer=setInterval(async()=>{
@@ -382,8 +385,9 @@ async function refreshMessages(){
  }catch(error){if(activeSession?.id===sessionId&&currentUser?.id===owner)toast(error.message);}
 }
 
-function startEvents(){if(!activeSession)return;stopEvents();const sessionId=activeSession.id,owner=currentUser?.id,key=String(owner)+':'+sessionId;let cursor=eventCursors.get(key)||0;try{cursor=Math.max(cursor,Number(sessionStorage.getItem('og-events:'+key))||0)}catch(error){}const stream=new EventSource(`/api/sessions/${sessionId}/events?after=${cursor}`);eventStream=stream;stream.addEventListener('authentication_expired',()=>{if(eventStream===stream&&currentUser?.id===owner)clearAuthenticatedState();});for(const kind of ['activity','submitted','analyzing','reading_files','editing','running_command','running_tests','waiting_approval','approval_decision','failed','completed','cancelled'])stream.addEventListener(kind,event=>{if(eventStream!==stream||activeSession?.id!==sessionId||currentUser?.id!==owner)return;const id=Number(event.lastEventId);if(id&&id<=(eventCursors.get(key)||cursor))return;if(id){cursor=id;eventCursors.set(key,id);try{sessionStorage.setItem('og-events:'+key,String(id))}catch(error){}}let data={};if(kind==='activity'){try{data=JSON.parse(event.data);}catch(error){return;}}window.renderWorkspaceEventLine?.(kind,data);window.dispatchEvent(new CustomEvent('workspace-execution-event',{detail:{sessionId,kind}}));});stream.onopen=()=>{if(eventStream===stream)window.dispatchEvent(new CustomEvent('workspace-execution-event',{detail:{sessionId,kind:'connected'}}))};stream.onerror=()=>{if(eventStream===stream&&activeSession?.id===sessionId)$('#runtimeStatus').textContent='Reconnecting to event stream'};syncPermissionPolling()}
+function startEvents(){if(window.nativeSession?.active()){window.nativeSession.start().catch(error=>toast(error.message));return;}if(!activeSession)return;stopEvents();const sessionId=activeSession.id,owner=currentUser?.id,key=String(owner)+':'+sessionId;let cursor=eventCursors.get(key)||0;try{cursor=Math.max(cursor,Number(sessionStorage.getItem('og-events:'+key))||0)}catch(error){}const stream=new EventSource(`/api/sessions/${sessionId}/events?after=${cursor}`);eventStream=stream;stream.addEventListener('authentication_expired',()=>{if(eventStream===stream&&currentUser?.id===owner)clearAuthenticatedState();});for(const kind of ['activity','submitted','analyzing','reading_files','editing','running_command','running_tests','waiting_approval','approval_decision','failed','completed','cancelled'])stream.addEventListener(kind,event=>{if(eventStream!==stream||activeSession?.id!==sessionId||currentUser?.id!==owner)return;const id=Number(event.lastEventId);if(id&&id<=(eventCursors.get(key)||cursor))return;if(id){cursor=id;eventCursors.set(key,id);try{sessionStorage.setItem('og-events:'+key,String(id))}catch(error){}}let data={};if(kind==='activity'){try{data=JSON.parse(event.data);}catch(error){return;}}window.renderWorkspaceEventLine?.(kind,data);window.dispatchEvent(new CustomEvent('workspace-execution-event',{detail:{sessionId,kind}}));});stream.onopen=()=>{if(eventStream===stream)window.dispatchEvent(new CustomEvent('workspace-execution-event',{detail:{sessionId,kind:'connected'}}))};stream.onerror=()=>{if(eventStream===stream&&activeSession?.id===sessionId)$('#runtimeStatus').textContent='Reconnecting to event stream'};syncPermissionPolling()}
 async function refreshPermissions(){
+ if(window.nativeSession?.active()){const rows=await window.nativeSession.requests("permission",activeSession?.id);if(window.renderWorkspaceApprovals)await window.renderWorkspaceApprovals(rows,activeSession?.id);else await window.nativeSession.permissions($("#approvalBox"),rows);await window.refreshWorkspaceQuestions?.();return rows;}
  if(!activeSession)return [];
  const sessionId=activeSession.id,owner=currentUser?.id;
  if(permissionPending?.id===sessionId&&permissionPending.owner===owner)return permissionPending.promise;

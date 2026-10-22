@@ -410,6 +410,9 @@ def _initialize(service, workspace, *, db=None):
     service.timings["credential_restore_ms"] = round((time.monotonic() - started) * 1000, 2)
 
 def for_workspace(workspace, *, start=True, db=None):
+    from ..routes.native_sessions import enabled
+    if enabled():
+        raise HTTPException(409, "Use the authorized native TEST transport; per-workspace engines are disabled")
     if settings.runtime_mode != "local":
         raise HTTPException(503, "Workspace runtime is disabled")
     key = str(workspace.id)
