@@ -71,7 +71,8 @@
       const status=root.querySelector('[role=status]');if(status)status.textContent=error.message;
       root.append(btn('retrySettings','Retry','إعادة المحاولة',()=>loadConnections()));
     });
-    const githubJob=loadConnectionsGithub();
+    // GitHub status is independent from Native provider discovery; never block Connections readiness.
+    const githubJob=loadConnectionsGithub().catch(error=>{const section=q('connectionsGithub');if(section) section.append(textElement('p',error.message));});
     const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Native OpenCode discovery (TEST)','اكتشاف OpenCode المباشر (TEST)'),text('p','Loading native agents…','جارٍ تحميل الوكلاء مباشرة…'));
     // Connections page: read native agent discovery through Nginx, not the Python
     // workspace runtime. This describes the independent TEST native service only.
@@ -86,8 +87,10 @@
       if(runtime.isConnected)runtime.lastElementChild.textContent=
         tr('Native agent discovery unavailable: ','تعذر استدعاء الوكلاء مباشرة: ')+error.message;
     });
-    const results=await Promise.allSettled([providersJob,githubJob,runtimeJob]);
-    for(const result of results)if(result.status==='rejected')toast(result.reason.message);
+    // Let providers determine initial readiness. GitHub and native agents update independently.
+    void githubJob;
+    void runtimeJob;
+    await providersJob;
   }
   async function loadConnectionsGithub(){
     const github=q('connectionsGithub');github.replaceChildren(title('GitHub account / authorization','حساب GitHub / التفويض'));
