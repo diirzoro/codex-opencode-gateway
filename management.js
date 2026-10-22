@@ -380,24 +380,10 @@
           view.ready=false;customButton.disabled=true;
           renderOptions();renderConnected();
           message(tr('Native providers loaded; checking account connections…','تم تحميل المزودين مباشرة؛ جارٍ التحقق من اتصالات الحساب…')+' · '+nativeRows.length);
-          // Connection metadata is a separate, non-blocking request. Do not enable
-          // connect/disconnect until the account-specific policy and auth status arrives.
-          api('/api/opencode/catalog/providers',{signal:controller.signal}).then(catalog=>{
-            if(!alive()||workspaceId)return;
-            if(!Array.isArray(catalog))throw new Error('Invalid account provider catalog');
-            const byId=new Map(catalog.map(p=>[p.id,p]));
-            const nativeMerged=nativeRows.map(p=>{
-              const existing=byId.get(p.id);
-              return existing?{...existing,name:p.name||existing.name}:p;
-            });
-            const connected=catalog.filter(p=>p.connected&&!nativeMerged.some(row=>row.id===p.id));
-            snapshot={providers:[...nativeMerged,...connected]};
-            view.ready=true;customButton.disabled=false;
-            renderOptions();renderConnected();
-            message(tr('Native providers and account connections ready','المزودون واتصالات الحساب جاهزة')+' · '+nativeRows.length);
-          }).catch(error=>{
-            if(alive()&&error.name!=='AbortError')message(tr('Native providers loaded, account connections unavailable: ','المزودون جاهزون، وتعذر تحميل اتصالات الحساب: ')+error.message,true);
-          });
+          // Native-only discovery. Do not read the Python provider catalog.
+          // The independent Native service does not own account credentials.
+          // Keep connection operations disabled until isolated native auth is implemented.
+          message(tr('Native providers ready via Nginx (read only)','المزودون مباشرة عبر Nginx (قراءة فقط)')+' · '+nativeRows.length);
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
       }
@@ -438,9 +424,8 @@
     box.append(button(tr('Refresh OpenCode state','حدّث حالة OpenCode'),()=>metadataReady?refresh(true):initialize()));
     async function initialize(){
       message(snapshot?tr('Refreshing OpenCode providers…','جارٍ تحديث OpenCode…'):tr('Loading OpenCode providers…','جارٍ تحميل مزوّدي OpenCode…'));renderOptions();renderConnected();
-      // Start Native discovery immediately, without waiting for projects/workspace metadata.
-      // Only account-wide discovery can do this; an explicitly selected workspace retains its own policy.
-      const earlyNative=body.dataset.connectionWorkspace?null:refresh();
+      // Account discovery must not wait for Python workspace/project requests.
+      if(!body.dataset.connectionWorkspace){await refresh();return;}
       try{
         const [owned,projectRows]=await Promise.all([api('/api/workspaces'),api('/api/projects'),window.workspaceContextReady||Promise.resolve()]);
         if(!alive())return;workspaces=owned;projects=projectRows;metadataReady=true;
@@ -450,7 +435,7 @@
         const selected=workspaces.find(w=>w.id===body.dataset.connectionWorkspace);
         workspaceId=selected?.id||'';view.workspaceId=workspaceId;picker.value=workspaceId;picker.disabled=false;
         base='/api/workspaces/'+workspaceId+'/providers/';
-        if(!workspaceId){await (earlyNative||refresh());return;}
+        if(!workspaceId){await refresh();return;}
         snapshot=window.workspaceRuntime.peek(workspaceId);renderOptions();await refresh();
       }catch(error){if(alive())message(error.message,true);}
     }
