@@ -1,24 +1,116 @@
-# Registration stub for GitHub Actions discovery on the default branch.
-# The actual deployment definition lives on the updates branch.
-# To deploy Test: Actions > Promote updates to test > Run workflow > Branch: updates.
+# Manual, frontend-only TEST deployment. NEVER deploy master or server configuration.
 name: Promote updates to test
 
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: 'Type promote-test to deploy updates to TEST ONLY'
+        description: 'Type promote-test to deploy the three reviewed UI files to TEST only'
         required: true
         type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: test-ui-deploy
+  cancel-in-progress: false
+
 jobs:
-  default-branch-safety:
+  deploy:
+    if: github.ref == 'refs/heads/updates'
     runs-on: ubuntu-latest
+    environment: test
+    timeout-minutes: 10
     steps:
-      - name: Refuse deployment from default branch
+      - name: Require explicit TEST confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
         run: |
-          echo "No staging deployment from master. Choose the updates branch in Run workflow."
-          exit 1
+          set -euo pipefail
+          test "$CONFIRMATION" = "promote-test" || { echo 'Type promote-test'; exit 1; }
+          test "$GITHUB_REF" = 'refs/heads/updates'
+
+      - uses: actions/checkout@v4
+        with:
+          ref: updates
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check deployment files and JavaScript syntax
+        run: |
+          set -euo pipefail
+          node --check management.js
+          node --check dashboards.js
+          test -s index.html
+          ! grep -Eq '(/home/|DATABASE_URL|OPENCODE_SERVER_PASSWORD)' management.js dashboards.js index.html
+
+      - name: Configure TEST-only SSH
+        env:
+          HOST: ${{ secrets.TEST_VPS_HOST }}
+          USER: ${{ secrets.TEST_VPS_USER }}
+          KEY: ${{ secrets.TEST_VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.TEST_VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${HOST:?Set TEST_VPS_HOST in test environment}"
+          : "${USER:?Set TEST_VPS_USER in test environment}"
+          : "${KEY:?Set TEST_VPS_SSH_KEY in test environment}"
+          : "${KNOWN_HOSTS:?Set TEST_VPS_KNOWN_HOSTS in test environment}"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Upload only reviewed UI files to temporary TEST directory
+        env:
+          HOST: ${{ secrets.TEST_VPS_HOST }}
+          USER: ${{ secrets.TEST_VPS_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${PORT:-22}"
+          stage=".opencode-test-ui-stage-${GITHUB_RUN_ID}"
+          ssh -p "$port" -o BatchMode=yes "$USER@$HOST" "mkdir -m 700 -p ~/$stage"
+          scp -P "$port" management.js dashboards.js index.html "$USER@$HOST:$stage/"
+
+      - name: Backup and activate UI files on TEST only
+        env:
+          HOST: ${{ secrets.TEST_VPS_HOST }}
+          USER: ${{ secrets.TEST_VPS_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${PORT:-22}"
+          ssh -p "$port" -o BatchMode=yes "$USER@$HOST" "bash -s -- '${GITHUB_RUN_ID}'" <<'REMOTE'
+          set -euo pipefail
+          run_id="$1"
+          [[ "$run_id" =~ ^[0-9]+$ ]] || exit 2
+          app="$HOME/opencode-gateway-test"
+          stage="$HOME/.opencode-test-ui-stage-$run_id"
+          backup="$HOME/opencode-test-ui-backups/$run_id"
+          test -d "$app/.git" && test -d "$app/backend" || { echo 'Expected TEST checkout absent'; exit 3; }
+          test -d "$stage" || exit 4
+          for file in management.js dashboards.js index.html; do
+            test -s "$stage/$file" && test -f "$app/$file" || exit 5
+          done
+          mkdir -p "$backup"
+          for file in management.js dashboards.js index.html; do
+            cp -p "$app/$file" "$backup/$file"
+          done
+          echo "Previous UI saved to $backup"
+          for file in management.js dashboards.js index.html; do
+            cp "$stage/$file" "$app/$file"
+          done
+          rm -rf -- "$stage"
+          echo 'TEST UI files updated. No service, secret, database, workspace or Nginx changes.'
+          REMOTE
+
+      - name: Deployment summary
+        run: |
+          echo 'TEST only: management.js, dashboards.js, index.html.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No backend, migrations, environment, Nginx, systemd, workspaces, runtime or LIVE changes.' >> "$GITHUB_STEP_SUMMARY"
