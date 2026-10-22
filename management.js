@@ -366,31 +366,38 @@
           const requestStarted=performance.now();
           // TEST Native discovery through Nginx; Gateway retains account-specific credential status.
           // The native instance has isolated credentials; never infer user connections from it.
-          const [nativeResponse,catalog]=await Promise.all([
-            fetch('/native-probe/provider',{credentials:'same-origin',cache:'no-store',signal:controller.signal}),
-            api('/api/opencode/catalog/providers',{signal:controller.signal})
-          ]);
+          const nativeResponse=await fetch('/native-probe/provider',{credentials:'same-origin',cache:'no-store',signal:controller.signal});
           if(!nativeResponse.ok)throw new Error('Native OpenCode providers HTTP '+nativeResponse.status);
           const nativeCatalog=await nativeResponse.json();
           if(!nativeCatalog||!Array.isArray(nativeCatalog.all))throw new Error('Invalid native OpenCode provider response');
           const nativeProviders=nativeCatalog.all.filter(p=>p&&typeof p.id==='string');
-          const byId=new Map(catalog.map(p=>[p.id,p]));
-          const nativeRows=nativeProviders.map(p=>{
-            const existing=byId.get(p.id);
-            return existing?{...existing,name:p.name||existing.name}:{
-              id:p.id,name:p.name||p.id,connected:false,allowed:true,
-              auth_methods:[],model_count:Object.keys(p.models||{}).length,
-              native_only:true
-            };
-          });
-          // Connected accounts remain visible even when the isolated Native instance has no key.
-          const connected=catalog.filter(p=>p.connected&&!nativeRows.some(row=>row.id===p.id));
-          const displayCatalog=[...nativeRows,...connected];
+          const nativeRows=nativeProviders.map(p=>({
+            id:p.id,name:p.name||p.id,connected:false,allowed:true,
+            auth_methods:[],model_count:Object.keys(p.models||{}).length,native_only:true
+          }));
           if(!alive()||workspaceId)return;
-          if(!Array.isArray(catalog))throw new Error('Invalid account provider catalog');
-          window.gatewayProviderTimings={metadata_request_ms:performance.now()-requestStarted};
-          snapshot={providers:displayCatalog};moreOffset=null;moreQuery='';view.ready=true;customButton.disabled=false;renderOptions();renderConnected();
-          message(tr('Native providers ready via Nginx','المزودون مباشرة عبر Nginx')+' · '+nativeRows.length);
+          snapshot={providers:nativeRows};moreOffset=null;moreQuery='';
+          view.ready=false;customButton.disabled=true;
+          renderOptions();renderConnected();
+          message(tr('Native providers loaded; checking account connections…','تم تحميل المزودين مباشرة؛ جارٍ التحقق من اتصالات الحساب…')+' · '+nativeRows.length);
+          // Connection metadata is a separate, non-blocking request. Do not enable
+          // connect/disconnect until the account-specific policy and auth status arrives.
+          api('/api/opencode/catalog/providers',{signal:controller.signal}).then(catalog=>{
+            if(!alive()||workspaceId)return;
+            if(!Array.isArray(catalog))throw new Error('Invalid account provider catalog');
+            const byId=new Map(catalog.map(p=>[p.id,p]));
+            const nativeMerged=nativeRows.map(p=>{
+              const existing=byId.get(p.id);
+              return existing?{...existing,name:p.name||existing.name}:p;
+            });
+            const connected=catalog.filter(p=>p.connected&&!nativeMerged.some(row=>row.id===p.id));
+            snapshot={providers:[...nativeMerged,...connected]};
+            view.ready=true;customButton.disabled=false;
+            renderOptions();renderConnected();
+            message(tr('Native providers and account connections ready','المزودون واتصالات الحساب جاهزة')+' · '+nativeRows.length);
+          }).catch(error=>{
+            if(alive()&&error.name!=='AbortError')message(tr('Native providers loaded, account connections unavailable: ','المزودون جاهزون، وتعذر تحميل اتصالات الحساب: ')+error.message,true);
+          });
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
       }
