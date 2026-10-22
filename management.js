@@ -364,12 +364,33 @@
         message(tr('Loading account providers…','جارٍ تحميل مزوّدات الحساب…'));
         try{
           const requestStarted=performance.now();
-          const catalog=await api('/api/opencode/catalog/providers',{signal:controller.signal});
+          // TEST Native discovery through Nginx; Gateway retains account-specific credential status.
+          // The native instance has isolated credentials; never infer user connections from it.
+          const [nativeResponse,catalog]=await Promise.all([
+            fetch('/native-probe/provider',{credentials:'same-origin',cache:'no-store',signal:controller.signal}),
+            api('/api/opencode/catalog/providers',{signal:controller.signal})
+          ]);
+          if(!nativeResponse.ok)throw new Error('Native OpenCode providers HTTP '+nativeResponse.status);
+          const nativeCatalog=await nativeResponse.json();
+          if(!nativeCatalog||!Array.isArray(nativeCatalog.all))throw new Error('Invalid native OpenCode provider response');
+          const nativeProviders=nativeCatalog.all.filter(p=>p&&typeof p.id==='string');
+          const byId=new Map(catalog.map(p=>[p.id,p]));
+          const nativeRows=nativeProviders.map(p=>{
+            const existing=byId.get(p.id);
+            return existing?{...existing,name:p.name||existing.name}:{
+              id:p.id,name:p.name||p.id,connected:false,allowed:true,
+              auth_methods:[],model_count:Object.keys(p.models||{}).length,
+              native_only:true
+            };
+          });
+          // Connected accounts remain visible even when the isolated Native instance has no key.
+          const connected=catalog.filter(p=>p.connected&&!nativeRows.some(row=>row.id===p.id));
+          const displayCatalog=[...nativeRows,...connected];
           if(!alive()||workspaceId)return;
           if(!Array.isArray(catalog))throw new Error('Invalid account provider catalog');
           window.gatewayProviderTimings={metadata_request_ms:performance.now()-requestStarted};
-          snapshot={providers:catalog};moreOffset=catalog.length;moreQuery='';view.ready=true;customButton.disabled=false;renderOptions();renderConnected();
-          message(tr('Account providers ready','مزوّدات الحساب جاهزة')+' · '+catalog.length);
+          snapshot={providers:displayCatalog};moreOffset=null;moreQuery='';view.ready=true;customButton.disabled=false;renderOptions();renderConnected();
+          message(tr('Native providers ready via Nginx','المزودون مباشرة عبر Nginx')+' · '+nativeRows.length);
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
       }
