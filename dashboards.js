@@ -72,6 +72,28 @@
       root.append(btn('retrySettings','Retry','إعادة المحاولة',()=>loadConnections()));
     });
     const githubJob=loadConnectionsGithub();
+    // Experimental TEST direct discovery: read-only; existing account credentials remain managed by Gateway.
+    const nativeBox=document.createElement('section');
+    nativeBox.className='manage-card';nativeBox.id='connectionsNativeDiscovery';root.after(nativeBox);
+    const nativeHeading=document.createElement('h2');nativeHeading.textContent='OpenCode Native · Nginx (TEST)';
+    const nativeStatus=document.createElement('p');nativeStatus.textContent=tr('Loading native providers and agents…','جارٍ استدعاء المزودين والوكلاء مباشرة…');
+    nativeBox.replaceChildren(nativeHeading,nativeStatus);
+    Promise.all(['/native-probe/provider','/native-probe/agent'].map(async path=>{
+      const response=await fetch(path,{credentials:'same-origin',cache:'no-store'});
+      if(!response.ok)throw new Error(path+' HTTP '+response.status);
+      return response.json();
+    })).then(([providers,agents])=>{
+      if(!nativeBox.isConnected||!currentUser)return;
+      if(!providers||!Array.isArray(agents))throw new Error('Invalid Native API response');
+      const entries=Array.isArray(providers.all)?providers.all:[];
+      const providerNames=entries.map(p=>typeof p==='string'?p:p?.name||p?.id).filter(Boolean);
+      nativeStatus.textContent=providerNames.length+' providers · '+agents.length+' agents · Nginx → OpenCode';
+      for(const [heading,values] of [[tr('Native providers','المزودون مباشرة'),providerNames],[tr('Native agents','الوكلاء مباشرة'),agents.map(a=>a?.name).filter(Boolean)]]){
+        const title=document.createElement('h3');title.textContent=heading;nativeBox.append(title);
+        const list=document.createElement('p');list.textContent=values.slice(0,80).join(' · ');nativeBox.append(list);
+      }
+    }).catch(error=>{if(nativeBox.isConnected)nativeStatus.textContent=tr('Native discovery unavailable: ','الاستدعاء المباشر غير متاح: ')+error.message;});
+
     const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Selected workspace runtime','وقت تشغيل مساحة العمل المختارة'),text('p','Loading workspace state…','جارٍ تحميل حالة مساحة العمل…'));
     const runtimeJob=(async()=>{
       await (window.workspaceContextReady||Promise.resolve());
