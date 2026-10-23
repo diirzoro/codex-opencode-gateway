@@ -22,8 +22,18 @@
   async function requests(kind,id){if(!id)return [];const row=await context(id),data=await native(row.workspace_id,kind);if(!Array.isArray(data))throw Error('Invalid native request list');return data.filter(x=>x.sessionID===row.runtime_id);}
   function display(messages){
     if(!Array.isArray(messages))throw Error('Invalid native message snapshot');
-    return messages.map(m=>({id:m.info.id,role:m.info.role,text:m.parts.filter(p=>p.type==='text').map(p=>p.text||'').join(''),
-      activity:m.parts.filter(p=>p.type==='tool').map(p=>({id:p.id,tool:p.tool,status:p.state?.status,stage:'tool_activity'}))}));
+    return messages.map(m=>{
+      // Preserve OpenCode text verbatim. Tool activity is sourced exclusively
+      // from native tool parts, never guessed from or appended to chat text.
+      const parts=Array.isArray(m.parts)?m.parts:[];
+      const seen=new Set();
+      const activity=parts.filter(p=>p.type==='tool'&&p.callID&& !seen.has(p.callID)&&seen.add(p.callID)).map(p=>({
+        id:p.callID,tool:p.tool,status:p.state?.status||'pending',stage:'tool_activity',
+        ...(typeof p.state?.title==='string'?{title:p.state.title}:{}),
+        ...(p.state?.status==='error'?{error_kind:'tool_failed'}:{})
+      }));
+      return {id:m.info.id,role:m.info.role,text:parts.filter(p=>p.type==='text').map(p=>p.text||'').join(''),activity};
+    });
   }
   async function route(path,options){
     if(!active())return null;
