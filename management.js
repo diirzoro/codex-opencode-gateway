@@ -363,27 +363,27 @@
         view.ready=false;
         message(tr('Loading account providers…','جارٍ تحميل مزوّدات الحساب…'));
         try{
-          const requestStarted=performance.now();
-          // TEST Native discovery through Nginx; Gateway retains account-specific credential status.
-          // The native instance has isolated credentials; never infer user connections from it.
-          const nativeResponse=await fetch('/native-probe/provider',{credentials:'same-origin',cache:'no-store',signal:controller.signal});
-          if(!nativeResponse.ok)throw new Error('Native OpenCode providers HTTP '+nativeResponse.status);
-          const nativeCatalog=await nativeResponse.json();
-          if(!nativeCatalog||!Array.isArray(nativeCatalog.all))throw new Error('Invalid native OpenCode provider response');
-          const nativeProviders=nativeCatalog.all.filter(p=>p&&typeof p.id==='string');
-          const nativeRows=nativeProviders.map(p=>({
-            id:p.id,name:p.name||p.id,connected:false,allowed:true,
-            auth_methods:[],model_count:Object.keys(p.models||{}).length,native_only:true
-          }));
+          // Use the authenticated Gateway ownership gate rather than the
+          // legacy /native-probe path, which does not authorize a workspace.
+          const owned=await api('/api/workspaces');
           if(!alive()||workspaceId)return;
+          const selected=Array.isArray(owned)?owned.find(w=>w&&w.id):null;
+          if(!selected){
+            snapshot={providers:[]};moreOffset=null;moreQuery='';
+            view.ready=false;customButton.disabled=true;
+            renderOptions();renderConnected();
+            message(tr('Open a project workspace to discover native providers.','افتح مساحة عمل مشروع لاكتشاف المزوّدين.'));
+            return;
+          }
+          const catalog=await window.workspaceRuntime.load(selected.id,{force});
+          if(!alive()||workspaceId)return;
+          const nativeRows=Array.isArray(catalog.providers)?catalog.providers.map(p=>({
+            ...p,connected:false,auth_methods:[],native_only:true
+          })):[];
           snapshot={providers:nativeRows};moreOffset=null;moreQuery='';
           view.ready=false;customButton.disabled=true;
           renderOptions();renderConnected();
-          message(tr('Native providers loaded; checking account connections…','تم تحميل المزودين مباشرة؛ جارٍ التحقق من اتصالات الحساب…')+' · '+nativeRows.length);
-          // Native-only discovery. Do not read the Python provider catalog.
-          // The independent Native service does not own account credentials.
-          // Keep connection operations disabled until isolated native auth is implemented.
-          message(tr('Native providers ready via Nginx (read only)','المزودون مباشرة عبر Nginx (قراءة فقط)')+' · '+nativeRows.length);
+          message(tr('Native provider catalog (read only)','فهرس المزوّدين المباشرين (قراءة فقط)')+' · '+nativeRows.length);
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
       }
