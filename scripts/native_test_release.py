@@ -184,6 +184,11 @@ def inspection(source,revision):
     for name in FILES:
         before=fingerprint(APP/name);bases=[git(source,'show',base+':'+name,optional=True) for base in BASELINES];after=git(source,'show',revision+':'+name)
         approved=[None if base is None else digest(base) for base in bases]
+        # TEST dashboards.js was deliberately restored by 9de0e55; accept only
+        # that exact Git-tracked preimage, then stage the reviewed native version.
+        # This exception does not relax reconciliation for any other file.
+        if name=='dashboards.js':
+            approved.append(digest(git(source,'show','9de0e55:dashboards.js')))
         match=(before is None and None in approved) or before is not None and before['sha256'] in {*approved,digest(after)}
         files.append({'path':name,'actual':before,'approved_baseline_sha256':approved,'candidate_sha256':digest(after),'reconciled':match})
     return values,env,files
