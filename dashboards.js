@@ -790,8 +790,12 @@
     const busy=['submitted','waiting_approval'].includes(activeSession?.execution_status);
     renderAttachments();
     attach.disabled=!workAccess||sending||Boolean(pendingSubmission)||busy;attachmentList.querySelectorAll('button').forEach(button=>button.disabled=sending||Boolean(pendingSubmission));
-    q('sendMessage').disabled=sending||queuing||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
-    q('sendMessage').title=busy||queueCount?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
+    // OpenCode 1.x does not guarantee that a second prompt_async while a
+    // session is already running will execute. Never advertise a Gateway
+    // queue in native mode or acknowledge a potentially orphaned prompt.
+    const nativeBusy=Boolean(window.nativeSession?.active()&&busy);
+    q('sendMessage').disabled=sending||queuing||nativeBusy||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
+    q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
     newSessionButton.disabled=newTask.disabled=!workAccess||busy||sending||Boolean(sessionCreating)||Boolean(pendingSubmission);
     closeSessionButton.disabled=!activeSession||sending||Boolean(pendingSubmission);
@@ -1241,6 +1245,10 @@
     const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
+      if(['submitted','waiting_approval'].includes(activeSession?.execution_status)){
+        toast(tr('OpenCode is still running. Keep the draft and send after it finishes.','OpenCode ما زال يعمل. احتفظ بالمسودة وأرسل بعد الانتهاء.'));
+        return;
+      }
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
       try{await refreshEntitlement();if(!workAccess)return;if(!activeSession)await createSession({checked:true});
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
