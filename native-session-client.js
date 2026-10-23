@@ -1,4 +1,4 @@
-/* OpenCode 1.18.32 wire adapter and existing-UI presentation, not an execution engine. */
+/* OpenCode 1.x native wire adapter and existing-UI presentation, not an execution engine. */
 (() => {
   let identity='',configuration=null,stream=null;const rows=new Map(),snapshots=new Map(),statuses=new Map(),statusEvents=new Map(),statusReads=new Map();let epoch=0;
   const owner=()=>String(currentUser?.id||'');
@@ -63,7 +63,10 @@
   async function start(){
     stop();const id=activeSession?.id,user=owner();if(!id)return;
     const row=await context(id);if(!current(id,user))return;
-    const source=new EventSource(url(row.workspace_id,'event'));stream=source;let timer,pending=false;
+    const source=new EventSource(url(row.workspace_id,'event'));stream=source;let timer,pending=false,lastMessageRead=0;
+    // Coalesce token/part bursts into bounded snapshots. The native SSE
+    // transport stays immediate; only expensive full-history reads are paced.
+    const MESSAGE_REFRESH_MS=650;
     let dirty={messages:false,status:false,controls:false,todos:false};
     async function flush(){
       timer=null;if(pending||stream!==source||!current(id,user))return;
@@ -71,13 +74,17 @@
       try{
         if(work.status)await window.refreshWorkspaceSessionStatus?.();
         if(stream!==source||!current(id,user))return;
-        if(work.messages)await refreshMessages();
+        if(work.messages){await refreshMessages();lastMessageRead=Date.now();}
         if(work.controls)await refreshPermissions();
         if(work.todos)await window.refreshWorkspaceTodos?.(true);
       }catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
-      finally{pending=false;if(stream===source&&current(id,user)&&Object.values(dirty).some(Boolean))timer=setTimeout(flush,80);}
+      finally{pending=false;if(stream===source&&current(id,user)&&Object.values(dirty).some(Boolean))schedule();}
     }
-    function schedule(){if(!pending&&!timer)timer=setTimeout(flush,80);}
+    function schedule(){
+      if(pending||timer)return;
+      const delay=dirty.messages?Math.max(0,MESSAGE_REFRESH_MS-(Date.now()-lastMessageRead)):80;
+      timer=setTimeout(flush,delay);
+    }
     source.onmessage=event=>{
       if(stream!==source||!current(id,user))return;
       let e;try{e=JSON.parse(event.data);}catch{return;}
