@@ -247,8 +247,13 @@
     const ended=typeof activeSession!=='undefined'&&['completed','failed','cancelled'].includes(activeSession?.execution_status);
     if(ended)rows=rows.map(row=>['pending','running'].includes(row.status)?{...row,status:'interrupted'}:row);
     if(!rows.length)return;
-    const details=document.createElement('details');details.className='message-activity';details.open=rows.some(row=>['pending','running','error'].includes(row.status));details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')));const list=document.createElement('ul');
-    for(const row of rows){const item=document.createElement('li'),step=document.createElement('details');step.className='tool-execution';step.dataset.state=row.status;step.open=['pending','running','error'].includes(row.status);
+    const details=document.createElement('details');details.className='message-activity';
+// Native OpenCode owns tool execution. Keep the UI summary compact;
+// show failures by default, but never expose tool arguments automatically.
+details.open=rows.some(row=>row.status==='error');
+const count=rows.length;
+details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')+' · '+count));const list=document.createElement('ul');
+    for(const row of rows){const item=document.createElement('li'),step=document.createElement('details');step.className='tool-execution';step.dataset.state=row.status;step.open=row.status==='error';
       const heading=textElement('summary',workLabel(row));step.append(heading);
       if(row.command){const pre=textElement('pre','','tool-execution-code'),command=textElement('code',row.command+(row.command_limited?tr(' (arguments hidden)',' (المعاملات مخفية)'):''),'activity-command');pre.dir='ltr';pre.append(command);step.append(pre);}
       const result=textElement('div','','tool-execution-result');
