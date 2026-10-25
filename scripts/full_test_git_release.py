@@ -77,23 +77,26 @@ def migration_runner():
         if tool.is_file() and os.access(tool,os.X_OK):return [str(tool)]
     return None
 def db_env():
-    # Read only the existing TEST .env; never rewrite, print, or persist secrets.
-    tool=migration_runner()
-    if tool is None:raise RuntimeError("TEST Alembic executable unavailable")
-    python=Path(tool[0]).parent/"python"
-    if not python.is_file():raise RuntimeError("TEST venv Python unavailable")
-    code=("import json,sys;from dotenv import dotenv_values;"
-          "print(json.dumps(dotenv_values(sys.argv[1])))")
-    import json
-    try:
-        values=json.loads(run(str(python),"-c",code,str(ROOT/".env"),timeout=15))
-    except (subprocess.CalledProcessError,ValueError):
-        raise RuntimeError("Could not read TEST database environment") from None
+    # Extract only DATABASE_URL from the existing TEST .env with stdlib.
+    # Do not rely on python-dotenv being installed in the VPS virtualenv.
+    # Never print, rewrite, or save server credentials.
+    import shlex
     env=os.environ.copy()
-    for key,val in values.items():
-        if isinstance(val,str):env[key]=val
+    path=ROOT/".env"
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match=re.match(r"^\\s*(?:export\\s+)?DATABASE_URL\\s*=\\s*(.*)$",line)
+        if not match:continue
+        raw=match.group(1).strip()
+        try:
+            values=shlex.split(raw,comments=True,posix=True)
+        except ValueError:
+            raise RuntimeError("Invalid TEST DATABASE_URL entry; refusing deployment") from None
+        if len(values)!=1:
+            raise RuntimeError("TEST DATABASE_URL must be one quoted value; refusing deployment")
+        env["DATABASE_URL"]=values[0]
+        break
     if not env.get("DATABASE_URL","").startswith(("postgresql://","postgresql+psycopg://")):
-        raise RuntimeError("TEST DATABASE_URL not available from protected .env; abort safely")
+        raise RuntimeError("TEST DATABASE_URL is missing or invalid; refusing deployment")
     return env
 def migration_needed(target):
     # Explicitly limited to the known forward-only email config migration.
