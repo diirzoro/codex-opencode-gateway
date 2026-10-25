@@ -388,6 +388,41 @@ def save_inbox_credential(data:SupportInboxCredential,actor:User=Depends(require
     admin_email_config.save(db,actor.id,config)
     return {"configured":True,"address":"support@opencode-gateway.codes"}
 
+class AdminComposeEmail(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    to: str = Field(min_length=3,max_length=254)
+    subject: str = Field(min_length=1,max_length=300)
+    body: str = Field(min_length=1,max_length=100000)
+
+@router.post("/service-integrations/send-email")
+def admin_compose_send(data:AdminComposeEmail,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Send an actual admin-authored email through configured Resend SMTP; no fake sent status."""
+    import re
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+    from ..services import email_verification
+    if not re.fullmatch(r"[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+",data.to):
+        raise HTTPException(422,"Invalid recipient address")
+    cfg=email_verification.smtp_settings(db)
+    if not email_verification.smtp_ready(db):
+        raise HTTPException(503,"Configure Resend and encryption before sending")
+    if cfg.get("smtp_host")!="smtp.resend.com":
+        raise HTTPException(503,"Admin compose requires the configured Resend SMTP provider")
+    message=EmailMessage()
+    message["From"]=cfg["smtp_from"]
+    message["To"]=data.to
+    message["Subject"]=data.subject
+    message.set_content(data.body)
+    try:
+        with smtplib.SMTP("smtp.resend.com",int(cfg["smtp_port"]),timeout=15) as smtp:
+            smtp.starttls(context=ssl.create_default_context())
+            smtp.login(cfg["smtp_username"],cfg["smtp_password"])
+            smtp.send_message(message)
+    except (OSError,smtplib.SMTPException,ValueError):
+        raise HTTPException(502,"Resend rejected or could not send the email") from None
+    return {"sent":True,"to":data.to}
+
 @router.get("/service-integrations/sent-emails")
 def resend_sent_emails(_:User=Depends(require_admin),db:Session=Depends(get_db)):
     """Read real Resend sent-email metadata. No keys or HTML returned to browsers."""
