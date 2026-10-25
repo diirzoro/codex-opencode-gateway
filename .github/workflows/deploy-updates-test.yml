@@ -93,37 +93,19 @@ jobs:
             if [[ "$expected" == "$actual" ]]; then echo "MATCH $file"; else echo "DIFFERENT_OR_MISSING $file"; fi
           done < /tmp/test-native-hashes
           echo "AUDIT_ONLY: no TEST application, configuration, or service changed"
-      - name: Package reviewed Native bundle
-        if: steps.confirm.outputs.mode == 'deploy-test'
-        run: |
-          set -euo pipefail
-          tar -cf "test-release-${GITHUB_RUN_ID}.tar" -T /tmp/test-native-manifest
-          sha256sum "test-release-${GITHUB_RUN_ID}.tar" > "test-release-${GITHUB_RUN_ID}.tar.sha256"
-      - name: Upload bundle and guarded deployment tool
+      - name: Deploy approved GitHub source diffs to TEST
         if: steps.confirm.outputs.mode == 'deploy-test'
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
           PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          EXPECTED_REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
           port="${PORT:-22}"
-          stage="/home/tahir/.opencode-test-release-${GITHUB_RUN_ID}"
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" "install -d -m 700 '$stage'"
-          scp -P "$port" -o StrictHostKeyChecking=yes "test-release-${GITHUB_RUN_ID}.tar" "test-release-${GITHUB_RUN_ID}.tar.sha256" scripts/test_diff_only_rollout.py "$USER@$HOST:$stage/"
-      - name: Apply guarded TEST-only diff release
-        if: steps.confirm.outputs.mode == 'deploy-test'
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ secrets.STAGING_USER }}
-          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
-        run: |
-          set -euo pipefail
-          port="${PORT:-22}"
-          stage="/home/tahir/.opencode-test-release-${GITHUB_RUN_ID}"
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            "sudo -n /usr/bin/python3 -I '$stage/test_diff_only_rollout.py' --bundle '$stage/test-release-${GITHUB_RUN_ID}.tar' --checksum '$stage/test-release-${GITHUB_RUN_ID}.tar.sha256'"
+            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && test \"\$(git rev-parse origin/updates)\" = '$EXPECTED_REVISION' && git show '$EXPECTED_REVISION:scripts/test_gateway_git_diff.py' > /home/tahir/.test-git-diff-${GITHUB_RUN_ID}.py && chmod 600 /home/tahir/.test-git-diff-${GITHUB_RUN_ID}.py && python3 -I /home/tahir/.test-git-diff-${GITHUB_RUN_ID}.py"
       - name: Report scope
         if: always()
         run: |
-          echo "TEST only. No master/LIVE/Native-engine restart. Deployment requires existing SSH and noninteractive scoped sudo permissions." >> "$GITHUB_STEP_SUMMARY"
+          echo "TEST only. GitHub updates files only in the approved 18-file runtime bundle, preserving .env, databases, system configuration, and the OpenCode installation." >> "$GITHUB_STEP_SUMMARY"
