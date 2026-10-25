@@ -98,8 +98,10 @@ jobs:
           # Read the approved script directly from the reviewed GitHub revision.
           # Git checkout and app source are preserved; no server .env, IP, port,
           # nginx, systemd, database files, Native engine, or LIVE changes.
+          operation=audit
+          if [[ "$MODE" == "deploy-test" ]]; then operation=deploy; fi
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' && git show '$TARGET_SHA:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && python3 -I /home/tahir/.full-test-git-release.py $(test '$MODE' = 'deploy-test' && echo deploy || echo audit) '$TARGET_SHA'"
+            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' && git show '$TARGET_SHA:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
       - name: Report scope
         if: always()
         run: |
