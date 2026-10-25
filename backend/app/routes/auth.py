@@ -61,7 +61,7 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
         user.status = "active"
         user.last_login_at = now
     # Mail delivery remains mandatory when the verification policy is enabled.
-    if not verified_social and verification_required and not email_verification.smtp_ready():
+    if not verified_social and verification_required and not email_verification.smtp_ready(db):
         raise HTTPException(503, "Email verification is unavailable; registration cannot proceed")
     db.add(user)
     try:
@@ -69,7 +69,7 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
         if not verified_social and verification_required:
             token = email_verification.create_pending(db, user)
             db.flush()
-            email_verification.send_link(email, token)
+            email_verification.send_link(email, token, db)
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -112,7 +112,7 @@ def resend_verification(data: ResendEmailVerification, db: Session = Depends(get
         raise HTTPException(401, "Invalid credentials")
     if user.status != "pending_email":
         raise HTTPException(409, "Account is not awaiting email verification")
-    if not email_verification.smtp_ready():
+    if not email_verification.smtp_ready(db):
         raise HTTPException(503, "Email verification delivery is unavailable")
     now = datetime.now(timezone.utc)
     recent = db.scalar(select(EmailVerification).where(
@@ -125,7 +125,7 @@ def resend_verification(data: ResendEmailVerification, db: Session = Depends(get
         record.used_at = now
     raw = email_verification.create_pending(db, user)
     db.flush()
-    email_verification.send_link(user.email, raw)
+    email_verification.send_link(user.email, raw, db)
     db.commit()
     return {"sent": True}
 
