@@ -68,6 +68,34 @@
       q('adminInboxTab').hidden=tab!=='inbox';
       q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
     }));
+    async function readSupportInbox(){
+      const status=q('adminInboxStatus'),list=q('adminInboxMessages');
+      status.textContent='جارٍ قراءة البريد · Loading…';
+      list.replaceChildren();
+      try{
+        const result=await api('/api/admin/service-integrations/support-inbox');
+        if(!result.configured){status.textContent=result.reason||'لم يتم ربط صندوق الدعم بعد';return;}
+        status.textContent='تم الاتصال بـResend · '+result.items.length+' رسالة في الصفحة الحالية';
+        for(const msg of result.items){
+          const row=document.createElement('div');row.className='manage-card';
+          const title=document.createElement('strong');title.textContent=msg.subject||'(No subject)';
+          const details=document.createElement('small');details.textContent=msg.from+' · '+msg.created_at;
+          row.append(title,details);list.append(row);
+        }
+        if(!result.items.length)list.append(textElement('p','لا توجد رسائل دعم ضمن النتائج الحالية.'));
+      }catch(error){status.textContent=error.message;}
+    }
+    q('adminInboxRead').onclick=readSupportInbox;
+    q('adminInboxSaveKey').onclick=async()=>{
+      const field=q('adminInboxApiKey'),button=q('adminInboxSaveKey');
+      if(!field.value){q('adminInboxStatus').textContent='أدخل مفتاح قراءة البريد أولًا';return;}
+      button.disabled=true;
+      try{
+        await api('/api/admin/service-integrations/inbox-credential',{method:'PUT',body:JSON.stringify({api_key:field.value})});
+        q('adminInboxStatus').textContent='تم حفظ مفتاح القراءة مشفرًا';
+      }catch(error){q('adminInboxStatus').textContent=error.message;}
+      finally{field.value='';button.disabled=false;}
+    };
     q('adminSmtpSecret').value='';
     q('adminSmtpSave').onclick=async()=>{
       const button=q('adminSmtpSave'),key=q('adminSmtpSecret');
