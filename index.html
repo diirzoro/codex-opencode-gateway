@@ -643,6 +643,16 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
 <div class="row-between" style="gap:12px;flex-wrap:wrap;margin:12px 0">
 <div style="display:flex;gap:8px"><button type="button" class="button ghost small" id="adminMailReceived" data-i18n="adminMailReceived">Received</button><button type="button" class="button ghost small" id="adminMailSent" data-i18n="adminMailSent">Sent</button></div>
 <button type="button" class="button ghost small" id="adminInboxRead" data-i18n="adminMailRefresh">Refresh messages</button></div>
+<button type="button" class="button small" id="adminMailComposeOpen">+ رسالة جديدة · Compose</button>
+<div id="adminMailCompose" hidden class="manage-card" style="padding:16px;margin:12px 0;max-width:720px">
+  <h3>رسالة جديدة · New message</h3>
+  <label class="field"><span>إلى · To</span><input type="email" id="adminComposeTo" maxlength="254" autocomplete="off" required></label>
+  <label class="field"><span>الموضوع · Subject</span><input type="text" id="adminComposeSubject" maxlength="300" required></label>
+  <label class="field"><span>الرسالة · Message</span><textarea id="adminComposeBody" rows="9" maxlength="100000" required></textarea></label>
+  <p class="lead">المرفقات والمسودات المحفوظة غير متاحة حتى تنفيذ تخزين آمن لها.</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="button" id="adminComposeSend">إرسال · Send</button><button type="button" class="button ghost" id="adminComposeCancel">إلغاء · Cancel</button></div>
+  <p id="adminComposeStatus" role="status"></p>
+</div>
 <p id="adminInboxStatus" role="status"></p><div id="adminInboxMessages" aria-live="polite"></div>
 <details style="margin-top:18px"><summary data-i18n="adminMailConnection">Connection diagnostics</summary>
 <p class="lead" data-i18n="adminMailConnectionHelp">Messages are retrieved from Resend, not fabricated.</p>
