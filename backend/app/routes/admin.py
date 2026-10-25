@@ -384,6 +384,30 @@ def support_inbox(_:User=Depends(require_admin),db:Session=Depends(get_db)):
                       "created_at":str(message.get("created_at",""))})
     return {"configured":True,"items":items,"has_more":bool(payload.get("has_more",False))}
 
+@router.get("/service-integrations/support-inbox/{message_id}")
+def support_inbox_message(message_id:_uuid.UUID,_:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from ..services import admin_email_config
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError,URLError
+    cfg=admin_email_config.read(db) or {}
+    key=cfg.get("inbox_api_key")
+    if not key:raise HTTPException(503,"Receiving API key has not been configured")
+    request=Request("https://api.resend.com/emails/receiving/"+str(message_id),
+                    headers={"Authorization":"Bearer "+key,"Accept":"application/json"})
+    try:
+        with urlopen(request,timeout=10) as response:
+            email=json.load(response)
+    except (HTTPError,URLError,TimeoutError,ValueError):
+        raise HTTPException(502,"Could not retrieve support email") from None
+    recipients=email.get("to") or []
+    if not isinstance(recipients,list) or not any(str(x).lower()=="support@opencode-gateway.codes" for x in recipients):
+        raise HTTPException(404,"Support email not found")
+    # Plain text only; never render untrusted email HTML.
+    return {"id":str(message_id),"subject":str(email.get("subject",""))[:300],
+            "from":str(email.get("from",""))[:254],
+            "text":str(email.get("text") or "")[:50000],
+            "created_at":str(email.get("created_at",""))}
+
 @router.get("/service-integrations")
 def service_integrations(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     import os
