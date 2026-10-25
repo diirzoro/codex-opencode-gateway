@@ -472,6 +472,29 @@ def support_inbox(_:User=Depends(require_admin),db:Session=Depends(get_db)):
                       "created_at":str(message.get("created_at",""))})
     return {"configured":True,"items":items,"has_more":bool(payload.get("has_more",False))}
 
+@router.get("/service-integrations/sent-emails/{message_id}")
+def resend_sent_message(message_id:_uuid.UUID,_:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Read a sent message from Resend, returning bounded text only."""
+    from ..services import admin_email_config
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+    cfg=admin_email_config.read(db) or {}
+    key=cfg.get("inbox_api_key")
+    if not key:raise HTTPException(503,"Resend read key is not configured")
+    request=Request("https://api.resend.com/emails/"+str(message_id),
+                    headers={"Authorization":"Bearer "+key,"Accept":"application/json"})
+    try:
+        with urlopen(request,timeout=10) as response:mail=json.load(response)
+    except (HTTPError,URLError,TimeoutError,ValueError):
+        raise HTTPException(502,"Could not retrieve sent email") from None
+    recipients=mail.get("to") or []
+    return {"id":str(message_id),"subject":str(mail.get("subject",""))[:300],
+            "to":recipients[:10] if isinstance(recipients,list) else [],
+            "from":str(mail.get("from",""))[:254],
+            "text":str(mail.get("text") or "")[:50000],
+            "created_at":str(mail.get("created_at","")),
+            "status":str(mail.get("last_event",""))[:50]}
+
 @router.get("/service-integrations/support-inbox/{message_id}")
 def support_inbox_message(message_id:_uuid.UUID,_:User=Depends(require_admin),db:Session=Depends(get_db)):
     from ..services import admin_email_config
