@@ -115,23 +115,23 @@ def rollout(target,mode):
     if mode=="audit":return
     oldrev=active_revision()
     if mode=="rollback" and not oldrev:raise RuntimeError("No prior GitHub release marker; rollback unavailable")
-    # Fail closed before changing files if the live TEST database cannot be
-    # checked. Only a dedicated, approved root-owned migration runner may load
-    # the protected systemd environment. Never read/print .env as deploy user.
-    if mode=="deploy":
-        runner=Path("/usr/local/sbin/opencode-gateway-test-migrate")
-        if not runner.is_file():
-            raise RuntimeError("TEST_DB_MIGRATION_RUNNER_REQUIRED: install the approved TEST-only migration runner (see deployment/TEST_DATABASE_MIGRATIONS.md)")
-        try:
-            outcome=run("sudo","-n",str(runner),"upgrade",timeout=180)
-        except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as exc:
-            raise RuntimeError("TEST_DB_MIGRATION_FAILED: authorized TEST migration runner unavailable or failed; source not deployed") from None
-        if "TEST_DB_MIGRATION_OK" not in outcome:
-            raise RuntimeError("TEST_DB_MIGRATION_NOT_CONFIRMED; source not deployed")
-        print("TEST_DB_MIGRATION_OK",flush=True)
     nativepid=run("systemctl","show","--value","-p","MainPID",NATIVE)
     for name,dest,data in changes:replace(dest,data);print("UPDATED",name,flush=True)
     try:
+        # Check the TEST schema after installing migration sources and before
+        # restarting the gateway. Only a dedicated, approved root-owned migration runner may load
+        # the protected systemd environment. Never read/print .env as deploy user.
+        if mode=="deploy":
+            runner=Path("/usr/local/sbin/opencode-gateway-test-migrate")
+            if not runner.is_file():
+                raise RuntimeError("TEST_DB_MIGRATION_RUNNER_REQUIRED: install the approved TEST-only migration runner (see deployment/TEST_DATABASE_MIGRATIONS.md)")
+            try:
+                outcome=run("sudo","-n",str(runner),"upgrade",timeout=180)
+            except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as exc:
+                raise RuntimeError("TEST_DB_MIGRATION_FAILED: authorized TEST migration runner unavailable or failed; service not restarted") from None
+            if "TEST_DB_MIGRATION_OK" not in outcome:
+                raise RuntimeError("TEST_DB_MIGRATION_NOT_CONFIRMED; source not deployed")
+            print("TEST_DB_MIGRATION_OK",flush=True)
         run("sudo","-n","/usr/bin/systemctl","restart",GATEWAY)
         time.sleep(3)
         if not service(GATEWAY):raise RuntimeError("Gateway unhealthy after restart")
