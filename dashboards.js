@@ -126,7 +126,14 @@
         const name=document.createElement('strong');name.textContent=(lang==='ar'?captionsAr:captionsEn)[item.id]||item.id;
         const state=document.createElement('small');state.style.cssText='opacity:.8;line-height:1.4;';
         state.textContent=item.available?(item.enabled?tr('Enabled','مفعّل'):tr('Available','متاح')):tr('Not implemented','غير منفّذ');
-        card.append(name,state);
+        const toggle=document.createElement('input');
+        toggle.type='checkbox';toggle.checked=Boolean(item.enabled);
+        toggle.disabled=true;
+        toggle.title=tr('Service activation is managed by the existing server policy; no writable API is available yet.','تفعيل هذه الخدمة يتطلب واجهة حفظ فعلية في سياسة الخادم، وهي غير متاحة بعد.');
+        toggle.setAttribute('aria-label',name.textContent);
+        const top=document.createElement('div');top.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:12px;';
+        top.append(name,toggle);
+        card.append(top,state);
         // Only a real backend-controlled toggle may become interactive.
         // Unimplemented services are informational, not disabled fake switches.
         list.append(card);
