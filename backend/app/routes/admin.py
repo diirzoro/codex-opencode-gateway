@@ -360,6 +360,29 @@ def save_inbox_credential(data:SupportInboxCredential,actor:User=Depends(require
     admin_email_config.save(db,actor.id,config)
     return {"configured":True,"address":"support@opencode-gateway.codes"}
 
+@router.get("/service-integrations/sent-emails")
+def resend_sent_emails(_:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Read real Resend sent-email metadata. No keys or HTML returned to browsers."""
+    from ..services import admin_email_config
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+    cfg=admin_email_config.read(db) or {}
+    key=cfg.get("inbox_api_key")
+    if not key:return {"configured":False,"items":[],"reason":"Resend read-capable API key is required"}
+    request=Request("https://api.resend.com/emails?limit=50",
+                    headers={"Authorization":"Bearer "+key,"Accept":"application/json"})
+    try:
+        with urlopen(request,timeout=10) as response:payload=json.load(response)
+    except (HTTPError,URLError,TimeoutError,ValueError):
+        raise HTTPException(502,"Resend sent-email API unavailable; verify API key permissions") from None
+    return {"configured":True,"items":[
+        {"id":str(item.get("id","")),"to":item.get("to",[])[:10] if isinstance(item.get("to"),list) else [],
+         "subject":str(item.get("subject",""))[:300],
+         "status":str(item.get("last_event") or item.get("status") or "unknown")[:50],
+         "created_at":str(item.get("created_at",""))}
+        for item in payload.get("data",[]) if isinstance(item,dict)
+    ],"has_more":bool(payload.get("has_more",False))}
+
 @router.get("/service-integrations/support-inbox")
 def support_inbox(_:User=Depends(require_admin),db:Session=Depends(get_db)):
     """Admin-only, read-only metadata for messages addressed to support mailbox."""
