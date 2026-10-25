@@ -26,6 +26,8 @@
   Object.assign(copy.ar,{accountPageTitle:'حسابي وملفي الشخصي',accountPageLead:'بياناتك وتفضيلاتك، في مكان واضح وبسيط.',accountReturnWorkspace:'العودة لمساحة العمل',accountProfileTab:'ملفي الشخصي',accountSecurityTab:'الأمان والدخول',accountDetailsTitle:'بياناتي وتفضيلاتي',accountDetailsLead:'معلومات التواصل وإعدادات العرض.',accountLanguage:'اللغة',accountAppearance:'المظهر',accountLight:'فاتح',accountDark:'داكن',accountAdditional:'طرق الدخول والتخزين وسياسات البيانات'});
   Object.assign(copy.en,{adminEmailNav:'Email & Verification',adminEmailCenterTitle:'Email & Verification',adminEmailCenterLead:'Manage email delivery, verification, and support inbox securely.',adminEmailProviders:'Providers',adminEmailServices:'Services',adminEmailInbox:'Support Inbox',adminEmailRefresh:'Refresh status',adminEmailDelivery:'Email Delivery'});
   Object.assign(copy.ar,{adminEmailNav:'البريد والتحقق الإلكتروني',adminEmailCenterTitle:'البريد والتحقق الإلكتروني',adminEmailCenterLead:'إدارة إرسال البريد والتحقق من الحسابات وبريد الدعم بأمان.',adminEmailProviders:'المزوّدون',adminEmailServices:'الخدمات',adminEmailInbox:'بريد الدعم',adminEmailRefresh:'تحديث الحالة',adminEmailDelivery:'إرسال البريد الإلكتروني'});
+  Object.assign(copy.en,{adminMailMessagesTitle:'Email messages',adminMailReceived:'Received',adminMailSent:'Sent',adminMailRefresh:'Refresh messages',adminMailConnection:'Connection diagnostics',adminMailConnectionHelp:'Messages are retrieved from Resend, not fabricated.',adminMailReadKey:'Read-capable Resend API key',adminMailSaveKey:'Save encrypted key'});
+  Object.assign(copy.ar,{adminMailMessagesTitle:'رسائل البريد الإلكتروني',adminMailReceived:'الوارد',adminMailSent:'المرسل',adminMailRefresh:'تحديث الرسائل',adminMailConnection:'تفاصيل الاتصال',adminMailConnectionHelp:'تُجلب الرسائل من Resend مباشرة ولا تُعرض بيانات وهمية.',adminMailReadKey:'مفتاح Resend بصلاحية القراءة',adminMailSaveKey:'حفظ المفتاح مشفّرًا'});
   Object.assign(copy.en,{subscriptionNoRefund:'Accepted payments cannot be cancelled or refunded.',clientAccountLead:'Personal details and preferences.'});
   Object.assign(copy.ar,{subscriptionNoRefund:'المدفوعات المقبولة غير قابلة للإلغاء أو الاسترداد.',clientAccountLead:'البيانات الشخصية والتفضيلات.'});
   function navButton(id,key,icon,action){const node=document.createElement('button');node.id=id;node.dataset.go=action;node.innerHTML='<svg class="nav-icon"><use href="'+icon+'"/></svg><span data-i18n="'+key+'">'+t(key)+'</span>';node.onclick=()=>page(action);return node;}
@@ -139,34 +141,48 @@
       q('adminProvidersTab').hidden=tab!=='providers';
       q('adminServicesTab').hidden=tab!=='services';
       q('adminInboxTab').hidden=tab!=='inbox';
+      if(tab==='inbox')readSupportInbox();
       q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
     }));
+    let mailFolder='received';
     async function readSupportInbox(){
       const status=q('adminInboxStatus'),list=q('adminInboxMessages');
-      status.textContent='جارٍ قراءة البريد · Loading…';
+      status.textContent=tr('Loading messages…','جارٍ تحميل الرسائل…');
       list.replaceChildren();
       try{
-        const result=await api('/api/admin/service-integrations/support-inbox');
-        if(!result.configured){status.textContent=result.reason||'لم يتم ربط صندوق الدعم بعد';return;}
-        status.textContent='تم الاتصال بـResend · '+result.items.length+' رسالة في الصفحة الحالية';
-        for(const msg of result.items){
-          const row=document.createElement('div');row.className='manage-card';
-          const title=document.createElement('strong');title.textContent=msg.subject||'(No subject)';
-          const details=document.createElement('small');details.textContent=msg.from+' · '+msg.created_at;
-          const open=document.createElement('button');open.type='button';open.className='button ghost small';open.textContent='قراءة الرسالة · Open';open.onclick=async()=>{
-            open.disabled=true;
-            try{
-              const item=await api('/api/admin/service-integrations/support-inbox/'+encodeURIComponent(msg.id));
-              let body=row.querySelector('.support-mail-text');
-              if(!body){body=document.createElement('pre');body.className='support-mail-text';body.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto';row.append(body);}
-              body.textContent=item.text||'لا يوجد نص عادي للرسالة';
-            }catch(error){toast(error.message);}finally{open.disabled=false;}
-          };
-          row.append(title,details,open);list.append(row);
+        const sent=mailFolder==='sent';
+        const result=await api(sent?'/api/admin/service-integrations/sent-emails':'/api/admin/service-integrations/support-inbox');
+        if(!result.configured){
+          status.textContent=tr('Message access needs a read-capable Resend key. See Connection diagnostics.','قراءة الرسائل تحتاج مفتاح Resend بصلاحية القراءة. راجع تفاصيل الاتصال.');
+          return;
         }
-        if(!result.items.length)list.append(textElement('p','لا توجد رسائل دعم ضمن النتائج الحالية.'));
+        status.textContent=tr('Messages: ','الرسائل: ')+result.items.length;
+        for(const msg of result.items){
+          const row=document.createElement('article');row.className='manage-card';
+          row.style.cssText='padding:14px;margin:8px 0;display:flex;flex-direction:column;gap:5px;';
+          const subject=document.createElement('strong');subject.textContent=msg.subject||tr('(No subject)','(بدون عنوان)');
+          const details=document.createElement('small');details.textContent=(sent?(Array.isArray(msg.to)?msg.to.join(', '):''):msg.from)+' · '+msg.created_at+(sent?' · '+msg.status:'');
+          row.append(subject,details);
+          if(!sent){
+            const open=document.createElement('button');open.type='button';open.className='button ghost small';
+            open.textContent=tr('Open message','قراءة الرسالة');
+            open.onclick=async()=>{
+              open.disabled=true;
+              try{
+                const item=await api('/api/admin/service-integrations/support-inbox/'+encodeURIComponent(msg.id));
+                let body=row.querySelector('.support-mail-text');
+                if(!body){body=document.createElement('pre');body.className='support-mail-text';body.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto';row.append(body);}
+                body.textContent=item.text||tr('No plain text body','لا يوجد نص للرسالة');
+              }catch(error){toast(error.message);}finally{open.disabled=false;}
+            };row.append(open);
+          }
+          list.append(row);
+        }
+        if(!result.items.length)list.append(textElement('p',tr('No messages returned by Resend.','لم يُرجع Resend أي رسائل.')));
       }catch(error){status.textContent=error.message;}
     }
+    q('adminMailReceived').onclick=()=>{mailFolder='received';readSupportInbox();};
+    q('adminMailSent').onclick=()=>{mailFolder='sent';readSupportInbox();};
     q('adminInboxRead').onclick=readSupportInbox;
     q('adminInboxSaveKey').onclick=async()=>{
       const field=q('adminInboxApiKey'),button=q('adminInboxSaveKey');
