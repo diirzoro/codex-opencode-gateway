@@ -1026,7 +1026,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     // queue in native mode or acknowledge a potentially orphaned prompt.
     const nativeBusy=Boolean(window.nativeSession?.active()&&(busy||window.nativeSession.blocked(activeSession?.id)));
     manualModel.hidden=!window.nativeSession?.active();
-    recoverConversation.hidden=!window.nativeSession?.active()||!activeSession;
+    recoverConversation.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
     q('sendMessage').disabled=sending||queuing||nativeBusy||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
