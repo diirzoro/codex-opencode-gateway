@@ -49,7 +49,8 @@ jobs:
           python3 - <<'PY'
           import pathlib, ast
           versions=sorted(pathlib.Path('backend/alembic/versions').glob('*.py'))
-          assert versions and versions[-1].name=='0021_email_delivery_settings.py'
+          assert versions and versions[-1].name=='0023_admin_mail_drafts.py'
+          assert pathlib.Path('backend/alembic/versions/0022_email_service_policies.py').is_file()
           assert pathlib.Path('backend/app/services/admin_email_config.py').is_file()
           assert pathlib.Path('index.html').is_file()
           print('FULL_SOURCE_PREFLIGHT_SUCCESS',len(versions),'migrations')
