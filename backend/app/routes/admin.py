@@ -319,35 +319,51 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
     db.commit(); db.refresh(row)
     return row.as_payload()
 
+class EmailDeliveryUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    provider: Literal["resend"] = "resend"
+    smtp_from: str = Field(min_length=6,max_length=254)
+    api_key: str | None = Field(default=None,min_length=5,max_length=4096)
+
+@router.put("/service-integrations/email")
+def save_email_delivery(data: EmailDeliveryUpdate, actor: User = Depends(require_admin), db: Session = Depends(get_db)):
+    from ..services import admin_email_config
+    sender=data.smtp_from
+    if not sender.endswith("@opencode-gateway.codes") or any(c in sender for c in "\r\n<> ,"):
+        raise HTTPException(422,"Sender must use verified opencode-gateway.codes domain")
+    existing=admin_email_config.read(db)
+    key=data.api_key if data.api_key is not None else (existing or {}).get("smtp_password")
+    if not key:
+        raise HTTPException(422,"Enter your Resend API key first")
+    cfg={"provider":"resend","smtp_host":"smtp.resend.com","smtp_port":587,
+         "smtp_username":"resend","smtp_password":key,"smtp_from":sender}
+    admin_email_config.save(db, actor.id, cfg)
+    return {"provider":"resend","configured":True,"credentials_configured":True,
+            "sender":sender,"smtp_host":"smtp.resend.com","smtp_port":587,
+            "smtp_username":"resend"}
+
 @router.get("/service-integrations")
-def service_integrations(_: User = Depends(require_admin)):
-    """Read-only service readiness. Never return SMTP passwords or provider tokens."""
+def service_integrations(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     import os
     from ..services import email_verification
-    email_ready = email_verification.smtp_ready()
-    verify_required = email_verification.required_for_registration()
-    host = os.getenv("SMTP_HOST", "").strip().lower()
-    provider = "resend" if host == "smtp.resend.com" else ("smtp" if host else "unconfigured")
-    return {
-        "email": {
-            "provider": provider,
-            "configured": email_ready,
-            "sending_ready": email_ready,
-            "sender": os.getenv("SMTP_FROM", "") if email_ready else "",
-            "verification_required": verify_required,
-            "credentials_configured": bool(os.getenv("SMTP_PASSWORD")),
-        },
-        "services": [
-            {"id": "registration_verification", "enabled": verify_required, "available": email_ready,
-             "reason": "" if email_ready else "SMTP credentials are not configured on this server"},
-            {"id": "password_reset", "enabled": False, "available": False,
-             "reason": "Secure password reset delivery is not available yet"},
-            {"id": "welcome_email", "enabled": False, "available": False, "reason": "Not implemented"},
-            {"id": "subscription_expiry", "enabled": False, "available": False, "reason": "Not implemented"},
-            {"id": "low_balance", "enabled": False, "available": False, "reason": "Not implemented"},
-            {"id": "account_suspension", "enabled": False, "available": False, "reason": "Not implemented"},
-            {"id": "payment_receipt", "enabled": False, "available": False, "reason": "Not implemented"},
-            {"id": "renewal_reminder", "enabled": False, "available": False, "reason": "Not implemented"},
-            {"id": "system_updates", "enabled": False, "available": False, "reason": "Not implemented"},
-        ],
-    }
+    from ..services import admin_email_config
+    saved=admin_email_config.read(db)
+    mail_ready=email_verification.smtp_ready(db)
+    required=email_verification.required_for_registration()
+    mail=saved or {}
+    provider=mail.get("provider","resend" if os.getenv("SMTP_HOST")=="smtp.resend.com" else "smtp")
+    return {"email":{"provider":provider,"configured":mail_ready,"sending_ready":mail_ready,
+          "sender":mail.get("smtp_from",os.getenv("SMTP_FROM","")),
+          "verification_required":required,
+          "credentials_configured":bool(mail.get("smtp_password") or os.getenv("SMTP_PASSWORD")),
+          "smtp_host":mail.get("smtp_host",os.getenv("SMTP_HOST","")),
+          "smtp_port":mail.get("smtp_port",os.getenv("SMTP_PORT","587")),
+          "smtp_username":mail.get("smtp_username",os.getenv("SMTP_USERNAME",""))},
+       "services":[
+         {"id":"registration_verification","enabled":required,"available":mail_ready,
+          "reason":"" if mail_ready else "Resend API key missing"},
+         {"id":"password_reset","enabled":False,"available":False,"reason":"Secure recovery flow not active"},
+         *({"id":i,"enabled":False,"available":False,"reason":"Not implemented"} for i in
+           ("welcome_email","subscription_expiry","low_balance","account_suspension",
+            "payment_receipt","renewal_reminder","system_updates"))
+       ]}
