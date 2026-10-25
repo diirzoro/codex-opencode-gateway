@@ -104,7 +104,11 @@ def catalog(db,user,directory=None):
     owners={}
     for record in db.scalars(select(AccountAudit).where(AccountAudit.action.like('native-provider:%')).order_by(AccountAudit.id)):
         owners[record.action.removesuffix(':off')]=None if record.action.endswith(':off') else record.subject_id
-    for entry in data['all']:
+    # Keep discovery lightweight for the UI while prioritizing connected and
+    # account-owned providers. The full Native catalog stays untouched; model
+    # authorization still checks the complete upstream catalog separately.
+    ordered=sorted(data['all'],key=lambda entry:(0 if entry.get('id') in data.get('connected',[]) else 1, str(entry.get('id',''))))
+    for entry in ordered[:50]:
         public=public_entry(entry)
         key=action(entry['id'])
         is_owned=owners.get(key)==user.id or (key not in owners and str(user.id)==os.getenv('OPENCODE_NATIVE_TEST_OWNER_ID','') and not public_free(entry))
