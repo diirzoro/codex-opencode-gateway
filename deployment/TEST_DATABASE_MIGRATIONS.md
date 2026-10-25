@@ -25,9 +25,11 @@ sudo -n /usr/local/sbin/opencode-gateway-test-migrate upgrade
 Expect TEST_DATABASE_CONFIRMED, Alembic current, TEST_DB_MIGRATION_OK.
 Use only the same protected TEST systemd environment files loaded by
 opencode-gateway-test.service. No credentials are printed or stored in Git.
-The fixed runner path reads runtime.env under the current TEST rollback
-directory; if that file changes during deployment management, an authorized
-operator must update and reinstall the runner.
+The root-owned runner uses transient systemd units under User=tahir and
+passes the protected EnvironmentFile paths to systemd. It never sources
+writable files into a root shell or prints secrets. If the TEST rollback
+environment path changes, an authorized operator must update and reinstall
+the runner. Transient units do not create persistent workers.
 
 The release script copies migrations before executing this runner and restarts
 the TEST gateway only on successful migration. A failed migration aborts and
