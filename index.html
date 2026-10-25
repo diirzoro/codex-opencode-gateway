@@ -649,7 +649,7 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   <label class="field"><span>إلى · To</span><input type="email" id="adminComposeTo" maxlength="254" autocomplete="off" required></label>
   <label class="field"><span>الموضوع · Subject</span><input type="text" id="adminComposeSubject" maxlength="300" required></label>
   <label class="field"><span>الرسالة · Message</span><textarea id="adminComposeBody" rows="9" maxlength="100000" required></textarea></label>
-  <p class="lead">المسودات تحفظ مشفّرة على الخادم. لا تُرفع المرفقات إلا عند الإرسال.</p>
+  <label class="field"><span>مرفق اختياري (PDF / PNG / JPEG / TXT، حتى 2 ميجابايت)</span><input id="adminComposeAttachment" type="file" accept=".pdf,.png,.jpg,.jpeg,.txt"></label><p class="lead">المسودات تحفظ مشفّرة على الخادم. لا تُرفع المرفقات إلا عند الإرسال.</p>
   <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="button" id="adminComposeSend">إرسال · Send</button><button type="button" class="button ghost" id="adminComposeSaveDraft">حفظ مسودة · Save draft</button><button type="button" class="button ghost" id="adminComposeCancel">إلغاء · Cancel</button></div>
   <p id="adminComposeStatus" role="status"></p>
 </div>
