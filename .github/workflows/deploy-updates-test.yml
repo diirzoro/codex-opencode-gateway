@@ -50,16 +50,16 @@ jobs:
 
       - name: Configure TEST-only SSH
         env:
-          HOST: ${{ secrets.TEST_VPS_HOST }}
-          USER: ${{ secrets.TEST_VPS_USER }}
-          KEY: ${{ secrets.TEST_VPS_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.TEST_VPS_KNOWN_HOSTS }}
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+          KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          : "${HOST:?Set TEST_VPS_HOST in test environment}"
-          : "${USER:?Set TEST_VPS_USER in test environment}"
-          : "${KEY:?Set TEST_VPS_SSH_KEY in test environment}"
-          : "${KNOWN_HOSTS:?Set TEST_VPS_KNOWN_HOSTS in test environment}"
+          : "${HOST:?Set STAGING_HOST for TEST}"
+          : "${USER:?Set STAGING_USER for TEST}"
+          : "${KEY:?Set STAGING_SSH_PRIVATE_KEY for TEST}"
+          : "${KNOWN_HOSTS:?Set STAGING_SSH_KNOWN_HOSTS for TEST}"
           install -d -m 700 "$HOME/.ssh"
           printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
@@ -68,8 +68,8 @@ jobs:
 
       - name: Upload only reviewed UI files to temporary TEST directory
         env:
-          HOST: ${{ secrets.TEST_VPS_HOST }}
-          USER: ${{ secrets.TEST_VPS_USER }}
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
           PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
         run: |
           set -euo pipefail
@@ -80,8 +80,8 @@ jobs:
 
       - name: Backup and activate UI files on TEST only
         env:
-          HOST: ${{ secrets.TEST_VPS_HOST }}
-          USER: ${{ secrets.TEST_VPS_USER }}
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
           PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
         run: |
           set -euo pipefail
