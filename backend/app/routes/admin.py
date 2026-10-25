@@ -670,11 +670,12 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
        ]}
 
 @router.get("/github-configuration")
-def github_configuration(_:User=Depends(require_admin)):
+def github_configuration(_:User=Depends(require_admin),db:Session=Depends(get_db)):
     """Read-only effective GitHub settings metadata; never disclose secrets."""
     from ..services import github, credentials
     return {
         "provider":"github_app", "configured":github.configured(),
+        "database":github.schema_status(db),
         "app_id":settings.github_app_id,
         "app_slug":settings.github_app_slug or "",
         "client_id":settings.github_client_id or "",

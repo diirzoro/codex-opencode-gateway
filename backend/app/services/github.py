@@ -17,6 +17,34 @@ from .entitlements import require_advanced
 
 STATE_TTL_MINUTES = 15
 
+def schema_status(db) -> dict:
+    """Read-only structure check. Never return rows, DSNs, tokens or DB errors."""
+    from alembic.migration import MigrationContext
+    from sqlalchemy import inspect
+    from sqlalchemy.exc import SQLAlchemyError
+    required = {
+        GithubConnection.__tablename__: set(GithubConnection.__table__.columns.keys()),
+        GithubAuthState.__tablename__: set(GithubAuthState.__table__.columns.keys()),
+        "projects": {"github_repository_id", "github_installation_id", "remote_url", "remote_branch"},
+    }
+    try:
+        connection = db.connection()
+        inspector = inspect(connection)
+        missing = []
+        for table, columns in required.items():
+            if not inspector.has_table(table):
+                missing.append(table)
+            else:
+                actual = {column["name"] for column in inspector.get_columns(table)}
+                missing.extend(table + "." + name for name in sorted(columns - actual))
+        revisions = list(MigrationContext.configure(connection).get_current_heads())
+        return {"checked": True, "ready": not missing, "missing": missing,
+                "revisions": revisions, "required_migrations": ["0003_github_provider", "0005_account_management"]}
+    except SQLAlchemyError:
+        return {"checked": False, "ready": False, "missing": [], "revisions": [],
+                "reason": "Database schema inspection unavailable"}
+
+
 def configured() -> bool:
     return bool(settings.github_configured and settings.github_client_id and settings.github_client_secret and credentials.available())
 
