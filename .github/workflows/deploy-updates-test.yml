@@ -3,9 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "Type audit-test or deploy-test"
+        description: "Select TEST operation (legacy promote-test is not accepted)"
         required: true
-        type: string
+        type: choice
+        default: audit-test
+        options:
+          - audit-test
+          - deploy-test
 permissions:
   contents: read
 concurrency:
