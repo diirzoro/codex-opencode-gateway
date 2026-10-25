@@ -77,17 +77,23 @@ def migration_runner():
         if tool.is_file() and os.access(tool,os.X_OK):return [str(tool)]
     return None
 def db_env():
-    # Preserve TEST environment; use python-dotenv parser if installed in interpreter.
+    # Read only the existing TEST .env; never rewrite, print, or persist secrets.
+    tool=migration_runner()
+    if tool is None:raise RuntimeError("TEST Alembic executable unavailable")
+    python=Path(tool[0]).parent/"python"
+    if not python.is_file():raise RuntimeError("TEST venv Python unavailable")
+    code=("import json,sys;from dotenv import dotenv_values;"
+          "print(json.dumps(dotenv_values(sys.argv[1])))")
+    import json
     try:
-        from dotenv import dotenv_values
-    except ImportError:
-        raise RuntimeError("python-dotenv missing; refuse DB migration")
-    values=dotenv_values(ROOT/".env")
+        values=json.loads(run(str(python),"-c",code,str(ROOT/".env"),timeout=15))
+    except (subprocess.CalledProcessError,ValueError):
+        raise RuntimeError("Could not read TEST database environment") from None
     env=os.environ.copy()
     for key,val in values.items():
-        if val is not None:env[key]=val
+        if isinstance(val,str):env[key]=val
     if not env.get("DATABASE_URL","").startswith(("postgresql://","postgresql+psycopg://")):
-        raise RuntimeError("TEST DATABASE_URL not available from existing .env")
+        raise RuntimeError("TEST DATABASE_URL not available from protected .env; abort safely")
     return env
 def migration_needed(target):
     # Explicitly limited to the known forward-only email config migration.
