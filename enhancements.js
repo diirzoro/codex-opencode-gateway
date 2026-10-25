@@ -148,11 +148,16 @@
     const panel=document.getElementById('adminGithubPanel');if(!panel)return;
     const status=document.createElement('p');status.setAttribute('role','status');
     status.textContent=tr('Checking GitHub configuration…','جارٍ فحص إعدادات GitHub…');
-    panel.replaceChildren(status);
+    // Leave the static settings skeleton visible while network requests run.
+    // A slow or failed endpoint must never produce a blank admin page.
+    const skeleton=panel.querySelector('.manage-card');
+    if(skeleton){const live=skeleton.querySelector('[role="status"]');if(live)live.replaceWith(status);}
+    else panel.append(status);
     try {
       const [connection,config]=await Promise.all([
         api('/api/github/status'),api('/api/admin/github-configuration')
       ]);
+      panel.replaceChildren(status);
       status.textContent=connection.connected
         ?tr('Connected: ','متصل: ')+(connection.account_login||'GitHub')
         :connection.configured
