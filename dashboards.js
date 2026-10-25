@@ -50,6 +50,34 @@
           ? tr('GitHub App configured; this account is not connected.','تطبيق GitHub مهيأ؛ هذا الحساب غير مرتبط.')
           : tr('GitHub App is not configured on TEST. A server operator must check the protected App configuration and encryption key.','تطبيق GitHub غير مهيأ على TEST. يلزم فحص إعداد التطبيق ومفتاح التشفير المحمي على الخادم.');
       if(data.reason){const detail=document.createElement('p');detail.textContent=data.reason;host.append(detail);}
+      const config=await api('/api/admin/github-configuration');
+      const panel=document.createElement('section');panel.className='manage-card';
+      const heading=document.createElement('h2');heading.textContent=tr('GitHub App configuration','إعدادات تطبيق GitHub');
+      panel.append(heading);
+      const explanation=document.createElement('p');explanation.className='lead';
+      explanation.textContent=tr('Effective settings from the protected TEST service. They are read-only until a safe server-side settings activation mechanism is implemented. Secret values are never returned.','هذه الإعدادات الفعلية من خدمة TEST المحمية. للقراءة فقط حتى تنفيذ آلية تفعيل آمنة للإعدادات من الخادم؛ لا تظهر قيم الأسرار.');
+      panel.append(explanation);
+      const grid=document.createElement('div');grid.className='field-grid';
+      const fields=[
+        ['Provider','provider'],['App ID','app_id'],['App slug','app_slug'],['OAuth Client ID','client_id'],
+        ['Public URL','public_base_url'],['Callback URL','callback_url'],
+        ['Webhook URL','webhook_url'],['GitHub API','api_base'],['GitHub Web','web_base']];
+      for(const [label,key] of fields){
+        const field=document.createElement('label');field.className='field';
+        const caption=document.createElement('span');caption.textContent=label;
+        const value=document.createElement('input');value.readOnly=true;
+        value.value=String(config[key]??'');value.setAttribute('aria-label',label);
+        field.append(caption,value);grid.append(field);
+      }
+      panel.append(grid);
+      const secrets=document.createElement('p');
+      const keys=[['OAuth Client Secret','client_secret'],['App private key','private_key'],['Webhook Secret','webhook_secret'],['Credential encryption key','encryption_key']];
+      secrets.textContent=keys.map(([name,key])=>name+': '+(config.secrets?.[key]?'✓ '+tr('configured','موجود'):'✕ '+tr('missing','ناقص'))).join(' · ');
+      panel.append(secrets);
+      const missing=document.createElement('p');missing.setAttribute('role','status');
+      missing.textContent=config.missing?.length?tr('Missing server settings: ','إعدادات الخادم الناقصة: ')+config.missing.join(', '):tr('All required environment names present; live authorization still needs testing.','الإعدادات المطلوبة موجودة؛ ما زال اختبار التفويض الحقيقي مطلوبًا.');
+      panel.append(missing);host.append(panel);
+
       const button=document.createElement('button');button.type='button';button.className='button ghost';
       button.textContent=data.connected?tr('Connected','متصل'):tr('Authorize GitHub','ربط GitHub');
       button.disabled=!data.configured||!!data.connected;
