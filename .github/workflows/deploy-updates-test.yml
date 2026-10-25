@@ -1,10 +1,5 @@
 name: Audit and promote updates to TEST
 on:
-  push:
-    branches:
-      - updates
-    paths:
-      - .github/workflows/deploy-updates-test.yml
   workflow_dispatch:
     inputs:
       confirmation:
@@ -22,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   test:
-    if: github.ref == 'refs/heads/updates' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[test-deploy-once]'))
+    if: github.ref == 'refs/heads/updates' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: test
     timeout-minutes: 20
@@ -30,7 +25,7 @@ jobs:
       - name: Confirm TEST operation
         id: confirm
         env:
-          CONFIRMATION: ${{ github.event_name == 'push' && 'deploy-test' || inputs.confirmation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
           mode="$(printf '%s' "$CONFIRMATION" | tr -d '[:space:]')"
