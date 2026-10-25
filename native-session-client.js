@@ -242,7 +242,16 @@
   function stop(){stream?.close();stream=null;}
   async function send(id,{text,providerID,modelID,agent,variant,files=[]}){
     const row=await context(id);
-    if(blocked(id))throw Error('Native receipt is uncertain. Reconnect and check history before resending.');
+    if(blocked(id)){
+      // Native may have accepted the previous prompt before the HTTP response
+      // was lost. Query authoritative native history (never retry the prompt).
+      // A confirmed messageID clears the local uncertainty via reconcile().
+      try{await history(id,true);}catch{}
+      if(blocked(id))throw Error(label(
+        'Previous Native prompt receipt is still uncertain. Draft preserved; check conversation history before resending.',
+        'لم يتأكد استلام الرسالة السابقة من OpenCode. تم الاحتفاظ بالمسودة؛ تحقق من سجل المحادثة قبل إعادة الإرسال.'
+      ));
+    }
     const user=owner();select(id,{providerID,modelID,agent,variant});
     const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
     const messageID='msg_'+((BigInt(Date.now())*4096n)&0xffffffffffffn).toString(16).padStart(12,'0')+Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');
