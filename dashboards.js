@@ -87,7 +87,7 @@
       refresh.textContent=tr('Refresh status','تحديث الحالة');refresh.onclick=loadAdminGithubStatus;host.append(refresh);
     }catch(error){status.textContent=tr('Could not retrieve GitHub status: ','تعذر جلب حالة GitHub: ')+error.message;}
   }
-  q('adminNav').querySelector('[data-admin-view="github"]')?.addEventListener('click',loadAdminGithubStatus);
+  window.gatewayLoadAdminGithubStatus=loadAdminGithubStatus;
   async function loadServiceCenter(){
     if(!admin())return;
     const notice=q('adminServiceNotice');if(!notice)return;
@@ -111,8 +111,8 @@
       }
     }catch(error){notice.textContent=error.message;}
   }
+  window.gatewayLoadServiceCenter=loadServiceCenter;
   if(q('adminServiceCenter')){
-    const previousAdminView=window.openAdminView;window.openAdminView=async name=>{await previousAdminView(name);if(name==='email')await loadServiceCenter();};
     q('adminServiceRefresh')?.addEventListener('click',loadServiceCenter);
     q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(button=>button.addEventListener('click',()=>{
       const tab=button.dataset.serviceTab;
