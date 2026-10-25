@@ -1026,7 +1026,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     // OpenCode 1.x does not guarantee that a second prompt_async while a
     // session is already running will execute. Never advertise a Gateway
     // queue in native mode or acknowledge a potentially orphaned prompt.
-    const nativeBusy=Boolean(window.nativeSession?.active()&&(busy||window.nativeSession.blocked(activeSession?.id)));
+    const nativeBusy=Boolean(window.nativeSession?.active()&&window.nativeSession.blocked(activeSession?.id));
     manualModel.hidden=!window.nativeSession?.active();
     recoverConversation.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
     q('sendMessage').disabled=sending||queuing||nativeBusy||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
@@ -1491,8 +1491,11 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
       if(['submitted','waiting_approval'].includes(activeSession?.execution_status)){
-        toast(tr('OpenCode is still running. Keep the draft and send after it finishes.','OpenCode ما زال يعمل. احتفظ بالمسودة وأرسل بعد الانتهاء.'));
-        return;
+        if(!activeSession?.id)return;
+        try{
+          await window.nativeSession.replaceRunningModel(activeSession.id,provider,model);
+          submissionStatus.textContent=tr('Previous model stopped in this conversation. Submitting to the selected model…','توقف النموذج السابق في هذه المحادثة. جارٍ الإرسال للنموذج المحدد…');
+        }catch(error){toast(error.message);submissionStatus.textContent=error.message;return;}
       }
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
       try{await refreshEntitlement();if(!workAccess)return;if(!activeSession)await createSession({checked:true});
