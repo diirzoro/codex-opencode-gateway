@@ -118,6 +118,14 @@ def rollout(target,mode):
     nativepid=run("systemctl","show","--value","-p","MainPID",NATIVE)
     for name,dest,data in changes:replace(dest,data);print("UPDATED",name,flush=True)
     try:
+        # A TEST-only, root-owned migration gate is a mandatory deployment dependency.
+        # It must validate current_database() and run Alembic against the exact TEST
+        # service environment. Never infer DB identity from a filename or URL.
+        # A missing or failed gate must block restart and release marking.
+        if mode == "deploy":
+            gate = "/usr/local/sbin/opencode-gateway-test-migrate"
+            run("sudo","-n",gate,"upgrade",timeout=180)
+            print("TEST_MIGRATION_GATE_PASSED",flush=True)
         run("sudo","-n","/usr/bin/systemctl","restart",GATEWAY)
         time.sleep(3)
         if not service(GATEWAY):raise RuntimeError("Gateway unhealthy after restart")
