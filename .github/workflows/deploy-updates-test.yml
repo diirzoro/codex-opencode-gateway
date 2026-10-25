@@ -1,56 +1,50 @@
-# TEST-only compatibility audit. Deliberately no deployment until existing shared Native routing is reconciled.
 name: Audit and promote updates to TEST
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: 'Type audit-test for read-only inspection, or deploy-test for reviewed TEST rollout'
+        description: "Type audit-test or deploy-test"
         required: true
         type: string
 permissions:
   contents: read
 concurrency:
-  group: test-native-deploy
+  group: test-native-audit-deploy
   cancel-in-progress: false
 jobs:
-  audit:
+  test:
     if: github.ref == 'refs/heads/updates'
     runs-on: ubuntu-latest
     environment: test
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
-      - name: Require TEST-only confirmation
+      - name: Confirm TEST operation
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
           [[ "$CONFIRMATION" == "audit-test" || "$CONFIRMATION" == "deploy-test" ]]
-          test "$GITHUB_REF" = 'refs/heads/updates'
+          [[ "$GITHUB_REF" == "refs/heads/updates" ]]
       - uses: actions/checkout@v4
         with:
           ref: updates
           persist-credentials: false
-      - name: Compare full runtime bundle to reviewed GitHub revision
+      - name: Validate reviewed 18-file source manifest
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import ast,re,pathlib
-          src=pathlib.Path('scripts/native_test_release.py').read_text()
-          match=re.search(r'^FILES=\((.*?)\)\s*$',src,re.S|re.M)
-          if not match: raise SystemExit('STOP: Cannot locate native release file manifest')
-          files=ast.literal_eval('('+match.group(1)+')')
-          if len(files)!=18 or len(set(files))!=len(files): raise SystemExit('STOP: Unexpected Native file manifest')
-          for name in files:
-              path=pathlib.Path(name)
-              if not path.is_file(): raise SystemExit('STOP: Missing source file: '+name)
-          pathlib.Path('/tmp/test-native-manifest').write_text('\n'.join(files)+'\n')
-          print('GitHub manifest checked:',len(files),'runtime files')
+          s=pathlib.Path("scripts/native_test_release.py").read_text()
+          m=re.search(r"^FILES=\((.*?)\)\s*$",s,re.S|re.M)
+          if not m: raise SystemExit("Missing release manifest")
+          paths=ast.literal_eval("("+m.group(1)+")")
+          if len(paths)!=18 or len(set(paths))!=18: raise SystemExit("Invalid release manifest")
+          if any(not pathlib.Path(p).is_file() for p in paths): raise SystemExit("Missing reviewed source")
+          pathlib.Path("/tmp/test-native-manifest").write_text("\n".join(paths)+"\n")
           PY
-          while read -r f; do
-            test -n "$f" || continue
-            printf '%s  %s\n' "$(sha256sum "$f" | cut -d ' ' -f 1)" "$f"
-          done < /tmp/test-native-manifest > /tmp/test-native-hashes
-      - name: Configure verified TEST SSH
+          while IFS= read -r f; do sha256sum "$f"; done < /tmp/test-native-manifest > /tmp/test-native-hashes
+          python3 -m py_compile scripts/test_diff_only_rollout.py
+      - name: Configure pinned SSH for TEST
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
@@ -67,7 +61,7 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ed25519"
           printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
-      - name: Read-only TEST inventory and source compatibility report
+      - name: Inspect TEST identity and service health
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
@@ -75,52 +69,30 @@ jobs:
         run: |
           set -euo pipefail
           port="${PORT:-22}"
-          # No sudo or secret-bearing file content is accessed or printed.
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            'test "$HOME" = /home/tahir && test -d /home/tahir/opencode-gateway-test/.git && test -d /home/tahir/opencode-gateway-test/backend && test -f /home/tahir/opencode-gateway-test/.env && systemctl is-active --quiet opencode-gateway-test.service && systemctl is-active --quiet opencode-native-test.service' || {
-              echo 'STOP: TEST identity, location, or service preflight failed'; exit 1;
-            }
-          scp -P "$port" -o StrictHostKeyChecking=yes /tmp/test-native-hashes "$USER@$HOST:/tmp/opencode-test-native-audit-${GITHUB_RUN_ID}.txt"
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" "bash -se -- ${GITHUB_RUN_ID}" <<'REMOTE'
+            'test "$HOME" = /home/tahir && test -d /home/tahir/opencode-gateway-test/.git && test -f /home/tahir/opencode-gateway-test/.env && systemctl is-active --quiet opencode-gateway-test.service && systemctl is-active --quiet opencode-native-test.service'
+      - name: Compare runtime files to GitHub read-only
+        if: inputs.confirmation == 'audit-test'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
           set -euo pipefail
-          run_id="$1"
-          [[ "$run_id" =~ ^[0-9]+$ ]] || exit 2
-          cd /home/tahir/opencode-gateway-test
-          manifest="/tmp/opencode-test-native-audit-$run_id.txt"
-          trap 'rm -f -- "$manifest"' EXIT
-          echo '=== TEST runtime comparison (source sha256 vs deployed sha256) ==='
-          changed=0
-          missing=0
-          while read -r wanted relative; do
-            case "$relative" in
-              app.js|dashboards.js|runtime-client.js|native-session-client.js|management.js|enhancements.js|backend/app/main.py|backend/app/routes/native_sessions.py|backend/app/routes/agent.py|backend/app/services/opencode.py|backend/app/routes/workspaces.py|backend/app/services/native_provider_accounts.py|backend/app/services/github.py|backend/app/routes/admin.py|backend/app/services/native_catalog_maintenance.py|backend/app/services/policy.py|backend/app/services/providers.py|backend/app/services/workspaces.py) ;;
-              *) echo 'STOP: unexpected manifest path'; exit 3;;
-            esac
-            if [[ ! -f "$relative" ]]; then
-              printf 'MISSING %s\n' "$relative"
-              missing=$((missing+1))
-            elif [[ -L "$relative" ]]; then
-              printf 'BLOCKED_SYMLINK %s\n' "$relative"
-              exit 4
-            else
-              current="$(sha256sum "$relative" | cut -d ' ' -f 1)"
-              if [[ "$current" == "$wanted" ]]; then printf 'MATCH %s\n' "$relative"
-              else printf 'DIFFERENT %s\n' "$relative"; changed=$((changed+1)); fi
-            fi
-          done < "$manifest"
-          echo "TOTAL_DIFFERENT=$changed TOTAL_MISSING=$missing"
-          echo '=== Protected TEST routing (presence only, no configuration content) ==='
-          for f in /etc/nginx/conf.d/opencode-native-test-session-local.conf /etc/nginx/snippets/opencode-native-coordinated-test.conf /etc/opencode-gateway-test/native-release.env /etc/systemd/system/opencode-gateway-test.service.d/zzzz-native-release.conf; do
-            if [[ -r "$f" ]]; then echo "READABLE $f"; elif [[ -e "$f" ]]; then echo "PRESENT_PROTECTED $f"; else echo "ABSENT $f"; fi
-          done
-          if [[ -r /etc/nginx/conf.d/opencode-native-test-session-local.conf ]] && grep -Eq 'location[[:space:]]*=[[:space:]]*/path([[:space:]]|\{)' /etc/nginx/conf.d/opencode-native-test-session-local.conf; then
-            echo 'PATH_ROUTE=FOUND_REVIEW_AUTH_REQUIRED'
-          else
-            echo 'PATH_ROUTE=NOT_CONFIRMED - Native security metadata dependency; do not deploy'
-          fi
-          echo 'AUDIT_ONLY: no code/config/service/database/Native process updated'
-          REMOTE
-      - name: Upload reviewed deployment source for TEST-only rollout
+          port="${PORT:-22}"
+          while IFS=' ' read -r expected file; do
+            test -n "$file" || continue
+            actual="$(ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" "cd /home/tahir/opencode-gateway-test && if test -f '$file' && test ! -L '$file'; then sha256sum '$file' | cut -d ' ' -f1; else echo MISSING; fi")"
+            if [[ "$expected" == "$actual" ]]; then echo "MATCH $file"; else echo "DIFFERENT_OR_MISSING $file"; fi
+          done < /tmp/test-native-hashes
+          echo "AUDIT_ONLY: no TEST application, configuration, or service changed"
+      - name: Package reviewed Native bundle
+        if: inputs.confirmation == 'deploy-test'
+        run: |
+          set -euo pipefail
+          tar -cf "test-release-${GITHUB_RUN_ID}.tar" -T /tmp/test-native-manifest
+          sha256sum "test-release-${GITHUB_RUN_ID}.tar" > "test-release-${GITHUB_RUN_ID}.tar.sha256"
+      - name: Upload bundle and guarded deployment tool
         if: inputs.confirmation == 'deploy-test'
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -129,27 +101,10 @@ jobs:
         run: |
           set -euo pipefail
           port="${PORT:-22}"
-          test "$port" = 22 || [[ "$port" =~ ^[0-9]{1,5}$ ]]
-          bundle="opencode-native-deploy-${GITHUB_RUN_ID}.tar"
-          python3 - <<'PY'
-          import ast,re,pathlib
-          s=pathlib.Path('scripts/native_test_release.py').read_text()
-          m=re.search(r'^FILES=\\((.*?)\\)\\s*        if: always()
-        run: |
-          echo 'TEST audit or guarded deployment (depending on dispatch input); master and LIVE excluded.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Deployment requires the separate root-private test_diff_only_rollout.py script and pre-existing authorized sudo. If either is absent, deployment stops without touching application files.' >> "$GITHUB_STEP_SUMMARY"
-,s,re.S|re.M)
-          if not m: raise SystemExit('Missing manifest')
-          files=ast.literal_eval('('+m.group(1)+')')
-          pathlib.Path('/tmp/opencode-native-files').write_text('\\n'.join(files)+'\\n')
-          PY
-          tar -cf "$bundle" -T /tmp/opencode-native-files
-          sha256sum "$bundle" > "$bundle.sha256"
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            "mkdir -p -m 700 /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}"
-          scp -P "$port" -o StrictHostKeyChecking=yes "$bundle" "$bundle.sha256" scripts/test_diff_only_rollout.py \
-            "$USER@$HOST:/home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/"
-      - name: Perform TEST-only guarded deployment
+          stage="/home/tahir/.opencode-test-release-${GITHUB_RUN_ID}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" "install -d -m 700 '$stage'"
+          scp -P "$port" -o StrictHostKeyChecking=yes "test-release-${GITHUB_RUN_ID}.tar" "test-release-${GITHUB_RUN_ID}.tar.sha256" scripts/test_diff_only_rollout.py "$USER@$HOST:$stage/"
+      - name: Apply guarded TEST-only diff release
         if: inputs.confirmation == 'deploy-test'
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -158,12 +113,10 @@ jobs:
         run: |
           set -euo pipefail
           port="${PORT:-22}"
-          # Requires a pre-existing narrowly authorized passwordless sudo capability;
-          # never send a sudo password or broaden sudoers from CI.
+          stage="/home/tahir/.opencode-test-release-${GITHUB_RUN_ID}"
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            "sudo -n /usr/bin/python3 -I /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/test_diff_only_rollout.py --bundle /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/opencode-native-deploy-${GITHUB_RUN_ID}.tar --checksum /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/opencode-native-deploy-${GITHUB_RUN_ID}.tar.sha256"
-      - name: Audit summary
+            "sudo -n /usr/bin/python3 -I '$stage/test_diff_only_rollout.py' --bundle '$stage/test-release-${GITHUB_RUN_ID}.tar' --checksum '$stage/test-release-${GITHUB_RUN_ID}.tar.sha256'"
+      - name: Report scope
         if: always()
         run: |
-          echo 'TEST audit only. No upload of application files, no restart, no Nginx changes, no LIVE/master.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Do not deploy Native bundle until the existing /path metadata route and ownership checks are reconciled.' >> "$GITHUB_STEP_SUMMARY"
+          echo "TEST only. No master/LIVE/Native-engine restart. Deployment requires existing SSH and noninteractive scoped sudo permissions." >> "$GITHUB_STEP_SUMMARY"
