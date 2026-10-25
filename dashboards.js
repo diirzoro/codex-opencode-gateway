@@ -59,7 +59,7 @@
     }catch(error){notice.textContent=error.message;}
   }
   if(q('adminServiceCenter')){
-    q('adminNav').querySelector('[data-admin-view="settings"]')?.addEventListener('click',loadServiceCenter);
+    q('adminNav').querySelector('[data-admin-view="email"]')?.addEventListener('click',loadServiceCenter);
     q('adminServiceRefresh')?.addEventListener('click',loadServiceCenter);
     q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(button=>button.addEventListener('click',()=>{
       const tab=button.dataset.serviceTab;
