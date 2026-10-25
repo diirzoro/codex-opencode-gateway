@@ -10,7 +10,7 @@ from ..config import settings
 from ..database import get_db
 from ..models import GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, ProviderCredential, Subscription, User, Workspace, WorkspaceSession
 from ..models.platform import get_policy
-from ..services import opencode
+from ..services import opencode, github
 from ..services.accounts import user_payload
 from .dependencies import require_admin
 
@@ -154,7 +154,7 @@ def overview(_: User = Depends(require_admin), db: Session = Depends(get_db)):
         "plans": {"total": _count(db, Plan), "active": _count(db, Plan, Plan.active.is_(True))},
         "runtime": _runtime_health(),
         "integrations": {
-            "github": {"configured": settings.github_configured, "connected_users": github_connected},
+            "github": {"configured": github.configured(db), "connected_users": github_connected},
             "opencode": settings.runtime_mode,
             "payments": "not_available",
         },
@@ -643,33 +643,51 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
 @router.get("/github-configuration")
 def github_configuration(_:User=Depends(require_admin),db:Session=Depends(get_db)):
     """Read-only effective GitHub settings metadata; never disclose secrets."""
-    from ..services import github, credentials
+    from ..services import github, credentials, github_app_config
+    cfg=github_app_config.effective(settings,db)
     return {
-        "provider":"github_app", "configured":github.configured(),
+        "provider":"github_app", "configured":github.configured(db,config=cfg),
         "database":github.schema_status(db),
-        "app_id":settings.github_app_id,
-        "app_slug":settings.github_app_slug or "",
-        "client_id":settings.github_client_id or "",
-        "callback_url":settings.github_callback_url,
+        "app_id":cfg.github_app_id,
+        "app_slug":cfg.github_app_slug or "",
+        "client_id":cfg.github_client_id or "",
+        "callback_url":cfg.github_callback_url,
         "public_base_url":settings.public_base_url,
-        "api_base":settings.github_api_base,
-        "web_base":settings.github_web_base,
+        "api_base":cfg.github_api_base,
+        "web_base":cfg.github_web_base,
         "webhook_url":settings.public_base_url.rstrip("/")+"/api/github/webhook",
         "secrets":{
-            "client_secret":bool(settings.github_client_secret),
-            "private_key":bool(settings.github_private_key),
-            "webhook_secret":bool(settings.github_webhook_secret),
+            "client_secret":bool(cfg.github_client_secret),
+            "private_key":bool(cfg.github_private_key),
+            "webhook_secret":bool(cfg.github_webhook_secret),
             "encryption_key":credentials.available(),
         },
         "missing":[label for label,ok in {
-            "GITHUB_APP_ID":bool(settings.github_app_id),
-            "GITHUB_APP_SLUG":bool(settings.github_app_slug),
-            "GITHUB_CLIENT_ID":bool(settings.github_client_id),
-            "GITHUB_CLIENT_SECRET":bool(settings.github_client_secret),
-            "GITHUB_APP_PRIVATE_KEY":bool(settings.github_private_key),
+            "GITHUB_APP_ID":bool(cfg.github_app_id),
+            "GITHUB_APP_SLUG":bool(cfg.github_app_slug),
+            "GITHUB_CLIENT_ID":bool(cfg.github_client_id),
+            "GITHUB_CLIENT_SECRET":bool(cfg.github_client_secret),
+            "GITHUB_APP_PRIVATE_KEY":bool(cfg.github_private_key),
             "CREDENTIALS_ENCRYPTION_KEY":credentials.available(),
         }.items() if not ok],
-        "source":"protected_server_environment",
-        "editable":False,
-        "message":"GitHub currently uses protected process environment. Changes to OAuth/signing secrets require an authorized operator-managed configuration workflow; no browser edits are applied.",
+        "source":"encrypted_database" if github_app_config.read(db) is not None else "protected_server_environment",
+        "editable":True,
+        "settings_schema_ready":github_app_config.schema_ready(db),
+        "credential_storage_ready":credentials.available(),
+        "message":"Blank secrets preserve saved values. Saving requires migration 0024 and the original Gateway encryption key. App registration alone does not authorize customer repositories.",
     }
+
+class GithubAppConfigurationIn(BaseModel):
+    model_config=ConfigDict(extra='forbid',str_strip_whitespace=True)
+    app_id:int=Field(gt=0)
+    app_slug:str=Field(pattern=r'^[a-z0-9][a-z0-9-]{0,99}$')
+    client_id:str=Field(min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_]+$')
+    client_secret:str|None=None
+    private_key:str|None=None
+    webhook_secret:str|None=None
+
+@router.put('/github-configuration')
+def save_github_configuration(data:GithubAppConfigurationIn,user:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from ..services import github_app_config
+    github_app_config.save(db,user.id,settings,data.model_dump())
+    return github_configuration(user,db)

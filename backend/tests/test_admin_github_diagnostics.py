@@ -47,6 +47,6 @@ def test_admin_http_diagnostics_enforce_role_and_detect_missing_table(boundary):
     assert response.status_code==200,response.text
     result=response.json()
     assert result['database']['missing']==['github_auth_states']
-    assert result['source']=='protected_server_environment' and result['editable'] is False
+    assert result['source']=='protected_server_environment' and result['editable'] is True
     assert all(isinstance(value,bool) for value in result['secrets'].values())
     assert 'user_token' not in result and 'private_key' not in result

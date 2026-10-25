@@ -9,7 +9,7 @@ import httpx
 import jwt
 from fastapi import HTTPException
 from ..config import settings
-from . import credentials, github
+from . import credentials, github, github_app_config
 
 FLOW_COOKIE = 'gateway_login_flow'
 SIGNUP_COOKIE = 'gateway_login_signup'
@@ -20,7 +20,9 @@ def available(provider):
     if (base.scheme != 'https' and not (base.scheme=='http' and base.hostname in {'127.0.0.1','localhost','::1'})) or base.username or base.password or base.query or base.fragment:
         return False
     if not credentials.available(): return False
-    if provider == 'github': return bool(settings.github_client_id and settings.github_client_secret)
+    if provider == 'github':
+        cfg=github_app_config.effective(settings)
+        return bool(cfg.github_client_id and cfg.github_client_secret)
     if provider == 'google': return bool(settings.google_client_id and settings.google_client_secret)
     return False
 
@@ -43,7 +45,8 @@ def begin(provider, session=None):
     state, verifier, nonce = secrets.token_urlsafe(32), secrets.token_urlsafe(64), secrets.token_urlsafe(32)
     value = {'purpose':'login', 'provider':provider, 'state':state, 'verifier':verifier, 'nonce':nonce,
              'session_id':str(session.id) if session else None, 'user_id':str(session.user_id) if session else None}
-    params = {'client_id':settings.github_client_id if provider == 'github' else settings.google_client_id,
+    cfg=github_app_config.effective(settings) if provider=='github' else settings
+    params = {'client_id':cfg.github_client_id if provider == 'github' else settings.google_client_id,
               'redirect_uri':callback_url(provider), 'state':state, 'response_type':'code',
               'code_challenge':base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('='),
               'code_challenge_method':'S256'}

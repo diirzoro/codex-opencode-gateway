@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from ..config import settings
 from ..models import GithubAuthState, GithubConnection, User
-from . import credentials
+from . import credentials, github_app_config
 from .entitlements import require_advanced
 
 STATE_TTL_MINUTES = 15
@@ -45,27 +45,30 @@ def schema_status(db) -> dict:
                 "reason": "Database schema inspection unavailable"}
 
 
-def configured() -> bool:
-    return bool(settings.github_configured and settings.github_client_id and settings.github_client_secret and credentials.available())
+def configured(db=None, *, config=None) -> bool:
+    cfg=config if config is not None else github_app_config.effective(settings,db)
+    return bool(cfg.github_configured and cfg.github_client_id and cfg.github_client_secret and credentials.available())
 
-def require_configured():
-    if not configured():
+def require_configured(config=None):
+    if not configured(config=config):
         raise HTTPException(503, "GitHub App is not configured on this server")
 
-def install_url(state: str) -> str:
-    require_configured()
-    base = settings.github_web_base.rstrip("/")
-    return f"{base}/apps/{settings.github_app_slug}/installations/new?state={state}"
+def install_url(state: str, config=None) -> str:
+    cfg=config if config is not None else github_app_config.effective(settings)
+    require_configured(cfg)
+    base = cfg.github_web_base.rstrip("/")
+    return f"{base}/apps/{cfg.github_app_slug}/installations/new?state={state}"
 
-def _jwt() -> str:
-    require_configured()
+def _jwt(config=None) -> str:
+    cfg=config if config is not None else github_app_config.effective(settings)
+    require_configured(cfg)
     try:
         import jwt
     except ImportError:  # pragma: no cover - dependency is pinned in requirements
         raise HTTPException(503, "GitHub App signing dependency is unavailable")
     now = datetime.now(timezone.utc)
-    payload = {"iat": int((now - timedelta(seconds=60)).timestamp()), "exp": int((now + timedelta(minutes=9)).timestamp()), "iss": str(settings.github_app_id)}
-    return jwt.encode(payload, settings.github_private_key, algorithm="RS256")
+    payload = {"iat": int((now - timedelta(seconds=60)).timestamp()), "exp": int((now + timedelta(minutes=9)).timestamp()), "iss": str(cfg.github_app_id)}
+    return jwt.encode(payload, cfg.github_private_key, algorithm="RS256")
 
 def _api(method: str, path: str, token: str | None = None, jwt_token: str | None = None, **kwargs):
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
@@ -87,15 +90,16 @@ def _api(method: str, path: str, token: str | None = None, jwt_token: str | None
     return response.json() if response.content else None
 
 def begin_install(db, user) -> str:
-    require_configured()
+    cfg=github_app_config.effective(settings,db)
+    require_configured(cfg)
     state = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     db.add(GithubAuthState(state=state, user_id=user.id, expires_at=now + timedelta(minutes=STATE_TTL_MINUTES)))
     db.commit()
-    return install_url(state)
+    return install_url(state,cfg)
 
 def connection_status(db, user) -> dict:
-    if not configured():
+    if not configured(db):
         return {"connected": False, "available": False, "configured": False, "reason": "GitHub App integration is not configured"}
     row = db.scalar(select(GithubConnection).where(GithubConnection.user_id == user.id))
     if row is None or row.suspended or not row.user_token or (row.token_expires_at and _aware(row.token_expires_at)<=datetime.now(timezone.utc)):
@@ -111,10 +115,11 @@ def installation_token(connection: GithubConnection) -> str:
 
 def _aware(value): return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
-def exchange_code(code, redirect_uri=None, verifier=None):
+def exchange_code(code, redirect_uri=None, verifier=None, *, config=None):
+    cfg=config if config is not None else github_app_config.effective(settings)
     try:
         with httpx.Client(timeout=20,follow_redirects=False,trust_env=False) as client:
-            response=client.post(settings.github_web_base.rstrip('/')+'/login/oauth/access_token',headers={'Accept':'application/json'},data={'client_id':settings.github_client_id,'client_secret':settings.github_client_secret,'code':code,'redirect_uri':redirect_uri or settings.github_callback_url,**({'code_verifier':verifier} if verifier else {})})
+            response=client.post(cfg.github_web_base.rstrip('/')+'/login/oauth/access_token',headers={'Accept':'application/json'},data={'client_id':cfg.github_client_id,'client_secret':cfg.github_client_secret,'code':code,'redirect_uri':redirect_uri or cfg.github_callback_url,**({'code_verifier':verifier} if verifier else {})})
             result=response.json()
     except (httpx.HTTPError,ValueError): raise HTTPException(502,'GitHub authorization failed')
     if response.status_code!=200 or not result.get('access_token'): raise HTTPException(403,'GitHub authorization failed')
@@ -127,7 +132,8 @@ def connection_for(db, user) -> GithubConnection:
     return row
 
 def handle_callback(db, state: str, installation_id: int | None, setup_action: str | None, code: str | None = None):
-    require_configured()
+    cfg=github_app_config.effective(settings,db)
+    require_configured(cfg)
     if not state or not installation_id:
         raise HTTPException(422, "Missing GitHub installation parameters")
     now = datetime.now(timezone.utc)
@@ -140,7 +146,7 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
     user=db.get(User,record.user_id)
     if not user or user.status!='active' or not code: raise HTTPException(403,'Active account and GitHub user authorization required')
     require_advanced(db, user)
-    token=exchange_code(code)
+    token=exchange_code(code,config=cfg)
     authorized=False
     for page in range(1,101):
         items=(_api('GET','/user/installations',token=token['access_token'],params={'per_page':100,'page':page}) or {}).get('installations',[])
@@ -150,7 +156,7 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
     existing=db.scalar(select(GithubConnection).where(GithubConnection.installation_id==installation_id,GithubConnection.user_id!=record.user_id))
     if existing: raise HTTPException(409,'Installation is already linked to another account')
     # Verify App identity as well as the authenticated user's installation membership.
-    info = _api("GET", f"/app/installations/{installation_id}", jwt_token=_jwt())
+    info = _api("GET", f"/app/installations/{installation_id}", jwt_token=_jwt(cfg))
     account = info.get("account") or {}
     login = account.get("login") or "unknown"
     record.consumed = True
@@ -162,7 +168,7 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
     row.account_login = login
     row.account_type = account.get("type") or "User"
     row.target_type = info.get("target_type") or "User"
-    row.app_id = settings.github_app_id
+    row.app_id = cfg.github_app_id
     row.suspended = False
     row.user_token=credentials.encrypt(token['access_token'])
     # GitHub Apps may issue non-expiring user tokens. Do not fabricate an
@@ -222,11 +228,12 @@ def verify_remote_commit(connection: GithubConnection, full_name: str, branch: s
     return ((data or {}).get("object") or {}).get("sha") == sha
 
 def verify_webhook(body: bytes, signature: str | None) -> bool:
-    if not settings.github_webhook_secret:
+    cfg=github_app_config.effective(settings)
+    if not cfg.github_webhook_secret:
         raise HTTPException(503, "GitHub webhook is not configured")
     if not signature or not signature.startswith("sha256="):
         return False
-    expected = hmac.new(settings.github_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+    expected = hmac.new(cfg.github_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(signature[len("sha256="):], expected)
 
 def handle_webhook(db, event: str, payload: dict):

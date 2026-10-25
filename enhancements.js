@@ -155,24 +155,60 @@
     if(!panel){panel=textElement('div','','admin-section');panel.id='adminGithubPanel';section.append(panel);}
     panel.replaceChildren();
     const heading=textElement('h2',tr('GitHub App settings','إعدادات تطبيق GitHub'));
-    const note=textElement('p',tr('Effective server configuration (read-only). Each customer authorizes their own account. Secrets are never displayed.','إعدادات الخادم الفعلية (للقراءة فقط). يفوّض كل عميل حسابه الخاص. لا تُعرض قيم الأسرار.'));
+    const note=textElement('p',tr('Manage the platform GitHub App. Each customer authorizes their own GitHub account and selected repositories. Blank secrets preserve saved values.','أدر تطبيق GitHub الخاص بالمنصة. يفوّض كل عميل حسابه ومستودعاته بنفسه. اترك الأسرار فارغة للاحتفاظ بالقيم المحفوظة.'));
     const status=textElement('p',tr('Checking configuration…','جارٍ فحص الإعدادات…'));status.setAttribute('role','status');
     const grid=textElement('div','','field-grid');
     const inputs=new Map();
+    const form=document.createElement('form');form.className='manage-card';form.setAttribute('aria-label',tr('GitHub App configuration','إعدادات تطبيق GitHub'));
+    const urls=textElement('details');urls.append(textElement('summary',tr('Callback and service URLs','عناوين العودة والخدمة')));
+    const urlGrid=textElement('div','','field-grid');urls.append(urlGrid);
     for(const [caption,key] of [['App ID','app_id'],['App Slug','app_slug'],['OAuth Client ID','client_id'],['Public URL','public_base_url'],['Callback URL','callback_url'],['Webhook URL','webhook_url'],['API URL','api_base'],['GitHub URL','web_base']]){
-      const label=textElement('label','','field'),input=document.createElement('input');input.readOnly=true;input.placeholder='—';input.setAttribute('aria-label',caption);
-      label.append(textElement('span',caption),input);grid.append(label);inputs.set(key,input);
+      const label=textElement('label','','field'),input=document.createElement('input');input.readOnly=!['app_id','app_slug','client_id'].includes(key);input.placeholder='—';input.setAttribute('aria-label',caption);
+      if(!input.readOnly){input.required=true;input.name=key;if(key==='app_id'){input.type='number';input.min='1';}else input.maxLength=key==='app_slug'?100:128;}
+      label.append(textElement('span',caption),input);(input.readOnly?urlGrid:grid).append(label);inputs.set(key,input);
     }
     const configuration=textElement('div'),connection=textElement('p'),database=textElement('p');database.setAttribute('role','status');
     const authorize=textElement('button',tr('Authorize my GitHub account','تفويض حساب GitHub الخاص بي'),'button ghost');authorize.type='button';authorize.disabled=true;authorize.onclick=()=>window.location.assign('/api/github/install');
     const refresh=textElement('button',tr('Refresh','تحديث'),'button ghost');refresh.type='button';refresh.onclick=loadAdminGithubAdmin;
+    const credentialsPanel=textElement('details');credentialsPanel.append(textElement('summary',tr('Update App credentials','تحديث بيانات اعتماد التطبيق')));
+    const secretGrid=textElement('div','','field-grid');credentialsPanel.append(secretGrid);
+    function secretField(caption,name,type='password'){const label=textElement('label','','field'),input=document.createElement('input');input.type=type;input.name=name;input.autocomplete='new-password';input.setAttribute('aria-label',caption);label.append(textElement('span',caption),input);secretGrid.append(label);return input;}
+    const clientSecret=secretField('OAuth Client Secret','client_secret');clientSecret.maxLength=4096;
+    const privateKey=secretField(tr('Private key (.pem file)','المفتاح الخاص (ملف .pem)'),'private_key_file','file');privateKey.accept='.pem';
+    const webhookSecret=secretField('Webhook Secret (optional)','webhook_secret');webhookSecret.maxLength=4096;
+    const save=textElement('button',tr('Save GitHub App settings','حفظ إعدادات تطبيق GitHub'),'button');save.type='submit';save.disabled=true;
+    const saveStatus=textElement('p');saveStatus.setAttribute('role','status');
+    const signIn=textElement('p');signIn.setAttribute('role','status');
     const connections=textElement('div');connections.id='adminGithubConnections';
-    panel.append(heading,note,status,grid,configuration,database,connection,authorize,refresh,connections);
+    form.append(grid,credentialsPanel,save,saveStatus);
+    panel.append(heading,note,status,form,urls,configuration,database,connection,signIn,authorize,refresh,connections);
+    form.onsubmit=async event=>{
+      event.preventDefault();if(save.disabled||!current())return;
+      save.disabled=true;saveStatus.textContent=tr('Saving encrypted settings…','جارٍ حفظ الإعدادات مشفّرة…');
+      let saved=false;
+      try{
+        const file=privateKey.files?.[0];if(file&&file.size>32768)throw Error(tr('PEM file exceeds 32 KB','ملف PEM يتجاوز 32 كيلوبايت'));
+        const pem=file?await file.text():null;
+        if(!current())return;
+        const data={app_id:Number(inputs.get('app_id').value),app_slug:inputs.get('app_slug').value.trim(),client_id:inputs.get('client_id').value.trim(),client_secret:clientSecret.value||null,private_key:pem,webhook_secret:webhookSecret.value||null};
+        await api('/api/admin/github-configuration',{method:'PUT',body:JSON.stringify(data)});
+        saved=true;if(!current())return;
+        clientSecret.value='';privateKey.value='';webhookSecret.value='';
+        saveStatus.textContent=tr('Saved securely. Configuration is not a completed OAuth connection.','حُفظت الإعدادات بأمان. الحفظ وحده لا يعني نجاح ربط OAuth.');
+      }catch(error){if(current())saveStatus.textContent=error.message;}
+      finally{if(current())save.disabled=false;}
+      if(saved&&current()){
+        await loadAdminGithubAdmin();
+        const result=document.getElementById('adminGithubPanel');if(result&&currentUser?.id===owner)result.append(textElement('p',tr('GitHub App settings saved securely.','حُفظت إعدادات تطبيق GitHub بأمان.')));
+      }
+    };
     const current=()=>currentUser?.id===owner&&['admin','owner'].includes(currentUser?.role)&&panel.isConnected;
     const showConfig=async()=>{
       try{
         const config=await api('/api/admin/github-configuration');if(!current())return;
         for(const [key,input] of inputs)input.value=String(config[key]??'');
+        save.disabled=config.editable!==true||config.settings_schema_ready!==true||config.credential_storage_ready!==true;
+        saveStatus.textContent=config.settings_schema_ready!==true?tr('Apply TEST migration 0024 to enable saving.','طبّق ترحيل TEST رقم 0024 لتمكين الحفظ.'):config.credential_storage_ready!==true?tr('Original Gateway encryption key is required; it cannot be replaced here.','يلزم مفتاح التشفير الأصلي لـGateway؛ لا يمكن استبداله هنا.'):tr('Secrets are encrypted on the server. Empty fields keep existing secrets.','تُشفّر الأسرار على الخادم. الحقول الفارغة تحتفظ بالأسرار الحالية.');
         status.textContent=config.configured?tr('GitHub App configured.','تطبيق GitHub مهيأ.'):tr('GitHub App is not ready on the server.','تطبيق GitHub غير جاهز على الخادم.');
         configuration.append(textElement('p',[['OAuth Client Secret','client_secret'],['App private key','private_key'],['Webhook Secret','webhook_secret'],['Credential encryption key','encryption_key']].map(([name,key])=>name+': '+(config.secrets?.[key]?tr('Configured','موجود'):tr('Missing','ناقص'))).join(' · ')));
         if(config.missing?.length)configuration.append(textElement('p',tr('Missing server settings: ','إعدادات الخادم الناقصة: ')+config.missing.join(', ')));
@@ -193,7 +229,8 @@
       }catch(error){if(current())connection.textContent=tr('Account status unavailable: ','تعذر فحص اتصال الحساب: ')+error.message;}
     };
     const entry={owner};adminGithubLoad=entry;
-    entry.promise=Promise.all([showConfig(),showConnection()]).then(async()=>{
+    const showSignIn=async()=>{try{const value=await api('/api/auth/social/options');if(current())signIn.textContent=value.github?tr('GitHub sign-in is configured; a real sign-in test is still required.','الدخول عبر GitHub مهيأ؛ ما زال اختبار الدخول الحقيقي مطلوبًا.'):tr('GitHub sign-in is not configured.','الدخول عبر GitHub غير مهيأ.');}catch(error){if(current())signIn.textContent=error.message;}};
+    entry.promise=Promise.all([showConfig(),showConnection(),showSignIn()]).then(async()=>{
       if(!current())return;
       authorize.disabled=authorize.dataset.available!=='true'||!database.dataset.ready;
       // This child alone is owned by the connections renderer. Never give it the
