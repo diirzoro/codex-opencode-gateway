@@ -247,10 +247,21 @@
       // was lost. Query authoritative native history (never retry the prompt).
       // A confirmed messageID clears the local uncertainty via reconcile().
       try{await history(id,true);}catch{}
-      if(blocked(id))throw Error(label(
-        'Previous Native prompt receipt is still uncertain. Draft preserved; check conversation history before resending.',
-        'لم يتأكد استلام الرسالة السابقة من OpenCode. تم الاحتفاظ بالمسودة؛ تحقق من سجل المحادثة قبل إعادة الإرسال.'
-      ));
+      if(blocked(id)){
+        // Never silently resend. An explicit user confirmation is required
+        // after consulting Native history because a lost acknowledgement may
+        // still represent an accepted request.
+        const confirmed=window.confirm(label(
+          'Native history does not confirm receipt of the previous prompt. The previous request may still be running. Do you want to clear the local uncertainty and send this NEW request? This could repeat work. Cancel keeps your draft and blocks sending.',
+          'سجل OpenCode لا يؤكد استلام الطلب السابق، وقد يكون الطلب ما زال قيد التنفيذ. هل تريد إزالة حالة عدم اليقين المحلية وإرسال الطلب الجديد؟ قد يتكرر العمل. اختر إلغاء للاحتفاظ بالمسودة ومنع الإرسال.'
+        ));
+        if(!confirmed)throw Error(label(
+          'Sending cancelled. Draft preserved until you review Native history.',
+          'تم إلغاء الإرسال. بقيت المسودة محفوظة حتى مراجعة سجل OpenCode.'
+        ));
+        uncertain.delete(id);
+        try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
+      }
     }
     const user=owner();select(id,{providerID,modelID,agent,variant});
     const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
