@@ -551,6 +551,22 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   recoverConversation.style.cssText='width:auto;max-width:100%;min-height:32px;padding:5px 12px;white-space:normal;text-align:center;';
   recoveryAction.append(recoverConversation);
   q('promptForm').before(recoveryAction);
+  const cancelAttachment=btn('cancelPendingAttachment','Cancel pending attachment','إلغاء طلب المرفق',async()=>{
+    const id=activeSession?.id,owner=currentUser?.id;
+    if(!id||!window.nativeSession?.pendingAttachment(id))return;
+    const confirmed=await window.confirmAction(tr('Cancel the current attachment task in this conversation? OpenCode will stop this session only. The uploaded file and chat history remain saved.','هل تريد إلغاء مهمة قراءة المرفق في هذه المحادثة؟ سيتوقف تنفيذ هذه الجلسة فقط، وسيبقى الملف وسجل المحادثة محفوظين.'));
+    if(!confirmed)return;
+    cancelAttachment.disabled=true;
+    try{
+      await window.nativeSession.cancelPendingAttachment(id);
+      if(activeSession?.id!==id||currentUser?.id!==owner)return;
+      submissionStatus.textContent=tr('Attachment task cancelled. File retained.','أُلغيت مهمة المرفق وبقي الملف محفوظًا.');
+      await refreshMessages();await refreshSessionStatus();
+    }finally{cancelAttachment.disabled=false;updateSend();}
+  });
+  cancelAttachment.style.cssText='width:auto;min-height:32px;padding:5px 12px;font-size:12px;';
+  recoveryAction.append(cancelAttachment);
+
   const retrySubmission=btn('retrySubmission','Check / retry same submission','تحقق / أعد نفس الطلب',()=>submitPending());retrySubmission.hidden=true;q('promptForm').before(retrySubmission);
   sessionsBody.append(newSessionButton,sessionTabs,search,q('sessionList'));sessionsSection.append(sessionsBody);
   const filesSection=document.createElement('details');filesSection.className='workspace-side-section workspace-files';filesSection.open=true;
@@ -1071,6 +1087,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const nativeBusy=Boolean(window.nativeSession?.active()&&window.nativeSession.blocked(activeSession?.id));
     manualModel.hidden=!window.nativeSession?.active();
     recoveryAction.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
+    cancelAttachment.hidden=!activeSession||!window.nativeSession?.pendingAttachment(activeSession.id);
     q('sendMessage').disabled=sending||queuing||nativeBusy||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
