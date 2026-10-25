@@ -115,16 +115,20 @@ def rollout(target,mode):
     if mode=="audit":return
     oldrev=active_revision()
     if mode=="rollback" and not oldrev:raise RuntimeError("No prior GitHub release marker; rollback unavailable")
-    # Never call a release "complete" with a required schema missing.
-    # The protected TEST .env is intentionally unreadable to this SSH account;
-    # an approved DB owner must apply Alembic before this release can proceed.
-    # A readable, least-privilege migration mechanism is a separate ops prerequisite.
-    # Application deployment must not require the SSH account to read the
-    # protected TEST .env. Database migrations run as the authorized DB owner
-    # through a separate controlled operation; missing migrations are surfaced
-    # by the admin schema-readiness endpoint, not falsely marked complete.
-    if mode=="deploy" and migration_needed(target):
-        print("TEST_DB_MIGRATION_UNVERIFIED; email settings remain gated until migration 0021 is applied",flush=True)
+    # Fail closed before changing files if the live TEST database cannot be
+    # checked. Only a dedicated, approved root-owned migration runner may load
+    # the protected systemd environment. Never read/print .env as deploy user.
+    if mode=="deploy":
+        runner=Path("/usr/local/sbin/opencode-gateway-test-migrate")
+        if not runner.is_file():
+            raise RuntimeError("TEST_DB_MIGRATION_RUNNER_REQUIRED: install the approved TEST-only migration runner (see deployment/TEST_DATABASE_MIGRATIONS.md)")
+        try:
+            outcome=run("sudo","-n",str(runner),"upgrade",timeout=180)
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as exc:
+            raise RuntimeError("TEST_DB_MIGRATION_FAILED: authorized TEST migration runner unavailable or failed; source not deployed") from None
+        if "TEST_DB_MIGRATION_OK" not in outcome:
+            raise RuntimeError("TEST_DB_MIGRATION_NOT_CONFIRMED; source not deployed")
+        print("TEST_DB_MIGRATION_OK",flush=True)
     nativepid=run("systemctl","show","--value","-p","MainPID",NATIVE)
     for name,dest,data in changes:replace(dest,data);print("UPDATED",name,flush=True)
     try:
