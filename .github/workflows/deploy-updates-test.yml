@@ -10,6 +10,11 @@ on:
         options:
           - audit-test
           - deploy-test
+          - rollback-test
+      rollback_sha:
+        description: "Only for rollback-test: previous GitHub updates commit SHA (40 hex characters)"
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -29,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           mode="$(printf '%s' "$CONFIRMATION" | tr -d '[:space:]')"
-          [[ "$mode" == "audit-test" || "$mode" == "deploy-test" ]]
+          [[ "$mode" == "audit-test" || "$mode" == "deploy-test" || "$mode" == "rollback-test" ]]
           printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
           [[ "$GITHUB_REF" == "refs/heads/updates" ]]
       - uses: actions/checkout@v4
@@ -92,6 +97,7 @@ jobs:
           PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
           TARGET_SHA: ${{ github.sha }}
           MODE: ${{ steps.confirm.outputs.mode }}
+          ROLLBACK_SHA: ${{ inputs.rollback_sha }}
         run: |
           set -euo pipefail
           port="${PORT:-22}"
@@ -100,8 +106,13 @@ jobs:
           # nginx, systemd, database files, Native engine, or LIVE changes.
           operation=audit
           if [[ "$MODE" == "deploy-test" ]]; then operation=deploy; fi
+          if [[ "$MODE" == "rollback-test" ]]; then
+            operation=rollback
+            [[ "$ROLLBACK_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Supply an exact 40-character GitHub commit SHA for rollback"; exit 1; }
+            TARGET_SHA="$ROLLBACK_SHA"
+          fi
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' && git show '$TARGET_SHA:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
+            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
       - name: Report scope
         if: always()
         run: |
