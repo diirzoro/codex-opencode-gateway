@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import uuid as _uuid
 from typing import Literal
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -67,6 +67,8 @@ class PolicyIn(BaseModel):
     allowed_models: list[str] = Field(default_factory=list, max_length=500)
     allowed_tools: list[str] = Field(default_factory=list, max_length=500)
     require_tool_approval: bool = True
+    hidden_providers: list[str] | None = Field(default=None,max_length=2000)
+    hidden_models: dict[str,list[str]] | None = None
 
 def _count(db, model, *conditions):
     return db.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
@@ -312,12 +314,38 @@ def read_policy(_: User = Depends(require_admin), db: Session = Depends(get_db))
 @router.put("/policy")
 def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session = Depends(get_db)):
     row = get_policy(db)
-    row.allowed_providers = json.dumps(sorted({p.strip() for p in data.allowed_providers if p.strip()}))
-    row.allowed_models = json.dumps(sorted({m.strip() for m in data.allowed_models if m.strip()}))
+    previous=row.as_payload()
+    hidden=data.hidden_providers if data.hidden_providers is not None else previous['hidden_providers']
+    selection=data.hidden_models if data.hidden_models is not None else previous['hidden_models']
+    if len(selection)>1000 or sum(len(v) for v in selection.values())>10000 or any(not key or len(key)>200 or any(not v or len(v)>300 for v in values) for key,values in selection.items()) or any(not p or len(p)>200 for p in hidden):
+        raise HTTPException(422,'Invalid provider/model policy')
+    row.allowed_providers = json.dumps({'allowed':sorted({p.strip() for p in data.allowed_providers if p.strip()}),'hidden':sorted(set(hidden))})
+    row.allowed_models = json.dumps({'allowed':sorted({m.strip() for m in data.allowed_models if m.strip()}),'hidden':{key:sorted(set(values)) for key,values in selection.items()}})
     row.allowed_tools = json.dumps(sorted({t.strip() for t in data.allowed_tools if t.strip()}))
     row.require_tool_approval = data.require_tool_approval
     db.commit(); db.refresh(row)
     return row.as_payload()
+
+@router.get('/native/providers')
+def native_provider_policy_catalog(offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=50),query:str=Query('',max_length=200),provider_id:str|None=Query(None,max_length=200),actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from . import native_sessions
+    from ..services import native_provider_accounts,policy,providers
+    if not native_sessions.enabled():raise HTTPException(409,'Native discovery is not enabled')
+    native_sessions.admit(actor)
+    data=native_sessions.metadata('GET','/provider',native_provider_accounts.root(actor))
+    if not isinstance(data,dict) or not isinstance(data.get('all'),list):raise HTTPException(502,'Invalid Native catalog')
+    rules=policy.load(db)
+    def summary(entry):
+        pid=entry['id']
+        return {'id':pid,'name':str(entry.get('name',pid)), 'runtime_configured':pid in data.get('connected',[]),
+                'allowed':policy.provider_allowed(rules,pid),'visible':policy.provider_visible(rules,pid),'model_count':len(entry.get('models',{}))}
+    if provider_id is not None:
+        entry=next((r for r in data['all'] if r.get('id')==provider_id),None)
+        if entry is None:raise HTTPException(404,'Provider is not discovered by Native')
+        return {'provider':summary(entry),'models':[{'id':mid,'name':str(m.get('name',mid)), 'allowed':policy.model_allowed(rules,mid,provider_id),'visible':policy.model_visible(rules,provider_id,mid)} for mid,m in entry.get('models',{}).items()]}
+    term=query.casefold();rows=sorted([r for r in data['all'] if not term or term in (str(r.get('id',''))+' '+str(r.get('name',''))).casefold()],key=lambda r:r['id'])
+    return {'items':[summary(r) for r in rows[offset:offset+limit]],'total':len(rows),'next_offset':offset+limit if offset+limit<len(rows) else None,
+            'custom_provider_creation':False,'custom_provider_reason':'Custom Native provider configuration is protected on the shared engine. Select an existing discovered provider; customer credentials connect separately.'}
 
 class EmailDeliveryUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -445,7 +473,8 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
     provider=mail.get("provider","resend" if os.getenv("SMTP_HOST")=="smtp.resend.com" else "smtp")
     return {"email":{"provider":provider,"configured":mail_ready,"sending_ready":mail_ready,
           "sender":mail.get("smtp_from",os.getenv("SMTP_FROM","")),
-          "verification_required":required,
+          "verification_required":required,"settings_schema_ready":admin_email_config.schema_ready(db),
+          "receiving_configured":bool(mail.get("inbox_api_key")),"delivery_verified":False,
           "credentials_configured":bool(mail.get("smtp_password") or os.getenv("SMTP_PASSWORD")),
           "smtp_host":mail.get("smtp_host",os.getenv("SMTP_HOST","")),
           "smtp_port":mail.get("smtp_port",os.getenv("SMTP_PORT","587")),
@@ -453,7 +482,7 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
        "services":[
          {"id":"registration_verification","enabled":required,"available":mail_ready,
           "reason":"" if mail_ready else "Resend API key missing"},
-         {"id":"password_reset","enabled":False,"available":False,"reason":"Secure recovery flow not active"},
+         {"id":"password_reset","enabled":True,"available":mail_ready,"reason":"" if mail_ready else "Email delivery not configured"},
          *({"id":i,"enabled":False,"available":False,"reason":"Not implemented"} for i in
            ("welcome_email","subscription_expiry","low_balance","account_suspension",
             "payment_receipt","renewal_reminder","system_updates","login_security",

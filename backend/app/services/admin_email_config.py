@@ -1,11 +1,15 @@
 """Database-backed admin provider configuration, using the existing Gateway encryption helper."""
 import json
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 from sqlalchemy.exc import ProgrammingError
 from fastapi import HTTPException
 from . import credentials
 
+def schema_ready(db):
+    return inspect(db.connection()).has_table('email_delivery_settings')
+
 def read(db):
+    if not schema_ready(db):return None
     try:
         # Keep existing SMTP functional before optional 0021 schema is installed.
         # Savepoint prevents a missing table from poisoning the caller transaction.
@@ -20,6 +24,7 @@ def read(db):
     except Exception:raise HTTPException(503,"Cannot read encrypted email settings") from None
 
 def save(db, actor_id, data):
+    if not schema_ready(db):raise HTTPException(503,'Email settings schema missing; apply TEST migration 0021 before saving')
     if not credentials.available():
         raise HTTPException(503,"Encryption is not configured")
     token=credentials.encrypt(json.dumps(data))

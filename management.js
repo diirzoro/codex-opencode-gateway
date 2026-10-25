@@ -208,6 +208,7 @@
         const updatePrompts=()=>{const values=Object.fromEntries(new FormData(f));for(const {prompt,field} of promptInputs){const condition=prompt.when;field.parentElement.hidden=Boolean(condition)&&(condition.op==='eq'?values[condition.key]!==condition.value:values[condition.key]===condition.value);field.disabled=field.parentElement.hidden;}};
         f.addEventListener('change',updatePrompts);updatePrompts();
         let submitting=false;
+        if(keyMethod&&accountOptions?.credential_storage_ready===false){setFeedback(feedback,tr('Provider connection is unavailable: secure credential storage needs administrator repair. Your API key has not been rejected by the provider.','الربط غير متاح: التخزين الآمن للاعتمادات يحتاج إصلاحًا من المدير. لم يرفض المزوّد مفتاح API الخاص بك.'),'error');return;}
         if(keyMethod){
           const key=input(f,tr('API key (server-side only)','مفتاح API (على الخادم فقط)'),'api_key','password');key.required=true;key.autocomplete='new-password';
           f.append(node('p',accountOptions?.native?tr('OpenCode stores the credential. Verify access with a native conversation; saving does not test a paid model.','يحفظ OpenCode الاعتماد. تحقّق من الوصول بمحادثة أصلية؛ الحفظ لا يختبر نموذجًا مدفوعًا.'):tr('OpenCode validates the key with a real model request. Provider charges may apply.','يتحقق OpenCode من المفتاح بطلب نموذج فعلي؛ قد تُحتسب رسوم لدى المزوّد.'),'provider-note'));
@@ -294,7 +295,7 @@
       const renderStarted=performance.now();
       const query=(combo.value||'').trim().toLowerCase();const previous=new Map([...options.children].map(n=>[n.dataset.providerId,n]));
       const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
-      const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query)).slice(0,50);
+      const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>(query||p.visible!==false)&&(!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query))).slice(0,50);
       for(const p of rows){
         const state=p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
         const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';

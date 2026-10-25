@@ -160,7 +160,7 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
         native_sessions.admit(user)
         data=native_provider_accounts.catalog(db,user,full=True)
         providers.resolve_provider(data,provider_id)
-        return {'provider_id':provider_id,'auth_methods':native_provider_accounts.methods(user,provider_id),'models':providers.model_details(data,provider_id,policy.load(db))['models'],'native':True}
+        return {'provider_id':provider_id,'auth_methods':native_provider_accounts.methods(user,provider_id),'models':providers.model_details(data,provider_id,policy.load(db))['models'],'native':True,'credential_storage_ready':credentials.available(),'credential_storage_reason':None if credentials.available() else 'Secure account credential storage is not configured on this server; this is not a provider API-key rejection'}
     if not 0 < len(provider_id) <= 120:
         raise HTTPException(422, "Invalid provider identifier")
     if not policy.provider_allowed(policy.load(db), provider_id):
@@ -720,7 +720,7 @@ def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user)
 def provider_models(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
     if native_sessions.enabled():
         row,root,_,_=native_sessions.context(db,user,workspace_id)
-        return {'workspace_id':str(row.id),'native':True,**providers.model_details(native_provider_accounts.catalog(db,user,root),provider_id,policy.load(db))}
+        return {'workspace_id':str(row.id),'native':True,**providers.model_details(native_provider_accounts.catalog(db,user,root,full=True),provider_id,policy.load(db))}
     row,service=_workspace_service(db,user,workspace_id)
     with service.state_lock:
         return runtime_snapshot.public_models(service,row,provider_id,db)

@@ -93,12 +93,12 @@
     const notice=q('adminServiceNotice');if(!notice)return;
     try{
       const data=await api('/api/admin/service-integrations'),e=data.email||{};
-      notice.textContent=e.configured?tr('Existing SMTP is configured','تم إعداد SMTP الموجود'):tr('Resend API key not yet configured; no mail sent','لم يتم إدخال مفتاح Resend بعد؛ الإرسال غير مفعّل');
+      notice.textContent=e.configured?tr('Email configured · delivery not yet tested','البريد مهيّأ · لم يُختبر التسليم بعد'):tr('Email delivery is not configured','إرسال البريد غير مهيّأ');if(e.settings_schema_ready===false)notice.textContent+=' · '+tr('Apply TEST migration 0021 before saving settings','يلزم تطبيق ترحيل TEST رقم 0021 قبل حفظ الإعدادات');
       q('adminEmailProvider').value=e.provider==='resend'?'resend':'smtp';
-      q('adminSmtpSave').disabled=e.provider!=='resend';
-      q('adminSmtpHost').value=e.provider==='resend'?'smtp.resend.com':'';
-      q('adminSmtpPort').value='587';
-      q('adminSmtpUsername').value=e.provider==='resend'?'resend':'';
+      q('adminSmtpSave').disabled=e.provider!=='resend'||e.settings_schema_ready===false;
+      q('adminSmtpHost').value=e.smtp_host||'';
+      q('adminSmtpPort').value=String(e.smtp_port||587);
+      q('adminSmtpUsername').value=e.smtp_username||'';
       q('adminSenderEmail').value=e.sender||'';
       q('adminSmtpSecret').value='';
       const captions={registration_verification:'التحقق من الحساب الجديد',password_reset:'استعادة كلمة المرور',welcome_email:'رسائل الترحيب',subscription_expiry:'انتهاء الاشتراك',low_balance:'انخفاض الرصيد',account_suspension:'تعليق الحساب',payment_receipt:'إيصالات الدفع',renewal_reminder:'تذكير التجديد',system_updates:'تحديث النظام',login_security:'تنبيه دخول جديد',password_changed:'تغيير كلمة المرور',email_changed:'تغيير البريد',payment_failed:'فشل الدفع',trial_expiring:'قرب انتهاء الفترة التجريبية',support_received:'رسالة دعم جديدة',support_unanswered:'رسائل دون رد',service_incident:'أعطال الخدمة',mail_delivery_failure:'فشل تسليم البريد',unusual_activity:'نشاط غير معتاد',backup_status:'حالة النسخ الاحتياطي'};
@@ -106,13 +106,13 @@
       for(const item of data.services||[]){
         const row=document.createElement('label');row.className='check';row.style.cssText='display:flex;align-items:center;gap:10px;padding:9px 0;';
         const input=document.createElement('input');input.type='checkbox';input.checked=!!item.enabled;input.disabled=true;
-        const label=document.createElement('span');label.textContent=(captions[item.id]||item.id)+' · '+(item.available?'متاح': 'غير متاح');
+        const label=document.createElement('span');label.textContent=(captions[item.id]||item.id)+' · '+(item.available?tr('Available','متاح'):tr('Unavailable','غير متاح'))+(item.reason?' · '+item.reason:'');
         row.append(input,label);list.append(row);
       }
     }catch(error){notice.textContent=error.message;}
   }
   if(q('adminServiceCenter')){
-    q('adminNav').querySelector('[data-admin-view="email"]')?.addEventListener('click',loadServiceCenter);
+    const previousAdminView=window.openAdminView;window.openAdminView=async name=>{await previousAdminView(name);if(name==='email')await loadServiceCenter();};
     q('adminServiceRefresh')?.addEventListener('click',loadServiceCenter);
     q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(button=>button.addEventListener('click',()=>{
       const tab=button.dataset.serviceTab;
@@ -178,7 +178,7 @@
     q('adminEmailProvider').onchange=()=>{
       const resend=q('adminEmailProvider').value==='resend';
       q('adminSmtpSave').disabled=!resend;
-      if(resend){q('adminSmtpHost').value='smtp.resend.com';q('adminSmtpPort').value='587';q('adminSmtpUsername').value='resend';q('adminSmtpTls').value='starttls';}
+      if(resend){q('adminSmtpHost').value='smtp.resend.com';q('adminSmtpPort').value=String(e.smtp_port||587);q('adminSmtpUsername').value='resend';q('adminSmtpTls').value='starttls';}
       q('adminServiceNotice').textContent=resend?'Resend SMTP':'Generic SMTP provider editing is not implemented yet';
     };
   }
@@ -431,6 +431,16 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   };
   const agent=q('agentSelect');agent.title=tr('Agent','الوكيل');controls.insertBefore(agent,q('providerSelect'));
   const nativeVariant=document.createElement('select');nativeVariant.id='nativeVariantSelect';nativeVariant.hidden=true;nativeVariant.setAttribute('aria-label',tr('Model variant','خيار النموذج'));controls.insertBefore(nativeVariant,q('modelSelect').nextSibling);
+  const manualModel=btn('manualNativeModel','Manual model','اختيار نموذج يدوي',async()=>{
+    if(!window.nativeSession?.active()||!activeWorkspace)return;
+    const owner=currentUser?.id,id=activeWorkspace.id;
+    const values=await window.requestForm(tr('Choose from the complete Native catalog','اختيار من كتالوج Native الكامل'),[{name:'provider',label:tr('Native provider ID','معرّف المزوّد في Native'),value:chosenProvider||'',required:true},{name:'model',label:tr('Native model ID','معرّف النموذج في Native'),value:chosenModel||'',required:true}],tr('Select','اختيار'));
+    if(!values||currentUser?.id!==owner||activeWorkspace?.id!==id)return;
+    const data=await api('/api/workspaces/'+id+'/providers/'+encodeURIComponent(values.provider)+'/models');
+    if(currentUser?.id!==owner||activeWorkspace?.id!==id)return;
+    if(!data.connected||data.allowed===false||!data.models.some(m=>m.id===values.model&&m.allowed!==false))throw Error(tr('Connect this provider to your account and choose an allowed Native model.','اربط هذا المزوّد بحسابك واختر نموذج Native مسموحًا.'));
+    chosenProvider=values.provider;chosenModel=values.model;await refreshChoices(chosenProvider,true);saveNativeSelection();
+  });controls.append(manualModel);
   function saveNativeSelection(){if(window.nativeSession?.active()&&activeSession)window.nativeSession.select(activeSession.id,{providerID:q('providerSelect').value,modelID:q('modelSelect').value,agent:agent.value,variant:nativeVariant.value||undefined});}
   function renderNativeVariants(){
     if(!window.nativeSession?.active()){nativeVariant.hidden=true;return;}
@@ -485,6 +495,18 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   for(const [value,en,ar] of [['all','All','الكل'],['active','Active','نشطة'],['closed','Previous / Closed','سابقة / مغلقة'],['archived','Archived','مؤرشفة']]){const tab=btn('sessions-'+value,en,ar,()=>{sessionFilter=value;for(const b of sessionTabs.children)b.setAttribute('aria-pressed',String(b===tab));renderRuntimeSessions(sessionRows);});tab.setAttribute('aria-pressed',String(value===sessionFilter));sessionTabs.append(tab);}
   const closeSessionButton=btn('closeActiveSession','Close / Disconnect','إغلاق / فصل',()=>sessionAction(activeSession,'close'));
   const submissionStatus=textElement('p','','muted-small');submissionStatus.setAttribute('role','status');q('promptForm').before(submissionStatus);
+  const recoverConversation=btn('recoverNativeConversation','Recover Conversation','استعادة المحادثة',async()=>{
+    const id=activeSession?.id,owner=currentUser?.id;if(!id||!window.nativeSession?.active())return;
+    recoverConversation.disabled=true;
+    try{
+      let result=await window.nativeSession.recover(id);
+      if(activeSession?.id!==id||currentUser?.id!==owner)return;
+      if(result.blocked&&result.status==='idle'&&await window.confirmAction(tr('Native has no receipt for the previous prompt and is idle. Clear only the local block? Nothing will be sent. Your draft stays saved.','لا يوجد تأكيد للطلب السابق وNative متوقف الآن. إزالة الحظر المحلي فقط؟ لن يُرسل شيء وستبقى المسودة محفوظة.'))){result=await window.nativeSession.recover(id,{release:true});}
+      if(activeSession?.id!==id||currentUser?.id!==owner)return;
+      await refreshMessages();await window.refreshWorkspaceQuestions?.();await refreshPermissions();
+      submissionStatus.textContent=result.blocked?tr('Receipt still uncertain. Draft preserved; no prompt resent.','الاستلام ما زال غير مؤكد. المسودة محفوظة ولم يُعد إرسال الطلب.'):tr('Conversation recovered. Review history; no prompt was resent.','استُعيدت المحادثة. راجع السجل؛ لم يُعد إرسال أي طلب.');
+    }finally{recoverConversation.disabled=false;updateSend();}
+  });q('promptForm').before(recoverConversation);
   const retrySubmission=btn('retrySubmission','Check / retry same submission','تحقق / أعد نفس الطلب',()=>submitPending());retrySubmission.hidden=true;q('promptForm').before(retrySubmission);
   sessionsBody.append(newSessionButton,sessionTabs,search,q('sessionList'));sessionsSection.append(sessionsBody);
   const filesSection=document.createElement('details');filesSection.className='workspace-side-section workspace-files';filesSection.open=true;
@@ -582,9 +604,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           let custom=null;if(question.custom){custom=document.createElement('input');custom.type='text';custom.maxLength=2000;custom.placeholder=tr('Other — write your choice…','خيار آخر — اكتب إجابتك…');custom.setAttribute('aria-label',custom.placeholder);fieldset.append(custom);if(!question.multiple){custom.oninput=()=>{if(custom.value.trim())inputs.forEach(input=>input.checked=false);};for(const input of inputs)input.onchange=()=>{if(input.checked)custom.value='';};}}groups.push({inputs,custom,multiple:question.multiple});form.append(fieldset);
         }
         const actions=textElement('div','','chat-approval-actions'),submit=textElement('button',tr('Choose and Continue','اختر وتابع'),'button ghost small'),reject=textElement('button',tr('Cancel question','إلغاء السؤال'),'button ghost small');submit.type='submit';reject.type='button';actions.append(submit,reject);form.append(actions);
+        const draftKey='og-native-question:'+owner+':'+sessionId+':'+request.id;
+        const saveAnswers=()=>{try{sessionStorage.setItem(draftKey,JSON.stringify({shape,groups:groups.map(g=>({values:g.inputs.filter(i=>i.checked).map(i=>i.value),custom:g.custom?.value||''}))}));}catch{}};
+        try{const saved=JSON.parse(sessionStorage.getItem(draftKey)||'null');if(saved?.shape===shape)groups.forEach((g,index)=>{const answer=saved.groups?.[index];if(answer){g.inputs.forEach(i=>i.checked=answer.values?.includes(i.value));if(g.custom)g.custom.value=String(answer.custom||'').slice(0,2000);}});}catch{}
+        form.addEventListener('input',saveAnswers);form.addEventListener('change',saveAnswers);
         async function send(rejected){if(questionSending||activeSession?.id!==sessionId||currentUser?.id!==owner)return;const answers=groups.map(g=>{const selected=g.inputs.filter(i=>i.checked).map(i=>i.value),custom=g.custom?.value.trim();return [...new Set(custom?(g.multiple?[...selected,custom]:[custom]):selected)];});if(!rejected&&answers.some(a=>!a.length)){toast(tr('Answer every question.','أجب عن كل سؤال.'));return;}
           questionSending=true;form.setAttribute('aria-busy','true');form.querySelectorAll('input,button').forEach(n=>n.disabled=true);
-          try{await api('/api/sessions/'+sessionId+'/questions/'+encodeURIComponent(request.id),{method:'POST',body:JSON.stringify({reject:rejected,answers:rejected?[]:answers})});questionSignature='';if(activeSession?.id===sessionId&&currentUser?.id===owner){await refreshSessionStatus();await refreshMessages();}}
+          try{await api('/api/sessions/'+sessionId+'/questions/'+encodeURIComponent(request.id),{method:'POST',body:JSON.stringify({reject:rejected,answers:rejected?[]:answers})});try{sessionStorage.removeItem(draftKey);}catch{}questionSignature='';if(activeSession?.id===sessionId&&currentUser?.id===owner){await refreshSessionStatus();await refreshMessages();}}
           catch(error){if(activeSession?.id===sessionId&&currentUser?.id===owner){toast(error.status===404?tr('This question expired. Refreshing the conversation…','انتهت صلاحية السؤال. جارٍ تحديث المحادثة…'):error.message);if(error.status===404)questionSignature='';form.removeAttribute('aria-busy');form.querySelectorAll('input,button').forEach(n=>n.disabled=false);}}finally{questionSending=false;await window.refreshWorkspaceQuestions();}
         }
         form.onsubmit=event=>{event.preventDefault();send(false);};reject.onclick=()=>send(true);nextForms.push(form);
@@ -999,6 +1025,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     // session is already running will execute. Never advertise a Gateway
     // queue in native mode or acknowledge a potentially orphaned prompt.
     const nativeBusy=Boolean(window.nativeSession?.active()&&(busy||window.nativeSession.blocked(activeSession?.id)));
+    manualModel.hidden=!window.nativeSession?.active();
+    recoverConversation.hidden=!window.nativeSession?.active()||!activeSession;
     q('sendMessage').disabled=sending||queuing||nativeBusy||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
@@ -1145,7 +1173,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     chosenAgent=agent.value;agent.onchange=()=>{chosenAgent=agent.value;saveNativeSelection();updateSend();};updateSend();
   }
   function renderProviders(snapshot,preferredProvider=''){
-    providers=(snapshot.providers||[]).filter(p=>p.auth_status!=='reauthorization_required'&&!p.locally_disconnected&&p.allowed!==false&&(p.connected||p.id==='opencode'));q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
+    providers=(snapshot.providers||[]).filter(p=>(p.visible!==false||p.id===preferredProvider||p.id===chosenProvider)&&p.auth_status!=='reauthorization_required'&&!p.locally_disconnected&&p.allowed!==false&&(p.connected||p.id==='opencode'));q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
     for(const p of providers.filter(p=>p.connected||p.id==='opencode')){const option=new Option(p.name+' · '+(p.allowed===false?tr('Restricted','مقيّد'):p.connected?tr('Connected','متصل'):tr('Default provider','المزوّد الافتراضي')),p.id);option.disabled=p.allowed===false;q('providerSelect').add(option);}
     if(preferredProvider)chosenProvider=preferredProvider;
     if(!providers.some(p=>p.id===chosenProvider)){chosenProvider='';chosenModel='';}
@@ -1154,7 +1182,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     q('providerSelect').onchange=()=>{chosenProvider=q('providerSelect').value;chosenModel='';models();};q('modelSelect').onchange=()=>{chosenModel=q('modelSelect').value;renderNativeVariants();saveNativeSelection();updateSend();};models();
   }
   refreshChoices=async function(preferredProvider='',force=false){
-    if(!activeWorkspace||admin())return;
+    if(!activeWorkspace)return;
     const workspaceId=activeWorkspace.id,stamp=++discovery,started=performance.now();
     const current=()=>stamp===discovery&&activeWorkspace?.id===workspaceId;
     runtimeReady=false;updateSend();
@@ -1180,6 +1208,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const current=()=>stamp===modelRequest&&activeWorkspace?.id===workspaceId&&q('providerSelect').value===selected?.id;
     modelsReady=false;retryModels.hidden=true;
     const render=rows=>{
+      rows=rows.filter(m=>m.visible!==false||m.id===chosenModel);
       q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));
       for(const model of rows){const option=new Option(model.name||model.id,model.id);option.disabled=model.allowed===false;q('modelSelect').add(option);}
       const preferred=chosenModel||selected?.default_model||'';

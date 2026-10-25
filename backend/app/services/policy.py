@@ -16,6 +16,7 @@ def _as_set(value: str) -> set[str]:
         items = json.loads(value or "[]")
     except ValueError:
         return set()
+    if isinstance(items,dict):items=items.get('allowed',[])
     return {str(item) for item in items if str(item).strip()}
 
 def provider_sets(policy):
@@ -25,9 +26,20 @@ def provider_allowed(policy, provider_id: str) -> bool:
     allowed, _, _ = provider_sets(policy)
     return not allowed or provider_id in allowed
 
-def model_allowed(policy, model_id: str) -> bool:
+def model_allowed(policy, model_id: str, provider_id: str | None = None) -> bool:
     _, allowed, _ = provider_sets(policy)
-    return not allowed or model_id in allowed
+    return (provider_id is None or provider_allowed(policy,provider_id)) and (not allowed or model_id in allowed or (provider_id is not None and provider_id+'/'+model_id in allowed))
+
+def provider_visible(policy, provider_id):
+    try:data=json.loads(policy.allowed_providers or '[]')
+    except ValueError:data=[]
+    return not isinstance(data,dict) or provider_id not in data.get('hidden',[])
+
+def model_visible(policy,provider_id,model_id):
+    try:data=json.loads(policy.allowed_models or '[]')
+    except ValueError:data=[]
+    return not isinstance(data,dict) or model_id not in data.get('hidden',{}).get(provider_id,[])
+
 
 def filter_providers(rows, policy):
     allowed_providers, allowed_models, _ = provider_sets(policy)
@@ -35,9 +47,9 @@ def filter_providers(rows, policy):
     for provider in rows:
         if allowed_providers and provider.get("id") not in allowed_providers:
             continue
+        if not provider_allowed(policy,provider.get('id','')):continue
         models = provider.get("models", [])
-        if allowed_models:
-            models = [m for m in models if m.get("id") in allowed_models]
+        models = [m for m in models if model_allowed(policy,m.get('id',''),provider.get('id'))]
         output.append({**provider, "models": models})
     return output
 

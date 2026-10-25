@@ -142,6 +142,36 @@ async function main(){
   await f.w.nativeSession.permissions(box,pending);const batch=box.querySelector('[data-reply=batch-once]');f.state.permissions.push({id:'new-not-displayed',permission:'read',patterns:['/owned/a/c.txt']});
   await batch.onclick();const calls=f.state.calls.filter(c=>c.path.includes('/permissions/'));assert.equal(calls.length,2);assert(calls.every(c=>JSON.parse(c.options.body).reply==='once'));assert(calls.every(c=>!c.path.includes('new-not-displayed')));f.close();
  });
+
+ await test('Recovery confirms a lost acknowledgement by exact Native message ID and never resends',async()=>{
+  const f=fixture();await f.ready();const draft='preserved draft';f.w.localStorage.setItem('draft-fixture',draft);
+  await assert.rejects(f.w.nativeSession.send(f.id,{text:'synthetic',providerID:'p',modelID:'m'}));assert(f.w.nativeSession.blocked(f.id));
+  const call=f.state.calls.find(c=>c.path.endsWith('/prompt_async')),messageID=JSON.parse(call.options.body).messageID;
+  f.state.history.push({info:{id:messageID,role:'user'},parts:[{type:'text',text:'synthetic'}]});
+  const result=await f.w.nativeSession.recover(f.id);assert(!result.blocked);assert.equal(f.state.calls.filter(c=>c.path.endsWith('/prompt_async')).length,1);assert.equal(f.w.localStorage.getItem('draft-fixture'),draft);f.close();
+ });
+ await test('Unconfirmed recovery requires explicit release and successful idle history/status reads, without sending',async()=>{
+  const f=fixture();await f.ready();await assert.rejects(f.w.nativeSession.send(f.id,{text:'synthetic',providerID:'p',modelID:'m'}));
+  assert((await f.w.nativeSession.recover(f.id)).blocked);assert(f.w.nativeSession.blocked(f.id));
+  const result=await f.w.nativeSession.recover(f.id,{release:true});assert(result.released&&!f.w.nativeSession.blocked(f.id));assert.equal(f.state.calls.filter(c=>c.path.endsWith('/prompt_async')).length,1);f.close();
+ });
+ await test('Failed history/status recovery and busy recovery preserve the receipt block',async()=>{
+  const f=fixture();await f.ready();await assert.rejects(f.w.nativeSession.send(f.id,{text:'synthetic',providerID:'p',modelID:'m'}));const original=f.c.api;
+  f.c.api=async(path,options)=>{if(path.endsWith('/message'))throw Error('History unavailable');return original(path,options)};
+  await assert.rejects(f.w.nativeSession.recover(f.id,{release:true}));assert(f.w.nativeSession.blocked(f.id));
+  f.c.api=async(path,options)=>path.endsWith('/session/status')?{ses_a:{type:'busy'}}:original(path,options);
+  await assert.rejects(f.w.nativeSession.recover(f.id,{release:true}));assert(f.w.nativeSession.blocked(f.id));f.close();
+ });
+ await test('Accepted message SSE wins over a later lost HTTP acknowledgement',async()=>{
+  const f=fixture();await f.ready();await f.w.nativeSession.start();const original=f.c.api;
+  f.c.api=async(path,options)=>{if(path.endsWith('/prompt_async')){const id=JSON.parse(options.body).messageID;f.state.events[0].onmessage({data:JSON.stringify({type:'message.updated',properties:{info:{id,sessionID:'ses_a',role:'user'}}})});throw Error('Lost acknowledgement');}return original(path,options)};
+  await f.w.nativeSession.send(f.id,{text:'synthetic',providerID:'p',modelID:'m'});assert(!f.w.nativeSession.blocked(f.id));f.close();
+ });
+ await test('Long assistant folding keeps full rich content and toggles without a fetch',async()=>{
+  const f=fixture();vm.runInContext(app.slice(app.indexOf('function foldLongAssistantMessage('),app.indexOf('async function refreshMessages(')),f.c);
+  const node=f.d.createElement('article'),content=f.d.createElement('div');node.dataset.messageId='a-long';content.textContent='Text '.repeat(1000);node.append(content);const before=content.textContent;f.c.foldLongAssistantMessage(node,content,before,false);
+  const button=node.querySelector('button');assert.equal(button.getAttribute('aria-expanded'),'false');assert(content.classList.contains('assistant-collapsed'));button.click();assert.equal(button.getAttribute('aria-expanded'),'true');assert.equal(content.textContent,before);assert.equal(f.state.calls.length,0);f.close();
+ });
  console.log(passed+' Native UX cases passed; controlled fixtures, not TEST account acceptance');
 }
 main().catch(error=>{console.error(error);process.exitCode=1});

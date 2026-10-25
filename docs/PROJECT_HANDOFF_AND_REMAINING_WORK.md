@@ -1,3 +1,15 @@
+# CURRENT Six-issue source checkpoint — 25 October 2026
+
+Owner's latest order is **push current changes to updates now; do not deploy automatically**. Baseline7e9b62bdf1a590a5327690dcd8ff83c10e51e889. See [TEST_SIX_ISSUE_SOURCE_CHECKPOINT.md](TEST_SIX_ISSUE_SOURCE_CHECKPOINT.md). Preserve concurrent owner changes.
+
+Implemented: explicit Native Recover Conversation action with authoritative history/status checks and no resend; pre-send receipt journal, accepted SSE wins over lost acknowledgement; compact Native question draft persistence and independent question refresh; long assistant folding and Markdown typography; Resend recovery DB wiring,0021 schema readiness/errors and truthful mail status; professional six-provider/eight-model paged admin visibility controls with search, bulk selection and persistent Gateway policy. Latest owner clarification overrides earlier task5: hidden is not disabled. Manual search, connection, model selection and Native prompt access remain possible under independent security/ownership restrictions. Add-from-catalog uses discovered Native providers only; custom shared-engine configuration remains protected. Provider key error in owner's screenshot is missing original CREDENTIALS_ENCRYPTION_KEY, not invalid vendor key; added safe preflight, no replacement key/config change.
+
+Focused evidence:11 new backend HTTP/ORM cases PASS; existing52 focused backend cases PASS;25 Native client/DOM cases PASS,6 formatter and7 long-message checks PASS. Syntax/Python compilation/diff clean. New backend tests exercise real FastAPI/ORM/encryption/migration0021 with controlled Native/SMTP boundaries, not actual vendor delivery or PostgreSQL certification. New admin console has syntax validation; its consolidated browser interaction/visual acceptance is unfinished at owner's immediate-push request.
+
+Actual existing TEST evidence via secure sign-in: customer testuser entered Workspace, Native discovery listed230 providers and7 agents; created separate project QA Native acceptance2026-10-25 and a conversation; real Big Pickle prompt produced Native Todo0/2 and a native question with two choices/custom answer. Card measured310px. Reload restored session/history/question but lost selected choice (0/2 checked), reproducing the selection-persistence defect. Custom answer was submitted; subsequent write/finish acceptance remains unfinished. No new source was deployed, no admin login/provider-key submission, no migration/server-config changes, no shared engine restart, no master/LIVE/Preview change. Do not relabel the baseline journey as verification of this source patch. Continue testing after the owner's manual rollout.
+
+---
+
 # CURRENT Three-point Native UX follow-up — 25 October 2026
 
 Published implementation: `8a1dbd6229315d39fdccb417238c110eadf12bb0` (runtime tree234f7543bd8b1c6bd8a0b795e9b3ad32ac1869de), integrated through owner commit2971ea3abf0618c0702eadcb293ceec0cb4f72b7. The documentation follow-up records this exact source checkpoint.

@@ -337,7 +337,7 @@ async def send(session_id: uuid.UUID,data: MessageRequest,user: User=Depends(req
     policy_row=policy.load(db)
     if not policy.provider_allowed(policy_row,data.provider_id):
         raise HTTPException(403,"Provider is disabled by platform policy")
-    if not policy.model_allowed(policy_row,data.model_id):
+    if not policy.model_allowed(policy_row,data.model_id,data.provider_id):
         raise HTTPException(403,"Model is disabled by platform policy")
     if providers.is_locally_disconnected(db,workspace,data.provider_id):
         raise HTTPException(409,"Provider is disconnected in this workspace; explicitly reconnect it before sending")
@@ -454,7 +454,7 @@ def enqueue_message(session_id: uuid.UUID,data: MessageRequest,user: User=Depend
     if previous is not None:
         row=message_queue.add(db,session.id,data)
         return {'status':row['state'],'request_id':row['request_id']}
-    if not policy.provider_allowed(policy.load(db),data.provider_id) or not policy.model_allowed(policy.load(db),data.model_id):
+    if not policy.provider_allowed(policy.load(db),data.provider_id) or not policy.model_allowed(policy.load(db),data.model_id,data.provider_id):
         raise HTTPException(403,'Provider or model is disabled by platform policy')
     if session_lifecycle.receipt(db,session_id,data.request_id):raise HTTPException(409,'Request ID already belongs to a submitted message')
     # Queueing never sends a model request, changes Todo or grants permission.

@@ -311,7 +311,7 @@ def authorize_native(workspace_id,resource,request,user,db,raw):
             tools=metadata('GET','/experimental/tool/ids',root)
             builtins={'invalid','question','bash','shell','terminal','read','glob','grep','list','edit','write','task','webfetch','todowrite','todoread','websearch','codesearch','skill','apply_patch','execute','lsp','plan_enter','plan_exit'}
             if not isinstance(tools,list) or any(not isinstance(t,str) or t not in builtins for t in tools) or len(tools)!=len(set(tools)):raise HTTPException(503,'Custom Native tool execution requires verified restrictions; execution is blocked')
-            if not policy.provider_allowed(current_policy,model['providerID']) or not policy.model_allowed(current_policy,model['modelID']):raise HTTPException(403,'Model disabled by policy')
+            if not policy.provider_allowed(current_policy,model['providerID']) or not policy.model_allowed(current_policy,model['modelID'],model['providerID']):raise HTTPException(403,'Model disabled by policy')
             from ..services.native_provider_accounts import require_model
             require_model(db,user,root,model['providerID'],model['modelID'])
             for part in body['parts']:

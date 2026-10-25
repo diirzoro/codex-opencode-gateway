@@ -291,13 +291,13 @@ async function refreshWorkspaceTodos(force=false){
 }
 // A deliberately small, text-only Markdown subset. Never interpret Agent HTML.
 function renderAgentText(host,value){
- host.replaceChildren();host.classList.add('message-rich');
+ host.replaceChildren();host.classList.add('message-rich');host.dir='auto';
  function inline(node,text){
-  let at=0;const tokens=/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
+  let at=0;const tokens=/(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
   for(const match of text.matchAll(tokens)){
    node.append(document.createTextNode(text.slice(at,match.index)));
-   const code=match[0].startsWith('`'),part=document.createElement(code?'code':'strong');
-   part.textContent=match[0].slice(code?1:2,code?-1:-2);node.append(part);at=match.index+match[0].length;
+   const code=match[0].startsWith('`'),bold=match[0].startsWith('**'),part=document.createElement(code?'code':bold?'strong':'em');
+   part.textContent=match[0].slice(bold?2:1,bold?-2:-1);node.append(part);at=match.index+match[0].length;
   }
   node.append(document.createTextNode(text.slice(at)));
  }
@@ -319,6 +319,8 @@ function renderAgentText(host,value){
    const language=fence[2].trim().split(/\s/)[0].slice(0,40)||'text';header.append(textElement('span',language),feedAction('copy',body.join('\n')));code.textContent=body.join('\n');pre.dir='ltr';pre.append(code);block.append(header,pre);host.append(block);continue;
   }
   if(!lines[i].trim()){flush();continue;}
+  if(/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(lines[i])){flush();host.append(document.createElement('hr'));continue;}
+  const quote=lines[i].match(/^\s{0,3}>\s?(.*)$/);if(quote){flush();const block=document.createElement('blockquote');inline(block,quote[1]);host.append(block);continue;}
   if(lines[i].includes('|')&&i+1<lines.length){
    const header=cells(lines[i]),separator=cells(lines[i+1]);
    if(header.length>1&&header.length<=20&&separator.length===header.length&&separator.every(cell=>/^:?-{3,}:?$/.test(cell))){
@@ -353,6 +355,13 @@ function foldLongUserMessage(node,content,text,expanded=false){
  const less=textElement('span',lang==='ar'?'عرض أقل':'Show less','user-message-less');
  summary.append(preview,more,less);node.replaceChild(fold,content);fold.append(summary,content);
 }
+function foldLongAssistantMessage(node,content,text,expanded=false){
+ if(text.length<4000&&text.split('\n').length<55)return;
+ const control=textElement('button','','button ghost small assistant-fold-control');control.type='button';
+ content.id='answer-'+(node.dataset.messageId||crypto.randomUUID());control.setAttribute('aria-controls',content.id);
+ const apply=()=>{node.dataset.answerExpanded=String(expanded);content.classList.toggle('assistant-collapsed',!expanded);control.setAttribute('aria-expanded',String(expanded));control.textContent=lang==='ar'?(expanded?'طي الرد':'عرض الرد كاملًا'):(expanded?'Collapse response':'Expand full response');};
+ control.onclick=()=>{expanded=!expanded;apply();};apply();content.after(control);
+}
 async function refreshMessages(){
  if(!activeSession)return;
  const sessionId=activeSession.id,owner=currentUser?.id,revision=++messageRenderRevision;
@@ -383,6 +392,7 @@ async function refreshMessages(){
    const hasText=presentation.hasText;
    const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text);node.append(content);
    if(nativeIncremental&&!hasText)content.hidden=true;
+   if(row.role==='assistant'&&hasText)foldLongAssistantMessage(node,content,row.text,cached?.node?.dataset.answerExpanded==='true'||(!cached&&['submitted','waiting_approval'].includes(activeSession.execution_status)));
    if(row.role==='user')foldLongUserMessage(node,content,row.text||'',expandedUserMessages.has(String(row.id)));
    if(row.role==='assistant'&&!hasText&&presentation.feedback){const state=presentation.state;
     const labels={waiting_approval:['Waiting for your approval…','بانتظار موافقتك…'],failed:['The agent could not finish this request. Review the activity below before retrying.','تعذر على الوكيل إكمال الطلب. راجع النشاط أدناه قبل إعادة المحاولة.'],cancelled:['Execution stopped.','تم إيقاف التنفيذ.'],working:['The agent is working…','الوكيل يعمل الآن…'],completed:['Tool step completed.','اكتملت خطوة الأدوات.']};
@@ -430,7 +440,13 @@ async function refreshMessages(){
 
 function startEvents(){if(window.nativeSession?.active()){window.nativeSession.start().catch(error=>toast(error.message));return;}if(!activeSession)return;stopEvents();const sessionId=activeSession.id,owner=currentUser?.id,key=String(owner)+':'+sessionId;let cursor=eventCursors.get(key)||0;try{cursor=Math.max(cursor,Number(sessionStorage.getItem('og-events:'+key))||0)}catch(error){}const stream=new EventSource(`/api/sessions/${sessionId}/events?after=${cursor}`);eventStream=stream;stream.addEventListener('authentication_expired',()=>{if(eventStream===stream&&currentUser?.id===owner)clearAuthenticatedState();});for(const kind of ['activity','submitted','analyzing','reading_files','editing','running_command','running_tests','waiting_approval','approval_decision','failed','completed','cancelled'])stream.addEventListener(kind,event=>{if(eventStream!==stream||activeSession?.id!==sessionId||currentUser?.id!==owner)return;const id=Number(event.lastEventId);if(id&&id<=(eventCursors.get(key)||cursor))return;if(id){cursor=id;eventCursors.set(key,id);try{sessionStorage.setItem('og-events:'+key,String(id))}catch(error){}}let data={};if(kind==='activity'){try{data=JSON.parse(event.data);}catch(error){return;}}window.renderWorkspaceEventLine?.(kind,data);window.dispatchEvent(new CustomEvent('workspace-execution-event',{detail:{sessionId,kind}}));});stream.onopen=()=>{if(eventStream===stream)window.dispatchEvent(new CustomEvent('workspace-execution-event',{detail:{sessionId,kind:'connected'}}))};stream.onerror=()=>{if(eventStream===stream&&activeSession?.id===sessionId)$('#runtimeStatus').textContent='Reconnecting to event stream'};syncPermissionPolling()}
 async function refreshPermissions(){
- if(window.nativeSession?.active()){const rows=await window.nativeSession.requests("permission",activeSession?.id);if(window.renderWorkspaceApprovals)await window.renderWorkspaceApprovals(rows,activeSession?.id);else await window.nativeSession.permissions($("#approvalBox"),rows);await window.refreshWorkspaceQuestions?.();return rows;}
+ if(window.nativeSession?.active()){
+  const id=activeSession?.id,owner=currentUser?.id;
+  const [permissions]=await Promise.allSettled([window.nativeSession.requests('permission',id),window.refreshWorkspaceQuestions?.()]);
+  if(activeSession?.id!==id||currentUser?.id!==owner)return [];
+  if(permissions.status==='rejected')throw permissions.reason;
+  const rows=permissions.value;if(window.renderWorkspaceApprovals)await window.renderWorkspaceApprovals(rows,id);else await window.nativeSession.permissions($('#approvalBox'),rows);return rows;
+ }
  if(!activeSession)return [];
  const sessionId=activeSession.id,owner=currentUser?.id;
  if(permissionPending?.id===sessionId&&permissionPending.owner===owner)return permissionPending.promise;
@@ -571,7 +587,7 @@ applyPrefs();
   ]);
   const basePage=page;page=async function(...args){document.querySelectorAll('dialog[data-form-dialog][open]').forEach(dialog=>dialog.close());return basePage(...args);};
   document.addEventListener('DOMContentLoaded',()=>{
-    for(const [id,en,ar] of [['adminPlanForm','Add plan','إضافة خطة'],['adminPolicyForm','Edit platform policy','تعديل سياسة المنصة'],['createProjectForm','Create project','إنشاء مشروع']]){
+    for(const [id,en,ar] of [['adminPlanForm','Add plan','إضافة خطة'],['adminPolicyForm','Advanced access restrictions','قيود الوصول المتقدمة'],['createProjectForm','Create project','إنشاء مشروع']]){
       const form=document.getElementById(id);if(!form)continue;
       // Label placeholder-only fields before relocating the existing bound form.
       for(const input of form.querySelectorAll('input:not([type=checkbox])'))if(!input.closest('label')){

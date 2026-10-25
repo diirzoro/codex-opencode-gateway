@@ -34,9 +34,12 @@ class PlatformPolicy(Base):
                 return json.loads(value or "[]")
             except ValueError:
                 return []
+        provider_rules=load(self.allowed_providers);model_rules=load(self.allowed_models)
         return {
-            "allowed_providers": load(self.allowed_providers),
-            "allowed_models": load(self.allowed_models),
+            "allowed_providers": provider_rules.get('allowed',[]) if isinstance(provider_rules,dict) else provider_rules,
+            "hidden_providers": provider_rules.get('hidden',[]) if isinstance(provider_rules,dict) else [],
+            "allowed_models": model_rules.get('allowed',[]) if isinstance(model_rules,dict) else model_rules,
+            "hidden_models": model_rules.get('hidden',{}) if isinstance(model_rules,dict) else {},
             "allowed_tools": load(self.allowed_tools),
             "require_tool_approval": bool(self.require_tool_approval),
             "updated_at": self.updated_at,

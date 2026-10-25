@@ -112,13 +112,18 @@ def catalog(db,user,directory=None,*,full=False):
     # Curate presentation only. Manual name/ID lookup needs the complete Native
     # catalog; another account's process-global connection gets no priority.
     ordered=sorted(data['all'],key=lambda entry:(not usable(entry),entry['id'] not in providers.POPULAR_PROVIDER_IDS,str(entry['id'])))
-    selected=ordered if full else ordered[:50]
-    additional=[] if full else [entry for entry in ordered[50:] if usable(entry)]
+    defaults=[entry for entry in ordered if policy.provider_visible(rules,entry['id'])]
+    selected=ordered if full else defaults[:50]
+    additional=[] if full else [entry for entry in ordered if entry not in selected and usable(entry)]
     for entry in [*selected,*additional]:
         public=public_entry(entry)
         if public_free(entry) and not account_owned(entry):
             public['models']={k:v for k,v in public['models'].items() if public_free(entry,k)}
+        public['models']={k:v for k,v in public['models'].items() if policy.model_allowed(rules,k,entry['id'])}
+        if not policy.provider_allowed(rules,entry['id']):public['models']={}
         if usable(entry):connected.append(entry['id'])
+        public['visible']=policy.provider_visible(rules,entry['id'])
+        for mid,model in public['models'].items():model['visible']=policy.model_visible(rules,entry['id'],mid)
         entries.append(public)
     return {'all':entries[:len(selected)],'connected_entries':entries[len(selected):],
             'connected':connected,'default':data.get('default',{}),'native':True,
@@ -126,6 +131,7 @@ def catalog(db,user,directory=None,*,full=False):
 
 
 def require_model(db,user,directory,provider_id,model_id):
+    if not policy.model_allowed(policy.load(db),model_id,provider_id):raise HTTPException(403,'Model disabled by policy')
     data=request('GET','/provider',directory)
     entry=next((p for p in data.get('all',[]) if p.get('id')==provider_id),None)
     if entry is None or provider_id not in data.get('connected',[]) or model_id not in entry.get('models',{}):raise HTTPException(403,'Native model is not configured')

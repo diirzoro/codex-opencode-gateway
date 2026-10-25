@@ -6,7 +6,8 @@ from fastapi import HTTPException
 def send_reset(email, token, db=None):
     from .email_verification import smtp_settings
     smtp_config=smtp_settings(db)
-    base=os.getenv('PUBLIC_BASE_URL','').rstrip('/')
+    from ..config import settings
+    base=settings.public_base_url.rstrip('/')
     host=smtp_config.get('smtp_host'); sender=smtp_config.get('smtp_from')
     url=urlsplit(base)
     if not host or not sender or url.scheme!='https' or not url.netloc or url.username or url.password or url.query or url.fragment:
@@ -18,5 +19,5 @@ def send_reset(email, token, db=None):
             smtp.starttls(context=ssl.create_default_context())
             if smtp_config.get('smtp_username'): smtp.login(smtp_config['smtp_username'],smtp_config.get('smtp_password',''))
             smtp.send_message(message)
-    except (OSError,smtplib.SMTPException):
+    except (OSError,smtplib.SMTPException,ValueError):
         raise HTTPException(503,'Password recovery email could not be delivered')

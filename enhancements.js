@@ -355,14 +355,91 @@
     } catch (error) { apiMessage('adminPlanMessage', error.message, true); }
   };
 
+  const policyStyle=document.createElement('style');policyStyle.textContent=`
+  .native-policy-console{display:grid;gap:12px}.native-policy-console .manage-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .native-policy-console input[type=search]{flex:1;min-width:180px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text)}
+  .policy-provider-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-block-end:1px solid var(--line);flex-wrap:wrap}
+  .policy-provider-identity{flex:1;min-width:150px;display:grid;gap:3px}.policy-provider-identity small{color:var(--muted)}
+  .policy-model-editor{border:1px solid var(--line);border-radius:12px;padding:14px}.policy-model-list{display:grid;gap:6px;margin-block:10px}
+  .policy-model-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px;background:var(--control-fill);border-radius:8px}.policy-model-row small{color:var(--muted);overflow-wrap:anywhere}
+  `;document.head.append(policyStyle);
+  var policyVisibilityRevision=0;
   async function loadAdminPolicy() {
+    const owner=currentUser?.id,revision=++policyVisibilityRevision;
+    const t=(en,ar)=>lang==='ar'?ar:en;
+    const panel=document.querySelector('[data-admin-panel="policy"]');
+    let host=document.getElementById('adminCatalogVisibility');
+    if(!host){host=textElement('section','','manage-card native-policy-console');host.id='adminCatalogVisibility';panel.append(host);}
+    host.replaceChildren(textElement('p',t('Loading policy…','جارٍ تحميل السياسة…')));
     try {
-      var policy = await api('/api/admin/policy');
-      document.getElementById('policyProviders').value = (policy.allowed_providers || []).join(', ');
-      document.getElementById('policyModels').value = (policy.allowed_models || []).join(', ');
-      document.getElementById('policyTools').value = (policy.allowed_tools || []).join(', ');
-      document.getElementById('policyApproval').checked = !!policy.require_tool_approval;
-    } catch (error) { toast(error.message); }
+      let draft=await api('/api/admin/policy');
+      const valid=()=>revision===policyVisibilityRevision&&currentUser?.id===owner&&['admin','owner'].includes(currentUser?.role);
+      if(!valid())return;
+      document.getElementById('policyProviders').value=(draft.allowed_providers||[]).join(', ');
+      document.getElementById('policyModels').value=(draft.allowed_models||[]).join(', ');
+      document.getElementById('policyTools').value=(draft.allowed_tools||[]).join(', ');
+      document.getElementById('policyApproval').checked=!!draft.require_tool_approval;
+      const changedProviders=new Map(),changedModels=new Map(),selected=new Set();let rows=[],offset=0,next=null,pageRevision=0;
+      host.replaceChildren();
+      host.append(textElement('h2',t('Customer catalog visibility','ظهور الكتالوج للعملاء')),textElement('p',t('Hide from default suggestions only. Manual search, connections and use remain available. Access restrictions and customer credentials are separate.','الإخفاء من الاقتراحات الافتراضية فقط. البحث والربط والاستخدام اليدوي متاحة. قيود الوصول ومفاتيح العملاء منفصلة.')));
+      const toolbar=textElement('div','','manage-actions'),search=document.createElement('input');search.type='search';search.placeholder=t('Search all Native providers','ابحث في جميع مزوّدي Native');search.setAttribute('aria-label',search.placeholder);
+      function action(label,handler){const b=textElement('button',label,'button ghost small');b.type='button';b.onclick=async()=>{try{await handler();}catch(error){if(valid())status.textContent=error.message;}};return b;}
+      const status=textElement('p','','muted-small');status.setAttribute('role','status');
+      const list=textElement('div','','policy-provider-list'),details=textElement('section','','policy-model-editor');details.hidden=true;
+      const save=action(t('Save visibility','حفظ الظهور'),async()=>{
+        save.disabled=true;
+        try{
+          const current=await api('/api/admin/policy');if(!valid())return;
+          const hidden=new Set(current.hidden_providers||[]),models={...(current.hidden_models||{})};
+          changedProviders.forEach((visible,id)=>visible?hidden.delete(id):hidden.add(id));
+          changedModels.forEach((changes,pid)=>{const ids=new Set(models[pid]||[]);changes.forEach((visible,id)=>visible?ids.delete(id):ids.add(id));models[pid]=[...ids];});
+          const {updated_at,...body}=current;draft=await api('/api/admin/policy',{method:'PUT',body:JSON.stringify({...body,hidden_providers:[...hidden],hidden_models:models})});
+          if(!valid())return;changedProviders.clear();changedModels.clear();window.workspaceRuntime?.clear();status.textContent=t('Visibility saved. Manual access remains available.','حُفظ الظهور. الوصول اليدوي ما زال متاحًا.');await loadPage(offset,false);
+        }finally{save.disabled=false;}
+      });save.className='button';save.disabled=true;
+      const dirty=()=>{save.disabled=!changedProviders.size&&!changedModels.size;status.textContent=t('Unsaved visibility changes','تغييرات ظهور غير محفوظة');};
+      const providerVisible=r=>changedProviders.has(r.id)?changedProviders.get(r.id):!(draft.hidden_providers||[]).includes(r.id);
+      const bulk=visible=>{rows.filter(r=>selected.has(r.id)).forEach(r=>changedProviders.set(r.id,visible));dirty();renderRows();};
+      const pick=action(t('Select page','تحديد الصفحة'),()=>{rows.forEach(r=>selected.add(r.id));renderRows();});
+      const show=action(t('Show selected','إظهار المحدد'),()=>bulk(true)),hide=action(t('Hide selected','إخفاء المحدد'),()=>bulk(false));
+      toolbar.append(search,action(t('Search','بحث'),()=>{offset=0;return loadPage(0);}),pick,show,hide);
+      const previous=action(t('Previous','السابق'),()=>loadPage(Math.max(0,offset-6))),following=action(t('Next','التالي'),()=>loadPage(next)),pageInfo=textElement('span','','muted-small');
+      const pager=textElement('div','','manage-actions');pager.append(previous,pageInfo,following);
+      const add=action(t('Add from Native catalog','إضافة من كتالوج Native'),async()=>{
+        const id=await window.requestInput(t('Native provider ID or name · no API key','اسم أو معرّف مزوّد Native · دون مفتاح API'));
+        if(id){search.value=id;await loadPage(0);status.textContent=t('Choose a discovered provider below. Custom engine configuration is protected; connect your own key in Connections.','اختر مزوّدًا مكتشفًا أدناه. إعداد المحرك المخصص محمي؛ اربط مفتاح حسابك من الاتصالات.');}
+      });
+      host.append(toolbar,list,pager,details,add,save,status);
+      async function openModels(provider){
+        const result=await api('/api/admin/native/providers?provider_id='+encodeURIComponent(provider.id));if(!valid())return;
+        let modelOffset=0;const all=result.models;details.hidden=false;details.replaceChildren(textElement('h3',provider.name));
+        const find=document.createElement('input');find.type='search';find.placeholder=t('Search models of this provider','ابحث في نماذج هذا المزوّد');find.setAttribute('aria-label',find.placeholder);
+        const body=textElement('div','','policy-model-list'),nav=textElement('div','','manage-actions');
+        function visible(m){const changes=changedModels.get(provider.id);return changes?.has(m.id)?changes.get(m.id):!(draft.hidden_models?.[provider.id]||[]).includes(m.id);}
+        function set(m,on){if(!changedModels.has(provider.id))changedModels.set(provider.id,new Map());changedModels.get(provider.id).set(m.id,on);dirty();}
+        const back=action(t('Previous models','النماذج السابقة'),()=>{modelOffset=Math.max(0,modelOffset-8);render();}),more=action(t('Next models','النماذج التالية'),()=>{modelOffset+=8;render();}),count=textElement('span','','muted-small');nav.append(back,count,more);
+        const bulkModels=textElement('div','','manage-actions');
+        bulkModels.append(action(t('Show matching models','إظهار النماذج المطابقة'),()=>{matches().forEach(m=>set(m,true));render();}),action(t('Hide matching models','إخفاء النماذج المطابقة'),()=>{matches().forEach(m=>set(m,false));render();}),action(t('Close models','إغلاق النماذج'),()=>details.hidden=true));
+        const matches=()=>all.filter(m=>(m.id+' '+m.name).toLowerCase().includes(find.value.toLowerCase()));
+        function render(){const matchesNow=matches();body.replaceChildren();for(const m of matchesNow.slice(modelOffset,modelOffset+8)){const row=textElement('label','','policy-model-row'),toggle=document.createElement('input');toggle.type='checkbox';toggle.checked=visible(m);toggle.onchange=()=>set(m,toggle.checked);row.append(toggle,textElement('span',m.name),textElement('small',m.id));body.append(row);}back.disabled=modelOffset===0;more.disabled=modelOffset+8>=matchesNow.length;count.textContent=(matchesNow.length?modelOffset+1:0)+'–'+Math.min(modelOffset+8,matchesNow.length)+' / '+matchesNow.length;}
+        find.oninput=()=>{modelOffset=0;render();};details.append(find,bulkModels,body,nav);render();
+      }
+      function renderRows(){
+        list.replaceChildren();for(const r of rows){const row=textElement('div','','policy-provider-row'),check=document.createElement('input');check.type='checkbox';check.checked=selected.has(r.id);check.setAttribute('aria-label',t('Select ','تحديد ')+r.name);check.onchange=()=>{check.checked?selected.add(r.id):selected.delete(r.id);show.disabled=hide.disabled=!selected.size;};
+          const identity=textElement('div','','policy-provider-identity');identity.append(textElement('strong',r.name),textElement('small',r.id+' · '+r.model_count+t(' models',' نموذج')));
+          const visible=providerVisible(r),state=textElement('small',visible?t('Shown','ظاهر'):t('Hidden · manual access available','مخفي · متاح يدويًا'));if(!r.allowed)state.textContent+=' · '+t('Access restricted separately','الوصول مقيّد بصورة مستقلة');
+          const toggle=action(visible?t('Hide','إخفاء'):t('Show','إظهار'),()=>{changedProviders.set(r.id,!providerVisible(r));dirty();renderRows();});
+          row.append(check,identity,state,toggle,action(t('Models','النماذج'),()=>openModels(r)));list.append(row);
+        }show.disabled=hide.disabled=!rows.some(r=>selected.has(r.id));
+      }
+      async function loadPage(value,announce=true){
+        if(value===null)return;const sequence=++pageRevision;offset=value;
+        const result=await api('/api/admin/native/providers?limit=6&offset='+offset+'&query='+encodeURIComponent(search.value));if(!valid()||sequence!==pageRevision)return;
+        rows=result.items;next=result.next_offset;selected.clear();renderRows();previous.disabled=offset===0;following.disabled=next===null;pageInfo.textContent=(rows.length?offset+1:0)+'–'+(offset+rows.length)+' / '+result.total;if(announce)status.textContent=t('Native catalog · six providers per page','كتالوج Native · ستة مزوّدين في الصفحة');
+      }
+      search.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();loadPage(0).catch(error=>status.textContent=error.message);}};
+      await loadPage(0);
+    } catch(error){host.replaceChildren(textElement('p',error.message,'api-message'));}
   }
 
   var policyForm = document.getElementById('adminPolicyForm');

@@ -63,7 +63,7 @@ def forgot(data:Forgot,db:Session=Depends(get_db)):
     token=secrets.token_urlsafe(32)
     record=PasswordReset(user_id=user.id,token_hash=hash_session_token(token),expires_at=now()+timedelta(minutes=30))
     db.add(record); db.commit()
-    try: recovery.send_reset(user.email,token)
+    try: recovery.send_reset(user.email,token,db)
     except HTTPException:
         record.used=True; audit(db,user,'password.recovery_delivery_unavailable'); db.commit()
     return message

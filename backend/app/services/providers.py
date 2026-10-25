@@ -124,7 +124,7 @@ def public_metadata(value):
 
 
 def catalog(data, methods, policy=None):
-    from .policy import provider_allowed, model_allowed
+    from .policy import provider_allowed, model_allowed, model_visible
     if not isinstance(data, dict) or not isinstance(data.get("all"), list):
         raise HTTPException(502, "OpenCode returned an invalid provider catalog")
     connected = set(data.get("connected", []))
@@ -136,7 +136,7 @@ def catalog(data, methods, policy=None):
         provider["locally_disconnected"] = provider_id in data.get("gateway_disconnected", [])
         provider["allowed"] = policy is None or provider_allowed(policy, provider_id)
         provider["models"] = [{**public_metadata(model), "id": identifier,
-                               "allowed": provider["allowed"] and (policy is None or model_allowed(policy, identifier))}
+                               "allowed": provider["allowed"] and (policy is None or model_allowed(policy, identifier, provider_id))}
                               for identifier, model in entry.get("models", {}).items()]
         # The methods are schema, not credentials. Preserve prompt keys/conditions.
         provider["auth_methods"] = methods.get(provider_id, [])
@@ -156,8 +156,8 @@ def _catalog_entries(data):
 
 
 def provider_index(entry, data, policy=None):
-    from .policy import provider_allowed
-    return {"id": entry["id"], "name": entry.get("name") or entry["id"],
+    from .policy import provider_allowed,provider_visible
+    return {"id": entry["id"],"visible":policy is None or provider_visible(policy,entry['id']), "name": entry.get("name") or entry["id"],
             **data.get("gateway_auth_status",{}).get(entry["id"],{}),
             "connected": entry["id"] in data.get("connected", []),
             "locally_disconnected": entry["id"] in data.get("gateway_disconnected", []),
@@ -200,8 +200,8 @@ def search_index(data, query, policy=None):
 
 def catalog_page(data, policy=None, *, offset=0, limit=50, query=''):
     wanted=query.strip().casefold()
-    entries=[r for r in _catalog_entries(data) if not wanted or wanted in r['id'].casefold()
-             or wanted in (r.get('name') or '').casefold()]
+    from .policy import provider_visible
+    entries=[r for r in _catalog_entries(data) if (bool(wanted) or policy is None or provider_visible(policy,r['id'])) and (not wanted or wanted in r['id'].casefold() or wanted in (r.get('name') or '').casefold())]
     connected=set(data.get('connected',[]))
     entries.sort(key=lambda r:(r['id'] not in connected,r['id'] not in POPULAR_PROVIDER_IDS,(r.get('name') or r['id']).casefold(),r['id']))
     end=min(offset+limit,len(entries))
@@ -212,7 +212,7 @@ def catalog_page(data, policy=None, *, offset=0, limit=50, query=''):
 
 def model_details(data, provider_id, policy=None):
     """Sanitize and annotate models for exactly one runtime-reported provider."""
-    from .policy import provider_allowed, model_allowed
+    from .policy import provider_allowed, model_allowed, model_visible
     if not isinstance(data, dict) or not isinstance(data.get("all"), list):
         raise HTTPException(502, "OpenCode returned an invalid provider catalog")
     entry = next((entry for entry in data["all"] if entry["id"] == provider_id), None)
@@ -222,7 +222,7 @@ def model_details(data, provider_id, policy=None):
     return {"provider_id": provider_id, "connected": provider_id in data.get("connected", []),
             "allowed": allowed, "default_model": data.get("default", {}).get(provider_id),
             "models": [{**public_metadata(model), "id": identifier,
-                        "allowed": allowed and (policy is None or model_allowed(policy, identifier))}
+                        "allowed": allowed and (policy is None or model_allowed(policy, identifier, provider_id)),"visible":policy is None or model_visible(policy,provider_id,identifier)}
                        for identifier, model in entry.get("models", {}).items()]}
 
 
@@ -336,7 +336,7 @@ def validate_model(service, provider_id, model_id=None, policy=None):
         raise HTTPException(422, "OpenCode does not report the selected provider as connected")
     models = entry.get("models", {})
     candidates = [identifier for identifier, model in models.items()
-                  if (policy is None or model_allowed(policy, identifier))
+                  if (policy is None or model_allowed(policy, identifier, provider_id))
                   and "text" in model.get("modalities", {}).get("output", ["text"])]
     if model_id and model_id not in candidates:
         raise HTTPException(422, "Validation model is unavailable or restricted")

@@ -25,6 +25,16 @@
       :root #workspacePage.native-mode #agentFeed .agent-response+.user-bubble{margin-top:12px}
       :root #workspacePage.native-mode #agentFeed :is(p,.agent-progress-note){margin-block:0 6px}
       :root #workspacePage.native-mode .message-content>:last-child{margin-bottom:0}
+      :root #workspacePage.native-mode .message-rich{font-size:15px;line-height:1.8;letter-spacing:normal}
+      :root #workspacePage.native-mode .message-rich :is(h2,h3,h4,h5,h6){line-height:1.45;margin-block:18px 8px;font-weight:650}
+      :root #workspacePage.native-mode .message-rich :is(ul,ol){padding-inline-start:24px;margin-block:8px}
+      :root #workspacePage.native-mode .message-rich blockquote{border-inline-start:3px solid var(--primary);padding-inline-start:12px;margin-inline:0;color:var(--muted)}
+      :root #workspacePage.native-mode .message-rich hr{border:0;border-block-start:1px solid var(--line);margin-block:16px}
+      :root #workspacePage.native-mode .message-rich li{margin-block:5px}
+      :root #workspacePage.native-mode .message-rich .message-code-block{margin-block:12px;max-width:100%;overflow:hidden}
+      :root #workspacePage.native-mode .message-rich pre{overflow:auto;white-space:pre;line-height:1.6}
+      :root #workspacePage.native-mode .assistant-collapsed{max-height:360px;overflow:hidden;mask-image:linear-gradient(#000 85%,transparent)}
+      :root #workspacePage.native-mode .assistant-fold-control{margin-block:6px}
       :root #workspacePage.native-mode .message-content{min-width:0;word-break:normal;overflow-wrap:anywhere}
       :root #workspacePage.native-mode :is(.native-activity,.native-permission-group,.chat-questions){min-width:0;max-width:100%;overflow-wrap:anywhere}
       :root #workspacePage.native-mode :is(.chat-approvals,.chat-questions){margin-block:8px}
@@ -85,7 +95,7 @@
     const last=messages.findLast(m=>m.info.role==='user'&&m.info.model)?.info;
     if(last&&!selection(id))select(id,{providerID:last.model.providerID,modelID:last.model.modelID,agent:last.agent,variant:last.model.variant});
     let pending=uncertain.get(id);try{pending??=JSON.parse(sessionStorage.getItem(storageKey('uncertain',id))||'null');}catch{}
-    if(pending){if(messages.some(m=>m.info.id===(pending.messageID||pending))){uncertain.delete(id);sessionStorage.removeItem(storageKey('uncertain',id));}else uncertain.set(id,pending);}
+    if(pending){if(messages.some(m=>m.info.id===(pending.messageID||pending))){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}else uncertain.set(id,pending);}
   }
   async function history(id,force=false){
     if(pendingReads.has('history:'+id))return pendingReads.get('history:'+id);
@@ -242,39 +252,45 @@
   function stop(){stream?.close();stream=null;}
   async function send(id,{text,providerID,modelID,agent,variant,files=[]}){
     const row=await context(id);
-    if(blocked(id)){
-      // Native may have accepted the previous prompt before the HTTP response
-      // was lost. Query authoritative native history (never retry the prompt).
-      // A confirmed messageID clears the local uncertainty via reconcile().
-      try{await history(id,true);}catch{}
-      if(blocked(id)){
-        // Never silently resend. An explicit user confirmation is required
-        // after consulting Native history because a lost acknowledgement may
-        // still represent an accepted request.
-        const confirmed=window.confirm(label(
-          'Native history does not confirm receipt of the previous prompt. The previous request may still be running. Do you want to clear the local uncertainty and send this NEW request? This could repeat work. Cancel keeps your draft and blocks sending.',
-          'سجل OpenCode لا يؤكد استلام الطلب السابق، وقد يكون الطلب ما زال قيد التنفيذ. هل تريد إزالة حالة عدم اليقين المحلية وإرسال الطلب الجديد؟ قد يتكرر العمل. اختر إلغاء للاحتفاظ بالمسودة ومنع الإرسال.'
-        ));
-        if(!confirmed)throw Error(label(
-          'Sending cancelled. Draft preserved until you review Native history.',
-          'تم إلغاء الإرسال. بقيت المسودة محفوظة حتى مراجعة سجل OpenCode.'
-        ));
-        uncertain.delete(id);
-        try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
-      }
-    }
+    if(blocked(id))throw Error(label('Recover this conversation before sending. Your draft is preserved.','استعد هذه المحادثة قبل الإرسال. مسودتك محفوظة.'));
     const user=owner();select(id,{providerID,modelID,agent,variant});
     const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
     const messageID='msg_'+((BigInt(Date.now())*4096n)&0xffffffffffffn).toString(16).padStart(12,'0')+Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');
     const parts=[{type:'text',text},...files.map(f=>({type:'file',mime:f.mime||({'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','pdf':'application/pdf'}[f.path.split('.').at(-1)]||'application/octet-stream'),url:row.file_base+f.path.split('/').map(encodeURIComponent).join('/'),filename:f.path.split('/').at(-1)}))];
+    const pending={messageID,text,files,providerID,modelID,agent,variant};uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}
     try{await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
       messageID,model:{providerID,modelID},...(variant?{variant}:{}),...(agent?{agent}:{}),parts});}
-    catch(error){if(owner()===user&&(!error.status||error.status>=500)){const pending={messageID,text,files,providerID,modelID,agent,variant};uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}error.message='Native receipt is uncertain. Draft preserved; check history before resending.';}throw error;}
+    catch(error){
+      const confirmed=histories.get(id)?.messages.some(message=>message.info.id===messageID);
+      if(!confirmed){
+        if(owner()===user&&(!error.status||error.status>=500))error.message='Native receipt is uncertain. Draft preserved; use Recover Conversation.';
+        else if(owner()===user){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}
+        throw error;
+      }
+    }
     if(owner()!==user)return;
+    uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
     statuses.set(id,'submitted');
     if(activeSession?.id===id)activeSession.execution_status='submitted';
     // The native acknowledgment is final for submission. Live/reconnect SSE
     // reconciles execution; a second status read cannot undo the acknowledgment.
+  }
+  async function recover(id,{release=false}={}){
+    const user=owner(),generation=epoch;
+    const result=await coalesce('recover:'+id,async()=>{
+      const row=await context(id);await history(id,true);
+      await synchronizeStatus(row,id,()=>owner()===user&&epoch===generation);
+      if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
+      return {blocked:blocked(id),status:statuses.get(id)||'idle'};
+    });
+    if(release&&result.blocked){
+      if(result.status!=='idle')throw Error(label('Stop the running conversation before clearing uncertainty.','أوقف المحادثة الجارية قبل إزالة حالة عدم اليقين.'));
+      if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
+      uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
+      result.blocked=false;result.released=true;
+    }
+    if(current(id,user)){activeSession.execution_status=result.status;await start();}
+    return result;
   }
   function blocked(id){if(uncertain.has(id))return true;try{return Boolean(sessionStorage.getItem(storageKey('uncertain',id)));}catch{return false;}}
   async function permissions(box,provided){
@@ -332,6 +348,6 @@
         default_model:providers.default?.[p.id],models:Object.values(p.models||{}).map(m=>({...m,allowed:true}))}))};
     return result;
   }
-  window.nativeSession={ready,active,route,start,stop,send,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
+  window.nativeSession={ready,active,route,start,stop,send,recover,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
 })();
