@@ -216,10 +216,10 @@
     [['#icon-user', tr('Username', 'اسم المستخدم'), user.username], ['#icon-file', tr('Email', 'البريد'), user.email], ['#icon-shield', tr('Role', 'الدور'), user.role], ['#icon-clock', tr('Trial', 'التجربة'), (typeof user.trial_remaining_days === 'number' ? user.trial_remaining_days + ' ' + tr('days remaining', 'يوم متبقٍ') : '—')]].forEach(function (r) { var c = listCard(r[0], r[1], r[2]); box.append(c); });
   }
 
-  var ADMIN_LOADERS = { overview: loadAdminOverview, projects: loadAdminProjects, workspaces: loadAdminWorkspaces, sessions: loadAdminSessions, users: loadAdminUsersData, plans: loadAdminPlans, billing: loadAdminBilling, reports: loadAdminReports, audit: async function () {}, health: loadAdminHealth, policy: loadAdminPolicy, github: loadAdminGithubAdmin, trial: loadAdminTrial, settings: async function () {}, security: async function () {}, account: loadAdminAccount };
+  var ADMIN_LOADERS = { overview: loadAdminOverview, projects: loadAdminProjects, workspaces: loadAdminWorkspaces, sessions: loadAdminSessions, users: loadAdminUsersData, plans: loadAdminPlans, billing: loadAdminBilling, reports: loadAdminReports, audit: async function () {}, health: loadAdminHealth, policy: loadAdminPolicy, github: async function(){ if(window.gatewayLoadAdminGithubStatus) await window.gatewayLoadAdminGithubStatus(); else await loadAdminGithubAdmin(); }, email: async function(){ if(window.gatewayLoadServiceCenter) await window.gatewayLoadServiceCenter(); }, trial: loadAdminTrial, settings: async function () {}, security: async function () {}, account: loadAdminAccount };
 
   function setAdminView(name) {
-    if (!['overview','users','plans','billing','reports','audit','health','policy','github','trial','settings','security','account'].includes(name)) name='overview';
+    if (!['overview','users','plans','billing','reports','audit','health','policy','github','email','trial','settings','security','account'].includes(name)) name='overview';
     adminView = name;
     document.querySelectorAll('#adminNav [data-admin-view]').forEach(function (b) { b.classList.toggle('active', b.dataset.adminView === name); });
     document.querySelectorAll('#adminPage [data-admin-panel]').forEach(function (p) { p.classList.toggle('active', p.dataset.adminPanel === name); });
