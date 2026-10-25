@@ -1,6 +1,6 @@
 # Native Connections, control plane and Shell — 25 October 2026
 
-Baseline: `updates` at `3cff49ca18e3f9e7850e623cef69522823077a93`. This is an implementation follow-up, **not a TEST deployment or completed acceptance**. Read the current handoff entry first. The specified Library memorandum was reread: file version5, document header **v3.3**, including sections2/15/16. The owner’s additional control-plane clarification is applied to source, not treated as a documentation-only policy.
+Baseline: `updates` at `3cff49ca18e3f9e7850e623cef69522823077a93`. Published implementation: `1c7deafe04a8260f7ec9c4e8d171ed5dafc142f6`. This is an implementation follow-up, **not a TEST deployment or completed acceptance**. Read the current handoff entry first. The specified Library memorandum was reread: file version5, document header **v3.3**, including sections2/15/16. The owner’s additional control-plane clarification is applied to source, not treated as a documentation-only policy.
 
 ## Implemented source
 
@@ -54,3 +54,22 @@ No actual TEST file, environment, Nginx configuration, service, original secret,
 Run only the read-only inspection command in [NATIVE_TEST_COORDINATED_RELEASE.md](NATIVE_TEST_COORDINATED_RELEASE.md#first-step-actual-test-comparison-no-deployment) on the existing TEST host using its authorized operator access. Fetch `updates`, extract the reviewed revision’s release utility to a temporary file, and run its `inspect`; do not pull/reset the working TEST checkout. Return only the tool’s safe JSON, not `.env`, tokens or raw Nginx/systemd environment. Existing installed routing/working patches must be reconciled before prepare/apply/activate; current first-install guards intentionally refuse unsupported existing layouts.
 
 The complete source bundle now has **18 runtime files**, adding `services/policy.py`, `services/providers.py` and `services/workspaces.py` to the previous15. The private18098 metadata allowlist additionally needs original `/path`. Preserve all exact preimages/permissions and original secrets. The unchanged three-file UI workflow cannot deploy these dependencies and was not dispatched. After compatible full TEST staging/activation, perform the requested newly registered ordinary-user and administrator acceptance journey once, using the supported verification flow and securely provided authorized credentials, then address failures and dedicated pre-launch hardening. Do not open external access while the listed critical boundaries remain unverified.
+
+Pinned read-only operator command for this tested source (no application/config/service writes):
+
+```bash
+(
+  set -eu
+  cd /home/tahir/opencode-gateway-test
+  revision=1c7deafe04a8260f7ec9c4e8d171ed5dafc142f6
+  git fetch --no-tags origin updates
+  git merge-base --is-ancestor "$revision" origin/updates
+  tool=$(mktemp /tmp/native-test-release.XXXXXX.py)
+  cleanup() { python3 -I -c 'import os,sys; os.unlink(sys.argv[1])' "$tool"; }
+  trap cleanup EXIT
+  git show "$revision:scripts/native_test_release.py" > "$tool"
+  sudo /usr/bin/python3 -I "$tool" inspect --source "$PWD" --revision "$revision"
+)
+```
+
+Publication changed14 tracked paths: AGENTS.md; app.js; management.js; native-session-client.js; backend/app/routes/native_sessions.py; backend/app/routes/workspaces.py; backend/app/services/native_provider_accounts.py; backend/app/services/policy.py; backend/app/services/providers.py; backend/app/services/workspaces.py; scripts/native_test_release.py; docs/NATIVE_TEST_COORDINATED_RELEASE.md; docs/PROJECT_HANDOFF_AND_REMAINING_WORK.md; docs/NATIVE_CONNECTIONS_SHELL_ACCEPTANCE.md(new). No tracked file deleted. Source tree verified byte-for-byte against GitHub GitData before advancing only `updates` with an expected-parent guard.
