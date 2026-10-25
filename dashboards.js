@@ -35,6 +35,31 @@
   window.openClientView=name=>['ai','github'].includes(name)?openConnections(name==='ai'?'providers':'github'):oldClientView(name);
   q('clientNav').querySelectorAll('[data-client-view]').forEach(button=>button.onclick=()=>window.openClientView(button.dataset.clientView));
   q('adminNav').querySelectorAll('[data-admin-view]').forEach(button=>button.onclick=()=>window.openAdminView(button.dataset.adminView));
+  async function loadAdminGithubStatus(){
+    if(!admin())return;
+    const host=q('adminGithubPanel');if(!host)return;
+    host.replaceChildren();
+    const status=document.createElement('p');status.setAttribute('role','status');
+    status.textContent=tr('Checking actual GitHub App configuration…','جارٍ فحص إعداد GitHub App الفعلي…');
+    host.append(status);
+    try{
+      const data=await api('/api/github/status');
+      status.textContent=data.connected
+        ? tr('Connected account: ','الحساب المتصل: ')+(data.account_login||'GitHub')
+        : data.configured
+          ? tr('GitHub App configured; this account is not connected.','تطبيق GitHub مهيأ؛ هذا الحساب غير مرتبط.')
+          : tr('GitHub App is not configured on TEST. A server operator must check the protected App configuration and encryption key.','تطبيق GitHub غير مهيأ على TEST. يلزم فحص إعداد التطبيق ومفتاح التشفير المحمي على الخادم.');
+      if(data.reason){const detail=document.createElement('p');detail.textContent=data.reason;host.append(detail);}
+      const button=document.createElement('button');button.type='button';button.className='button ghost';
+      button.textContent=data.connected?tr('Connected','متصل'):tr('Authorize GitHub','ربط GitHub');
+      button.disabled=!data.configured||!!data.connected;
+      button.onclick=()=>window.location.assign('/api/github/install');
+      host.append(button);
+      const refresh=document.createElement('button');refresh.type='button';refresh.className='button ghost';
+      refresh.textContent=tr('Refresh status','تحديث الحالة');refresh.onclick=loadAdminGithubStatus;host.append(refresh);
+    }catch(error){status.textContent=tr('Could not retrieve GitHub status: ','تعذر جلب حالة GitHub: ')+error.message;}
+  }
+  q('adminNav').querySelector('[data-admin-view="github"]')?.addEventListener('click',loadAdminGithubStatus);
   async function loadServiceCenter(){
     if(!admin())return;
     const notice=q('adminServiceNotice');if(!notice)return;
