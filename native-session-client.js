@@ -303,6 +303,32 @@
     statuses.set(id,'idle');
     return {interrupted:true,previous};
   }
+  function pendingAttachment(id){
+    let item=uncertain.get(id);
+    if(!item){try{item=JSON.parse(sessionStorage.getItem(storageKey('uncertain',id))||'null');}catch{}}
+    return Boolean(item&&Array.isArray(item.files)&&item.files.length);
+  }
+  async function cancelPendingAttachment(id){
+    const user=owner(),generation=epoch,row=await context(id);
+    if(!pendingAttachment(id))throw Error(label('No uncertain attachment request to cancel.','لا يوجد طلب مرفق معلّق لإلغائه.'));
+    // Reconcile first: an accepted prompt can finish despite a lost HTTP receipt.
+    await history(id,true);
+    if(owner()!==user||generation!==epoch)throw Error('Authenticated account changed');
+    const live=await native(row.workspace_id,'session/status');
+    const state=live[row.runtime_id]?.type||'idle';
+    if(state!=='idle'){
+      await sessionRequest(id,'abort',{}); // Native cancellation scoped to this session.
+      const next=await native(row.workspace_id,'session/status');
+      if((next[row.runtime_id]?.type||'idle')!=='idle')
+        throw Error(label('OpenCode is stopping. Check again before clearing the pending request.','OpenCode يوقف المهمة؛ تحقق مرة أخرى قبل إزالة الطلب المعلّق.'));
+    }
+    if(owner()!==user||generation!==epoch)throw Error('Authenticated account changed');
+    uncertain.delete(id);
+    try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
+    statuses.set(id,'idle');
+    if(current(id,user)){activeSession.execution_status='idle';await start();}
+    return {cancelled:true};
+  }
   async function recover(id,{release=false}={}){
     const user=owner(),generation=epoch;
     const result=await coalesce('recover:'+id,async()=>{
@@ -376,6 +402,6 @@
         default_model:providers.default?.[p.id],models:Object.values(p.models||{}).map(m=>({...m,allowed:true}))}))};
     return result;
   }
-  window.nativeSession={ready,active,route,start,stop,send,recover,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
+  window.nativeSession={ready,active,route,start,stop,send,recover,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
 })();
