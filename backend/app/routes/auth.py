@@ -56,7 +56,7 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
         user.status = 'active'
         user.last_login_at = now
         response.delete_cookie(social_login.SIGNUP_COOKIE, path='/api/auth', secure=settings.cookie_secure, httponly=True, samesite='strict')
-    verification_required = email_verification.required_for_registration()
+    verification_required = email_verification.required_for_registration(db)
     if not verified_social and not verification_required:
         user.status = "active"
         user.last_login_at = now
