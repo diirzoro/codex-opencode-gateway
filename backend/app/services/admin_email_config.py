@@ -1,11 +1,20 @@
 """Database-backed admin provider configuration, using the existing Gateway encryption helper."""
 import json
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from fastapi import HTTPException
 from . import credentials
 
 def read(db):
-    token=db.execute(text("SELECT encrypted_data FROM email_delivery_settings WHERE id=1")).scalar_one_or_none()
+    try:
+        # Keep existing SMTP functional before optional 0021 schema is installed.
+        # Savepoint prevents a missing table from poisoning the caller transaction.
+        with db.begin_nested():
+            token=db.execute(text("SELECT encrypted_data FROM email_delivery_settings WHERE id=1")).scalar_one_or_none()
+    except ProgrammingError as exc:
+        if getattr(getattr(exc,"orig",None),"sqlstate",None)=="42P01":
+            return None
+        raise
     if not token:return None
     try:return json.loads(credentials.decrypt(token))
     except Exception:raise HTTPException(503,"Cannot read encrypted email settings") from None
