@@ -147,7 +147,7 @@ jobs:
           sha256sum "$bundle" > "$bundle.sha256"
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             "mkdir -p -m 700 /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}"
-          scp -P "$port" -o StrictHostKeyChecking=yes "$bundle" "$bundle.sha256" \
+          scp -P "$port" -o StrictHostKeyChecking=yes "$bundle" "$bundle.sha256" scripts/test_diff_only_rollout.py \
             "$USER@$HOST:/home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/"
       - name: Perform TEST-only guarded deployment
         if: inputs.confirmation == 'deploy-test'
@@ -161,7 +161,7 @@ jobs:
           # Requires a pre-existing narrowly authorized passwordless sudo capability;
           # never send a sudo password or broaden sudoers from CI.
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            "sudo -n /usr/bin/python3 -I /home/tahir/opencode-gateway-test/scripts/test_diff_only_rollout.py --bundle /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/opencode-native-deploy-${GITHUB_RUN_ID}.tar --checksum /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/opencode-native-deploy-${GITHUB_RUN_ID}.tar.sha256"
+            "sudo -n /usr/bin/python3 -I /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/test_diff_only_rollout.py --bundle /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/opencode-native-deploy-${GITHUB_RUN_ID}.tar --checksum /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/opencode-native-deploy-${GITHUB_RUN_ID}.tar.sha256"
       - name: Audit summary
         if: always()
         run: |
