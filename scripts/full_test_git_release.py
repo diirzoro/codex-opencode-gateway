@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""GitHub-commit-based, TEST-only full application rollout. No source backups."""
+import argparse
+import ast
+import fcntl
+import hashlib
+import os
+from pathlib import Path, PurePosixPath
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT=Path("/home/tahir/opencode-gateway-test")
+GATEWAY="opencode-gateway-test.service"
+NATIVE="opencode-native-test.service"
+REVISION=ROOT/".test-full-release-revision"
+LOCK=Path("/home/tahir/.gateway-test-deploy.lock")
+FRONT={"app.js","index.html","styles.css","dashboards.js","enhancements.js",
+       "management.js","native-session-client.js","runtime-client.js"}
+ALLOWED_ROOTS=("backend/app/","backend/alembic/versions/","assets/")
+ALLOWED_EXACT={"backend/alembic.ini","backend/alembic/env.py","backend/alembic/script.py.mako"}
+PROTECTED=("backend/app/services/preview_", "backend/app/routes/preview_", "backend/app/models/preview.py")
+def run(*argv,timeout=90,cwd=None,env=None):
+    return subprocess.run(argv,check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                          timeout=timeout,cwd=cwd,env=env).stdout.decode().strip()
+def git(*argv):return run("git","-C",str(ROOT),*argv)
+def files(revision):
+    listing=git("ls-tree","-r","--name-only",revision)
+    result=[]
+    for name in listing.splitlines():
+        if name in FRONT or name in ALLOWED_EXACT or (
+            name.startswith("backend/app/") and name.endswith(".py") and not name.startswith(PROTECTED)
+        ) or (name.startswith("backend/alembic/versions/") and name.endswith(".py")
+        ) or name.startswith("assets/"):
+            result.append(name)
+    if not {"backend/app/main.py","backend/app/routes/admin.py","backend/alembic.ini","index.html"} <= set(result):
+        raise RuntimeError("Incomplete source revision")
+    return sorted(result)
+def check(name):
+    rel=PurePosixPath(name)
+    if rel.is_absolute() or ".." in rel.parts or str(rel)!=name:raise RuntimeError("Unsafe path")
+    dest=ROOT/name
+    if dest.exists() and (not dest.is_file() or dest.stat().st_nlink!=1):raise RuntimeError("Unsafe file "+name)
+    for parent in (dest,*dest.parents):
+        if parent==ROOT.parent:break
+        if parent.is_symlink():raise RuntimeError("Symlink in source path "+name)
+    return dest
+def replace(path,data):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    old=path.stat() if path.exists() else ROOT.stat()
+    fd,tmp=tempfile.mkstemp(prefix=".release-",dir=path.parent)
+    try:
+        with os.fdopen(fd,"wb") as handle:handle.write(data);handle.flush();os.fsync(handle.fileno())
+        os.chmod(tmp,stat.S_IMODE(old.st_mode) if path.exists() else 0o644)
+        os.chown(tmp,old.st_uid,old.st_gid)
+        os.replace(tmp,path)
+    finally:
+        if os.path.lexists(tmp):os.unlink(tmp)
+def service(name):return run("systemctl","is-active",name)=="active"
+def requirements():
+    if os.geteuid()==0 or Path.cwd()!=ROOT:raise RuntimeError("Must run as tahir from TEST app")
+    if not (ROOT/".env").is_file():raise RuntimeError("Existing TEST .env missing")
+    if not service(GATEWAY) or not service(NATIVE):raise RuntimeError("Expected TEST services inactive")
+    if not (ROOT/".git").exists():raise RuntimeError("TEST Git checkout missing")
+def verified_commit(sha):
+    if not re.fullmatch(r"[a-f0-9]{40}",sha):raise RuntimeError("Invalid commit")
+    if git("cat-file","-t",sha)!="commit":raise RuntimeError("Not a commit")
+    run("git","-C",str(ROOT),"merge-base","--is-ancestor",sha,"origin/updates")
+def active_revision():
+    v=REVISION.read_text().strip() if REVISION.is_file() else ""
+    return v if re.fullmatch(r"[a-f0-9]{40}",v) else None
+def migration_runner():
+    for tool in (ROOT/".venv/bin/alembic",ROOT/"backend/.venv/bin/alembic"):
+        if tool.is_file() and os.access(tool,os.X_OK):return [str(tool)]
+    return None
+def db_env():
+    # Preserve TEST environment; use python-dotenv parser if installed in interpreter.
+    try:
+        from dotenv import dotenv_values
+    except ImportError:
+        raise RuntimeError("python-dotenv missing; refuse DB migration")
+    values=dotenv_values(ROOT/".env")
+    env=os.environ.copy()
+    for key,val in values.items():
+        if val is not None:env[key]=val
+    if not env.get("DATABASE_URL","").startswith(("postgresql://","postgresql+psycopg://")):
+        raise RuntimeError("TEST DATABASE_URL not available from existing .env")
+    return env
+def migration_needed(target):
+    # Explicitly limited to the known forward-only email config migration.
+    return "backend/alembic/versions/0021_email_delivery_settings.py" in files(target)
+def rollout(target,mode):
+    source=files(target)
+    changes=[]
+    for name in source:
+        dest=check(name)
+        expected=git("show",target+":"+name).encode() if False else subprocess.run(
+            ["git","-C",str(ROOT),"show",target+":"+name],check=True,capture_output=True,timeout=45).stdout
+        old=dest.read_bytes() if dest.is_file() else None
+        if expected!=old:changes.append((name,dest,expected))
+    print("TARGET",target,"FILES_TOTAL",len(source),"CHANGES",len(changes),flush=True)
+    for name,_,_ in changes:print("CHANGE",name,flush=True)
+    if mode=="audit":return
+    oldrev=active_revision()
+    if mode=="rollback" and not oldrev:raise RuntimeError("No prior GitHub release marker; rollback unavailable")
+    if mode=="deploy" and migration_needed(target):
+        # A no-backups policy cannot recover DB state. Block unless operator separately
+        # confirms the additive schema has already been applied with Alembic.
+        tool=migration_runner()
+        if not tool:raise RuntimeError("Cannot find TEST Alembic executable; do not deploy partial app")
+        env=db_env()
+        current=run(*tool,"-c","alembic.ini","current",cwd=str(ROOT/"backend"),env=env)
+        heads=run(*tool,"-c","alembic.ini","heads",cwd=str(ROOT/"backend"),env=env)
+        if "0021_email_delivery_settings" not in current:
+            raise RuntimeError("Database migration 0021 pending. Apply controlled additive migration first; Git-only rollback cannot revert PostgreSQL safely.")
+        if not heads:raise RuntimeError("Alembic head unavailable")
+    nativepid=run("systemctl","show","--value","-p","MainPID",NATIVE)
+    for name,dest,data in changes:replace(dest,data);print("UPDATED",name,flush=True)
+    try:
+        run("sudo","-n","/usr/bin/systemctl","restart",GATEWAY)
+        time.sleep(3)
+        if not service(GATEWAY):raise RuntimeError("Gateway unhealthy after restart")
+        if nativepid!=run("systemctl","show","--value","-p","MainPID",NATIVE):
+            raise RuntimeError("OpenCode Native PID changed")
+        replace(REVISION,(target+"\n").encode())
+        print("FULL_TEST_RELEASE_SUCCESS",target,flush=True)
+    except Exception:
+        if oldrev:
+            for name in files(oldrev):
+                dest=check(name)
+                data=subprocess.run(["git","-C",str(ROOT),"show",oldrev+":"+name],
+                                    check=True,capture_output=True,timeout=45).stdout
+                replace(dest,data)
+            run("sudo","-n","/usr/bin/systemctl","restart",GATEWAY)
+            print("GIT_ROLLBACK_APPLIED",oldrev,flush=True)
+        else:
+            print("FIRST_RELEASE_HAS_NO_RECORDED_PREVIOUS_GIT_COMMIT; MANUAL RECOVERY REQUIRED",flush=True)
+        raise
+def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument("mode",choices=("audit","deploy","rollback"))
+    parser.add_argument("sha")
+    args=parser.parse_args()
+    requirements()
+    verified_commit(args.sha)
+    if args.mode=="rollback" and args.sha==active_revision():
+        raise RuntimeError("Rollback target must differ from deployed revision")
+    with LOCK.open("a+") as fd:
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        rollout(args.sha,args.mode)
+if __name__=="__main__":main()
