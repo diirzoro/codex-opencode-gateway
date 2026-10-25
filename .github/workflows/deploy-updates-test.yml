@@ -19,11 +19,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Confirm TEST operation
+        id: confirm
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          [[ "$CONFIRMATION" == "audit-test" || "$CONFIRMATION" == "deploy-test" ]]
+          mode="$(printf '%s' "$CONFIRMATION" | tr -d '[:space:]')"
+          [[ "$mode" == "audit-test" || "$mode" == "deploy-test" ]]
+          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
           [[ "$GITHUB_REF" == "refs/heads/updates" ]]
       - uses: actions/checkout@v4
         with:
@@ -72,7 +75,7 @@ jobs:
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             'test "$HOME" = /home/tahir && test -d /home/tahir/opencode-gateway-test/.git && test -f /home/tahir/opencode-gateway-test/.env && systemctl is-active --quiet opencode-gateway-test.service && systemctl is-active --quiet opencode-native-test.service'
       - name: Compare runtime files to GitHub read-only
-        if: inputs.confirmation == 'audit-test'
+        if: steps.confirm.outputs.mode == 'audit-test'
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
@@ -87,13 +90,13 @@ jobs:
           done < /tmp/test-native-hashes
           echo "AUDIT_ONLY: no TEST application, configuration, or service changed"
       - name: Package reviewed Native bundle
-        if: inputs.confirmation == 'deploy-test'
+        if: steps.confirm.outputs.mode == 'deploy-test'
         run: |
           set -euo pipefail
           tar -cf "test-release-${GITHUB_RUN_ID}.tar" -T /tmp/test-native-manifest
           sha256sum "test-release-${GITHUB_RUN_ID}.tar" > "test-release-${GITHUB_RUN_ID}.tar.sha256"
       - name: Upload bundle and guarded deployment tool
-        if: inputs.confirmation == 'deploy-test'
+        if: steps.confirm.outputs.mode == 'deploy-test'
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
@@ -105,7 +108,7 @@ jobs:
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" "install -d -m 700 '$stage'"
           scp -P "$port" -o StrictHostKeyChecking=yes "test-release-${GITHUB_RUN_ID}.tar" "test-release-${GITHUB_RUN_ID}.tar.sha256" scripts/test_diff_only_rollout.py "$USER@$HOST:$stage/"
       - name: Apply guarded TEST-only diff release
-        if: inputs.confirmation == 'deploy-test'
+        if: steps.confirm.outputs.mode == 'deploy-test'
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
