@@ -247,7 +247,7 @@
     }
     const composePanel=q('adminMailCompose');
     q('adminMailComposeOpen').onclick=()=>{
-      currentDraftId=null;q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
+      currentDraftId=null;q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';q('adminComposeAttachment').value='';
       q('adminComposeStatus').textContent='';composePanel.hidden=false;q('adminComposeTo').focus();
     };
     q('adminComposeSaveDraft').onclick=async()=>{
@@ -270,9 +270,25 @@
       if(!to||!subject||!body.trim()){status.textContent=tr('Recipient, subject, and message are required.','المستلم والموضوع والرسالة مطلوبة.');return;}
       send.disabled=true;status.textContent=tr('Sending…','جارٍ الإرسال…');
       try{
-        const result=await api('/api/admin/service-integrations/send-email',{method:'POST',body:JSON.stringify({to,subject,body})});
+        const file=q('adminComposeAttachment').files[0];
+        let attachment=null;
+        if(file){
+          if(file.size>2*1024*1024)throw Error(tr('Attachment must be under 2 MiB.','المرفق يجب ألا يتجاوز 2 ميجابايت.'));
+          const suffix=file.name.toLowerCase().split('.').pop();
+          const mimeMap={pdf:'application/pdf',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',txt:'text/plain'};
+          if(!Object.prototype.hasOwnProperty.call(mimeMap,suffix))throw Error(tr('Unsupported attachment type.','نوع المرفق غير مدعوم.'));
+          const encoded=await new Promise((resolve,reject)=>{
+            const reader=new FileReader();
+            reader.onload=()=>resolve(String(reader.result).split(',')[1]||'');
+            reader.onerror=()=>reject(Error('Cannot read attachment'));
+            reader.readAsDataURL(file);
+          });
+          attachment={filename:file.name,mime:mimeMap[suffix],base64_content:encoded};
+        }
+        const result=await api('/api/admin/service-integrations/send-email',{method:'POST',body:JSON.stringify({to,subject,body,...(attachment?{attachment}:{})})});
         if(!result.sent)throw Error('Sending was not confirmed');
         q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
+        q('adminComposeAttachment').value='';
         if(currentDraftId){
           const savedId=currentDraftId;currentDraftId=null;
           try{await api('/api/admin/service-integrations/drafts/'+encodeURIComponent(savedId),{method:'DELETE'});}
