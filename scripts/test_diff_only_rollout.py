@@ -64,7 +64,7 @@ def main():
         raise RuntimeError('TEST Nginx drift or route already changed; requires new audited plan, no files updated')
     text=oldconf.decode()
     if text.count('listen 127.0.0.1:18098;')!=1 or text.count('location / { return 404; }')!=1:raise RuntimeError('Unexpected TEST loopback layout')
-    auth=re.findall(r'proxy_set_header\\s+Authorization\\s+("Basic [A-Za-z0-9+/=]+")\\s*;',text)
+    auth=re.findall(r'proxy_set_header\s+Authorization\s+("Basic [A-Za-z0-9+/=]+")\s*;',text)
     if not auth or len(set(auth))!=1:raise RuntimeError('Existing Native private authorization cannot be verified')
     # Reuse the exact upstream and private header; read-only metadata only.
     addition='''    # Authorized Gateway metadata; TEST loopback only. No new listener.
