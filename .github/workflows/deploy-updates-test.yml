@@ -1,54 +1,56 @@
-# Manual, frontend-only TEST deployment. NEVER deploy master or server configuration.
-name: Promote updates to test
-
+# TEST-only compatibility audit. Deliberately no deployment until existing shared Native routing is reconciled.
+name: Audit updates against TEST
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: 'Type promote-test to deploy the three reviewed UI files to TEST only'
+        description: 'Type audit-test to inspect TEST without changing it'
         required: true
         type: string
-
 permissions:
   contents: read
-
 concurrency:
-  group: test-ui-deploy
+  group: test-native-audit
   cancel-in-progress: false
-
 jobs:
-  deploy:
+  audit:
     if: github.ref == 'refs/heads/updates'
     runs-on: ubuntu-latest
     environment: test
     timeout-minutes: 10
     steps:
-      - name: Require explicit TEST confirmation
+      - name: Require TEST-only confirmation
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          test "$CONFIRMATION" = "promote-test" || { echo 'Type promote-test'; exit 1; }
+          test "$CONFIRMATION" = "audit-test"
           test "$GITHUB_REF" = 'refs/heads/updates'
-
       - uses: actions/checkout@v4
         with:
           ref: updates
           persist-credentials: false
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Check deployment files and JavaScript syntax
+      - name: Compare full runtime bundle to reviewed GitHub revision
         run: |
           set -euo pipefail
-          node --check management.js
-          node --check dashboards.js
-          test -s index.html
-          ! grep -Eq '(/home/|DATABASE_URL|OPENCODE_SERVER_PASSWORD)' management.js dashboards.js index.html
-
-      - name: Configure TEST-only SSH
+          python3 - <<'PY'
+          import ast,re,pathlib
+          src=pathlib.Path('scripts/native_test_release.py').read_text()
+          match=re.search(r'^FILES=\((.*?)\)\s*$',src,re.S|re.M)
+          if not match: raise SystemExit('STOP: Cannot locate native release file manifest')
+          files=ast.literal_eval('('+match.group(1)+')')
+          if len(files)!=18 or len(set(files))!=len(files): raise SystemExit('STOP: Unexpected Native file manifest')
+          for name in files:
+              path=pathlib.Path(name)
+              if not path.is_file(): raise SystemExit('STOP: Missing source file: '+name)
+          pathlib.Path('/tmp/test-native-manifest').write_text('\n'.join(files)+'\n')
+          print('GitHub manifest checked:',len(files),'runtime files')
+          PY
+          while read -r f; do
+            test -n "$f" || continue
+            printf '%s  %s\n' "$(sha256sum "$f" | cut -d ' ' -f 1)" "$f"
+          done < /tmp/test-native-manifest > /tmp/test-native-hashes
+      - name: Configure verified TEST SSH
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
@@ -56,17 +58,16 @@ jobs:
           KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          : "${HOST:?Set STAGING_HOST for TEST}"
-          : "${USER:?Set STAGING_USER for TEST}"
-          : "${KEY:?Set STAGING_SSH_PRIVATE_KEY for TEST}"
-          : "${KNOWN_HOSTS:?Set STAGING_SSH_KNOWN_HOSTS for TEST}"
+          : "${HOST:?Missing STAGING_HOST}"
+          : "${USER:?Missing STAGING_USER}"
+          : "${KEY:?Missing STAGING_SSH_PRIVATE_KEY}"
+          : "${KNOWN_HOSTS:?Missing STAGING_SSH_KNOWN_HOSTS}"
           install -d -m 700 "$HOME/.ssh"
           printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
           printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
-
-      - name: Upload only reviewed UI files to temporary TEST directory
+      - name: Read-only TEST inventory and source compatibility report
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
@@ -74,43 +75,53 @@ jobs:
         run: |
           set -euo pipefail
           port="${PORT:-22}"
-          stage=".opencode-test-ui-stage-${GITHUB_RUN_ID}"
-          ssh -p "$port" -o BatchMode=yes "$USER@$HOST" "mkdir -m 700 -p ~/$stage"
-          scp -P "$port" management.js dashboards.js index.html "$USER@$HOST:$stage/"
-
-      - name: Backup and activate UI files on TEST only
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ secrets.STAGING_USER }}
-          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
-        run: |
-          set -euo pipefail
-          port="${PORT:-22}"
-          ssh -p "$port" -o BatchMode=yes "$USER@$HOST" "bash -s -- '${GITHUB_RUN_ID}'" <<'REMOTE'
+          # No sudo or secret-bearing file content is accessed or printed.
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'test "$HOME" = /home/tahir && test -d /home/tahir/opencode-gateway-test/.git && test -d /home/tahir/opencode-gateway-test/backend && test -f /home/tahir/opencode-gateway-test/.env && systemctl is-active --quiet opencode-gateway-test.service && systemctl is-active --quiet opencode-native-test.service' || {
+              echo 'STOP: TEST identity, location, or service preflight failed'; exit 1;
+            }
+          scp -P "$port" -o StrictHostKeyChecking=yes /tmp/test-native-hashes "$USER@$HOST:/tmp/opencode-test-native-audit-${GITHUB_RUN_ID}.txt"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" "bash -se -- ${GITHUB_RUN_ID}" <<'REMOTE'
           set -euo pipefail
           run_id="$1"
           [[ "$run_id" =~ ^[0-9]+$ ]] || exit 2
-          app="$HOME/opencode-gateway-test"
-          stage="$HOME/.opencode-test-ui-stage-$run_id"
-          backup="$HOME/opencode-test-ui-backups/$run_id"
-          test -d "$app/.git" && test -d "$app/backend" || { echo 'Expected TEST checkout absent'; exit 3; }
-          test -d "$stage" || exit 4
-          for file in management.js dashboards.js index.html; do
-            test -s "$stage/$file" && test -f "$app/$file" || exit 5
+          cd /home/tahir/opencode-gateway-test
+          manifest="/tmp/opencode-test-native-audit-$run_id.txt"
+          trap 'rm -f -- "$manifest"' EXIT
+          echo '=== TEST runtime comparison (source sha256 vs deployed sha256) ==='
+          changed=0
+          missing=0
+          while read -r wanted relative; do
+            case "$relative" in
+              app.js|dashboards.js|runtime-client.js|native-session-client.js|management.js|enhancements.js|backend/app/main.py|backend/app/routes/native_sessions.py|backend/app/routes/agent.py|backend/app/services/opencode.py|backend/app/routes/workspaces.py|backend/app/services/native_provider_accounts.py|backend/app/services/github.py|backend/app/routes/admin.py|backend/app/services/native_catalog_maintenance.py|backend/app/services/policy.py|backend/app/services/providers.py|backend/app/services/workspaces.py) ;;
+              *) echo 'STOP: unexpected manifest path'; exit 3;;
+            esac
+            if [[ ! -f "$relative" ]]; then
+              printf 'MISSING %s\n' "$relative"
+              missing=$((missing+1))
+            elif [[ -L "$relative" ]]; then
+              printf 'BLOCKED_SYMLINK %s\n' "$relative"
+              exit 4
+            else
+              current="$(sha256sum "$relative" | cut -d ' ' -f 1)"
+              if [[ "$current" == "$wanted" ]]; then printf 'MATCH %s\n' "$relative"
+              else printf 'DIFFERENT %s\n' "$relative"; changed=$((changed+1)); fi
+            fi
+          done < "$manifest"
+          echo "TOTAL_DIFFERENT=$changed TOTAL_MISSING=$missing"
+          echo '=== Protected TEST routing (presence only, no configuration content) ==='
+          for f in /etc/nginx/conf.d/opencode-native-test-session-local.conf /etc/nginx/snippets/opencode-native-coordinated-test.conf /etc/opencode-gateway-test/native-release.env /etc/systemd/system/opencode-gateway-test.service.d/zzzz-native-release.conf; do
+            if [[ -r "$f" ]]; then echo "READABLE $f"; elif [[ -e "$f" ]]; then echo "PRESENT_PROTECTED $f"; else echo "ABSENT $f"; fi
           done
-          mkdir -p "$backup"
-          for file in management.js dashboards.js index.html; do
-            cp -p "$app/$file" "$backup/$file"
-          done
-          echo "Previous UI saved to $backup"
-          for file in management.js dashboards.js index.html; do
-            cp "$stage/$file" "$app/$file"
-          done
-          rm -rf -- "$stage"
-          echo 'TEST UI files updated. No service, secret, database, workspace or Nginx changes.'
+          if [[ -r /etc/nginx/conf.d/opencode-native-test-session-local.conf ]] && grep -Eq 'location[[:space:]]*=[[:space:]]*/path([[:space:]]|\{)' /etc/nginx/conf.d/opencode-native-test-session-local.conf; then
+            echo 'PATH_ROUTE=FOUND_REVIEW_AUTH_REQUIRED'
+          else
+            echo 'PATH_ROUTE=NOT_CONFIRMED - Native security metadata dependency; do not deploy'
+          fi
+          echo 'AUDIT_ONLY: no code/config/service/database/Native process updated'
           REMOTE
-
-      - name: Deployment summary
+      - name: Audit summary
+        if: always()
         run: |
-          echo 'TEST only: management.js, dashboards.js, index.html.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'No backend, migrations, environment, Nginx, systemd, workspaces, runtime or LIVE changes.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'TEST audit only. No upload of application files, no restart, no Nginx changes, no LIVE/master.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Do not deploy Native bundle until the existing /path metadata route and ownership checks are reconciled.' >> "$GITHUB_STEP_SUMMARY"
