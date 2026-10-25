@@ -96,7 +96,7 @@ def public_free(entry,model=None):
     return bool(rows) and any(isinstance(m,dict) and m.get('cost',{}).get('input')==0 and m.get('cost',{}).get('output')==0 for m in rows)
 
 
-def catalog(db,user,directory=None):
+def catalog(db,user,directory=None,*,full=False):
     data=request('GET','/provider',directory or root(user))
     if not isinstance(data,dict) or not isinstance(data.get('all'),list):raise HTTPException(502,'Invalid native provider catalog')
     connected=[];entries=[];rules=policy.load(db)
@@ -104,19 +104,24 @@ def catalog(db,user,directory=None):
     owners={}
     for record in db.scalars(select(AccountAudit).where(AccountAudit.action.like('native-provider:%')).order_by(AccountAudit.id)):
         owners[record.action.removesuffix(':off')]=None if record.action.endswith(':off') else record.subject_id
-    # Keep discovery lightweight for the UI while prioritizing connected and
-    # account-owned providers. The full Native catalog stays untouched; model
-    # authorization still checks the complete upstream catalog separately.
-    ordered=sorted(data['all'],key=lambda entry:(0 if entry.get('id') in data.get('connected',[]) else 1, str(entry.get('id',''))))
-    for entry in ordered[:50]:
-        public=public_entry(entry)
+    def account_owned(entry):
         key=action(entry['id'])
-        is_owned=owners.get(key)==user.id or (key not in owners and str(user.id)==os.getenv('OPENCODE_NATIVE_TEST_OWNER_ID','') and not public_free(entry))
-        if public_free(entry) and not is_owned:
+        return owners.get(key)==user.id or (key not in owners and str(user.id)==os.getenv('OPENCODE_NATIVE_TEST_OWNER_ID','') and not public_free(entry))
+    def usable(entry):
+        return entry['id'] in data.get('connected',[]) and (account_owned(entry) or public_free(entry)) and policy.provider_allowed(rules,entry['id'])
+    # Curate presentation only. Manual name/ID lookup needs the complete Native
+    # catalog; another account's process-global connection gets no priority.
+    ordered=sorted(data['all'],key=lambda entry:(not usable(entry),entry['id'] not in providers.POPULAR_PROVIDER_IDS,str(entry['id'])))
+    selected=ordered if full else ordered[:50]
+    additional=[] if full else [entry for entry in ordered[50:] if usable(entry)]
+    for entry in [*selected,*additional]:
+        public=public_entry(entry)
+        if public_free(entry) and not account_owned(entry):
             public['models']={k:v for k,v in public['models'].items() if public_free(entry,k)}
-        if entry['id'] in data.get('connected',[]) and (is_owned or public_free(entry)) and policy.provider_allowed(rules,entry['id']):connected.append(entry['id'])
+        if usable(entry):connected.append(entry['id'])
         entries.append(public)
-    return {'all':entries,'connected':connected,'default':data.get('default',{}),'native':True,
+    return {'all':entries[:len(selected)],'connected_entries':entries[len(selected):],
+            'connected':connected,'default':data.get('default',{}),'native':True,
             'gateway_auth_status':{pid:{'auth_status':'configured','verified':False} for pid in connected}}
 
 

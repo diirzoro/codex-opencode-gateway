@@ -91,10 +91,10 @@ def _account_catalog_state(db, user, data):
             "gateway_auth_status":{r.provider_id:account_provider_sync.public_status(r,services) for r in rows}}
 
 
-def _account_public_catalog(user, path, db, *, agents=False):
+def _account_public_catalog(user, path, db, *, agents=False,full=False):
     if native_sessions.enabled():
         native_sessions.admit(user)
-        if not agents:return native_provider_accounts.catalog(db,user)
+        if not agents:return native_provider_accounts.catalog(db,user,full=full)
         return [{k:r[k] for k in ('name','mode','hidden') if k in r} for r in native_sessions.metadata('GET','/agent',native_provider_accounts.root(user)) if isinstance(r,dict)]
     account, service = opencode.for_account(user.id, db=db)
     with opencode.workspace_lock(account), service.state_lock:
@@ -104,21 +104,21 @@ def _account_public_catalog(user, path, db, *, agents=False):
 @router.get("/opencode/catalog/providers")
 def account_provider_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Project-independent definitions only; never expose global connected state."""
-    return providers.catalog_page(_account_catalog_state(db, user, _account_public_catalog(user,"/provider",db)), policy.load(db),limit=50)["items"]
+    return providers.catalog_page(_account_catalog_state(db, user, _account_public_catalog(user,"/provider",db,full=True)), policy.load(db),limit=50)["items"]
 
 
 @router.get("/opencode/catalog/providers/page")
 def account_provider_page(offset: int=Query(default=0,ge=0),limit: int=Query(default=50,ge=1,le=50),
                           query: str=Query(default='',max_length=200),
                           user: User=Depends(require_user),db: Session=Depends(get_db)):
-    data=_account_catalog_state(db,user,_account_public_catalog(user,"/provider",db))
+    data=_account_catalog_state(db,user,_account_public_catalog(user,"/provider",db,full=True))
     return providers.catalog_page(data,policy.load(db),offset=offset,limit=limit,query=query)
 
 
 @router.get('/opencode/catalog/providers/resolve')
 def account_provider_resolve(name: str=Query(min_length=1,max_length=200),
                              user: User=Depends(require_user),db: Session=Depends(get_db)):
-    data=_account_catalog_state(db,user,_account_public_catalog(user,'/provider',db))
+    data=_account_catalog_state(db,user,_account_public_catalog(user,'/provider',db,full=True))
     entry=providers.resolve_provider(data,name)
     return providers.provider_index(entry,data,policy.load(db))
 
@@ -127,7 +127,7 @@ def account_provider_resolve(name: str=Query(min_length=1,max_length=200),
 def account_provider_search(query: str=Query(min_length=2,max_length=200),
                             user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Search OpenCode definitions independently of a project; no auth status."""
-    return providers.search_index(_account_catalog_state(db, user, _account_public_catalog(user,"/provider",db)), query, policy.load(db))
+    return providers.search_index(_account_catalog_state(db, user, _account_public_catalog(user,"/provider",db,full=True)), query, policy.load(db))
 
 
 @router.get("/opencode/catalog/agents")
@@ -158,7 +158,7 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
     require_advanced(db,user)
     if native_sessions.enabled():
         native_sessions.admit(user)
-        data=native_provider_accounts.catalog(db,user)
+        data=native_provider_accounts.catalog(db,user,full=True)
         providers.resolve_provider(data,provider_id)
         return {'provider_id':provider_id,'auth_methods':native_provider_accounts.methods(user,provider_id),'models':providers.model_details(data,provider_id,policy.load(db))['models'],'native':True}
     if not 0 < len(provider_id) <= 120:
@@ -742,7 +742,7 @@ def search_providers(workspace_id: uuid.UUID,query: str=Query(min_length=2,max_l
 
 def _native_provider_lookup(db,user,workspace_id,*,name=None,query=None):
     row,root,_,_=native_sessions.context(db,user,workspace_id)
-    data=native_provider_accounts.catalog(db,user,root);rules=policy.load(db)
+    data=native_provider_accounts.catalog(db,user,root,full=True);rules=policy.load(db)
     rows=[providers.provider_index(providers.resolve_provider(data,name),data,rules)] if name is not None else providers.search_index(data,query,rules)
     # Native discovery's revision denotes the current client projection; no
     # legacy runtime or catalog copy is created to service a manual lookup.

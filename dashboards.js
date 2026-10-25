@@ -247,14 +247,16 @@
     const ended=typeof activeSession!=='undefined'&&['completed','failed','cancelled'].includes(activeSession?.execution_status);
     if(ended)rows=rows.map(row=>['pending','running'].includes(row.status)?{...row,status:'interrupted'}:row);
     if(!rows.length)return;
-    const details=document.createElement('details');details.className='message-activity';
+    const details=document.createElement('details');details.className='message-activity'+(rows.some(row=>row.native)?' native-activity':'');
 // Native OpenCode owns tool execution. Keep the UI summary compact;
 // show failures by default, but never expose tool arguments automatically.
-details.open=rows.some(row=>row.status==='error');
+details.open=rows.some(row=>row.status==='error'||row.native&&['pending','running'].includes(row.status));
+if(rows.some(row=>row.native))details.dataset.activityId='group';
 const count=rows.length;
 details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')+' · '+count));const list=document.createElement('ul');
     for(const row of rows){const item=document.createElement('li'),step=document.createElement('details');step.className='tool-execution';step.dataset.state=row.status;step.open=row.status==='error';
-      const heading=textElement('summary',workLabel(row));step.append(heading);
+      const heading=textElement('summary',workLabel(row)+(row.native&&row.files?.length?' · '+row.files.slice(0,3).map(f=>f.path).join(', '):''));step.append(heading);
+      if(row.native){step.dataset.activityId=row.id;for(const node of [details,step]){if(node.dataset.tracked)continue;node.dataset.tracked='1';const summary=node.querySelector('summary');summary?.addEventListener('click',()=>{node.dataset.userToggled='1';});node.addEventListener('toggle',()=>{if(node.dataset.userToggled)node.dataset.userOpen=String(node.open);});}}
       if(row.command){const pre=textElement('pre','','tool-execution-code'),command=textElement('code',row.command+(row.command_limited?tr(' (arguments hidden)',' (المعاملات مخفية)'):''),'activity-command');pre.dir='ltr';pre.append(command);step.append(pre);}
       const result=textElement('div','','tool-execution-result');
       if(row.status==='error'){
@@ -263,7 +265,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       }
       if(Number.isInteger(row.exit_code))result.append(textElement('small',tr('Exit code: ','رمز الخروج: ')+row.exit_code));
       if(Number.isFinite(row.duration_ms)&&row.duration_ms>=0)result.append(textElement('small',(row.duration_ms/1000).toFixed(1)+tr(' s',' ث')));
-      for(const file of row.files||[])result.append(textElement('div',file.path+' · '+(row.status==='completed'?activityLabel(operations,file.operation):tr('Requested','مطلوب'))));step.append(result);item.append(step);list.append(item);
+      for(const key of ['matches','count'])if(Number.isInteger(row[key]))result.append(textElement('small',(key==='matches'?tr('Matches: ','نتائج: '):tr('Items: ','عناصر: '))+row[key]));
+      for(const file of row.files||[]){const text=file.path+' · '+(row.status==='completed'?activityLabel(operations,file.operation):tr('Requested','مطلوب'));
+        if(row.native&&file.operation!=='deleted'){
+          const owner=currentUser?.id,workspaceId=row.workspace_id,link=textElement('button',text,'native-file-link');link.type='button';link.dir='auto';link.title=tr('Open owned Workspace file','فتح ملف مساحة العمل المملوكة');link.onclick=()=>{if(currentUser?.id===owner&&activeWorkspace?.id===workspaceId)window.openWorkspaceFile?.(file.path,{owner,workspaceId});};result.append(link);
+        }else result.append(textElement('div',text));
+      }step.append(result);item.append(step);list.append(item);
     }details.append(list);host.append(details);
   };
   window.renderActivitySummary=rows=>{
@@ -360,18 +367,48 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         rowButton.onclick=async()=>{if(!valid())return;const opening=children.hidden;children.hidden=!opening;rowButton.setAttribute('aria-expanded',String(opening));if(!opening||children.dataset.loaded)return;children.dataset.loaded='1';try{const childRows=await api('/api/workspaces/'+context.workspaceId+'/files?path='+encodeURIComponent(row.path));if(!valid()||!children.isConnected)return;renderFileRows(children,childRows,context);}catch(error){if(valid()){delete children.dataset.loaded;children.replaceChildren();children.append(textElement('p',error.message,'muted-small'));}}};
         item.append(rowButton,children);
       }else{
-        rowButton.onclick=()=>{if(!valid())return;context.root.querySelectorAll('.file-row.selected').forEach(node=>node.classList.remove('selected'));rowButton.classList.add('selected');context.status.textContent=row.path;};
+        rowButton.onclick=()=>{if(!valid())return;context.root.querySelectorAll('.file-row.selected').forEach(node=>node.classList.remove('selected'));rowButton.classList.add('selected');context.status.textContent=row.path;if(window.nativeSession?.active())window.openWorkspaceFile?.(row.path,{owner:context.owner,workspaceId:context.workspaceId});};
         item.append(rowButton);
       }
       host.append(item);
     }
   }
+  let fileLoad=null,fileViewRevision=0,fileView=null;
+  window.closeNativeFile=()=>{fileViewRevision++;if(fileView){fileView.close();fileView.remove();fileView=null;}};
+  window.addEventListener('authentication-cleared',window.closeNativeFile);
+  window.openWorkspaceFile=async(path,expected={owner:currentUser?.id,workspaceId:activeWorkspace?.id})=>{
+    if(!window.nativeSession?.active()||currentUser?.id!==expected.owner||activeWorkspace?.id!==expected.workspaceId)return;
+    if(typeof path!=='string'||path.startsWith('/')||path.includes('\\')||path.split('/').some(p=>!p||p==='..'||p.startsWith('.env')||['.git','.ssh','.opencode','opencode.json','opencode.jsonc'].includes(p)))return;
+    window.closeNativeFile();const revision=fileViewRevision;
+    try{
+      const value=await api('/api/workspaces/'+encodeURIComponent(expected.workspaceId)+'/files/content?path='+encodeURIComponent(path));
+      if(revision!==fileViewRevision||currentUser?.id!==expected.owner||activeWorkspace?.id!==expected.workspaceId)return;
+      const dialog=document.createElement('dialog');dialog.className='action-form-dialog native-file-dialog';fileView=dialog;
+      const heading=textElement('h2',path);heading.id='nativeFileHeading';dialog.setAttribute('aria-labelledby',heading.id);
+      const close=textElement('button',tr('Close','إغلاق'),'button ghost small');close.type='button';close.onclick=()=>window.closeNativeFile();
+      const content=textElement('pre',value.content);content.dir='auto';content.tabIndex=0;dialog.append(heading,close,content);q('workspacePage').append(dialog);
+      dialog.addEventListener('close',()=>{dialog.remove();if(fileView===dialog)fileView=null;});dialog.showModal();
+    }catch(error){if(revision===fileViewRevision&&currentUser?.id===expected.owner&&activeWorkspace?.id===expected.workspaceId)toast(error.message);}
+  };
   async function loadFiles(){
     if(!activeWorkspace){filesTree.replaceChildren();filesStatus.textContent=tr('Open a workspace to see its files.','افتح مساحة عمل لعرض ملفاتها.');return;}
-    const workspaceId=activeWorkspace.id;filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
-    try{const rows=await api('/api/workspaces/'+workspaceId+'/files');if(activeWorkspace?.id!==workspaceId)return;renderFileRows(filesTree,rows);filesStatus.textContent=rows.length?'':tr('This workspace is empty.','مساحة العمل فارغة.');}
-    catch(error){if(activeWorkspace?.id===workspaceId)filesStatus.textContent=error.message;}
+    const workspaceId=activeWorkspace.id,owner=currentUser?.id,key=owner+':'+workspaceId;
+    if(fileLoad?.key===key)return fileLoad.promise;
+    const expanded=[...filesTree.querySelectorAll('.file-row.is-directory[aria-expanded="true"]')].map(n=>n.dataset.path).sort((a,b)=>a.split('/').length-b.split('/').length);
+    const selected=filesTree.querySelector('.file-row.selected')?.dataset.path;
+    filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
+    const valid=()=>activeWorkspace?.id===workspaceId&&currentUser?.id===owner;
+    const promise=(async()=>{
+      try{
+        const rows=await api('/api/workspaces/'+workspaceId+'/files');if(!valid())return;
+        renderFileRows(filesTree,rows);
+        for(const path of expanded){if(!valid())return;const button=[...filesTree.querySelectorAll('.file-row.is-directory')].find(n=>n.dataset.path===path);if(button)await button.onclick();}
+        if(!valid())return;const button=[...filesTree.querySelectorAll('.file-row')].find(n=>n.dataset.path===selected);button?.classList.add('selected');
+        filesStatus.textContent=rows.length?'':tr('This workspace is empty.','مساحة العمل فارغة.');
+      }catch(error){if(valid())filesStatus.textContent=error.message;}
+    })();fileLoad={key,promise};try{return await promise;}finally{if(fileLoad?.promise===promise)fileLoad=null;}
   }
+  window.refreshNativeFiles=({workspaceId,owner})=>{if(activeWorkspace?.id===workspaceId&&String(currentUser?.id)===String(owner))return loadFiles();};
   const modes=textElement('nav','','workspace-panel-modes');modes.setAttribute('aria-label',tr('Workspace panel','لوحة مساحة العمل'));
   const changesMode=btn('workspaceChanges','Project files','ملفات المشروع',()=>setPanel('changes'));
   const conversationsMode=btn('workspaceConversations','Conversations','المحادثات',()=>setPanel('conversations'));
@@ -388,20 +425,26 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   window.refreshWorkspaceQuestions=async()=>{if(!activeSession||questionSending)return;const sessionId=activeSession.id,owner=currentUser?.id,revision=++questionRevision;
     try{const data=await api('/api/sessions/'+sessionId+'/questions');if(revision!==questionRevision||activeSession?.id!==sessionId||currentUser?.id!==owner)return;questionError='';const signature=lang+JSON.stringify(data.requests||[]);
       if(questionSession===sessionId&&questionOwner===owner&&signature===questionSignature){keepQuestions();return;}
-      questionSession=sessionId;questionOwner=owner;questionSignature=signature;questionView.replaceChildren();questionView.hidden=!data.requests?.length;
-      for(const request of data.requests||[]){const form=document.createElement('form');form.className='chat-approval';form.append(textElement('strong',tr('The agent needs your answer','الوكيل ينتظر إجابتك')));const groups=[];
-        for(const [index,question] of request.questions.entries()){const fieldset=document.createElement('fieldset');fieldset.append(textElement('legend',question.question||question.header||tr('Choose an answer','اختر إجابة')));if(question.header&&question.question){fieldset.prepend(textElement('p',question.header,'question-heading'));}const inputs=[];
+      const retained=questionSession===sessionId&&questionOwner===owner?new Map([...questionView.children].map(form=>[form.dataset.requestId,form])):new Map();
+      questionSession=sessionId;questionOwner=owner;questionSignature=signature;questionView.hidden=!data.requests?.length;const nextForms=[];
+      for(const request of [...new Map((data.requests||[]).map(row=>[row.id,row])).values()]){
+        const shape=lang+JSON.stringify(request.questions),old=retained.get(request.id);if(old?.dataset.questionShape===shape){nextForms.push(old);continue;}
+        const form=document.createElement('form');form.className='chat-approval';form.dataset.requestId=request.id;form.dataset.questionShape=shape;form.append(textElement('strong',tr('The agent needs your answer','الوكيل ينتظر إجابتك')));const groups=[];
+        for(const [index,question] of request.questions.entries()){const fieldset=document.createElement('fieldset');fieldset.append(textElement('legend',question.question||question.header||tr('Choose an answer','اختر إجابة')));if(question.header&&question.question){fieldset.append(textElement('p',question.header,'question-heading'));}const inputs=[];
           for(const option of question.options){const label=document.createElement('label'),input=document.createElement('input');input.type=question.multiple?'checkbox':'radio';input.name='q'+index;input.value=option.label;label.append(input,textElement('span',option.label));if(option.description)label.append(textElement('small',option.description));if(option.recommended===true){const hint=textElement('span',tr('Recommended by agent','موصى به من الوكيل'),'question-recommended');label.append(hint);if(option.description)hint.title=option.description;}fieldset.append(label);inputs.push(input);}
-          let custom=null;if(question.custom){custom=document.createElement('input');custom.type='text';custom.maxLength=2000;custom.placeholder=tr('Other — write your choice…','خيار آخر — اكتب إجابتك…');custom.setAttribute('aria-label',custom.placeholder);fieldset.append(custom);}groups.push({inputs,custom,multiple:question.multiple});form.append(fieldset);
+          let custom=null;if(question.custom){custom=document.createElement('input');custom.type='text';custom.maxLength=2000;custom.placeholder=tr('Other — write your choice…','خيار آخر — اكتب إجابتك…');custom.setAttribute('aria-label',custom.placeholder);fieldset.append(custom);if(!question.multiple){custom.oninput=()=>{if(custom.value.trim())inputs.forEach(input=>input.checked=false);};for(const input of inputs)input.onchange=()=>{if(input.checked)custom.value='';};}}groups.push({inputs,custom,multiple:question.multiple});form.append(fieldset);
         }
         const actions=textElement('div','','chat-approval-actions'),submit=textElement('button',tr('Choose and Continue','اختر وتابع'),'button ghost small'),reject=textElement('button',tr('Cancel question','إلغاء السؤال'),'button ghost small');submit.type='submit';reject.type='button';actions.append(submit,reject);form.append(actions);
         async function send(rejected){if(questionSending||activeSession?.id!==sessionId||currentUser?.id!==owner)return;const answers=groups.map(g=>{const selected=g.inputs.filter(i=>i.checked).map(i=>i.value),custom=g.custom?.value.trim();return [...new Set(custom?(g.multiple?[...selected,custom]:[custom]):selected)];});if(!rejected&&answers.some(a=>!a.length)){toast(tr('Answer every question.','أجب عن كل سؤال.'));return;}
-          questionSending=true;form.querySelectorAll('input,button').forEach(n=>n.disabled=true);
+          questionSending=true;form.setAttribute('aria-busy','true');form.querySelectorAll('input,button').forEach(n=>n.disabled=true);
           try{await api('/api/sessions/'+sessionId+'/questions/'+encodeURIComponent(request.id),{method:'POST',body:JSON.stringify({reject:rejected,answers:rejected?[]:answers})});questionSignature='';if(activeSession?.id===sessionId&&currentUser?.id===owner){await refreshSessionStatus();await refreshMessages();}}
-          catch(error){if(activeSession?.id===sessionId&&currentUser?.id===owner){toast(error.status===404?tr('This question expired. Refreshing the conversation…','انتهت صلاحية السؤال. جارٍ تحديث المحادثة…'):error.message);if(error.status===404)questionSignature='';form.querySelectorAll('input,button').forEach(n=>n.disabled=false);}}finally{questionSending=false;await window.refreshWorkspaceQuestions();}
+          catch(error){if(activeSession?.id===sessionId&&currentUser?.id===owner){toast(error.status===404?tr('This question expired. Refreshing the conversation…','انتهت صلاحية السؤال. جارٍ تحديث المحادثة…'):error.message);if(error.status===404)questionSignature='';form.removeAttribute('aria-busy');form.querySelectorAll('input,button').forEach(n=>n.disabled=false);}}finally{questionSending=false;await window.refreshWorkspaceQuestions();}
         }
-        form.onsubmit=event=>{event.preventDefault();send(false);};reject.onclick=()=>send(true);questionView.append(form);
-      }if(!questionView.hidden)q('agentFeed').append(questionView);
+        form.onsubmit=event=>{event.preventDefault();send(false);};reject.onclick=()=>send(true);nextForms.push(form);
+      }
+      for(const form of [...questionView.children])if(!nextForms.includes(form))form.remove();
+      let cursor=questionView.firstChild;for(const form of nextForms){if(form===cursor)cursor=cursor.nextSibling;else questionView.insertBefore(form,cursor);}
+      if(!questionView.hidden)q('agentFeed').append(questionView);
     }catch(error){if(revision===questionRevision&&activeSession?.id===sessionId&&currentUser?.id===owner&&questionError!==error.message){questionError=error.message;toast(error.message);}}
   };
   const approvalBusy=new Set();let approvalOwner=null,approvalSession=null;
@@ -1020,7 +1063,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(admin()){await page('adminPage');return;}
     if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));
     if(!await usableWorkspace(workspace)){toast(tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.'));if(navigate)await page('workspaceHomePage');return;}
-    saveNativeDraft();if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}detailLoads.delete(workspace.id);stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;restoreNativeDraft();window.resetWorkspaceQueue?.();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
+    saveNativeDraft();window.closeNativeFile?.();if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}detailLoads.delete(workspace.id);stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;restoreNativeDraft();window.resetWorkspaceQueue?.();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
     discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewStatus.textContent=tr('Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
     renderWorkspaceEmpty();q('promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode'),''));updateSend();

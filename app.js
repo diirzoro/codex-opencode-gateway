@@ -302,6 +302,14 @@ function renderAgentText(host,value){
   node.append(document.createTextNode(text.slice(at)));
  }
  const lines=String(value||'').split('\n');let paragraph=[],list=null;
+ const cells=line=>{
+  const result=[];let text='',code=false,escaped=false;
+  for(const char of line.trim()){
+   if(escaped){text+=(char==='|'||char==='\\'||char==='`'?'':'\\')+char;escaped=false;continue;}if(char==='\\'){escaped=true;continue;}if(char==='`')code=!code;
+   if(char==='|'&&!code){result.push(text.trim());text='';}else text+=char;
+  }if(escaped)text+='\\';result.push(text.trim());
+  if(result[0]==='')result.shift();if(result.at(-1)==='')result.pop();return result;
+ };
  const flush=()=>{if(paragraph.length){const p=document.createElement('p');inline(p,paragraph.join('\n'));host.append(p);paragraph=[];}list=null;};
  for(let i=0;i<lines.length;i++){
   const fence=lines[i].match(/^\s{0,3}(`{3,}|~{3,})([^`]*)$/);
@@ -311,6 +319,18 @@ function renderAgentText(host,value){
    const language=fence[2].trim().split(/\s/)[0].slice(0,40)||'text';header.append(textElement('span',language),feedAction('copy',body.join('\n')));code.textContent=body.join('\n');pre.dir='ltr';pre.append(code);block.append(header,pre);host.append(block);continue;
   }
   if(!lines[i].trim()){flush();continue;}
+  if(lines[i].includes('|')&&i+1<lines.length){
+   const header=cells(lines[i]),separator=cells(lines[i+1]);
+   if(header.length>1&&header.length<=20&&separator.length===header.length&&separator.every(cell=>/^:?-{3,}:?$/.test(cell))){
+    flush();const wrap=document.createElement('div'),table=document.createElement('table'),head=document.createElement('thead'),body=document.createElement('tbody');
+    wrap.className='message-table-wrap';wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label',typeof lang!=='undefined'&&lang==='ar'?'جدول الرد':'Response table');
+    const row=document.createElement('tr');for(const cell of header){const th=document.createElement('th');th.scope='col';inline(th,cell);row.append(th);}head.append(row);i++;
+    while(i+1<lines.length&&lines[i+1].trim()&&lines[i+1].includes('|')){
+     const values=cells(lines[i+1]);if(values.length!==header.length)break;i++;const tr=document.createElement('tr');
+     for(const cell of values){const td=document.createElement('td');inline(td,cell);tr.append(td);}body.append(tr);
+    }table.append(head,body);wrap.append(table);host.append(wrap);continue;
+   }
+  }
   const heading=lines[i].match(/^(#{1,6})\s+(.+)$/),item=lines[i].match(/^\s*(?:([-+*])|\d+[.)])\s+(.+)$/);
   if(heading){flush();const h=document.createElement('h'+Math.min(heading[1].length+1,6));inline(h,heading[2]);host.append(h);}
   else if(item){const tag=item[1]?'ul':'ol';if(!list||list.tagName.toLowerCase()!==tag){flush();list=document.createElement(tag);host.append(list);}const li=document.createElement('li');inline(li,item[2]);list.append(li);}
@@ -362,6 +382,7 @@ async function refreshMessages(){
    if(row.id)node.dataset.messageId=row.id;
    const hasText=presentation.hasText;
    const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text);node.append(content);
+   if(nativeIncremental&&!hasText)content.hidden=true;
    if(row.role==='user')foldLongUserMessage(node,content,row.text||'',expandedUserMessages.has(String(row.id)));
    if(row.role==='assistant'&&!hasText&&presentation.feedback){const state=presentation.state;
     const labels={waiting_approval:['Waiting for your approval…','بانتظار موافقتك…'],failed:['The agent could not finish this request. Review the activity below before retrying.','تعذر على الوكيل إكمال الطلب. راجع النشاط أدناه قبل إعادة المحاولة.'],cancelled:['Execution stopped.','تم إيقاف التنفيذ.'],working:['The agent is working…','الوكيل يعمل الآن…'],completed:['Tool step completed.','اكتملت خطوة الأدوات.']};
@@ -369,6 +390,10 @@ async function refreshMessages(){
     const feedback=textElement('p',labels[state][lang==='ar'?1:0],'agent-progress-note');feedback.setAttribute('role','status');node.append(feedback);
    }if(row.role==='user'&&row.attachments?.length){const attached=textElement('div','','message-attachments');for(const file of row.attachments){const label=textElement('span',file.name+(Number.isFinite(file.size)?' · '+Math.ceil(file.size/1024)+' KB':''));label.dir='auto';attached.append(label);}node.append(attached);}
    window.renderMessageActivity?.(node,presentation.activity);
+   if(nativeIncremental&&cached){
+    const expansion=new Map([...cached.node.querySelectorAll('[data-activity-id][data-user-open]')].map(item=>[item.dataset.activityId,item.dataset.userOpen]));
+    for(const item of node.querySelectorAll('[data-activity-id]'))if(expansion.has(item.dataset.activityId)){item.open=expansion.get(item.dataset.activityId)==='true';item.dataset.userOpen=String(item.open);}
+   }
    if(row.role==='assistant')window.renderWorkspaceMessageActions?.(node,row.actions,{owner,sessionId,messageId:row.id});
    if(nativeIncremental){feed.nativeNodes.set(row.id,{signature:nodeSignature,node});nextNodes.push(node);}
    if(row.role==='assistant'&&!hasText){if(!nativeIncremental)feed.append(node);continue;}
