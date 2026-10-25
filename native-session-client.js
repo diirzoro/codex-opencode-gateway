@@ -263,7 +263,7 @@
     catch(error){
       const confirmed=histories.get(id)?.messages.some(message=>message.info.id===messageID);
       if(!confirmed){
-        if(owner()===user&&(!error.status||error.status>=500))error.message='Native receipt is uncertain. Draft preserved; use Recover Conversation.';
+        if(owner()===user&&(!error.status||error.status>=500))error.message=label('Native could not confirm this request. Draft saved; check the conversation status.','تعذر تأكيد استلام الطلب. المسودة محفوظة؛ تحقق من حالة المحادثة.');
         else if(owner()===user){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}
         throw error;
       }
