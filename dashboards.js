@@ -188,6 +188,23 @@
         if(!result.items.length)list.append(textElement('p',tr('No messages returned by Resend.','لم يُرجع Resend أي رسائل.')));
       }catch(error){status.textContent=error.message;}
     }
+    const composePanel=q('adminMailCompose');
+    q('adminMailComposeOpen').onclick=()=>{composePanel.hidden=false;q('adminComposeTo').focus();};
+    q('adminComposeCancel').onclick=()=>{composePanel.hidden=true;q('adminComposeStatus').textContent='';};
+    q('adminComposeSend').onclick=async()=>{
+      const send=q('adminComposeSend'),status=q('adminComposeStatus');
+      const to=q('adminComposeTo').value.trim(),subject=q('adminComposeSubject').value.trim(),body=q('adminComposeBody').value;
+      if(!to||!subject||!body.trim()){status.textContent=tr('Recipient, subject, and message are required.','المستلم والموضوع والرسالة مطلوبة.');return;}
+      send.disabled=true;status.textContent=tr('Sending…','جارٍ الإرسال…');
+      try{
+        const result=await api('/api/admin/service-integrations/send-email',{method:'POST',body:JSON.stringify({to,subject,body})});
+        if(!result.sent)throw Error('Sending was not confirmed');
+        q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
+        status.textContent=tr('Sent successfully.','تم إرسال الرسالة بنجاح.');
+        mailFolder='sent';await readSupportInbox();
+      }catch(error){status.textContent=error.message;}
+      finally{send.disabled=false;}
+    };
     q('adminMailReceived').onclick=()=>{mailFolder='received';readSupportInbox();};
     q('adminMailSent').onclick=()=>{mailFolder='sent';readSupportInbox();};
     q('adminInboxRead').onclick=readSupportInbox;
