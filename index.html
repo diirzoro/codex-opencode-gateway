@@ -629,9 +629,9 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
 <label class="field"><span>API Key / SMTP Password — أدخله لاحقًا</span><input id="adminSmtpSecret" type="password" autocomplete="new-password" maxlength="4096" placeholder="فارغ حتى ربط المزوّد" value=""></label>
 <label class="field"><span>بريد اختبار الإرسال · Test recipient</span><input id="adminSmtpTestRecipient" type="email" maxlength="254" autocomplete="off" placeholder="admin-owned@example.com"></label>
 </div>
-<p class="lead">الإعدادات المعروضة مسودة غير محفوظة. ربط المفاتيح والتبديل الفعلي غير مفعّل حتى اكتمال التخزين المشفّر واختبار الإرسال. لا تضع مفتاحًا حقيقيًا قبل تفعيل الحفظ الآمن.</p>
-<button type="button" class="button" id="adminSmtpSave" disabled title="Encrypted provider configuration is not yet implemented">حفظ الإعدادات · Save (not available yet)</button>
-<button type="button" class="button ghost" id="adminSmtpTest" disabled title="Requires verified provider connection">اختبار الإرسال · Test (not available yet)</button>
+<p class="lead">أدخل مفتاح Resend عندما تصبح جاهزًا للتفعيل. يُحفظ مشفرًا ولا يعرضه الخادم مرة أخرى. يتطلب تفعيل قاعدة البيانات والمفتاح الرئيسي للتشفير على TEST.</p>
+<button type="button" class="button" id="adminSmtpSave">حفظ وتفعيل Resend · Save &amp; Activate</button>
+<button type="button" class="button ghost" id="adminSmtpTest" disabled title="Live email test awaits TEST deployment acceptance">اختبار الإرسال · Test (coming after deployment)</button>
 </section>
 <section id="adminServicesTab" hidden><h2>تفعيل الخدمات · Service Toggles</h2><div id="adminServiceToggles" aria-live="polite"></div><p class="lead">التفعيل يعتمد على تكامل فعلي في الخادم. الخيارات غير الجاهزة معطّلة وليست موافقات شكلية.</p></section>
 </div></section>
