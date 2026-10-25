@@ -458,11 +458,18 @@ def delete_admin_mail_draft(draft_id:_uuid.UUID,actor:User=Depends(require_admin
     db.commit()
     return {"deleted":True}
 
+class AdminMailAttachment(BaseModel):
+    model_config=ConfigDict(extra="forbid",str_strip_whitespace=True)
+    filename: str = Field(min_length=1,max_length=120)
+    mime: Literal["application/pdf","image/png","image/jpeg","text/plain"]
+    base64_content: str = Field(min_length=1,max_length=3000000)
+
 class AdminComposeEmail(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     to: str = Field(min_length=3,max_length=254)
     subject: str = Field(min_length=1,max_length=300)
     body: str = Field(min_length=1,max_length=100000)
+    attachment: AdminMailAttachment | None = None
 
 @router.post("/service-integrations/send-email")
 def admin_compose_send(data:AdminComposeEmail,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
@@ -484,6 +491,28 @@ def admin_compose_send(data:AdminComposeEmail,actor:User=Depends(require_admin),
     message["To"]=data.to
     message["Subject"]=data.subject
     message.set_content(data.body)
+    if data.attachment is not None:
+        import base64
+        import binascii
+        import os
+        filename=data.attachment.filename
+        mime=data.attachment.mime
+        extension=os.path.splitext(filename)[1].lower()
+        valid_extensions={
+            "application/pdf":{".pdf"},"image/png":{".png"},
+            "image/jpeg":{".jpg",".jpeg"},"text/plain":{".txt"},
+        }
+        if (filename != os.path.basename(filename) or
+                extension not in valid_extensions[mime]):
+            raise HTTPException(422,"Unsupported attachment filename or type")
+        try:
+            attachment=base64.b64decode(data.attachment.base64_content,validate=True)
+        except (binascii.Error,ValueError):
+            raise HTTPException(422,"Attachment is not valid base64") from None
+        if len(attachment)>2*1024*1024:
+            raise HTTPException(413,"Attachment limit is 2 MiB")
+        maintype,subtype=mime.split("/",1)
+        message.add_attachment(attachment,maintype=maintype,subtype=subtype,filename=filename)
     try:
         with smtplib.SMTP("smtp.resend.com",int(cfg["smtp_port"]),timeout=15) as smtp:
             smtp.starttls(context=ssl.create_default_context())
