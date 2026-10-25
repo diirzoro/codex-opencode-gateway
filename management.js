@@ -462,7 +462,31 @@
 
   async function locations(body,platform=false){const box=section(body,tr('Locations','المواقع'));let kind='countries',editing=null;const picker=select(box,tr('Type','النوع'),'type',[['countries',tr('Countries','الدول')],['regions',tr('Regions','المناطق')],['cities',tr('Cities','المدن')]]),list=node('div');box.append(list);const editor=section(body,tr('Location details','بيانات الموقع'));let parent;
     const f=form(editor,f=>{input(f,tr('Name','الاسم'),'name').required=true;input(f,tr('Country code','رمز الدولة'),'code');parent=select(f,tr('Parent location','الموقع الأب'),'parent_id',[]);select(f,tr('Enabled','مفعّل'),'enabled',[['true',tr('Yes','نعم')],['false',tr('No','لا')]])},tr('Save','حفظ'),async values=>{values.enabled=values.enabled==='true';values.parent_id=values.parent_id?Number(values.parent_id):null;values.code=values.code||null;await api('/api/admin/locations/'+kind+(editing?'/'+editing:''),{method:editing?'PUT':'POST',body:JSON.stringify(values)});await refresh()});
-    async function refresh(){editing=null;f.reset();list.replaceChildren();parent.replaceChildren(new Option('—',''));if(kind!=='countries')for(const p of await api('/api/admin/locations/'+(kind==='regions'?'countries':'regions')))parent.add(new Option(p.name,p.id));for(const r of await api('/api/admin/locations/'+kind))row(list,r.name,r.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل'),[button(tr('Edit','تعديل'),()=>{editing=r.id;for(const [k,v] of Object.entries({...r,parent_id:r.country_id||r.region_id||'',enabled:String(r.enabled)}))if(f.elements.namedItem(k))f.elements.namedItem(k).value=v;f.openDialog()}),button(tr('Disable','تعطيل'),async()=>{await api('/api/admin/locations/'+kind+'/'+r.id,{method:'DELETE'});await refresh()})])}
+    const choice=select(list,tr('Choose a location','اختر الموقع'),'selected_location',[['',tr('Select from the list','اختر من القائمة')]]);
+    const actions=node('div','','row-between');list.append(actions);
+    let records=[];
+    function selected(){return records.find(r=>String(r.id)===choice.value)}
+    actions.append(
+      button(tr('Edit selected','تعديل المحدد'),()=>{
+        const r=selected();if(!r)return;
+        editing=r.id;
+        for(const [k,v] of Object.entries({...r,parent_id:r.country_id||r.region_id||'',enabled:String(r.enabled)}))
+          if(f.elements.namedItem(k))f.elements.namedItem(k).value=v;
+        f.openDialog();
+      }),
+      button(tr('Disable selected','تعطيل المحدد'),async()=>{
+        const r=selected();if(!r)return;
+        await api('/api/admin/locations/'+kind+'/'+r.id,{method:'DELETE'});
+        await refresh();
+      })
+    );
+    async function refresh(){
+      editing=null;f.reset();parent.replaceChildren(new Option('—',''));
+      if(kind!=='countries')for(const p of await api('/api/admin/locations/'+(kind==='regions'?'countries':'regions')))parent.add(new Option(p.name,p.id));
+      records=await api('/api/admin/locations/'+kind);
+      choice.replaceChildren(new Option(tr('Select from the list','اختر من القائمة'),''));
+      for(const r of records)choice.add(new Option(r.name+' · '+(r.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل')),String(r.id)));
+    }
     picker.onchange=()=>{kind=picker.value;refresh().catch(e=>toast(e.message))};await refresh();
   }
   const github=$('#chatGithub');if(github)github.onclick=()=>open('connections');
