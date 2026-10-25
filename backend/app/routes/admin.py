@@ -342,6 +342,48 @@ def save_email_delivery(data: EmailDeliveryUpdate, actor: User = Depends(require
             "sender":sender,"smtp_host":"smtp.resend.com","smtp_port":587,
             "smtp_username":"resend"}
 
+class SupportInboxCredential(BaseModel):
+    model_config=ConfigDict(extra="forbid", str_strip_whitespace=True)
+    api_key: str = Field(min_length=5,max_length=4096)
+
+@router.put("/service-integrations/inbox-credential")
+def save_inbox_credential(data:SupportInboxCredential,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from ..services import admin_email_config, credentials
+    if not credentials.available():
+        raise HTTPException(503,"Encrypted credential storage is unavailable")
+    config=admin_email_config.read(db)
+    if config is None:
+        raise HTTPException(409,"Configure the Resend sender first")
+    config["inbox_api_key"]=data.api_key
+    admin_email_config.save(db,actor.id,config)
+    return {"configured":True,"address":"support@opencode-gateway.codes"}
+
+@router.get("/service-integrations/support-inbox")
+def support_inbox(_:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Admin-only, read-only metadata for messages addressed to support mailbox."""
+    from ..services import admin_email_config
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+    cfg=admin_email_config.read(db) or {}
+    key=cfg.get("inbox_api_key")
+    if not key:return {"configured":False,"items":[],"reason":"Receiving API key has not been configured"}
+    request=Request("https://api.resend.com/emails/receiving?limit=50",headers={"Authorization":"Bearer "+key,"Accept":"application/json"})
+    try:
+        with urlopen(request,timeout=10) as response:
+            payload=json.load(response)
+    except (HTTPError,URLError,TimeoutError,ValueError):
+        raise HTTPException(502,"Receiving API unavailable; verify API key permissions") from None
+    items=[]
+    for message in payload.get("data",[]):
+        if not isinstance(message,dict):continue
+        recipients=message.get("to") or []
+        if not isinstance(recipients,list) or not any(str(x).lower()=="support@opencode-gateway.codes" for x in recipients):
+            continue
+        items.append({"id":str(message.get("id","")),"from":str(message.get("from",""))[:254],
+                      "subject":str(message.get("subject",""))[:300],
+                      "created_at":str(message.get("created_at",""))})
+    return {"configured":True,"items":items,"has_more":bool(payload.get("has_more",False))}
+
 @router.get("/service-integrations")
 def service_integrations(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     import os
