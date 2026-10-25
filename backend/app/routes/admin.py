@@ -367,6 +367,10 @@ def save_email_delivery(data: EmailDeliveryUpdate, actor: User = Depends(require
          "smtp_username":"resend","smtp_password":key,"smtp_from":sender}
     if existing and existing.get("inbox_api_key"):
         cfg["inbox_api_key"]=existing["inbox_api_key"]
+    elif data.api_key:
+        # One full-access Resend key may serve both SMTP and message reads.
+        # Dedicated read credentials, when present, remain unchanged.
+        cfg["inbox_api_key"]=data.api_key
     admin_email_config.save(db, actor.id, cfg)
     return {"provider":"resend","configured":True,"credentials_configured":True,
             "sender":sender,"smtp_host":"smtp.resend.com","smtp_port":587,
