@@ -163,11 +163,44 @@
       q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
     }));
     let mailFolder='received';
+    let currentDraftId=null;
     async function readSupportInbox(){
       const status=q('adminInboxStatus'),list=q('adminInboxMessages');
       status.textContent=tr('Loading messages…','جارٍ تحميل الرسائل…');
       list.replaceChildren();
       try{
+        if(mailFolder==='drafts'){
+          const drafts=await api('/api/admin/service-integrations/drafts');
+          status.textContent=tr('Drafts: ','المسودات: ')+drafts.items.length;
+          for(const item of drafts.items){
+            const card=document.createElement('article');card.className='manage-card';card.style.cssText='padding:14px;margin:8px 0;display:grid;gap:8px;';
+            const heading=document.createElement('strong');heading.textContent=item.subject||tr('(No subject)','(بدون موضوع)');
+            const meta=document.createElement('small');meta.textContent=(item.to||tr('No recipient','بدون مستلم'))+' · '+item.updated_at;
+            const preview=document.createElement('p');preview.textContent=item.preview||'';
+            const actions=document.createElement('div');actions.style.cssText='display:flex;gap:8px;';
+            const edit=document.createElement('button');edit.type='button';edit.className='button ghost small';edit.textContent=tr('Edit draft','تعديل المسودة');
+            edit.onclick=async()=>{
+              edit.disabled=true;
+              try{
+                const draft=await api('/api/admin/service-integrations/drafts/'+encodeURIComponent(item.id));
+                currentDraftId=draft.id;
+                q('adminComposeTo').value=draft.to;
+                q('adminComposeSubject').value=draft.subject;
+                q('adminComposeBody').value=draft.body;
+                composePanel.hidden=false;q('adminComposeBody').focus();
+              }catch(error){toast(error.message);}finally{edit.disabled=false;}
+            };
+            const remove=document.createElement('button');remove.type='button';remove.className='button ghost small';remove.textContent=tr('Delete','حذف');
+            remove.onclick=async()=>{
+              remove.disabled=true;
+              try{await api('/api/admin/service-integrations/drafts/'+encodeURIComponent(item.id),{method:'DELETE'});await readSupportInbox();}
+              catch(error){toast(error.message);remove.disabled=false;}
+            };
+            actions.append(edit,remove);card.append(heading,meta,preview,actions);list.append(card);
+          }
+          if(!drafts.items.length)list.append(textElement('p',tr('No saved drafts.','لا توجد مسودات محفوظة.')));
+          return;
+        }
         const sent=mailFolder==='sent';
         const result=await api(sent?'/api/admin/service-integrations/sent-emails':'/api/admin/service-integrations/support-inbox');
         if(!result.configured){
@@ -213,7 +246,23 @@
       }catch(error){status.textContent=error.message;}
     }
     const composePanel=q('adminMailCompose');
-    q('adminMailComposeOpen').onclick=()=>{composePanel.hidden=false;q('adminComposeTo').focus();};
+    q('adminMailComposeOpen').onclick=()=>{
+      currentDraftId=null;q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
+      q('adminComposeStatus').textContent='';composePanel.hidden=false;q('adminComposeTo').focus();
+    };
+    q('adminComposeSaveDraft').onclick=async()=>{
+      const button=q('adminComposeSaveDraft'),status=q('adminComposeStatus');
+      const draft={to:q('adminComposeTo').value.trim(),subject:q('adminComposeSubject').value.trim(),body:q('adminComposeBody').value};
+      button.disabled=true;
+      try{
+        const url='/api/admin/service-integrations/drafts'+(currentDraftId?'/'+encodeURIComponent(currentDraftId):'');
+        const result=await api(url,{method:currentDraftId?'PUT':'POST',body:JSON.stringify(draft)});
+        currentDraftId=result.id;
+        status.textContent=tr('Draft saved securely.','تم حفظ المسودة مشفرة.');
+        mailFolder='drafts';await readSupportInbox();
+      }catch(error){status.textContent=error.message;}
+      finally{button.disabled=false;}
+    };
     q('adminComposeCancel').onclick=()=>{composePanel.hidden=true;q('adminComposeStatus').textContent='';};
     q('adminComposeSend').onclick=async()=>{
       const send=q('adminComposeSend'),status=q('adminComposeStatus');
@@ -224,13 +273,20 @@
         const result=await api('/api/admin/service-integrations/send-email',{method:'POST',body:JSON.stringify({to,subject,body})});
         if(!result.sent)throw Error('Sending was not confirmed');
         q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
-        status.textContent=tr('Sent successfully.','تم إرسال الرسالة بنجاح.');
+        if(currentDraftId){
+          const savedId=currentDraftId;currentDraftId=null;
+          try{await api('/api/admin/service-integrations/drafts/'+encodeURIComponent(savedId),{method:'DELETE'});}
+          catch(error){status.textContent=tr('Sent; old draft could not be removed.','تم الإرسال، لكن تعذّر حذف المسودة القديمة.');}
+        }
+        if(!status.textContent.includes('draft')&&!status.textContent.includes('المسودة'))
+          status.textContent=tr('Sent successfully.','تم إرسال الرسالة بنجاح.');
         mailFolder='sent';await readSupportInbox();
       }catch(error){status.textContent=error.message;}
       finally{send.disabled=false;}
     };
     q('adminMailReceived').onclick=()=>{mailFolder='received';readSupportInbox();};
     q('adminMailSent').onclick=()=>{mailFolder='sent';readSupportInbox();};
+    q('adminMailDrafts').onclick=()=>{mailFolder='drafts';readSupportInbox();};
     q('adminInboxRead').onclick=readSupportInbox;
     q('adminInboxSaveKey').onclick=async()=>{
       const field=q('adminInboxApiKey'),button=q('adminInboxSaveKey');
