@@ -112,7 +112,7 @@ jobs:
             TARGET_SHA="$ROLLBACK_SHA"
           fi
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
+            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
       - name: Report scope
         if: always()
         run: |
