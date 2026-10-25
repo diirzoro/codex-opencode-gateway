@@ -1,7 +1,7 @@
 # Native 1.19.4 development checkpoint — 25 October 2026
 
 Source baseline: `6a04264d94f7b175cf5e0ba087fc9f407a88e693` on `updates`.
-Published implementation SHA is recorded in the top entry of PROJECT_HANDOFF_AND_REMAINING_WORK.md after publication. This is a source/local checkpoint, **not a TEST deployment or a claim that A–G are entirely accepted**.
+Published implementation SHA: `cf9039f49b3ad671956cdb5ffb5efe722c009dac`. This is a source/local checkpoint, **not a TEST deployment or a claim that A–G are entirely accepted**.
 
 ## Owner scope
 
