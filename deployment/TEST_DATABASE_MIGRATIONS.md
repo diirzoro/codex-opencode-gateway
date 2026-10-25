@@ -1,5 +1,19 @@
 # TEST-only database migration deployment prerequisite
 
+> Status (2026-10-25): source commit 7fad35fc restores a fail-closed
+> deployment gate for TEST. The referenced root-owned
+> `deployment/test-only-migrate.sh` is NOT present on this branch.
+> Consequently a fresh deploy currently **fails closed** until an audited
+> root-owned runner is installed. Do not run the legacy install command
+> below against a missing file, do not fake its output, and do not regard
+> this source fix as execution of migrations on the VPS.
+> The operator must verify the effective TEST systemd EnvironmentFiles
+> (including rollback environment paths), confirm a TEST backup, verify
+> database identity `opencode_gateway_test`, execute Alembic through the
+> approved runner and confirm `0024_github_app_settings` before marking
+> the environment ready. This restriction applies to deploy-test, not
+> audit-test. LIVE/master must remain untouched.
+
 The TEST deployment script now fails closed if Alembic is not executed and verified.
 Do NOT point this runner at production. It asserts current_database() = opencode_gateway_test.
 
