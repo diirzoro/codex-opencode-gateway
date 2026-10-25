@@ -115,13 +115,19 @@
       q('adminSmtpUsername').value=e.smtp_username||'';
       q('adminSenderEmail').value=e.sender||'';
       q('adminSmtpSecret').value='';
-      const captions={registration_verification:'التحقق من الحساب الجديد',password_reset:'استعادة كلمة المرور',welcome_email:'رسائل الترحيب',subscription_expiry:'انتهاء الاشتراك',low_balance:'انخفاض الرصيد',account_suspension:'تعليق الحساب',payment_receipt:'إيصالات الدفع',renewal_reminder:'تذكير التجديد',system_updates:'تحديث النظام',login_security:'تنبيه دخول جديد',password_changed:'تغيير كلمة المرور',email_changed:'تغيير البريد',payment_failed:'فشل الدفع',trial_expiring:'قرب انتهاء الفترة التجريبية',support_received:'رسالة دعم جديدة',support_unanswered:'رسائل دون رد',service_incident:'أعطال الخدمة',mail_delivery_failure:'فشل تسليم البريد',unusual_activity:'نشاط غير معتاد',backup_status:'حالة النسخ الاحتياطي'};
-      const list=q('adminServiceToggles');list.replaceChildren();list.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:10px;align-items:stretch;';
+      const captionsAr={registration_verification:'التحقق من الحساب الجديد',password_reset:'استعادة كلمة المرور',welcome_email:'رسائل الترحيب',subscription_expiry:'انتهاء الاشتراك',low_balance:'انخفاض الرصيد',account_suspension:'تعليق الحساب',payment_receipt:'إيصالات الدفع',renewal_reminder:'تذكير التجديد',system_updates:'تحديث النظام',login_security:'تنبيه دخول جديد',password_changed:'تغيير كلمة المرور',email_changed:'تغيير البريد',payment_failed:'فشل الدفع',trial_expiring:'قرب انتهاء الفترة التجريبية',support_received:'رسالة دعم جديدة',support_unanswered:'رسائل دون رد',service_incident:'أعطال الخدمة',mail_delivery_failure:'فشل تسليم البريد',unusual_activity:'نشاط غير معتاد',backup_status:'حالة النسخ الاحتياطي'};
+      const captionsEn={registration_verification:'New account verification',password_reset:'Password reset',welcome_email:'Welcome email',subscription_expiry:'Subscription expiry',low_balance:'Low balance',account_suspension:'Account suspension',payment_receipt:'Payment receipt',renewal_reminder:'Renewal reminder',system_updates:'System updates',login_security:'New sign-in alert',password_changed:'Password changed',email_changed:'Email changed',payment_failed:'Payment failed',trial_expiring:'Trial expiring',support_received:'New support message',support_unanswered:'Unanswered support',service_incident:'Service incidents',mail_delivery_failure:'Mail delivery failure',unusual_activity:'Unusual activity',backup_status:'Backup status'};
+      const list=q('adminServiceToggles');list.replaceChildren();list.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;align-items:stretch;';
       for(const item of data.services||[]){
-        const row=document.createElement('label');row.className='check';row.style.cssText='display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--surface-edge, #d8dee7);border-radius:12px;min-height:62px;background:var(--panel,transparent);min-width:0;';
-        const input=document.createElement('input');input.type='checkbox';input.checked=!!item.enabled;input.disabled=true;
-        const label=document.createElement('span');label.textContent=(captions[item.id]||item.id)+' · '+(item.available?tr('Available','متاح'):tr('Unavailable','غير متاح'))+(item.reason?' · '+item.reason:'');
-        label.style.cssText='overflow-wrap:anywhere;min-width:0;line-height:1.5;';row.append(input,label);list.append(row);
+        const card=document.createElement('article');card.className='manage-card';
+        card.style.cssText='display:flex;flex-direction:column;justify-content:space-between;gap:10px;margin:0;padding:14px 16px;min-height:88px;border-radius:12px;border:1px solid var(--surface-edge, #d8dee7);box-shadow:none;min-width:0;';
+        const name=document.createElement('strong');name.textContent=(lang==='ar'?captionsAr:captionsEn)[item.id]||item.id;
+        const state=document.createElement('small');state.style.cssText='opacity:.8;line-height:1.4;';
+        state.textContent=item.available?(item.enabled?tr('Enabled','مفعّل'):tr('Available','متاح')):tr('Not implemented','غير منفّذ');
+        card.append(name,state);
+        // Only a real backend-controlled toggle may become interactive.
+        // Unimplemented services are informational, not disabled fake switches.
+        list.append(card);
       }
     }catch(error){notice.textContent=error.message;}
   }
