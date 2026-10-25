@@ -84,7 +84,7 @@ def db_env():
     env=os.environ.copy()
     path=ROOT/".env"
     for line in path.read_text(encoding="utf-8").splitlines():
-        match=re.match(r"^\\s*(?:export\\s+)?DATABASE_URL\\s*=\\s*(.*)$",line)
+        match=re.match(r"^\s*(?:export\s+)?DATABASE_URL\s*=\s*(.*)$",line)
         if not match:continue
         raw=match.group(1).strip()
         try:
