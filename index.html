@@ -635,22 +635,16 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
 <button type="button" class="button ghost" id="adminSmtpTest" disabled title="Live email test awaits TEST deployment acceptance">اختبار الإرسال · Test (coming after deployment)</button>
 </section>
 <section id="adminInboxTab" hidden>
-<h2>صندوق بريد الدعم · Support Inbox</h2>
-<p class="lead">support@opencode-gateway.codes</p>
-<p>يعرض هذا القسم حالة استقبال رسائل الدعم. القراءة المباشرة تحتاج صلاحية Resend Receiving API أو ربط Inbox رسمي. لن تُعرض رسائل وهمية.</p>
-<div id="adminInboxStatus" role="status">غير متصل بعد · Not connected</div><div class="field-grid"><label class="field"><span>مفتاح قراءة البريد · Receiving API key (separate)</span><input id="adminInboxApiKey" type="password" autocomplete="new-password" placeholder="أدخل المفتاح لاحقًا · Leave blank until setup"></label></div><button type="button" class="button" id="adminInboxSaveKey">حفظ مفتاح القراءة المشفّر · Save inbox key</button><button type="button" class="button ghost" id="adminInboxRead">عرض البريد الوارد · Read inbox</button>
-<div class="field-grid">
-<label class="field"><span>عنوان بريد الدعم · Support address</span><input value="support@opencode-gateway.codes" readonly></label>
-<label class="field"><span>طريقة الاستقبال · Receiving provider</span><select disabled><option>Resend Receiving API / Inboxes — requires setup</option></select></label>
-</div>
-<h3>رسائل العملاء · Incoming Messages</h3><div id="adminInboxMessages"><p>لا توجد وصلة قراءة مفعلة بعد · Inbox connection pending.</p></div>
-<h3>ربط الإنذارات · Notification Links</h3>
-<div id="adminInboxAlerts"><label class="check"><input type="checkbox" disabled> إشعار المدير بوصول رسالة جديدة · New support email</label>
-<label class="check"><input type="checkbox" disabled> إشعار الرسائل العاجلة · Urgent request</label>
-<label class="check"><input type="checkbox" disabled> تنبيه الرسائل التي لم يُردّ عليها · Unanswered messages</label>
-<label class="check"><input type="checkbox" disabled> تنبيه فشل استلام البريد · Inbound failure</label></div>
-<p class="lead">هذه الخيارات محفوظة للمراحل التالية ولا ترسل إشعارات أو تقرأ بيانات حتى الربط الفعلي.</p>
-</section>
+<h2 data-i18n="adminMailMessagesTitle">Email Messages</h2>
+<div class="row-between" style="gap:12px;flex-wrap:wrap;margin:12px 0">
+<div style="display:flex;gap:8px"><button type="button" class="button ghost small" id="adminMailReceived" data-i18n="adminMailReceived">Received</button><button type="button" class="button ghost small" id="adminMailSent" data-i18n="adminMailSent">Sent</button></div>
+<button type="button" class="button ghost small" id="adminInboxRead" data-i18n="adminMailRefresh">Refresh messages</button></div>
+<p id="adminInboxStatus" role="status"></p><div id="adminInboxMessages" aria-live="polite"></div>
+<details style="margin-top:18px"><summary data-i18n="adminMailConnection">Connection diagnostics</summary>
+<p class="lead" data-i18n="adminMailConnectionHelp">Messages are retrieved from Resend, not fabricated.</p>
+<label class="field"><span data-i18n="adminMailReadKey">Read-capable Resend API key</span><input id="adminInboxApiKey" type="password" autocomplete="new-password"></label>
+<button type="button" class="button ghost small" id="adminInboxSaveKey" data-i18n="adminMailSaveKey">Save encrypted key</button>
+</details></section>
 <section id="adminServicesTab" hidden><h2>تفعيل الخدمات · Service Toggles</h2><div id="adminServiceToggles" aria-live="polite"></div><p class="lead">التفعيل يعتمد على تكامل فعلي في الخادم. الخيارات غير الجاهزة معطّلة وليست موافقات شكلية.</p></section>
 </div></section>
   <section class="admin-view" data-admin-panel="security"><div class="page-head"><div><h1 data-i18n="adminSecurity">Security</h1><p class="lead" data-i18n="aNay">Not available yet.</p></div></div><div class="admin-section"><p data-i18n="aAdminSecurityNotAvail">Admin security settings are not available yet.</p></div></section>
