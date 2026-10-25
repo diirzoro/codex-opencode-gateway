@@ -38,7 +38,7 @@ def main():
     lock=open('/home/tahir/.gateway-test-deploy.lock','a+')
     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     source=run('git','show','origin/updates:scripts/native_test_release.py').decode()
-    match=re.search(r'^FILES=(\\(.*?\\))\\n',source,re.S|re.M)
+    match=re.search(r'^FILES=(\(.*?\))\n',source,re.S|re.M)
     if not match:raise RuntimeError('Missing source manifest')
     files=ast.literal_eval(match.group(1))
     if len(files)!=18 or len(set(files))!=18:raise RuntimeError('Unexpected release manifest')
