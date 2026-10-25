@@ -17,7 +17,7 @@ from ..config import settings
 TOKEN_TTL = timedelta(hours=24)
 
 
-def required_for_registration() -> bool:
+def required_for_registration(db=None) -> bool:
     """Deployment-controlled launch switch; default secure/verified.
 
     Set EMAIL_VERIFICATION_REQUIRED=false explicitly for early acquisition.
@@ -25,10 +25,15 @@ def required_for_registration() -> bool:
     """
     value = os.getenv("EMAIL_VERIFICATION_REQUIRED", "true").strip().lower()
     if value in {"true", "1", "yes", "on"}:
-        return True
-    if value in {"false", "0", "no", "off"}:
-        return False
-    raise RuntimeError("EMAIL_VERIFICATION_REQUIRED must be true or false")
+        default = True
+    elif value in {"false", "0", "no", "off"}:
+        default = False
+    else:
+        raise RuntimeError("EMAIL_VERIFICATION_REQUIRED must be true or false")
+    if db is not None:
+        from . import email_service_policies
+        return email_service_policies.enabled(db, "registration_verification", default)
+    return default
 
 
 
