@@ -306,21 +306,34 @@
   function pendingAttachment(id){
     let item=uncertain.get(id);
     if(!item){try{item=JSON.parse(sessionStorage.getItem(storageKey('uncertain',id))||'null');}catch{}}
-    return Boolean(item&&Array.isArray(item.files)&&item.files.length);
+    if(item&&Array.isArray(item.files)&&item.files.length)return true;
+    const messages=histories.get(id)?.messages||[];
+    const lastUser=[...messages].reverse().find(m=>m.info?.role==='user');
+    // Native history is authoritative for accepted attachments; do not
+    // fabricate a separate upload/attachment execution state.
+    return Boolean(lastUser?.parts?.some(part=>part.type==='file')&&statuses.get(id)==='submitted');
   }
   async function cancelPendingAttachment(id){
     const user=owner(),generation=epoch,row=await context(id);
-    if(!pendingAttachment(id))throw Error(label('No uncertain attachment request to cancel.','لا يوجد طلب مرفق معلّق لإلغائه.'));
-    // Reconcile first: an accepted prompt can finish despite a lost HTTP receipt.
-    await history(id,true);
+    const messages=await history(id,true);
     if(owner()!==user||generation!==epoch)throw Error('Authenticated account changed');
+    let pending=uncertain.get(id);
+    if(!pending){try{pending=JSON.parse(sessionStorage.getItem(storageKey('uncertain',id))||'null');}catch{}}
+    const lastUser=[...messages].reverse().find(m=>m.info?.role==='user');
+    const hasNativeFile=Boolean(lastUser?.parts?.some(part=>part.type==='file'));
+    if(!((pending?.files?.length)||hasNativeFile))
+      throw Error(label('No attachment task in this conversation.','لا توجد مهمة مرفق في هذه المحادثة.'));
     const live=await native(row.workspace_id,'session/status');
     const state=live[row.runtime_id]?.type||'idle';
+    // Cancellation always uses the original OpenCode session API, never
+    // deletes uploaded workspace files or erases native history.
     if(state!=='idle'){
-      await sessionRequest(id,'abort',{}); // Native cancellation scoped to this session.
+      if(!hasNativeFile&&!(pending?.files?.length))
+        throw Error(label('The running task is not an attachment request.','المهمة الجارية ليست طلب مرفق.'));
+      await sessionRequest(id,'abort',{});
       const next=await native(row.workspace_id,'session/status');
       if((next[row.runtime_id]?.type||'idle')!=='idle')
-        throw Error(label('OpenCode is stopping. Check again before clearing the pending request.','OpenCode يوقف المهمة؛ تحقق مرة أخرى قبل إزالة الطلب المعلّق.'));
+        throw Error(label('OpenCode is stopping. Check status again.','OpenCode يوقف المهمة؛ تحقق من حالتها مجددًا.'));
     }
     if(owner()!==user||generation!==epoch)throw Error('Authenticated account changed');
     uncertain.delete(id);
