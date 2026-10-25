@@ -496,6 +496,23 @@ def support_inbox_message(message_id:_uuid.UUID,_:User=Depends(require_admin),db
             "text":str(email.get("text") or "")[:50000],
             "created_at":str(email.get("created_at",""))}
 
+class EmailServiceToggle(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    enabled: bool
+
+@router.put("/service-integrations/services/{service_id}")
+def update_email_service(service_id:str, data:EmailServiceToggle,
+                         _:User=Depends(require_admin), db:Session=Depends(get_db)):
+    from ..services import email_service_policies
+    if service_id not in email_service_policies.SUPPORTED:
+        raise HTTPException(409,"This email service is not implemented")
+    try:
+        email_service_policies.set_enabled(db, service_id, data.enabled)
+    except Exception:
+        db.rollback()
+        raise
+    return {"id":service_id,"enabled":data.enabled,"saved":True}
+
 @router.get("/service-integrations")
 def service_integrations(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     import os
@@ -503,7 +520,7 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
     from ..services import admin_email_config
     saved=admin_email_config.read(db)
     mail_ready=email_verification.smtp_ready(db)
-    required=email_verification.required_for_registration()
+    required=email_verification.required_for_registration(db)
     mail=saved or {}
     provider=mail.get("provider","resend")
     return {"email":{"provider":provider,"configured":mail_ready,"sending_ready":mail_ready,
@@ -515,9 +532,9 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
           "smtp_port":mail.get("smtp_port",587),
           "smtp_username":mail.get("smtp_username","resend")},
        "services":[
-         {"id":"registration_verification","enabled":required,"available":mail_ready,
+         {"id":"registration_verification","enabled":required,"available":True,"editable":True,
           "reason":"" if mail_ready else "Resend API key missing"},
-         {"id":"password_reset","enabled":True,"available":mail_ready,"reason":"" if mail_ready else "Email delivery not configured"},
+         {"id":"password_reset","enabled":False,"available":False,"reason":"Password reset endpoint not implemented"},
          *({"id":i,"enabled":False,"available":False,"reason":"Not implemented"} for i in
            ("welcome_email","subscription_expiry","low_balance","account_suspension",
             "payment_receipt","renewal_reminder","system_updates","login_security",
