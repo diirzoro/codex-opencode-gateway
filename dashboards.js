@@ -80,7 +80,16 @@
           const row=document.createElement('div');row.className='manage-card';
           const title=document.createElement('strong');title.textContent=msg.subject||'(No subject)';
           const details=document.createElement('small');details.textContent=msg.from+' · '+msg.created_at;
-          row.append(title,details);list.append(row);
+          const open=document.createElement('button');open.type='button';open.className='button ghost small';open.textContent='قراءة الرسالة · Open';open.onclick=async()=>{
+            open.disabled=true;
+            try{
+              const item=await api('/api/admin/service-integrations/support-inbox/'+encodeURIComponent(msg.id));
+              let body=row.querySelector('.support-mail-text');
+              if(!body){body=document.createElement('pre');body.className='support-mail-text';body.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto';row.append(body);}
+              body.textContent=item.text||'لا يوجد نص عادي للرسالة';
+            }catch(error){toast(error.message);}finally{open.disabled=false;}
+          };
+          row.append(title,details,open);list.append(row);
         }
         if(!result.items.length)list.append(textElement('p','لا توجد رسائل دعم ضمن النتائج الحالية.'));
       }catch(error){status.textContent=error.message;}
