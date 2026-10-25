@@ -32,27 +32,38 @@ def required_for_registration() -> bool:
 
 
 
-def smtp_ready():
-    return bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_FROM") and os.getenv("SMTP_USERNAME")
-                and os.getenv("SMTP_PASSWORD"))
+def smtp_settings(db=None):
+    if db is not None:
+        from . import admin_email_config
+        saved=admin_email_config.read(db)
+        if saved:return saved
+    return {'smtp_host':os.getenv('SMTP_HOST',''),'smtp_from':os.getenv('SMTP_FROM',''),
+            'smtp_username':os.getenv('SMTP_USERNAME',''),'smtp_password':os.getenv('SMTP_PASSWORD',''),
+            'smtp_port':int(os.getenv('SMTP_PORT','587'))}
 
 
-def send_link(email: str, raw: str):
-    if not smtp_ready():
+def smtp_ready(db=None):
+    config=smtp_settings(db)
+    return all(config.get(key) for key in ('smtp_host','smtp_from','smtp_username','smtp_password'))
+
+
+def send_link(email: str, raw: str, db=None):
+    config=smtp_settings(db)
+    if not smtp_ready(db):
         raise HTTPException(503, "Email verification delivery is not configured")
     if not settings.public_base_url.startswith("https://"):
         raise HTTPException(503, "Verification links require HTTPS")
     message = EmailMessage()
     message["Subject"] = "Verify your OpenCode Gateway email"
-    message["From"] = os.environ["SMTP_FROM"]
+    message["From"] = config["smtp_from"]
     message["To"] = email
     url = settings.public_base_url + "/api/auth/verify-email?token=" + quote(raw, safe="")
     message.set_content("Verify your email address using this link (valid for 24 hours):\n" + url)
     try:
-        port = int(os.getenv("SMTP_PORT", "587"))
-        with smtplib.SMTP(os.environ["SMTP_HOST"], port, timeout=12) as client:
+        port = int(config["smtp_port"])
+        with smtplib.SMTP(config["smtp_host"], port, timeout=12) as client:
             client.starttls(context=ssl.create_default_context())
-            client.login(os.environ["SMTP_USERNAME"], os.environ["SMTP_PASSWORD"])
+            client.login(config["smtp_username"], config["smtp_password"])
             client.send_message(message)
     except (OSError, smtplib.SMTPException, ValueError):
         raise HTTPException(503, "Verification email could not be delivered; try again later") from None
