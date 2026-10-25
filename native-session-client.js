@@ -261,9 +261,21 @@
     try{await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
       messageID,model:{providerID,modelID},...(variant?{variant}:{}),...(agent?{agent}:{}),parts});}
     catch(error){
-      const confirmed=histories.get(id)?.messages.some(message=>message.info.id===messageID);
+      // The HTTP response can fail after Native accepted an async prompt.
+      // Resolve the exact Native message ID against authoritative history
+      // before reporting uncertainty. Never send the prompt a second time.
+      let confirmed=false;
+      if(owner()===user){
+        try{
+          const messages=await history(id,true);
+          confirmed=messages.some(message=>message.info?.id===messageID);
+        }catch(_historyError){
+          // Keep the original transport error and uncertain receipt.
+        }
+      }
       if(!confirmed){
-        if(owner()===user&&(!error.status||error.status>=500))error.message=label('Native could not confirm this request. Draft saved; check the conversation status.','تعذر تأكيد استلام الطلب. المسودة محفوظة؛ تحقق من حالة المحادثة.');
+        if(owner()===user&&(!error.status||error.status>=500))
+          error.message=label('OpenCode receipt could not be confirmed. Your draft is saved; check session status.','تعذر تأكيد استلام OpenCode للطلب. المسودة محفوظة؛ تحقق من حالة الجلسة.');
         else if(owner()===user){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}
         throw error;
       }
