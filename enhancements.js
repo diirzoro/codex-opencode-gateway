@@ -145,11 +145,40 @@
     list.forEach(function (s) { var row = document.createElement('tr'); adminCells(row, [s.owner, s.project || '—', s.title, s.status, s.created_at ? new Date(s.created_at).toLocaleDateString('en-GB') : '—']); body.append(row); });
   }
   async function loadAdminGithubAdmin() {
-    var panel = document.getElementById('adminGithubPanel');
+    const panel=document.getElementById('adminGithubPanel');if(!panel)return;
+    const status=document.createElement('p');status.setAttribute('role','status');
+    status.textContent=tr('Checking GitHub configuration…','جارٍ فحص إعدادات GitHub…');
+    panel.replaceChildren(status);
     try {
-      var s = await api('/api/github/status');
-      panel.replaceChildren(textElement('p', 'Configured: ' + (s.configured ? 'yes' : 'no') + ' · Connected: ' + (s.connected ? 'yes' : 'no') + (s.account_login ? (' · ' + s.account_login) : '')), textElement('p', 'This is a status placeholder. The real GitHub authorization, clone and push flow is a later phase.'));
-    } catch (error) { panel.replaceChildren(textElement('p', error.message)); }
+      const [connection,config]=await Promise.all([
+        api('/api/github/status'),api('/api/admin/github-configuration')
+      ]);
+      status.textContent=connection.connected
+        ?tr('Connected: ','متصل: ')+(connection.account_login||'GitHub')
+        :connection.configured
+          ?tr('GitHub App configured. Account authorization still required.','تطبيق GitHub مهيأ. تفويض الحساب مطلوب.')
+          :tr('GitHub App is not ready on the server.','تطبيق GitHub غير جاهز على الخادم.');
+      const heading=document.createElement('h2');heading.textContent=tr('GitHub App settings','إعدادات تطبيق GitHub');panel.append(heading);
+      const note=document.createElement('p');note.className='lead';
+      note.textContent=tr('Effective server configuration (read-only). Secrets are never displayed.','إعدادات الخادم الفعلية (للقراءة فقط). لا تُعرض قيم الأسرار.');
+      panel.append(note);
+      const grid=document.createElement('div');grid.className='field-grid';panel.append(grid);
+      for(const [caption,key] of [['App ID','app_id'],['App Slug','app_slug'],['OAuth Client ID','client_id'],['Public URL','public_base_url'],['Callback URL','callback_url'],['Webhook URL','webhook_url'],['API URL','api_base'],['GitHub URL','web_base']]){
+        const field=document.createElement('label');field.className='field';
+        const label=document.createElement('span');label.textContent=caption;
+        const input=document.createElement('input');input.readOnly=true;input.value=String(config[key]??'');
+        field.append(label,input);grid.append(field);
+      }
+      const missing=document.createElement('p');missing.setAttribute('role','status');
+      missing.textContent=config.missing?.length?tr('Missing: ','ناقص: ')+config.missing.join(', '):tr('Required keys are present. OAuth still needs a live test.','المفاتيح المطلوبة موجودة؛ يلزم اختبار OAuth الفعلي.');
+      panel.append(missing);
+      const authorize=document.createElement('button');authorize.type='button';authorize.className='button ghost';
+      authorize.textContent=tr('Authorize my GitHub account','تفويض حساب GitHub الخاص بي');
+      authorize.disabled=!connection.configured||!!connection.connected;
+      authorize.onclick=()=>window.location.assign('/api/github/install');panel.append(authorize);
+      const refresh=document.createElement('button');refresh.type='button';refresh.className='button ghost';
+      refresh.textContent=tr('Refresh','تحديث');refresh.onclick=loadAdminGithubAdmin;panel.append(refresh);
+    }catch(error){status.textContent=tr('GitHub configuration unavailable: ','تعذر تحميل إعدادات GitHub: ')+error.message;}
   }
 
   async function loadAdminBilling() {
@@ -216,7 +245,7 @@
     [['#icon-user', tr('Username', 'اسم المستخدم'), user.username], ['#icon-file', tr('Email', 'البريد'), user.email], ['#icon-shield', tr('Role', 'الدور'), user.role], ['#icon-clock', tr('Trial', 'التجربة'), (typeof user.trial_remaining_days === 'number' ? user.trial_remaining_days + ' ' + tr('days remaining', 'يوم متبقٍ') : '—')]].forEach(function (r) { var c = listCard(r[0], r[1], r[2]); box.append(c); });
   }
 
-  var ADMIN_LOADERS = { overview: loadAdminOverview, projects: loadAdminProjects, workspaces: loadAdminWorkspaces, sessions: loadAdminSessions, users: loadAdminUsersData, plans: loadAdminPlans, billing: loadAdminBilling, reports: loadAdminReports, audit: async function () {}, health: loadAdminHealth, policy: loadAdminPolicy, github: async function(){ if(window.gatewayLoadAdminGithubStatus) await window.gatewayLoadAdminGithubStatus(); else await loadAdminGithubAdmin(); }, email: async function(){ if(window.gatewayLoadServiceCenter) await window.gatewayLoadServiceCenter(); }, trial: loadAdminTrial, settings: async function () {}, security: async function () {}, account: loadAdminAccount };
+  var ADMIN_LOADERS = { overview: loadAdminOverview, projects: loadAdminProjects, workspaces: loadAdminWorkspaces, sessions: loadAdminSessions, users: loadAdminUsersData, plans: loadAdminPlans, billing: loadAdminBilling, reports: loadAdminReports, audit: async function () {}, health: loadAdminHealth, policy: loadAdminPolicy, github: loadAdminGithubAdmin, email: async function(){ if(window.gatewayLoadServiceCenter) await window.gatewayLoadServiceCenter(); }, trial: loadAdminTrial, settings: async function () {}, security: async function () {}, account: loadAdminAccount };
 
   function setAdminView(name) {
     if (!['overview','users','plans','billing','reports','audit','health','policy','github','email','trial','settings','security','account'].includes(name)) name='overview';
