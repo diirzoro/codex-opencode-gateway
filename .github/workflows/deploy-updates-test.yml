@@ -1,9 +1,9 @@
-name: Audit and promote updates to TEST
+name: Audit and deploy all updates to TEST
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "Select TEST operation (legacy promote-test is not accepted)"
+        description: "Full TEST: audit without changes or deploy all approved app source"
         required: true
         type: choice
         default: audit-test
@@ -36,21 +36,28 @@ jobs:
         with:
           ref: updates
           persist-credentials: false
-      - name: Validate reviewed 18-file source manifest
+      - name: Validate full TEST source and migration chain
         run: |
           set -euo pipefail
+          python3 -m py_compile scripts/full_test_git_release.py
+          python3 -m compileall -q backend/app backend/alembic/versions
           python3 - <<'PY'
-          import ast,re,pathlib
-          s=pathlib.Path("scripts/native_test_release.py").read_text()
-          m=re.search(r"^FILES=\((.*?)\)\s*$",s,re.S|re.M)
-          if not m: raise SystemExit("Missing release manifest")
-          paths=ast.literal_eval("("+m.group(1)+")")
-          if len(paths)!=18 or len(set(paths))!=18: raise SystemExit("Invalid release manifest")
-          if any(not pathlib.Path(p).is_file() for p in paths): raise SystemExit("Missing reviewed source")
-          pathlib.Path("/tmp/test-native-manifest").write_text("\n".join(paths)+"\n")
+          import pathlib, ast
+          versions=sorted(pathlib.Path('backend/alembic/versions').glob('*.py'))
+          assert versions and versions[-1].name=='0021_email_delivery_settings.py'
+          assert pathlib.Path('backend/app/services/admin_email_config.py').is_file()
+          assert pathlib.Path('index.html').is_file()
+          print('FULL_SOURCE_PREFLIGHT_SUCCESS',len(versions),'migrations')
           PY
-          while IFS= read -r f; do sha256sum "$f"; done < /tmp/test-native-manifest > /tmp/test-native-hashes
-          python3 -m py_compile scripts/test_diff_only_rollout.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate frontend syntax
+        run: |
+          set -euo pipefail
+          for file in app.js dashboards.js enhancements.js management.js native-session-client.js runtime-client.js; do
+            node --check "$file"
+          done
       - name: Configure pinned SSH for TEST
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -78,34 +85,22 @@ jobs:
           port="${PORT:-22}"
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             'test "$HOME" = /home/tahir && test -d /home/tahir/opencode-gateway-test/.git && test -f /home/tahir/opencode-gateway-test/.env && systemctl is-active --quiet opencode-gateway-test.service && systemctl is-active --quiet opencode-native-test.service'
-      - name: Compare runtime files to GitHub read-only
-        if: steps.confirm.outputs.mode == 'audit-test'
+      - name: Full TEST audit or deploy by pinned GitHub commit
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.STAGING_USER }}
           PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          TARGET_SHA: ${{ github.sha }}
+          MODE: ${{ steps.confirm.outputs.mode }}
         run: |
           set -euo pipefail
           port="${PORT:-22}"
-          while IFS=' ' read -r expected file; do
-            test -n "$file" || continue
-            actual="$(ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" "cd /home/tahir/opencode-gateway-test && if test -f '$file' && test ! -L '$file'; then sha256sum '$file' | cut -d ' ' -f1; else echo MISSING; fi")"
-            if [[ "$expected" == "$actual" ]]; then echo "MATCH $file"; else echo "DIFFERENT_OR_MISSING $file"; fi
-          done < /tmp/test-native-hashes
-          echo "AUDIT_ONLY: no TEST application, configuration, or service changed"
-      - name: Deploy approved GitHub source diffs to TEST
-        if: steps.confirm.outputs.mode == 'deploy-test'
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ secrets.STAGING_USER }}
-          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
-          EXPECTED_REVISION: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          port="${PORT:-22}"
+          # Read the approved script directly from the reviewed GitHub revision.
+          # Git checkout and app source are preserved; no server .env, IP, port,
+          # nginx, systemd, database files, Native engine, or LIVE changes.
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && test \"\$(git rev-parse origin/updates)\" = '$EXPECTED_REVISION' && git show '$EXPECTED_REVISION:scripts/test_gateway_git_diff.py' > /home/tahir/.test-git-diff-${GITHUB_RUN_ID}.py && chmod 600 /home/tahir/.test-git-diff-${GITHUB_RUN_ID}.py && python3 -I /home/tahir/.test-git-diff-${GITHUB_RUN_ID}.py"
+            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' && git show '$TARGET_SHA:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && python3 -I /home/tahir/.full-test-git-release.py $(test '$MODE' = 'deploy-test' && echo deploy || echo audit) '$TARGET_SHA'"
       - name: Report scope
         if: always()
         run: |
-          echo "TEST only. GitHub updates files only in the approved 18-file runtime bundle, preserving .env, databases, system configuration, and the OpenCode installation." >> "$GITHUB_STEP_SUMMARY"
+          echo "TEST only: full tracked application source, excluding server .env, protected runtime, OS/Nginx/systemd configuration, Preview, LIVE and Native engine. Database upgrades require explicit safe gate; rollback is by Git commit, not backup copies." >> "$GITHUB_STEP_SUMMARY"
