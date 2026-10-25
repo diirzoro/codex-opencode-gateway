@@ -318,3 +318,36 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
     row.require_tool_approval = data.require_tool_approval
     db.commit(); db.refresh(row)
     return row.as_payload()
+
+@router.get("/service-integrations")
+def service_integrations(_: User = Depends(require_admin)):
+    """Read-only service readiness. Never return SMTP passwords or provider tokens."""
+    import os
+    from ..services import email_verification
+    email_ready = email_verification.smtp_ready()
+    verify_required = email_verification.required_for_registration()
+    host = os.getenv("SMTP_HOST", "").strip().lower()
+    provider = "resend" if host == "smtp.resend.com" else ("smtp" if host else "unconfigured")
+    return {
+        "email": {
+            "provider": provider,
+            "configured": email_ready,
+            "sending_ready": email_ready,
+            "sender": os.getenv("SMTP_FROM", "") if email_ready else "",
+            "verification_required": verify_required,
+            "credentials_configured": bool(os.getenv("SMTP_PASSWORD")),
+        },
+        "services": [
+            {"id": "registration_verification", "enabled": verify_required, "available": email_ready,
+             "reason": "" if email_ready else "SMTP credentials are not configured on this server"},
+            {"id": "password_reset", "enabled": False, "available": False,
+             "reason": "Secure password reset delivery is not available yet"},
+            {"id": "welcome_email", "enabled": False, "available": False, "reason": "Not implemented"},
+            {"id": "subscription_expiry", "enabled": False, "available": False, "reason": "Not implemented"},
+            {"id": "low_balance", "enabled": False, "available": False, "reason": "Not implemented"},
+            {"id": "account_suspension", "enabled": False, "available": False, "reason": "Not implemented"},
+            {"id": "payment_receipt", "enabled": False, "available": False, "reason": "Not implemented"},
+            {"id": "renewal_reminder", "enabled": False, "available": False, "reason": "Not implemented"},
+            {"id": "system_updates", "enabled": False, "available": False, "reason": "Not implemented"},
+        ],
+    }
