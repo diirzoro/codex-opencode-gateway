@@ -1,5 +1,7 @@
 # CURRENT Three-point Native UX follow-up — 25 October 2026
 
+Published implementation: `8a1dbd6229315d39fdccb417238c110eadf12bb0` (runtime tree234f7543bd8b1c6bd8a0b795e9b3ad32ac1869de), integrated through owner commit2971ea3abf0618c0702eadcb293ceec0cb4f72b7. The documentation follow-up records this exact source checkpoint.
+
 Owner requests: fewer approval interruptions, smaller question choices, and removal of attachment read scaffolding from the user bubble. Baseline updates bbd1d58203bc84dc178092722aa6e040c2b91ef4 includes concurrent Resend/admin work preserved intact. Read [NATIVE_APPROVALS_AND_ATTACHMENT_UX.md](NATIVE_APPROVALS_AND_ATTACHMENT_UX.md) for exact behavior, pinned1.19.4 findings, test evidence and limitations.
 
 Implemented in existing Native integration: automatic Todo/question capability permission; explicit grouped once for displayed same-tool requests; ownership-validated exact-file Native session permission grants for later prompts; compact680px/min(360px,46dvh) choices; synthetic user attachment expansion hidden using Native's flag while original prompt/file chip/history stay intact. Shell and raw always remain blocked. Native stores the permission rules; Gateway only validates/manages them.
