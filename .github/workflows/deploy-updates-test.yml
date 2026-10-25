@@ -1,16 +1,16 @@
 # TEST-only compatibility audit. Deliberately no deployment until existing shared Native routing is reconciled.
-name: Audit updates against TEST
+name: Audit and promote updates to TEST
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: 'Type audit-test to inspect TEST without changing it'
+        description: 'Type audit-test for read-only inspection, or deploy-test for reviewed TEST rollout'
         required: true
         type: string
 permissions:
   contents: read
 concurrency:
-  group: test-native-audit
+  group: test-native-deploy
   cancel-in-progress: false
 jobs:
   audit:
@@ -24,7 +24,7 @@ jobs:
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          test "$CONFIRMATION" = "audit-test"
+          [[ "$CONFIRMATION" == "audit-test" || "$CONFIRMATION" == "deploy-test" ]]
           test "$GITHUB_REF" = 'refs/heads/updates'
       - uses: actions/checkout@v4
         with:
@@ -120,6 +120,48 @@ jobs:
           fi
           echo 'AUDIT_ONLY: no code/config/service/database/Native process updated'
           REMOTE
+      - name: Upload reviewed deployment source for TEST-only rollout
+        if: inputs.confirmation == 'deploy-test'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${PORT:-22}"
+          test "$port" = 22 || [[ "$port" =~ ^[0-9]{1,5}$ ]]
+          bundle="opencode-native-deploy-${GITHUB_RUN_ID}.tar"
+          python3 - <<'PY'
+          import ast,re,pathlib
+          s=pathlib.Path('scripts/native_test_release.py').read_text()
+          m=re.search(r'^FILES=\\((.*?)\\)\\s*        if: always()
+        run: |
+          echo 'TEST audit or guarded deployment (depending on dispatch input); master and LIVE excluded.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Deployment requires the separate root-private test_diff_only_rollout.py script and pre-existing authorized sudo. If either is absent, deployment stops without touching application files.' >> "$GITHUB_STEP_SUMMARY"
+,s,re.S|re.M)
+          if not m: raise SystemExit('Missing manifest')
+          files=ast.literal_eval('('+m.group(1)+')')
+          pathlib.Path('/tmp/opencode-native-files').write_text('\\n'.join(files)+'\\n')
+          PY
+          tar -cf "$bundle" -T /tmp/opencode-native-files
+          sha256sum "$bundle" > "$bundle.sha256"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            "mkdir -p -m 700 /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}"
+          scp -P "$port" -o StrictHostKeyChecking=yes "$bundle" "$bundle.sha256" \
+            "$USER@$HOST:/home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/"
+      - name: Perform TEST-only guarded deployment
+        if: inputs.confirmation == 'deploy-test'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.STAGING_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${PORT:-22}"
+          # Requires a pre-existing narrowly authorized passwordless sudo capability;
+          # never send a sudo password or broaden sudoers from CI.
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            "sudo -n /usr/bin/python3 -I /home/tahir/opencode-gateway-test/scripts/test_diff_only_rollout.py --bundle /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/opencode-native-deploy-${GITHUB_RUN_ID}.tar --checksum /home/tahir/.opencode-test-release-${GITHUB_RUN_ID}/opencode-native-deploy-${GITHUB_RUN_ID}.tar.sha256"
       - name: Audit summary
         if: always()
         run: |
