@@ -206,6 +206,7 @@ def catalog_page(data, policy=None, *, offset=0, limit=50, query=''):
     entries.sort(key=lambda r:(r['id'] not in connected,r['id'] not in POPULAR_PROVIDER_IDS,(r.get('name') or r['id']).casefold(),r['id']))
     end=min(offset+limit,len(entries))
     return {'items':[provider_index(r,data,policy) for r in entries[offset:end]],
+            'connected_items':[provider_index(r,data,policy) for r in _catalog_entries(data) if r['id'] in connected],
             'total':len(entries),'offset':offset,'limit':limit,
             'next_offset':end if end<len(entries) else None}
 

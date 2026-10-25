@@ -57,3 +57,27 @@ def permission_config(policy) -> dict:
 def session_permissions(policy):
     return [{"permission": name, "pattern": "*", "action": action}
             for name, action in permission_config(policy).items()]
+
+
+# Native execution is deny-by-default, including delegation/custom command tools.
+# Shell stays blocked for administrators too until TEST's OS/project boundary is
+# verified. A role alone cannot constrain a shared process's filesystem access.
+NATIVE_REVIEW_TOOLS = frozenset({'read', 'edit', 'write', 'apply_patch', 'glob', 'grep',
+                                 'list', 'question', 'todowrite', 'todoread'})
+
+def native_session_permissions(row, root):
+    allowed = provider_sets(row)[2]
+    rules = [{'permission': '*', 'pattern': '*', 'action': 'deny'}]
+    for name in sorted(NATIVE_REVIEW_TOOLS):
+        if not allowed or name in allowed:
+            rules.append({'permission': name, 'pattern': '*', 'action': 'ask'})
+    # Session rules follow agent rules in Native. Neither an agent nor an old
+    # always grant should reopen shell, task/subagents, MCP or code-mode execute.
+    for name in ('bash', 'shell', 'terminal', 'execute', 'task', 'skill', 'lsp', 'external_directory'):
+        rules.append({'permission': name, 'pattern': '*', 'action': 'deny'})
+    for permission in ('read', 'edit', 'write', 'apply_patch', 'glob', 'grep', 'list'):
+        for pattern in ('.git', '.git/*', '*/.git', '*/.git/*', '.opencode', '.opencode/*',
+                        '*/.opencode', '*/.opencode/*', '.env*', '*/.env*',
+                        'opencode.json*', '*/opencode.json*', '.ssh', '.ssh/*', '*/.ssh/*'):
+            rules.append({'permission': permission, 'pattern': pattern, 'action': 'deny'})
+    return rules

@@ -198,7 +198,7 @@
     const [providers,agents]=await Promise.all(['provider','agent'].map(path=>native(id,path)));
     if(!Array.isArray(providers.all)||!Array.isArray(providers.connected)||!Array.isArray(agents))throw Error('Invalid native discovery schema');
     const result={native:true,loadedAt:Date.now(),workspace_id:String(id),health:{healthy:true},version:configuration.version,status:'ready',errors:{},agents,default_agent:null,
-      generation:'native-test',revision:'live',policy_revision:'native',providers:providers.all.map(p=>({...p,connected:providers.connected.includes(p.id),allowed:true,
+      generation:'native-test',revision:'live',policy_revision:'native',providers:providers.all.map(p=>({...p,...providers.gateway_auth_status?.[p.id],connected:providers.connected.includes(p.id),allowed:true,
         default_model:providers.default?.[p.id],models:Object.values(p.models||{}).map(m=>({...m,allowed:true}))}))};
     return result;
   }

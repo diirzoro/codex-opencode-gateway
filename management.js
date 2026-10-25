@@ -129,44 +129,20 @@
     let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
     let searchRows=[],searchQuery='',searchTimer=null,searchAbort=null,searchSequence=0,optionsOpen=false;
     const searchState=node('p','','provider-search-status');searchState.setAttribute('role','status');comboWrap.after(searchState);
-    let moreOffset=0,moreQuery=null,moreBusy=false;
-    const moreProviders=button(tr('Load 50 more providers','تحميل 50 مزوّدًا إضافيًا'),async()=>{
-      if(workspaceId||moreBusy||!view.ready)return;
-      const query=combo.value.trim().toLowerCase(),offset=moreQuery===query?moreOffset:0;
-      if(offset===null)return;
-      const sequence=searchSequence;moreBusy=true;moreProviders.disabled=true;
-      try{
-        const result=await api('/api/opencode/catalog/providers/page?limit=50&offset='+offset+'&query='+encodeURIComponent(query),{signal:controller.signal});
-        if(!alive()||sequence!==searchSequence||combo.value.trim().toLowerCase()!==query)return;
-        moreQuery=query;moreOffset=result.next_offset;
-        if(query){searchQuery=query;searchRows=[...new Map([...searchRows,...result.items].map(p=>[p.id,p])).values()];}
-        else snapshot={...snapshot,providers:[...new Map([...(snapshot?.providers||[]),...result.items].map(p=>[p.id,p])).values()]};
-        optionsOpen=true;renderOptions();moreProviders.hidden=true;
-        searchState.textContent=tr('Runtime providers: ','مزوّدات Runtime: ')+result.total;
-      }catch(error){if(alive()&&error.name!=='AbortError')searchState.textContent=error.message;}
-      finally{moreBusy=false;moreProviders.disabled=false;}
-    });moreProviders.hidden=true;comboWrap.after(moreProviders);
-
-    // Keep the first 50 fast; fetch further pages only when a user scrolls the results.
-    // The legacy pagination action stays internal and never blocks the first render.
-    options.addEventListener('scroll',()=>{
-      if(workspaceId||moreBusy||!view.ready||!optionsOpen||moreOffset===null)return;
-      if(options.scrollTop+options.clientHeight>=options.scrollHeight-48)moreProviders.click();
-    });
+    // The main catalog stays at 50. Every other Native ID/name is available
+    // through manual resolution; connected providers have their own section.
     const sameCatalog=data=>data.workspace_id===workspaceId&&data.generation===snapshot?.generation&&data.revision===snapshot?.revision&&data.policy_revision===snapshot?.policy_revision;
     async function lookup(kind,value,signal){
       if(!workspaceId){
+        if(kind==='resolve'){const result=await api('/api/opencode/catalog/providers/resolve?name='+encodeURIComponent(value),{signal});if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');return [result];}
         const url='/api/opencode/catalog/providers/page?limit=50&query='+encodeURIComponent(value);
         const result=await api(url,{signal});
         if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
-        if(kind==='search'&&combo.value.trim().toLowerCase()===value.toLowerCase()){
-          moreQuery=value.toLowerCase();moreOffset=result.next_offset;moreProviders.hidden=true;
-        }
-        return kind==='resolve'?result.items.filter(row=>row.id===value):result.items;
+        return result.items;
       }
       const data=await api(base+kind+'?'+(kind==='search'?'query':'name')+'='+encodeURIComponent(value),{signal});
       if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
-      if(!sameCatalog(data)){
+      if(!data.native&&!sameCatalog(data)){
         view.ready=false;customButton.disabled=true;window.workspaceRuntime.invalidate(workspaceId);
         message(tr('OpenCode state changed. Refresh before connecting.','تغيّرت حالة OpenCode. حدّث الحالة قبل الربط.'),true);
         throw new Error(tr('OpenCode state changed. Close this dialog and refresh before connecting.','تغيّرت حالة OpenCode. أغلق النافذة وحدّث الحالة قبل الربط.'));
@@ -204,7 +180,7 @@
       let choices,accountOptions=null;
       try{
         if(!workspaceId){const authStarted=performance.now();accountOptions=await api("/api/opencode/connections/"+encodeURIComponent(p.id)+"/options",{signal:discovery.signal});window.gatewayProviderTimings={...window.gatewayProviderTimings,auth_request_ms:performance.now()-authStarted};}
-        else if(!resolved)p=(await lookup('resolve',p.id,discovery.signal))[0];
+        else {if(!resolved)p=(await lookup('resolve',p.id,discovery.signal))[0];if(snapshot?.native)accountOptions=await api('/api/opencode/connections/'+encodeURIComponent(p.id)+'/options',{signal:discovery.signal});}
         if(!currentDialog())return;
         if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
         choices=accountOptions?accountOptions.auth_methods:p.auth_methods;
@@ -279,9 +255,9 @@
     };
     function renderSelected(p){
       const state=p.auth_status==='reauthorization_required'?tr('Authorization required','يلزم إعادة التفويض'):
-        p.auth_status==='refresh_required'?tr('Token expired · refresh or reauthorize','انتهى التوكن · جدّد أو أعد التفويض'):p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
+        p.auth_status==='refresh_required'?tr('Token expired · refresh or reauthorize','انتهى التوكن · جدّد أو أعد التفويض'):p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
       const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
-      status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String(p.model_count||0)+' '+tr('models','نموذج')));
+      status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String(p.model_count??p.models?.length??0)+' '+tr('models','نموذج')));
       if(!view.ready){status.append(node('span',tr('Refreshing workspace state…','جارٍ تحديث حالة مساحة العمل…')));return;}
       const act=node('div','','manage-actions');
       if(p.connected)act.append(button(tr('Disconnect / delete key','فصل / حذف المفتاح'),()=>disconnect(p)));
@@ -309,7 +285,7 @@
       const rows=(snapshot?.providers||[]).filter(p=>p.connected);
       if(!rows.length){connectedBox.append(node('p',tr('No connected providers.','لا توجد مزوّدات متصلة.')));return;}
       for(const p of rows){
-        const item=node('div','','manage-actions');item.append(node('strong',p.name||p.id));
+        const item=node('div','','manage-actions');item.append(node('strong',p.name||p.id),node('span',p.verified===true?tr('Tested','تم اختباره'):tr('Configured · not tested','مهيأ · لم يُختبر')));
         if(p.allowed===false)item.append(node('span',tr('Restricted','مقيّد')));
         const remove=button(tr('Disconnect / delete key','فصل / حذف المفتاح'),()=>disconnect(p));remove.disabled=!view.ready;item.append(remove);connectedBox.append(item);
       }
@@ -318,9 +294,9 @@
       const renderStarted=performance.now();
       const query=(combo.value||'').trim().toLowerCase();const previous=new Map([...options.children].map(n=>[n.dataset.providerId,n]));
       const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
-      const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query));
+      const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query)).slice(0,50);
       for(const p of rows){
-        const state=p.connected?tr('Connected','متصل'):tr('Disconnected','غير متصل');
+        const state=p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
         const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
         const o=previous.get(p.id)||node('button','','provider-combo-option');previous.delete(p.id);o.dataset.providerId=p.id;o.textContent=(p.name||p.id)+' · '+state+restriction;o.type='button';
         o.onclick=()=>{
@@ -335,7 +311,7 @@
       options.hidden=!optionsOpen||!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
       window.gatewayProviderTimings={...window.gatewayProviderTimings,render_sync_ms:performance.now()-renderStarted,rendered_options:rows.length};
     };
-    function stopSearch(){const empty=!combo.value.trim();moreOffset=empty?(snapshot?.providers?.length||0):0;moreQuery=empty?'':null;moreProviders.hidden=true;searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}
+    function stopSearch(){searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}
     function scheduleSearch(){
       stopSearch();renderOptions();const query=combo.value.trim().toLowerCase();
       if(query.length<2||!view.ready)return;
@@ -349,19 +325,19 @@
       },350);
     }
     controller.signal.addEventListener('abort',stopSearch,{once:true});
-    const customButton=button(tr('Add custom provider','إضافة مزوّد مخصص'),()=>{
+    const customButton=button(tr('Add Provider Manually','إضافة مزوّد يدويًا'),()=>{
       const host=node('div'),f=node('form','','manage-form');
       const pid=input(f,tr('Provider name or ID','اسم المزوّد أو معرّفه'),'provider_id');pid.required=true;pid.maxLength=200;pid.placeholder='OpenAI / openai / …';
-      f.append(node('p',tr('Only providers reported by this workspace’s OpenCode runtime can be added. OpenCode validates the key with a real model request before it is saved; provider usage may apply.','يمكن إضافة المزوّدات التي تعلنها بيئة OpenCode لهذه المساحة فقط. يتحقق OpenCode من المفتاح بطلب نموذج فعلي قبل حفظه؛ قد تُحتسب رسوم استخدام لدى المزوّد.')));
+      f.append(node('p',tr('Search any provider in OpenCode by its original name or ID. Saving credentials configures the connection; a native prompt is required to test access.','ابحث عن أي مزوّد في OpenCode باسمه أو معرّفه الأصلي. حفظ الاعتماد يهيئ الاتصال؛ يلزم طلب أصلي لاختبار صلاحية الوصول.')));
       const validationState=node('p','','provider-feedback');setFeedback(validationState,'');f.append(validationState);
       const save=node('button',tr('Choose authentication method','اختر طريقة المصادقة'),'button');save.type='submit';f.append(save);host.append(f);document.body.append(host);
-      const dlg=window.mountFormDialog(host,f,tr('Custom provider','مزوّد مخصص'));dlg.classList.add('provider-auth-dialog');f.dialogTrigger.hidden=true;
+      const dlg=window.mountFormDialog(host,f,tr('Add Provider Manually','إضافة مزوّد يدويًا'));dlg.classList.add('provider-auth-dialog');f.dialogTrigger.hidden=true;
       dlg.addEventListener('keydown',event=>event.stopPropagation());
       const current=()=>alive()&&view.ready&&contextCurrent()&&dlg.open;
       f.onsubmit=async event=>{
         event.preventDefault();if(!current()||save.disabled||!f.reportValidity())return;save.disabled=true;setFeedback(validationState,tr('Checking the OpenCode provider…','جارٍ فحص المزوّد في OpenCode…'));
         try{
-          const rows=await lookup('resolve',pid.value.trim());if(!current())return;const p=rows[0];
+          const rows=await lookup('resolve',pid.value.trim());if(!current())return;const p=rows[0];if(!p)throw new Error(tr('Provider was not found in OpenCode.','المزوّد غير موجود في OpenCode.'));
           if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
           selectedProviderId=p.id;dlg.close();await openAuthDialog(p,true);
         }catch(error){if(error.name!=='AbortError')showError(f,error);}finally{save.disabled=false;}
@@ -376,8 +352,8 @@
         try{
           const catalog=await api('/api/opencode/catalog/providers/page?limit=50&offset=0',{signal:controller.signal});
           if(!alive()||workspaceId)return;
-          snapshot={providers:catalog.items||[]};moreOffset=catalog.next_offset;moreQuery='';
-          view.ready=true;customButton.disabled=true;
+          snapshot={providers:[...new Map([...(catalog.items||[]),...(catalog.connected_items||[])].map(p=>[p.id,p])).values()]};
+          view.ready=true;customButton.disabled=false;
           renderOptions();renderConnected();
           message(tr('OpenCode providers ready','مزوّدو OpenCode جاهزون')+' · '+catalog.total);
           const selected=snapshot.providers.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
@@ -414,7 +390,7 @@
       return refresh(true);
     }
     view.refresh=refresh;
-    combo.addEventListener('input',()=>{moreOffset=0;moreQuery=null;moreProviders.hidden=true;body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
+    combo.addEventListener('input',()=>{body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
     combo.addEventListener('focus',()=>{optionsOpen=true;scheduleSearch();});
     combo.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}});
     document.addEventListener('click',event=>{if(!comboWrap.contains(event.target)){optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}},{signal:controller.signal});

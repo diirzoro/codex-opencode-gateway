@@ -108,11 +108,19 @@ def account_provider_catalog(user: User=Depends(require_user),db: Session=Depend
 
 
 @router.get("/opencode/catalog/providers/page")
-def account_provider_page(offset: int=Query(default=0,ge=0),limit: int=Query(default=50,ge=1,le=100),
+def account_provider_page(offset: int=Query(default=0,ge=0),limit: int=Query(default=50,ge=1,le=50),
                           query: str=Query(default='',max_length=200),
                           user: User=Depends(require_user),db: Session=Depends(get_db)):
     data=_account_catalog_state(db,user,_account_public_catalog(user,"/provider",db))
     return providers.catalog_page(data,policy.load(db),offset=offset,limit=limit,query=query)
+
+
+@router.get('/opencode/catalog/providers/resolve')
+def account_provider_resolve(name: str=Query(min_length=1,max_length=200),
+                             user: User=Depends(require_user),db: Session=Depends(get_db)):
+    data=_account_catalog_state(db,user,_account_public_catalog(user,'/provider',db))
+    entry=providers.resolve_provider(data,name)
+    return providers.provider_index(entry,data,policy.load(db))
 
 
 @router.get("/opencode/catalog/providers/search")
@@ -694,35 +702,53 @@ def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_us
     if native_sessions.enabled():
         row,root,_,_=native_sessions.context(db,user,workspace_id)
         tools=native_sessions.metadata('GET','/experimental/tool/ids',root)
-        skills=native_sessions.metadata('GET','/skill',root)
         allowed=policy.provider_sets(policy.load(db))[2]
-        return {'workspace_id':str(row.id),'tools':tools,'skills':[{'name':r['name']} for r in skills if isinstance(r,dict) and isinstance(r.get('name'),str)],'tool_policy':{name:not allowed or name in allowed for name in tools},'errors':{},'native':True}
+        return {'workspace_id':str(row.id),'tools':tools,'skills':[],'tool_policy':{name:name in policy.NATIVE_REVIEW_TOOLS and (not allowed or name in allowed) for name in tools},'tool_access':native_sessions.tool_access(db,user,row),'errors':{},'native':True}
     row,service=_workspace_service(db,user,workspace_id)
     return runtime_snapshot.public_capabilities(service,row,db,view=view)
 
 @router.get("/workspaces/{workspace_id}/providers")
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():
+        _,root,_,_=native_sessions.context(db,user,workspace_id)
+        return providers.catalog_index(native_provider_accounts.catalog(db,user,root),policy.load(db))
     row,service=_workspace_service(db,user,workspace_id)
     return providers.catalog(providers.client_catalog(db,row,service._core_value("provider_data","/provider")),
                              providers.auth_methods(service),policy.load(db))
 
 @router.get("/workspaces/{workspace_id}/providers/{provider_id}/models")
 def provider_models(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():
+        row,root,_,_=native_sessions.context(db,user,workspace_id)
+        return {'workspace_id':str(row.id),'native':True,**providers.model_details(native_provider_accounts.catalog(db,user,root),provider_id,policy.load(db))}
     row,service=_workspace_service(db,user,workspace_id)
     with service.state_lock:
         return runtime_snapshot.public_models(service,row,provider_id,db)
 
 @router.get("/workspaces/{workspace_id}/providers/resolve")
 def resolve_provider(workspace_id: uuid.UUID,name: str=Query(min_length=1,max_length=200),user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():return _native_provider_lookup(db,user,workspace_id,name=name)
     row,service=_workspace_service(db,user,workspace_id)
     with service.state_lock:
         return runtime_snapshot.public_provider_lookup(service,row,db,name=name)
 
 @router.get("/workspaces/{workspace_id}/providers/search")
 def search_providers(workspace_id: uuid.UUID,query: str=Query(min_length=2,max_length=200),user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():return _native_provider_lookup(db,user,workspace_id,query=query)
     row,service=_workspace_service(db,user,workspace_id)
     with service.state_lock:
         return runtime_snapshot.public_provider_lookup(service,row,db,query=query)
+
+
+def _native_provider_lookup(db,user,workspace_id,*,name=None,query=None):
+    row,root,_,_=native_sessions.context(db,user,workspace_id)
+    data=native_provider_accounts.catalog(db,user,root);rules=policy.load(db)
+    rows=[providers.provider_index(providers.resolve_provider(data,name),data,rules)] if name is not None else providers.search_index(data,query,rules)
+    # Native discovery's revision denotes the current client projection; no
+    # legacy runtime or catalog copy is created to service a manual lookup.
+    for entry in rows:
+        if name is not None:entry['auth_methods']=native_provider_accounts.methods(user,entry['id'])
+    return {'workspace_id':str(row.id),'native':True,'providers':rows}
 
 @router.get("/workspaces/{workspace_id}/agents")
 def available_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -744,6 +770,9 @@ def user_provider_credentials_schema_ready(db):
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/credentials")
 def set_provider_credential(workspace_id: uuid.UUID,provider_id: str,data: ApiKeyCredential,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():
+        native_sessions.context(db,user,workspace_id)
+        return connect_account_provider(provider_id,data,user,db)
     require_advanced(db,user)
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
     if not credentials.available():
@@ -952,6 +981,9 @@ def remove_account_provider_connection(provider_id: str,user: User=Depends(requi
 
 @router.delete("/workspaces/{workspace_id}/providers/{provider_id}",status_code=204)
 def remove_provider_credential(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():
+        native_sessions.context(db,user,workspace_id)
+        return remove_account_provider_connection(provider_id,user,db)
     workspace=manager.owned(db,Workspace,workspace_id,user.id)
     if user_provider_credentials_schema_ready(db) and user_provider_credentials.find(db,user.id,provider_id):
         _remove_account_api_provider(db,user,provider_id)
@@ -978,6 +1010,10 @@ def remove_provider_credential(workspace_id: uuid.UUID,provider_id: str,user: Us
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/test")
 def test_provider(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():
+        _,root,_,_=native_sessions.context(db,user,workspace_id)
+        data=native_provider_accounts.catalog(db,user,root)
+        return {'configured':provider_id in data['connected'],'connected':provider_id in data['connected'],'verified':False,'connection_test':'Submit a native prompt to verify provider access'}
     row,service=_workspace_service(db,user,workspace_id)
     return {"connected":not providers.is_locally_disconnected(db,row,provider_id) and providers.is_connected(service,provider_id)}
 
@@ -994,6 +1030,9 @@ def reject_account_key_oauth_conflict(db, user_id, provider_id):
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/authorize")
 def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAuthAuthorize,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():
+        native_sessions.context(db,user,workspace_id)
+        return account_oauth_authorize(provider_id,data,user,db)
     require_advanced(db,user)
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
     reject_account_key_oauth_conflict(db,user.id,provider_id)
@@ -1003,6 +1042,9 @@ def provider_oauth_authorize(workspace_id: uuid.UUID,provider_id: str,data: OAut
 
 @router.post("/workspaces/{workspace_id}/providers/{provider_id}/oauth/callback")
 def provider_oauth_callback(workspace_id: uuid.UUID,provider_id: str,data: OAuthCallback,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():
+        native_sessions.context(db,user,workspace_id)
+        return account_oauth_callback(provider_id,data,user,db)
     require_advanced(db,user)
     if not policy.provider_allowed(policy.load(db),provider_id): raise HTTPException(403,'Provider is disabled by platform policy')
     reject_account_key_oauth_conflict(db,user.id,provider_id)

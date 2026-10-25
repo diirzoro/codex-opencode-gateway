@@ -112,7 +112,8 @@ def catalog(db,user,directory=None):
             public['models']={k:v for k,v in public['models'].items() if public_free(entry,k)}
         if entry['id'] in data.get('connected',[]) and (is_owned or public_free(entry)) and policy.provider_allowed(rules,entry['id']):connected.append(entry['id'])
         entries.append(public)
-    return {'all':entries,'connected':connected,'default':data.get('default',{}),'native':True}
+    return {'all':entries,'connected':connected,'default':data.get('default',{}),'native':True,
+            'gateway_auth_status':{pid:{'auth_status':'configured','verified':False} for pid in connected}}
 
 
 def require_model(db,user,directory,provider_id,model_id):
@@ -125,8 +126,15 @@ def require_model(db,user,directory,provider_id,model_id):
 
 
 def methods(user,provider_id):
-    data=request('GET','/provider/auth',root(user))
-    return data.get(provider_id,[])
+    directory=root(user)
+    entry=providers.resolve_provider(request('GET','/provider',directory),provider_id)
+    if entry['id']!=provider_id:raise HTTPException(422,'Use the original Native provider ID')
+    data=request('GET','/provider/auth',directory)
+    if not isinstance(data,dict):raise HTTPException(502,'Invalid native authentication metadata')
+    # /provider/auth enumerates plugin hooks, not generic /auth/{provider} API
+    # key storage. The official PUT auth API supports the API-key form for a
+    # catalog provider with no plugin method, including manually selected IDs.
+    return data.get(provider_id) or [{'type':'api','label':'API key'}]
 
 
 def connect(db,user,provider_id,data):

@@ -34,8 +34,17 @@ def context(db,user,workspace_id,session_id=None):
     workspace=workspaces.owned(db,Workspace,workspace_id,user.id)
     project=workspaces.owned(db,Project,workspace.project_id,user.id)
     if project.archived_at is not None:raise HTTPException(409,'Restore the project before native execution')
+    workspace._native_tool_access=tool_access(db,user,workspace,project=project)
     root=workspaces.root_for(workspace)
     if not root.is_dir():raise HTTPException(409,'Workspace files are unavailable; records were preserved')
+    # Imported repositories may contain Native plugins/MCP/agent configuration.
+    # Do not initialize that executable configuration in the shared process.
+    # Preserve it for operator review instead of changing/deleting project files.
+    base=settings.workspace_root.resolve()
+    for directory in (root,*root.parents):
+        if any((directory/name).exists() or (directory/name).is_symlink() for name in ('.opencode','opencode.json','opencode.jsonc')):
+            raise HTTPException(409,'Project Native configuration requires operator review; all files were preserved')
+        if directory==base:break
     row=None;live=None
     if session_id is not None:
         row=workspaces.owned(db,WorkspaceSession,session_id,user.id)
@@ -46,11 +55,19 @@ def context(db,user,workspace_id,session_id=None):
             raise HTTPException(409,'Native conversation requires an owned directory mapping')
     return workspace,root,row,live
 
+def tool_access(db,user,workspace,*,project=None):
+    project=project if project is not None else workspaces.owned(db,Project,workspace.project_id,user.id)
+    # The schema has account admin/owner roles and project ownership, no
+    # independent Project Manager membership. Ownership alone is not Shell rights.
+    manager=user.role in {'admin','owner'} and project.user_id==user.id
+    return {'project_manager':manager,'shell_authorized':manager,'shell_enabled':False,
+            'shell_blocker':'project_execution_boundary_unverified' if manager else 'project_manager_required'}
+
 def metadata(method,path,root,data=None):
     # Only ownership/session metadata. No prompts, model responses or events.
     discovery=path in {'/provider','/agent'} and method=='GET'
     auth=(method in {'PUT','DELETE'} and re.fullmatch(r'/auth/'+ID,path)) or (method=='POST' and re.fullmatch(r'/provider/'+ID+r'/oauth/(authorize|callback)',path)) or (method=='GET' and path=='/provider/auth')
-    if not (discovery or auth or (path=='/session' and method in {'GET','POST'}) or method in {'GET','PATCH'} and re.fullmatch(r'/session/'+ID,path) or path in {'/permission','/question','/session/status','/global/health','/experimental/tool/ids','/skill'} and method=='GET'):
+    if not (discovery or auth or (path=='/session' and method in {'GET','POST'}) or method in {'GET','PATCH'} and re.fullmatch(r'/session/'+ID,path) or path in {'/permission','/question','/session/status','/global/health','/experimental/tool/ids','/skill','/path'} and method=='GET'):
         raise HTTPException(403,'Unsupported metadata operation')
     try:
         with httpx.Client(base_url='http://127.0.0.1:'+('18097' if discovery else '18098'),trust_env=False,timeout=15) as client:
@@ -77,15 +94,12 @@ def sessions(workspace_id:uuid.UUID,request:Request,data:Create|None=None,user:U
         if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
         if not access_payload(db,user)['allowed']:raise HTTPException(402,'Workspace access has expired')
         workspaces.require_quota_headroom(workspace)
-        permissions=policy.session_permissions(policy.load(db))
-        # Development accounts may use the same native process, but tools must
-        # still wait for review and cannot authorize external-directory access.
-        permissions=[{**rule,'action':'ask' if rule['action']=='allow' else rule['action']} for rule in permissions]
+        permissions=policy.native_session_permissions(policy.load(db),root)
         live=metadata('POST','/session',root,{'title':(data or Create()).title,'permission':permissions})
         if not isinstance(live,dict) or not re.fullmatch('ses'+ID,str(live.get('id',''))) or not isinstance(live.get('title'),str) or live.get('directory')!=str(root):raise HTTPException(502,'Invalid native session metadata')
         row=WorkspaceSession(id=uuid.uuid4(),user_id=user.id,workspace_id=workspace.id,opencode_session_id=live['id'],title=live['title'][:120],status='idle')
         db.add(row);db.flush();session_lifecycle.set_state(db,row,'active');db.commit()
-        return {**session_lifecycle.payload(row,'active'),'runtime_id':live['id'],'native':True,'file_base':root.as_uri()+'/'}
+        return {**session_lifecycle.payload(row,'active'),'runtime_id':live['id'],'native':True,'file_base':root.as_uri()+'/','tool_access':workspace._native_tool_access}
     live=metadata('GET','/session',root)
     if not isinstance(live,list):raise HTTPException(502,'Invalid native session list')
     # Never adopt arbitrary IDs from the shared engine. Existing map is authority.
@@ -104,7 +118,7 @@ def sessions(workspace_id:uuid.UUID,request:Request,data:Create|None=None,user:U
 def session(session_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
     admit(user);row=workspaces.owned(db,WorkspaceSession,session_id,user.id)
     workspace,root,row,live=context(db,user,row.workspace_id,session_id)
-    return {**session_lifecycle.payload(row,session_lifecycle.state(db,row)),'runtime_id':row.opencode_session_id,'native':True,'file_base':root.as_uri()+'/','model':live.get('model'),'agent':live.get('agent')}
+    return {**session_lifecycle.payload(row,session_lifecycle.state(db,row)),'runtime_id':row.opencode_session_id,'native':True,'file_base':root.as_uri()+'/','model':live.get('model'),'agent':live.get('agent'),'tool_access':workspace._native_tool_access}
 
 @router.patch('/api/native-test/sessions/{session_id}')
 def rename(session_id:uuid.UUID,data:Create,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
@@ -161,7 +175,7 @@ def authorize_native(workspace_id,resource,request,user,db,raw):
     if match:
         row=db.scalar(select(WorkspaceSession).where(WorkspaceSession.workspace_id==workspace.id,WorkspaceSession.user_id==user.id,WorkspaceSession.opencode_session_id==match.group(1)))
         if row is None:raise HTTPException(404,'Conversation is not owned')
-        context(db,user,workspace_id,row.id)
+        _,_,_,session_live=context(db,user,workspace_id,row.id)
         if write and match.group(2) not in {'prompt_async','abort'}:raise HTTPException(403,'Unsupported native write')
         if not write and match.group(2) in {'prompt_async','abort'}:raise HTTPException(403,'Unsupported native method')
     elif write:
@@ -183,7 +197,31 @@ def authorize_native(workspace_id,resource,request,user,db,raw):
             if not isinstance(body,dict):raise HTTPException(422,'Invalid native reply')
             if action.group(1)=='permission':
                 if set(body)!={'reply'} or body['reply'] not in {'once','reject'}:raise HTTPException(422,'Only one-time approval or rejection is allowed')
-                if item.get('permission')=='external_directory' and body['reply']!='reject':raise HTTPException(403,'External-directory access is not allowed')
+                if body['reply']!='reject':
+                    if item.get('permission') not in policy.NATIVE_REVIEW_TOOLS:raise HTTPException(403,'This execution capability is prohibited; it cannot be approved')
+                    allowed=policy.provider_sets(policy.load(db))[2]
+                    if allowed and item['permission'] not in allowed:raise HTTPException(403,'Tool disabled by policy')
+                    # Validate native file-permission patterns too; an old pending
+                    # request must not authorize a foreign file or a symlink.
+                    if item['permission'] in {'read','edit','write','apply_patch','glob','grep','list'}:
+                        location=metadata('GET','/path',root)
+                        if not isinstance(location,dict) or location.get('directory')!=str(root) or not isinstance(location.get('worktree'),str):raise HTTPException(503,'Native file-permission context is unavailable')
+                        worktree=Path(location['worktree'])
+                        if not worktree.is_absolute() or not root.is_relative_to(worktree):raise HTTPException(403,'Native file-permission context is outside this Workspace')
+                        # Native read/edit patterns are relative to worktree,
+                        # which is '/' for a non-Git project, NOT to directory.
+                        # Search metadata.path, conversely, is directory-relative.
+                        search=item['permission'] in {'glob','grep','list'}
+                        patterns=([item.get('metadata',{}).get('path') or str(root)] if item['permission'] in {'glob','grep','list'} else item.get('patterns',[]))
+                        if not patterns:raise HTTPException(403,'File permission has no owned path')
+                        for pattern in patterns:
+                            try:
+                                path=Path(pattern)
+                                absolute=path if path.is_absolute() else (root if search else worktree)/path
+                                relative=absolute.relative_to(root).as_posix()
+                            except (TypeError,ValueError):raise HTTPException(403,'File permission is outside this Workspace') from None
+                            if any(p in {'.opencode','opencode.json','opencode.jsonc'} or p.startswith('.env') for p in Path(relative).parts):raise HTTPException(403,'Runtime configuration and secrets are protected')
+                            workspaces.safe_path(workspace,relative)
             elif action.group(3)=='reply':
                 answers=body.get('answers')
                 if set(body)!={'answers'} or not isinstance(answers,list) or len(answers)>30 or any(not isinstance(a,list) or not a or len(a)>50 or any(not isinstance(v,str) or not 1<=len(v)<=2000 for v in a) or len(set(a))!=len(a) for a in answers):raise HTTPException(422,'Invalid native question answers')
@@ -199,6 +237,18 @@ def authorize_native(workspace_id,resource,request,user,db,raw):
             model=body.get('model')
             if not isinstance(model,dict) or set(model)!={'providerID','modelID'} or any(not isinstance(v,str) or not 1<=len(v)<=200 for v in model.values()):raise HTTPException(422,'Select a native provider and model')
             current_policy=policy.load(db)
+            # PATCH the supported Native session permission field before any new
+            # execution, including sessions created under the older ask-all rules.
+            # Never alter a running session and pretend its old tools were revoked.
+            permissions=policy.native_session_permissions(current_policy,root)
+            if session_live.get('permission')!=permissions:
+                statuses=metadata('GET','/session/status',root)
+                if statuses.get(row.opencode_session_id,{}).get('type','idle')!='idle':raise HTTPException(409,'Stop this conversation before applying its new tool restrictions')
+                updated=metadata('PATCH','/session/'+row.opencode_session_id,root,{'permission':permissions})
+                if updated.get('permission')!=permissions:raise HTTPException(503,'Native tool restrictions were not confirmed')
+            tools=metadata('GET','/experimental/tool/ids',root)
+            builtins={'invalid','question','bash','shell','terminal','read','glob','grep','list','edit','write','task','webfetch','todowrite','todoread','websearch','codesearch','skill','apply_patch','execute','lsp','plan_enter','plan_exit'}
+            if not isinstance(tools,list) or any(not isinstance(t,str) or t not in builtins for t in tools) or len(tools)!=len(set(tools)):raise HTTPException(503,'Custom Native tool execution requires verified restrictions; execution is blocked')
             if not policy.provider_allowed(current_policy,model['providerID']) or not policy.model_allowed(current_policy,model['modelID']):raise HTTPException(403,'Model disabled by policy')
             from ..services.native_provider_accounts import require_model
             require_model(db,user,root,model['providerID'],model['modelID'])

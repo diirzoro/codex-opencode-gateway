@@ -76,6 +76,8 @@ def safe_path(workspace, relative=""):
     if "\x00" in relative or "\\" in relative or PureWindowsPath(relative).drive or Path(relative).is_absolute():
         raise HTTPException(422, "A relative workspace path is required")
     parts = Path(relative).parts
+    if os.getenv('OPENCODE_NATIVE_TEST_ENABLED','').lower() in {'1','true','yes'} and any(p in {'.opencode','opencode.json','opencode.jsonc'} for p in parts):
+        raise HTTPException(403, "Native executable configuration is managed by the server")
     if any(p in {"..", ".git", ".ssh", ".env"} for p in parts):
         raise HTTPException(403, "Path is not accessible")
     root = root_for(workspace)

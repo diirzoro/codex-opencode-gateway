@@ -34,13 +34,15 @@ DROPIN=Path('/etc/systemd/system/opencode-gateway-test.service.d/zzzz-native-rel
 PLANS=Path('/var/backups/opencode-native-coordinated-test')
 SERVICE='opencode-gateway-test.service'
 BASELINE='3d4d52d69464edc57ab7f851d7e6faa67a607091'
-BASELINES=(BASELINE,'c0d830bc3abb374d9f5699c445b0195032aba39a','6a04264d94f7b175cf5e0ba087fc9f407a88e693')
+BASELINES=(BASELINE,'c0d830bc3abb374d9f5699c445b0195032aba39a','6a04264d94f7b175cf5e0ba087fc9f407a88e693','3cff49ca18e3f9e7850e623cef69522823077a93')
 FILES=('app.js','dashboards.js','runtime-client.js','native-session-client.js',
        'backend/app/main.py','backend/app/routes/native_sessions.py',
        'backend/app/routes/agent.py','backend/app/services/opencode.py',
        'management.js','backend/app/routes/workspaces.py','backend/app/services/native_provider_accounts.py',
        'backend/app/services/github.py','backend/app/routes/admin.py',
-       'backend/app/services/native_catalog_maintenance.py','enhancements.js')
+       'backend/app/services/native_catalog_maintenance.py','enhancements.js',
+       'backend/app/services/policy.py','backend/app/services/providers.py',
+       'backend/app/services/workspaces.py')
 
 class Stop(RuntimeError):pass
 
@@ -178,7 +180,7 @@ def loopback_candidate(text):
     # Management metadata/auth uses the SAME protected native transport. It is
     # not exposed by the browser transport allowlist. No new listener/service.
     management='''
-    location ~ "^/(?:auth/[A-Za-z0-9_-]{1,120}|provider/auth|provider/[A-Za-z0-9_-]{1,120}/oauth/(?:authorize|callback)|session/[A-Za-z0-9_-]{1,120}|global/health|experimental/tool/ids|skill)$" {
+    location ~ "^/(?:auth/[A-Za-z0-9_-]{1,120}|provider/auth|provider/[A-Za-z0-9_-]{1,120}/oauth/(?:authorize|callback)|session/[A-Za-z0-9_-]{1,120}|global/health|experimental/tool/ids|skill|path)$" {
         limit_except GET POST PUT DELETE PATCH { deny all; }
         proxy_pass http://127.0.0.2:4097;
         AUTHORIZATION

@@ -34,6 +34,7 @@ function invalidateProviderMutation(path,method='GET'){
  const mutation=path.match(/^\/api\/workspaces\/([^/]+)\/providers\/([^/?]+)(?:\/(?:credentials|oauth\/callback))?(?:\?|$)/);
  if(mutation&&!['GET','HEAD'].includes(method.toUpperCase())){
   const workspaceId=decodeURIComponent(mutation[1]);window.workspaceRuntime?.invalidate(workspaceId);
+  if(window.nativeSession?.active()){window.workspaceRuntime?.clear();try{localStorage.setItem('og-native-provider-revision:'+currentUser?.id,String(Date.now()));}catch{}window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser?.id}}));}
   if(method.toUpperCase()==='DELETE')window.dispatchEvent(new CustomEvent('workspace-provider-disconnected',{detail:{workspaceId,providerId:decodeURIComponent(mutation[2])}}));
  }
 }
