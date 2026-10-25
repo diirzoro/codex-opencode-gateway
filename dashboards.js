@@ -48,7 +48,7 @@
       q('adminSmtpUsername').value=e.provider==='resend'?'resend':'';
       q('adminSenderEmail').value=e.sender||'';
       q('adminSmtpSecret').value='';
-      const captions={registration_verification:'التحقق من الحساب الجديد',password_reset:'استعادة كلمة المرور',welcome_email:'رسائل الترحيب',subscription_expiry:'انتهاء الاشتراك',low_balance:'انخفاض الرصيد',account_suspension:'تعليق الحساب',payment_receipt:'إيصالات الدفع',renewal_reminder:'تذكير التجديد',system_updates:'تحديث النظام'};
+      const captions={registration_verification:'التحقق من الحساب الجديد',password_reset:'استعادة كلمة المرور',welcome_email:'رسائل الترحيب',subscription_expiry:'انتهاء الاشتراك',low_balance:'انخفاض الرصيد',account_suspension:'تعليق الحساب',payment_receipt:'إيصالات الدفع',renewal_reminder:'تذكير التجديد',system_updates:'تحديث النظام',login_security:'تنبيه دخول جديد',password_changed:'تغيير كلمة المرور',email_changed:'تغيير البريد',payment_failed:'فشل الدفع',trial_expiring:'قرب انتهاء الفترة التجريبية',support_received:'رسالة دعم جديدة',support_unanswered:'رسائل دون رد',service_incident:'أعطال الخدمة',mail_delivery_failure:'فشل تسليم البريد',unusual_activity:'نشاط غير معتاد',backup_status:'حالة النسخ الاحتياطي'};
       const list=q('adminServiceToggles');list.replaceChildren();
       for(const item of data.services||[]){
         const row=document.createElement('label');row.className='check';row.style.cssText='display:flex;align-items:center;gap:10px;padding:9px 0;';
@@ -62,8 +62,10 @@
     q('adminNav').querySelector('[data-admin-view="settings"]')?.addEventListener('click',loadServiceCenter);
     q('adminServiceRefresh')?.addEventListener('click',loadServiceCenter);
     q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(button=>button.addEventListener('click',()=>{
-      const provider=button.dataset.serviceTab==='providers';
-      q('adminProvidersTab').hidden=!provider;q('adminServicesTab').hidden=provider;
+      const tab=button.dataset.serviceTab;
+      q('adminProvidersTab').hidden=tab!=='providers';
+      q('adminServicesTab').hidden=tab!=='services';
+      q('adminInboxTab').hidden=tab!=='inbox';
       q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
     }));
     q('adminSmtpSecret').value='';
