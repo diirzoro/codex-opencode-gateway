@@ -461,3 +461,36 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
             "support_received","support_unanswered","service_incident","mail_delivery_failure",
             "unusual_activity","backup_status"))
        ]}
+
+@router.get("/github-configuration")
+def github_configuration(_:User=Depends(require_admin)):
+    """Read-only effective GitHub settings metadata; never disclose secrets."""
+    from ..services import github, credentials
+    return {
+        "provider":"github_app", "configured":github.configured(),
+        "app_id":settings.github_app_id,
+        "app_slug":settings.github_app_slug or "",
+        "client_id":settings.github_client_id or "",
+        "callback_url":settings.github_callback_url,
+        "public_base_url":settings.public_base_url,
+        "api_base":settings.github_api_base,
+        "web_base":settings.github_web_base,
+        "webhook_url":settings.public_base_url.rstrip("/")+"/api/github/webhook",
+        "secrets":{
+            "client_secret":bool(settings.github_client_secret),
+            "private_key":bool(settings.github_private_key),
+            "webhook_secret":bool(settings.github_webhook_secret),
+            "encryption_key":credentials.available(),
+        },
+        "missing":[label for label,ok in {
+            "GITHUB_APP_ID":bool(settings.github_app_id),
+            "GITHUB_APP_SLUG":bool(settings.github_app_slug),
+            "GITHUB_CLIENT_ID":bool(settings.github_client_id),
+            "GITHUB_CLIENT_SECRET":bool(settings.github_client_secret),
+            "GITHUB_APP_PRIVATE_KEY":bool(settings.github_private_key),
+            "CREDENTIALS_ENCRYPTION_KEY":credentials.available(),
+        }.items() if not ok],
+        "source":"protected_server_environment",
+        "editable":False,
+        "message":"GitHub currently uses protected process environment. Changes to OAuth/signing secrets require an authorized operator-managed configuration workflow; no browser edits are applied.",
+    }
