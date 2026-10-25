@@ -128,8 +128,19 @@
         state.textContent=item.available?(item.enabled?tr('Enabled','مفعّل'):tr('Available','متاح')):tr('Not implemented','غير منفّذ');
         const toggle=document.createElement('input');
         toggle.type='checkbox';toggle.checked=Boolean(item.enabled);
-        toggle.disabled=true;
-        toggle.title=tr('Service activation is managed by the existing server policy; no writable API is available yet.','تفعيل هذه الخدمة يتطلب واجهة حفظ فعلية في سياسة الخادم، وهي غير متاحة بعد.');
+        toggle.disabled=!item.editable;
+        toggle.title=item.editable?tr('Save service preference','حفظ تفضيل الخدمة'):tr('Service is not yet implemented','الخدمة غير منفذة بعد');
+        if(item.editable)toggle.onchange=async()=>{
+          const requested=toggle.checked;toggle.disabled=true;
+          try{
+            const saved=await api('/api/admin/service-integrations/services/'+encodeURIComponent(item.id),{
+              method:'PUT',body:JSON.stringify({enabled:requested})
+            });
+            toggle.checked=Boolean(saved.enabled);
+            state.textContent=toggle.checked?tr('Enabled','مفعّل'):tr('Disabled','معطّل');
+          }catch(error){toggle.checked=!requested;notice.textContent=error.message;}
+          finally{toggle.disabled=false;}
+        };
         toggle.setAttribute('aria-label',name.textContent);
         const top=document.createElement('div');top.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:12px;';
         top.append(name,toggle);
