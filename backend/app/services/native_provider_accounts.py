@@ -8,6 +8,7 @@ No engines, polling jobs, copied auth files, or alternate AI requests live here.
 import hashlib
 import json
 import hmac
+import os
 from urllib.parse import quote
 
 from fastapi import HTTPException
@@ -46,7 +47,10 @@ def binding(db,provider_id):
 
 def owned(db,user,provider_id):
     record=binding(db,provider_id)
-    return bool(record and record.action==action(provider_id) and record.subject_id==user.id)
+    # Preserve the prior pilot's existing native connections. This retired flag
+    # is legacy ownership attribution only, never an admission restriction.
+    if record is None:return str(user.id)==os.getenv('OPENCODE_NATIVE_TEST_OWNER_ID','')
+    return bool(record.action==action(provider_id) and record.subject_id==user.id)
 
 
 def lock(db,provider_id):
@@ -102,7 +106,8 @@ def catalog(db,user,directory=None):
         owners[record.action.removesuffix(':off')]=None if record.action.endswith(':off') else record.subject_id
     for entry in data['all']:
         public=public_entry(entry)
-        is_owned=owners.get(action(entry['id']))==user.id
+        key=action(entry['id'])
+        is_owned=owners.get(key)==user.id or (key not in owners and str(user.id)==os.getenv('OPENCODE_NATIVE_TEST_OWNER_ID','') and not public_free(entry))
         if public_free(entry) and not is_owned:
             public['models']={k:v for k,v in public['models'].items() if public_free(entry,k)}
         if entry['id'] in data.get('connected',[]) and (is_owned or public_free(entry)) and policy.provider_allowed(rules,entry['id']):connected.append(entry['id'])
@@ -114,7 +119,9 @@ def require_model(db,user,directory,provider_id,model_id):
     data=request('GET','/provider',directory)
     entry=next((p for p in data.get('all',[]) if p.get('id')==provider_id),None)
     if entry is None or provider_id not in data.get('connected',[]) or model_id not in entry.get('models',{}):raise HTTPException(403,'Native model is not configured')
-    if not owned(db,user,provider_id) and not public_free(entry,model_id):raise HTTPException(403,'This native provider credential does not belong to your account')
+    if public_free(entry):
+        if not public_free(entry,model_id):raise HTTPException(403,'This native model requires an owned provider credential')
+    elif not owned(db,user,provider_id):raise HTTPException(403,'This native provider credential does not belong to your account')
 
 
 def methods(user,provider_id):

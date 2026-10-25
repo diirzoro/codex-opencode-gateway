@@ -50,7 +50,7 @@ def metadata(method,path,root,data=None):
     # Only ownership/session metadata. No prompts, model responses or events.
     discovery=path in {'/provider','/agent'} and method=='GET'
     auth=(method in {'PUT','DELETE'} and re.fullmatch(r'/auth/'+ID,path)) or (method=='POST' and re.fullmatch(r'/provider/'+ID+r'/oauth/(authorize|callback)',path)) or (method=='GET' and path=='/provider/auth')
-    if not (discovery or auth or (path=='/session' and method in {'GET','POST'}) or method in {'GET','PATCH'} and re.fullmatch(r'/session/'+ID,path) or path in {'/permission','/question','/session/status'} and method=='GET'):
+    if not (discovery or auth or (path=='/session' and method in {'GET','POST'}) or method in {'GET','PATCH'} and re.fullmatch(r'/session/'+ID,path) or path in {'/permission','/question','/session/status','/global/health','/experimental/tool/ids','/skill'} and method=='GET'):
         raise HTTPException(403,'Unsupported metadata operation')
     try:
         with httpx.Client(base_url='http://127.0.0.1:'+('18097' if discovery else '18098'),trust_env=False,timeout=15) as client:

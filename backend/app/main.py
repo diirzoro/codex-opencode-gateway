@@ -29,6 +29,13 @@ async def retention_maintenance():
                 # Jobs log sanitized IDs/categories; never print operational data.
                 import logging
                 logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
+        if native_sessions.enabled():
+            try:
+                from .services import native_catalog_maintenance
+                await asyncio.to_thread(native_catalog_maintenance.sweep)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning('Native catalog maintenance unavailable; existing catalog and conversations preserved')
 
 async def provider_maintenance():
     from .services import account_provider_sync
@@ -40,16 +47,17 @@ async def provider_maintenance():
 @asynccontextmanager
 async def lifespan(app):
     cleanup = asyncio.create_task(retention_maintenance())
-    provider_sync = asyncio.create_task(provider_maintenance())
+    provider_sync = None if native_sessions.enabled() else asyncio.create_task(provider_maintenance())
     try:
         yield
     finally:
         cleanup.cancel()
-        provider_sync.cancel()
+        if provider_sync is not None:provider_sync.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup
-        with suppress(asyncio.CancelledError):
-            await provider_sync
+        if provider_sync is not None:
+            with suppress(asyncio.CancelledError):
+                await provider_sync
 
 preview_access.install_access_log_redaction()
 

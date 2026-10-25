@@ -39,7 +39,8 @@ FILES=('app.js','dashboards.js','runtime-client.js','native-session-client.js',
        'backend/app/main.py','backend/app/routes/native_sessions.py',
        'backend/app/routes/agent.py','backend/app/services/opencode.py',
        'management.js','backend/app/routes/workspaces.py','backend/app/services/native_provider_accounts.py',
-       'backend/app/services/github.py')
+       'backend/app/services/github.py','backend/app/routes/admin.py',
+       'backend/app/services/native_catalog_maintenance.py','enhancements.js')
 
 class Stop(RuntimeError):pass
 
@@ -177,7 +178,7 @@ def loopback_candidate(text):
     # Management metadata/auth uses the SAME protected native transport. It is
     # not exposed by the browser transport allowlist. No new listener/service.
     management='''
-    location ~ "^/(?:auth/[A-Za-z0-9_-]{1,120}|provider/auth|provider/[A-Za-z0-9_-]{1,120}/oauth/(?:authorize|callback)|session/[A-Za-z0-9_-]{1,120})$" {
+    location ~ "^/(?:auth/[A-Za-z0-9_-]{1,120}|provider/auth|provider/[A-Za-z0-9_-]{1,120}/oauth/(?:authorize|callback)|session/[A-Za-z0-9_-]{1,120}|global/health|experimental/tool/ids|skill)$" {
         limit_except GET POST PUT DELETE PATCH { deny all; }
         proxy_pass http://127.0.0.2:4097;
         AUTHORIZATION

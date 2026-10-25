@@ -691,6 +691,12 @@ def workspace_runtime_agents(workspace_id: uuid.UUID,user: User=Depends(require_
 
 @router.get("/workspaces/{workspace_id}/runtime/capabilities")
 def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db),view: str|None=Query(default=None,pattern="^agent$")):
+    if native_sessions.enabled():
+        row,root,_,_=native_sessions.context(db,user,workspace_id)
+        tools=native_sessions.metadata('GET','/experimental/tool/ids',root)
+        skills=native_sessions.metadata('GET','/skill',root)
+        allowed=policy.provider_sets(policy.load(db))[2]
+        return {'workspace_id':str(row.id),'tools':tools,'skills':[{'name':r['name']} for r in skills if isinstance(r,dict) and isinstance(r.get('name'),str)],'tool_policy':{name:not allowed or name in allowed for name in tools},'errors':{},'native':True}
     row,service=_workspace_service(db,user,workspace_id)
     return runtime_snapshot.public_capabilities(service,row,db,view=view)
 

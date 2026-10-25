@@ -24,7 +24,7 @@
     if(isPlatform&&!admin())throw new Error('Administrator access required');
     if(name==='providers'&&!isPlatform&&root.providerView?.workspaceId===(root.dataset.connectionWorkspace||'')&&root.providerView.owner===currentUser.id)return root.providerView.refresh(false);
     root.providerController?.abort();root.replaceChildren();root.dataset.managementSection=name;
-    const loader={security,billing,connections,roles,locations,logs,providers,lifecycle}[name];
+    const loader={security,billing,connections,roles,locations,logs,providers,lifecycle,nativeCatalog}[name];
     if(!loader)throw new Error('Unknown section');
     try{await loader(root,isPlatform)}catch(e){root.append(node('p',e.message))}
   }
@@ -38,6 +38,17 @@
     if(admin()&&['security','logs','lifecycle'].includes(name))return window.openAdminView(name==='security'?'security':'account');
     if(admin()&&name==='providers')return window.openAdminView('policy');
     return window.openClientView(client[name]);
+  }
+  async function nativeCatalog(body,platform=false){
+    if(!platform||!admin())return;
+    const box=section(body,tr('Native catalog maintenance','صيانة فهرس OpenCode'));
+    const note=node('p',tr('Uses OpenCode’s own cache refresh. The running service may retain its current model snapshot; conversations are not restarted.','يستخدم تحديث Cache الأصلي في OpenCode. قد تحتفظ الخدمة الجارية بفهرسها الحالي؛ لا تُعاد تشغيل المحادثات.'));box.append(note);
+    const state=node('p');state.setAttribute('role','status');box.append(state);
+    const days=select(box,tr('Maintenance interval','دورية الصيانة'),'interval_days',[['7',tr('Every 7 days','كل 7 أيام')],['14',tr('Every 14 days','كل 14 يومًا')]]);
+    function display(value){days.value=String(value.interval_days);state.textContent=tr('Last result: ','آخر نتيجة: ')+({not_attempted:tr('Not run yet','لم يُنفذ بعد'),running:tr('Running','جارٍ التنفيذ'),failed:tr('Refresh failed; last working catalog retained','فشل التحديث؛ يبقى آخر فهرس صالح'),cli_completed_reload_unverified:tr('Cache command completed; live reload unverified','اكتمل أمر Cache؛ إعادة التحميل الحية غير مثبتة')}[value.outcome]||tr('Unknown','غير معروف'))+(value.last_attempt_at?' · '+new Date(value.last_attempt_at*1000).toLocaleString():'')+(value.available===false?tr(' · Native service context requires operator inspection',' · يلزم فحص سياق الخدمة الفعلي من المشغّل'):'');}
+    display(await api('/api/admin/native/catalog-maintenance'));
+    box.append(button(tr('Save interval','حفظ الدورية'),async()=>display(await api('/api/admin/native/catalog-maintenance',{method:'PUT',body:JSON.stringify({interval_days:Number(days.value)})}))),
+      button(tr('Refresh native cache','تحديث Cache الأصلي'),async()=>display(await api('/api/admin/native/catalog-maintenance/refresh',{method:'POST'}))));
   }
   async function security(body,platform=false){
     const change=section(body,tr('Change password','تغيير كلمة المرور'));
@@ -223,9 +234,9 @@
         let submitting=false;
         if(keyMethod){
           const key=input(f,tr('API key (server-side only)','مفتاح API (على الخادم فقط)'),'api_key','password');key.required=true;key.autocomplete='new-password';
-          f.append(node('p',tr('OpenCode automatically selects an allowed text model for one real validation request. Provider charges may apply. The key is saved only after validation succeeds.','يختار OpenCode تلقائيًا نموذجًا نصيًا مسموحًا لطلب تحقق حقيقي واحد. قد تُحتسب رسوم لدى المزوّد. لا يُحفظ المفتاح إلا بعد نجاح التحقق.'),'provider-note'));
+          f.append(node('p',accountOptions?.native?tr('OpenCode stores the credential. Verify access with a native conversation; saving does not test a paid model.','يحفظ OpenCode الاعتماد. تحقّق من الوصول بمحادثة أصلية؛ الحفظ لا يختبر نموذجًا مدفوعًا.'):tr('OpenCode validates the key with a real model request. Provider charges may apply.','يتحقق OpenCode من المفتاح بطلب نموذج فعلي؛ قد تُحتسب رسوم لدى المزوّد.'),'provider-note'));
         }
-        const submit=node('button',keyMethod?tr('Validate and connect','تحقق واربط'):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
+        const submit=node('button',keyMethod?(accountOptions?.native?tr('Connect provider','ربط المزوّد'):tr('Validate and connect','تحقق واربط')):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
         const currentForm=()=>currentDialog()&&view.ready&&methodArea.contains(f);
         f.onsubmit=async event=>{
           event.preventDefault();if(submitting||!currentForm()||!f.reportValidity())return;

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import json
 import uuid as _uuid
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
@@ -14,6 +15,25 @@ from ..services.accounts import user_payload
 from .dependencies import require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+class NativeCatalogSchedule(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    interval_days:Literal[7,14]
+
+@router.get('/native/catalog-maintenance')
+def native_catalog_status(_:User=Depends(require_admin)):
+    from ..services import native_catalog_maintenance
+    return native_catalog_maintenance.status()
+
+@router.put('/native/catalog-maintenance')
+def native_catalog_schedule(data:NativeCatalogSchedule,_:User=Depends(require_admin)):
+    from ..services import native_catalog_maintenance
+    return native_catalog_maintenance.configure(data.interval_days)
+
+@router.post('/native/catalog-maintenance/refresh')
+def native_catalog_refresh(_:User=Depends(require_admin)):
+    from ..services import native_catalog_maintenance
+    return native_catalog_maintenance.refresh()
 
 class PlanIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
