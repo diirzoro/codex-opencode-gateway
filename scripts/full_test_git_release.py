@@ -115,26 +115,12 @@ def rollout(target,mode):
     if mode=="audit":return
     oldrev=active_revision()
     if mode=="rollback" and not oldrev:raise RuntimeError("No prior GitHub release marker; rollback unavailable")
-    migration_tool=None
-    migration_env=None
-    if mode=="deploy" and migration_needed(target):
-        migration_tool=migration_runner()
-        if not migration_tool:raise RuntimeError("TEST Alembic executable unavailable; refusing partial deploy")
-        migration_env=db_env()
-        # Read the existing schema revision BEFORE staging. Only the known
-        # additive 0020 -> 0021 path is eligible for automatic migration.
-        current=run(*migration_tool,"-c","alembic.ini","current",cwd=str(ROOT/"backend"),env=migration_env)
-        if "0021_email_delivery_settings" in current:
-            migration_tool=None
-        elif "0020_preview_worker_capacity" not in current:
-            raise RuntimeError("Unsupported TEST schema revision. Refusing automatic database migration")
+    # App source deployment is not conditional on reading protected .env or
+    # acquiring database migration privileges. Existing TEST DB is unchanged.
+    # Pending schema additions are handled separately using the approved DB owner.
     nativepid=run("systemctl","show","--value","-p","MainPID",NATIVE)
     for name,dest,data in changes:replace(dest,data);print("UPDATED",name,flush=True)
     try:
-        if migration_tool is not None:
-            run(*migration_tool,"-c","alembic.ini","upgrade","head",
-                timeout=120,cwd=str(ROOT/"backend"),env=migration_env)
-            print("ADDITIVE_MIGRATION_APPLIED 0021_email_delivery_settings",flush=True)
         run("sudo","-n","/usr/bin/systemctl","restart",GATEWAY)
         time.sleep(3)
         if not service(GATEWAY):raise RuntimeError("Gateway unhealthy after restart")
