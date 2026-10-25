@@ -73,7 +73,7 @@ def metadata(method,path,root,data=None):
         with httpx.Client(base_url='http://127.0.0.1:'+('18097' if discovery else '18098'),trust_env=False,timeout=15) as client:
             response=client.request(method,path,params={'directory':str(root)},json=data)
             response.raise_for_status()
-            if not response.headers.get('content-type','').startswith('application/json') or len(response.content)>4*1024*1024:raise ValueError()
+            if not response.headers.get('content-type','').startswith('application/json') or len(response.content)>(16 if path=='/provider' else 4)*1024*1024:raise ValueError()
             return response.json()
     except (httpx.HTTPError,ValueError):raise HTTPException(502,'Native session metadata is unavailable') from None
 
