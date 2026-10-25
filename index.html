@@ -610,7 +610,31 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   <section class="admin-view" data-admin-panel="policy"><div class="page-head"><div><h1 data-i18n="adminPolicy">AI / OpenCode Policy</h1><p class="lead" data-i18n="adminPolicyLead">These settings persist and limit what clients can select. User API keys and OAuth credentials are never shown here.</p></div></div><form id="adminPolicyForm" class="policy-form"><label><span data-i18n="aEnabledProviders">Enabled providers (comma separated)</span><input id="policyProviders" placeholder="openai, anthropic"></label><label><span data-i18n="aAllowedModels">Allowed models (comma separated)</span><input id="policyModels" placeholder="gpt-4o, claude-3-5-sonnet"></label><label><span data-i18n="aEnabledTools">Enabled tools / capabilities (comma separated)</span><input id="policyTools" placeholder="read, edit, bash"></label><label class="checkbox-row"><input id="policyApproval" type="checkbox"><span data-i18n="aRequireApproval">Require approval before running tools</span></label><button class="button" type="submit" data-i18n="aSavePolicy">Save policy</button></form><div id="adminPolicyMessage" class="api-message"></div></section>
   <section class="admin-view" data-admin-panel="github"><div class="page-head"><div><h1 data-i18n="adminGithubSettings">GitHub Integration Settings</h1><p class="lead" data-i18n="aGithubLead">Connection status. The real GitHub integration is a later phase.</p></div></div><div id="adminGithubPanel" class="admin-section"><p data-i18n="aLoadingStatus">Loading status…</p></div></section>
   <section class="admin-view" data-admin-panel="trial"><div class="page-head"><div><h1 data-i18n="adminTrial">Trial / Entitlement Settings</h1><p class="lead" data-i18n="aTrialLead">Trial entitlement overview. Editing trial defaults is not available yet.</p></div></div><div id="adminTrialPanel" class="admin-section"><p data-i18n="aLoading">Loading…</p></div></section>
-  <section class="admin-view" data-admin-panel="settings"><div class="page-head"><div><h1 data-i18n="adminSettings">Platform Settings</h1><p class="lead" data-i18n="aNay">Not available yet.</p></div></div><div class="admin-section"><p data-i18n="aPlatformSettings">Platform settings are not available yet.</p></div></section>
+  <section class="admin-view" data-admin-panel="settings">
+<div class="page-head"><div><h1>الخدمات والتكاملات · Services &amp; Integrations</h1><p class="lead">إعدادات المزوّدين وحالة الخدمات. المفاتيح لا تُعرض من الخادم.</p></div></div>
+<div class="admin-section" id="adminServiceCenter">
+<div class="row-between" style="flex-wrap:wrap;gap:8px;margin-bottom:14px"><button type="button" class="button ghost" data-service-tab="providers" aria-pressed="true">المزوّدون · Providers</button><button type="button" class="button ghost" data-service-tab="services" aria-pressed="false">الخدمات · Services</button><button type="button" class="button ghost" id="adminServiceRefresh">تحديث الحالة · Refresh</button></div>
+<p id="adminServiceNotice" role="status">Loading…</p>
+<section id="adminProvidersTab">
+<h2>البريد الإلكتروني · Email Delivery</h2>
+<div class="field-grid">
+<label class="field"><span>نوع الخدمة · Category</span><select disabled><option>Transactional Email · البريد الإلكتروني</option><option>Payments · المدفوعات — لاحقًا</option><option>SMS / Push — غير متاحة بعد</option></select></label>
+<label class="field"><span>مزوّد البريد · Provider</span><select id="adminEmailProvider"><option value="resend">Resend SMTP</option><option value="smtp">Generic SMTP</option></select></label>
+<label class="field"><span>اسم المرسل · Sender name</span><input id="adminSenderName" maxlength="120" autocomplete="off" placeholder="OpenCode Gateway"></label>
+<label class="field"><span>بريد المرسل · Sender email</span><input id="adminSenderEmail" type="email" maxlength="254" autocomplete="off" placeholder="verify@opencode-gateway.codes"></label>
+<label class="field"><span>SMTP host · الخادم</span><input id="adminSmtpHost" maxlength="253" autocomplete="off" placeholder="smtp.resend.com"></label>
+<label class="field"><span>Port · المنفذ</span><input id="adminSmtpPort" type="number" min="1" max="65535" value="587"></label>
+<label class="field"><span>التشفير · TLS</span><select id="adminSmtpTls"><option value="starttls">STARTTLS (587)</option><option value="implicit">Implicit TLS (465) — requires integration</option></select></label>
+<label class="field"><span>اسم المستخدم · SMTP username</span><input id="adminSmtpUsername" maxlength="254" autocomplete="off" placeholder="resend"></label>
+<label class="field"><span>API Key / SMTP Password — أدخله لاحقًا</span><input id="adminSmtpSecret" type="password" autocomplete="new-password" maxlength="4096" placeholder="فارغ حتى ربط المزوّد" value=""></label>
+<label class="field"><span>بريد اختبار الإرسال · Test recipient</span><input id="adminSmtpTestRecipient" type="email" maxlength="254" autocomplete="off" placeholder="admin-owned@example.com"></label>
+</div>
+<p class="lead">الإعدادات المعروضة مسودة غير محفوظة. ربط المفاتيح والتبديل الفعلي غير مفعّل حتى اكتمال التخزين المشفّر واختبار الإرسال. لا تضع مفتاحًا حقيقيًا قبل تفعيل الحفظ الآمن.</p>
+<button type="button" class="button" id="adminSmtpSave" disabled title="Encrypted provider configuration is not yet implemented">حفظ الإعدادات · Save (not available yet)</button>
+<button type="button" class="button ghost" id="adminSmtpTest" disabled title="Requires verified provider connection">اختبار الإرسال · Test (not available yet)</button>
+</section>
+<section id="adminServicesTab" hidden><h2>تفعيل الخدمات · Service Toggles</h2><div id="adminServiceToggles" aria-live="polite"></div><p class="lead">التفعيل يعتمد على تكامل فعلي في الخادم. الخيارات غير الجاهزة معطّلة وليست موافقات شكلية.</p></section>
+</div></section>
   <section class="admin-view" data-admin-panel="security"><div class="page-head"><div><h1 data-i18n="adminSecurity">Security</h1><p class="lead" data-i18n="aNay">Not available yet.</p></div></div><div class="admin-section"><p data-i18n="aAdminSecurityNotAvail">Admin security settings are not available yet.</p></div></section>
   <section class="admin-view" data-admin-panel="account"><div class="page-head"><div><h1 data-i18n="adminPersonal">Personal account</h1><p class="lead" data-i18n="aPersonalLead">Your own account. Administrative controls are on the other pages.</p></div></div><div id="adminAccountPanel"></div></section>
   </div></section></main>
