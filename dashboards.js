@@ -90,6 +90,18 @@
     }catch(error){status.textContent=tr('Could not retrieve GitHub status: ','تعذر جلب حالة GitHub: ')+error.message;}
   }
   window.gatewayLoadAdminGithubStatus=loadAdminGithubStatus;
+  // Navigation is managed by enhancements.js; this delegated fallback also
+  // handles older admin navigation handlers that replace its click callbacks.
+  q('adminNav')?.addEventListener('click',event=>{
+    if(!event.target.closest('[data-admin-view="github"]'))return;
+    setTimeout(()=>{
+      const section=document.querySelector('#adminPage [data-admin-panel="github"]');
+      if(section?.classList.contains('active'))loadAdminGithubStatus().catch(error=>{
+        const host=q('adminGithubPanel');if(host)host.textContent=error.message;
+      });
+    },0);
+  });
+
   async function loadServiceCenter(){
     if(!admin())return;
     const notice=q('adminServiceNotice');if(!notice)return;
@@ -104,12 +116,12 @@
       q('adminSenderEmail').value=e.sender||'';
       q('adminSmtpSecret').value='';
       const captions={registration_verification:'التحقق من الحساب الجديد',password_reset:'استعادة كلمة المرور',welcome_email:'رسائل الترحيب',subscription_expiry:'انتهاء الاشتراك',low_balance:'انخفاض الرصيد',account_suspension:'تعليق الحساب',payment_receipt:'إيصالات الدفع',renewal_reminder:'تذكير التجديد',system_updates:'تحديث النظام',login_security:'تنبيه دخول جديد',password_changed:'تغيير كلمة المرور',email_changed:'تغيير البريد',payment_failed:'فشل الدفع',trial_expiring:'قرب انتهاء الفترة التجريبية',support_received:'رسالة دعم جديدة',support_unanswered:'رسائل دون رد',service_incident:'أعطال الخدمة',mail_delivery_failure:'فشل تسليم البريد',unusual_activity:'نشاط غير معتاد',backup_status:'حالة النسخ الاحتياطي'};
-      const list=q('adminServiceToggles');list.replaceChildren();
+      const list=q('adminServiceToggles');list.replaceChildren();list.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:10px;align-items:stretch;';
       for(const item of data.services||[]){
-        const row=document.createElement('label');row.className='check';row.style.cssText='display:flex;align-items:center;gap:10px;padding:9px 0;';
+        const row=document.createElement('label');row.className='check';row.style.cssText='display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--surface-edge, #d8dee7);border-radius:12px;min-height:62px;background:var(--panel,transparent);min-width:0;';
         const input=document.createElement('input');input.type='checkbox';input.checked=!!item.enabled;input.disabled=true;
         const label=document.createElement('span');label.textContent=(captions[item.id]||item.id)+' · '+(item.available?tr('Available','متاح'):tr('Unavailable','غير متاح'))+(item.reason?' · '+item.reason:'');
-        row.append(input,label);list.append(row);
+        label.style.cssText='overflow-wrap:anywhere;min-width:0;line-height:1.5;';row.append(input,label);list.append(row);
       }
     }catch(error){notice.textContent=error.message;}
   }
