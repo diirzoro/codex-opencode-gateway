@@ -34,10 +34,12 @@ DROPIN=Path('/etc/systemd/system/opencode-gateway-test.service.d/zzzz-native-rel
 PLANS=Path('/var/backups/opencode-native-coordinated-test')
 SERVICE='opencode-gateway-test.service'
 BASELINE='3d4d52d69464edc57ab7f851d7e6faa67a607091'
-BASELINES=(BASELINE,'c0d830bc3abb374d9f5699c445b0195032aba39a')
+BASELINES=(BASELINE,'c0d830bc3abb374d9f5699c445b0195032aba39a','6a04264d94f7b175cf5e0ba087fc9f407a88e693')
 FILES=('app.js','dashboards.js','runtime-client.js','native-session-client.js',
        'backend/app/main.py','backend/app/routes/native_sessions.py',
-       'backend/app/routes/agent.py','backend/app/services/opencode.py')
+       'backend/app/routes/agent.py','backend/app/services/opencode.py',
+       'management.js','backend/app/routes/workspaces.py','backend/app/services/native_provider_accounts.py',
+       'backend/app/services/github.py')
 
 class Stop(RuntimeError):pass
 
@@ -106,7 +108,7 @@ def public_environment_check(env):
         raise Stop('Running service does not identify the exact TEST DB/domain')
 
 def protected(values):
-    paths={APP/'.env',APP/'index.html',APP/'management.js',APP/'backend/app/config.py',APP/'backend/requirements.txt',Path(values['FragmentPath']),Path('/etc/opencode-native-test.env')}
+    paths={APP/'.env',APP/'index.html',APP/'backend/app/config.py',APP/'backend/requirements.txt',Path(values['FragmentPath']),Path('/etc/opencode-native-test.env')}
     paths.update(Path(x) for x in values.get('DropInPaths','').split())
     paths.update(Path(x) for x in values.get('EnvironmentFiles','').split() if x.startswith('/'))
     # Keep originals fingerprinted, never rewrite or print their contents.
@@ -172,6 +174,22 @@ def loopback_candidate(text):
         add_header Cache-Control "no-store" always;
     }
 '''.replace('AUTHORIZATION',lines[0])
+    # Management metadata/auth uses the SAME protected native transport. It is
+    # not exposed by the browser transport allowlist. No new listener/service.
+    management='''
+    location ~ "^/(?:auth/[A-Za-z0-9_-]{1,120}|provider/auth|provider/[A-Za-z0-9_-]{1,120}/oauth/(?:authorize|callback)|session/[A-Za-z0-9_-]{1,120})$" {
+        limit_except GET POST PUT DELETE PATCH { deny all; }
+        proxy_pass http://127.0.0.2:4097;
+        AUTHORIZATION
+        proxy_set_header Cookie "";
+        proxy_set_header Host 127.0.0.2:4097;
+        proxy_read_timeout 120s;
+        add_header Cache-Control "no-store" always;
+    }
+'''.replace('AUTHORIZATION',lines[0])
+    start=groups[0][0]
+    text=text[:start+1]+management+text[start+1:]
+    groups=blocks(text)
     end=groups[0][1];return text[:end]+addition+text[end:]
 
 def inspection(source,revision):
@@ -180,6 +198,7 @@ def inspection(source,revision):
     if APP.is_symlink() or APP.resolve()!=APP:raise Stop('TEST checkout is a symlink; manual release reconciliation required')
     if ENABLED_SITE.resolve()!=SITE:raise Stop('Enabled TEST site does not point to the expected TEST-only file')
     values=unit();env=process_environment(values);public_environment_check(env)
+    native_version()
     files=[]
     for name in FILES:
         before=fingerprint(APP/name);bases=[git(source,'show',base+':'+name,optional=True) for base in BASELINES];after=git(source,'show',revision+':'+name)
@@ -188,10 +207,24 @@ def inspection(source,revision):
         # that exact Git-tracked preimage, then stage the reviewed native version.
         # This exception does not relax reconciliation for any other file.
         if name=='dashboards.js':
-            approved.append(digest(git(source,'show','9de0e55:dashboards.js')))
+            restored=git(source,'show','9de0e55:dashboards.js',optional=True)
+            if restored is not None:approved.append(digest(restored))
         match=(before is None and None in approved) or before is not None and before['sha256'] in {*approved,digest(after)}
         files.append({'path':name,'actual':before,'approved_baseline_sha256':approved,'candidate_sha256':digest(after),'reconciled':match})
     return values,env,files
+
+def native_version():
+    # Reuse protected existing authentication in memory; never echo the config.
+    headers=re.findall(r'proxy_set_header\s+Authorization\s+"(Basic [A-Za-z0-9+/=]+)"\s*;',LOCAL.read_text(),re.I)
+    if not headers or len(set(headers))!=1:raise Stop('Cannot verify native version with the existing private TEST authentication')
+    request=urllib.request.Request('http://127.0.0.2:4097/global/health',headers={'Authorization':headers[0]})
+    try:
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+        with opener.open(request,timeout=5) as response:health=json.loads(response.read(8192))
+    except Exception:raise Stop('Native TEST health/version could not be verified; no service was changed') from None
+    version=health.get('version','')
+    if health.get('healthy') is not True or not re.fullmatch(r'1\.(?:18|19)\.\d+',str(version)):raise Stop('Existing native TEST health/API family requires reconciliation; no installation/upgrade performed')
+    return version
 
 def prepare(source,revision):
     values,env,files=inspection(source,revision)
@@ -317,13 +350,14 @@ def apply(folder,review):
         rollback(folder,plan);raise Stop('Coordinated staging failed; original TEST files restored') from None
     return {'revision':plan['revision'],'state':plan['state'],'deployed':[e['path'] for e in plan['entries']]}
 
-def activate(folder,owner):
+def activate(folder,owner=None):
     plan,_=load(folder)
     if plan['state']!='staged-disabled':raise Stop('All dependencies must be staged and healthy before activation')
-    owner=str(uuid.UUID(owner));check_files(plan,'after');check_protected(plan)
+    if owner:raise Stop('Single-owner activation is retired; use authenticated TEST admission')
+    check_files(plan,'after');check_protected(plan)
     entry=next(e for e in plan['entries'] if e['path']==str(FLAG))
     try:
-        raw=('OPENCODE_NATIVE_TEST_ENABLED=true\nOPENCODE_NATIVE_TEST_OWNER_ID='+owner+'\n').encode()
+        raw=b'OPENCODE_NATIVE_TEST_ENABLED=true\n'
         # Persist the exact new value before mutation so rollback can recognize it.
         entry.setdefault('previous_after',[]).append(dict(entry['after']))
         entry['after']['sha256']=digest(raw);write(folder/entry['new'],raw,{'uid':0,'gid':0,'mode':0o600});save(folder,plan)
@@ -379,7 +413,6 @@ def main():
         if args.operation=='review':result=review_plan(args.plan)
         elif args.operation=='apply':result=apply(args.plan,args.review_sha256)
         elif args.operation=='activate':
-            if not args.owner_id:raise Stop('The existing TEST owner UUID is required; do not create another account')
             result=activate(args.plan,args.owner_id)
         else:
             plan,_=load(args.plan);rollback(args.plan,plan);result={'state':'rolled-back','database_or_workspace_changes':False}

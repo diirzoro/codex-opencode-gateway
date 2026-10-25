@@ -28,6 +28,7 @@ const protectedPages=new Set(['clientPage','accountPage','onboarding','workspace
 function invalidateProviderMutation(path,method='GET'){
  if(/^\/api\/opencode\/connections\/[^/?]+(?:\/(?:credentials|oauth\/callback))?(?:\?|$)/.test(path)&&!['GET','HEAD'].includes(method.toUpperCase())){
   window.workspaceRuntime?.clear();
+  try{localStorage.setItem('og-native-provider-revision:'+currentUser?.id,String(Date.now()));}catch{}
   window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser?.id}}));
  }
  const mutation=path.match(/^\/api\/workspaces\/([^/]+)\/providers\/([^/?]+)(?:\/(?:credentials|oauth\/callback))?(?:\?|$)/);
@@ -36,6 +37,9 @@ function invalidateProviderMutation(path,method='GET'){
   if(method.toUpperCase()==='DELETE')window.dispatchEvent(new CustomEvent('workspace-provider-disconnected',{detail:{workspaceId,providerId:decodeURIComponent(mutation[2])}}));
  }
 }
+window.addEventListener('storage',event=>{
+ if(currentUser&&event.key==='og-native-provider-revision:'+currentUser.id){window.workspaceRuntime?.clear();window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser.id}}));}
+});
 const api=async(path,options={})=>{
  if(window.nativeSession&&/^\/api\/(?:sessions(?:\/|\?|$)|workspaces\/[^/]+\/sessions)/.test(path))await window.nativeSession.ready();
  if(window.nativeSession?.active()){const routed=await window.nativeSession.route(path,options);if(routed)return routed.value;}
@@ -253,6 +257,7 @@ function workspaceLatestVisibility(feed){
 // Session-scoped OpenCode tasks: collapsible and pinned above the composer.
 let todoLastCheck=0,todoRequest=null,todoSessionKey='',todoEpoch=0;
 async function refreshWorkspaceTodos(force=false){
+ if(window.nativeSession?.active()&&!force)return;
  const sessionId=activeSession?.id,ownerId=currentUser?.id;
  let panel=document.getElementById('workspaceTodoPanel');
  if(!panel){
@@ -315,7 +320,7 @@ function renderAgentText(host,value){
 function workspaceMessagePresentation(row,latest,status){
  const hasText=Boolean(row.text?.trim()),activity=(row.activity||[]).filter(item=>!['todowrite','todoread'].includes(item.tool));
  if(row.role!=='assistant'||hasText)return {hasText,activity,omit:false,feedback:false};
- const state=status==='waiting_approval'?'waiting_approval':status==='failed'||row.state==='failed'?'failed':status==='cancelled'?'cancelled':status==='submitted'?'working':row.state==='working'&&latest?'working':'completed';
+ const state=status==='waiting_approval'?'waiting_approval':status==='failed'||row.state==='failed'?'failed':status==='cancelled'||row.state==='cancelled'?'cancelled':status==='submitted'?'working':row.state==='working'&&latest?'working':'completed';
  return {hasText,activity,state,omit:!latest&&state==='completed'&&!activity.length,feedback:latest||state!=='completed'};
 }
 function foldLongUserMessage(node,content,text,expanded=false){
@@ -336,12 +341,18 @@ async function refreshMessages(){
   const feed=$('#agentFeed');
   const snapshot=JSON.stringify([owner,sessionId,lang,activeSession.execution_status,rows]);
   if(feed.messageSnapshot===snapshot){window.renderActivitySummary?.(rows);return;}
-  workspaceLatestControl(feed);const followingLatest=feed.workspaceFollow.following;const previousOffset=feed.scrollTop;const expandedUserMessages=new Set([...feed.querySelectorAll('.user-message-fold[open]')].map(el=>el.closest('[data-message-id]')?.dataset.messageId).filter(Boolean));feed.replaceChildren();const seen=new Set();let previousPrompt='',previousAttachments=[];
+  workspaceLatestControl(feed);const followingLatest=feed.workspaceFollow.following;const previousOffset=feed.scrollTop;const expandedUserMessages=new Set([...feed.querySelectorAll('.user-message-fold[open]')].map(el=>el.closest('[data-message-id]')?.dataset.messageId).filter(Boolean));
+  const nativeIncremental=window.nativeSession?.active(),renderKey=JSON.stringify([owner,sessionId,lang]);
+  if(!nativeIncremental||feed.nativeRenderKey!==renderKey){feed.replaceChildren();feed.nativeNodes=new Map();feed.nativeRenderKey=renderKey;}
+  const nextNodes=[],seen=new Set();let previousPrompt='',previousAttachments=[];
   const latestAssistant=rows.filter(row=>row.role==='assistant').at(-1);
   for(const row of rows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
    if(row.role==='user'){previousPrompt=row.text;previousAttachments=row.attachments||[];}
    const latest=row===latestAssistant,presentation=workspaceMessagePresentation(row,latest,latest?activeSession.execution_status:null);if(presentation.omit)continue;
+   const nodeSignature=JSON.stringify([row,presentation,previousPrompt,previousAttachments,window.workspaceSubmissionBlocked?.()||false]);
+   const cached=nativeIncremental&&feed.nativeNodes.get(row.id);
+   if(cached?.signature===nodeSignature){nextNodes.push(cached.node);continue;}
    const node=document.createElement('article');node.className=row.role==='user'?'user-bubble':'agent-response';node.dir='auto';node.tabIndex=0;
    const avatar=textElement('span','','message-avatar');avatar.setAttribute('aria-hidden','true');
    if(row.role==='user')avatar.textContent=Array.from(currentUser?.full_name||currentUser?.username||'').at(0)||'·';
@@ -355,22 +366,28 @@ async function refreshMessages(){
     const labels={waiting_approval:['Waiting for your approval…','بانتظار موافقتك…'],failed:['The agent could not finish this request. Review the activity below before retrying.','تعذر على الوكيل إكمال الطلب. راجع النشاط أدناه قبل إعادة المحاولة.'],cancelled:['Execution stopped.','تم إيقاف التنفيذ.'],working:['The agent is working…','الوكيل يعمل الآن…'],completed:['Tool step completed.','اكتملت خطوة الأدوات.']};
     if(latest&&state==='completed')labels.completed=['The agent finished without a text reply. Review the tool results below.','انتهى الوكيل دون رد نصي. راجع نتائج الأدوات أدناه.'];
     const feedback=textElement('p',labels[state][lang==='ar'?1:0],'agent-progress-note');feedback.setAttribute('role','status');node.append(feedback);
-   }if(row.role==='user'&&row.attachments?.length){const attached=textElement('div','','message-attachments');for(const file of row.attachments){const label=textElement('span',file.name+' · '+Math.ceil(file.size/1024)+' KB');label.dir='auto';label.title=file.path;attached.append(label);}node.append(attached);}
+   }if(row.role==='user'&&row.attachments?.length){const attached=textElement('div','','message-attachments');for(const file of row.attachments){const label=textElement('span',file.name+(Number.isFinite(file.size)?' · '+Math.ceil(file.size/1024)+' KB':''));label.dir='auto';attached.append(label);}node.append(attached);}
    window.renderMessageActivity?.(node,presentation.activity);
    if(row.role==='assistant')window.renderWorkspaceMessageActions?.(node,row.actions,{owner,sessionId,messageId:row.id});
-   if(row.role==='assistant'&&!hasText){feed.append(node);continue;}
+   if(nativeIncremental){feed.nativeNodes.set(row.id,{signature:nodeSignature,node});nextNodes.push(node);}
+   if(row.role==='assistant'&&!hasText){if(!nativeIncremental)feed.append(node);continue;}
    const bar=document.createElement('div');bar.className='feed-actions';bar.setAttribute('role','group');bar.setAttribute('aria-label',lang==='ar'?'إجراءات الرسالة':'Message actions');
    if(row.role==='user')bar.append(feedAction('repeat',row.text,row.attachments),feedAction('edit',row.text,row.attachments));
    else if(previousPrompt){const regenerate=feedAction('regenerate',previousPrompt,previousAttachments);regenerate.disabled=window.workspaceSubmissionBlocked?.()||false;bar.append(regenerate);}
    bar.append(feedAction('copy',row.text));
-   if(row.id){
+   if(row.id&&!nativeIncremental){
     const hide=feedAction('hide',row.text);hide.disabled=['submitted','waiting_approval'].includes(activeSession.execution_status);
     hide.onclick=async()=>{
      if(!await window.confirmAction(lang==='ar'?'إخفاء من واجهتك فقط؟ يبقى سياق OpenCode والإجراءات والملفات كما هي.':'Hide from your view only? OpenCode context, completed actions and files are preserved.'))return;
      try{await api(`/api/sessions/${sessionId}/messages/${encodeURIComponent(row.id)}`,{method:'DELETE'});if(activeSession?.id===sessionId)await refreshMessages();}catch(error){if(currentUser?.id===owner)toast(error.message);}
     };bar.append(hide);
    }
-   node.append(bar);feed.append(node);
+   node.append(bar);if(!nativeIncremental)feed.append(node);
+  }
+  if(nativeIncremental){
+   for(const [id,cached] of feed.nativeNodes)if(!seen.has(id)){cached.node.remove();feed.nativeNodes.delete(id);}
+   let cursor=feed.firstChild;for(const node of nextNodes){if(node===cursor)cursor=cursor.nextSibling;else feed.insertBefore(node,cursor);}
+   for(const node of [...feed.querySelectorAll('article[data-message-id]')])if(!nextNodes.includes(node))node.remove();
   }
   window.renderActivitySummary?.(rows);
   feed.messageSnapshot=snapshot;

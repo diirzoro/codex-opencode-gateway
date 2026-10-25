@@ -70,14 +70,14 @@ def connection_status(db, user) -> dict:
     if not configured():
         return {"connected": False, "available": False, "configured": False, "reason": "GitHub App integration is not configured"}
     row = db.scalar(select(GithubConnection).where(GithubConnection.user_id == user.id))
-    if row is None or row.suspended or not row.user_token or not row.token_expires_at or _aware(row.token_expires_at)<=datetime.now(timezone.utc):
+    if row is None or row.suspended or not row.user_token or (row.token_expires_at and _aware(row.token_expires_at)<=datetime.now(timezone.utc)):
         return {"connected": False, "available": True, "configured": True, "reason": "GitHub App is installed" if row and row.suspended else "GitHub is not connected"}
     return {"connected": True, "available": True, "configured": True, "account_login": row.account_login, "account_type": row.account_type, "target_type": row.target_type}
 
 def installation_token(connection: GithubConnection) -> str:
     # Every customer operation uses the customer's authorization, never the App's
     # broader installation token. Membership removal therefore takes effect at GitHub.
-    if not connection.user_token or not connection.token_expires_at or _aware(connection.token_expires_at)<=datetime.now(timezone.utc):
+    if not connection.user_token or (connection.token_expires_at and _aware(connection.token_expires_at)<=datetime.now(timezone.utc)):
         raise HTTPException(403,'Reconnect GitHub: user authorization expired')
     return credentials.decrypt(connection.user_token)
 
@@ -137,7 +137,9 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
     row.app_id = settings.github_app_id
     row.suspended = False
     row.user_token=credentials.encrypt(token['access_token'])
-    row.token_expires_at=now+timedelta(seconds=min(int(token.get('expires_in',28800)),28800))
+    # GitHub Apps may issue non-expiring user tokens. Do not fabricate an
+    # eight-hour expiry when GitHub did not return expires_in.
+    row.token_expires_at=now+timedelta(seconds=int(token['expires_in'])) if token.get('expires_in') is not None else None
     require_advanced(db, user, start=True)
     db.commit()
     return row

@@ -19,6 +19,14 @@ def test_expired_github_authorization_never_calls_vendor(monkeypatch):
     assert error.value.status_code==403 and api.call_count==0
 
 
+def test_github_nonexpiring_token_does_not_gain_a_fabricated_expiry(monkeypatch):
+    row=connection();row.token_expires_at=None;row.suspended=False;row.account_login='fixture';row.account_type='User';row.target_type='User'
+    monkeypatch.setattr(github.credentials,'decrypt',lambda value:'owner-token')
+    monkeypatch.setattr(github,'configured',lambda:True)
+    assert github.installation_token(row)=='owner-token'
+    assert github.connection_status(SimpleNamespace(scalar=lambda query:row),SimpleNamespace(id='owner'))['connected'] is True
+
+
 def test_repository_and_branch_access_uses_only_connected_user_token(monkeypatch):
     api=Mock(side_effect=[{'repositories':[{'id':1,'full_name':'owned/repo','name':'repo','owner':{'login':'owned'},'default_branch':'updates','clone_url':'https://github.com/owned/repo.git'}]},[{'name':'updates','commit':{'sha':'fixture'}}]])
     monkeypatch.setattr(github,'_api',api);monkeypatch.setattr(github.credentials,'decrypt',lambda value:'owned-token-fixture')

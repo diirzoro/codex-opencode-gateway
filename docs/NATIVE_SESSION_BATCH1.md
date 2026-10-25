@@ -1,5 +1,7 @@
 # Native OpenCode 1.18.32 — Batch 1 (22 October 2026)
 
+**Historical batch record:** current development instructions and code are in [NATIVE_DEVELOPMENT_1194.md](NATIVE_DEVELOPMENT_1194.md). Its authenticated TEST admission and current native adapters supersede this batch's owner-ID restriction. Historical version/test statements below are retained accurately; do not reinstall or upgrade an existing compatible native service merely to match a label.
+
 **Current deployment follow-up:** use [NATIVE_TEST_COORDINATED_RELEASE.md](NATIVE_TEST_COORDINATED_RELEASE.md) and its operator-only comparison/stage/activate/rollback tool. Do not deploy this batch through the three-file UI workflow. The historical manual proposal below is superseded by that coordinated procedure; no actual TEST deployment by Work is claimed.
 
 Published source: `c0d830bc3abb374d9f5699c445b0195032aba39a`, exact tested tree `54e1728e397c36631029c8bd44fdf3973d3767c8`.

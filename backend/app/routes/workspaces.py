@@ -20,6 +20,8 @@ from ..services import user_provider_credentials
 from ..services import account_provider_sync
 from ..services.entitlements import access_payload, require_advanced
 from .dependencies import require_user, require_workspace_entitlement
+from . import native_sessions
+from ..services import native_provider_accounts
 
 router=APIRouter(prefix="/api",tags=["workspaces"],dependencies=[Depends(require_workspace_entitlement)])
 logger=logging.getLogger(__name__)
@@ -80,6 +82,7 @@ def health(user: User=Depends(require_user)):
 
 def _account_catalog_state(db, user, data):
     """Show only this user's saved connections; shared daemon auth is never trusted."""
+    if native_sessions.enabled():return data
     user_provider_credentials.require_schema(db)
     rows = user_provider_credentials.list_owned(db, user.id)
     connected = {row.provider_id for row in rows}
@@ -89,6 +92,10 @@ def _account_catalog_state(db, user, data):
 
 
 def _account_public_catalog(user, path, db, *, agents=False):
+    if native_sessions.enabled():
+        native_sessions.admit(user)
+        if not agents:return native_provider_accounts.catalog(db,user)
+        return [{k:r[k] for k in ('name','mode','hidden') if k in r} for r in native_sessions.metadata('GET','/agent',native_provider_accounts.root(user)) if isinstance(r,dict)]
     account, service = opencode.for_account(user.id, db=db)
     with opencode.workspace_lock(account), service.state_lock:
         return opencode_catalog.public_catalog(path, agents=agents, service=service)
@@ -128,6 +135,9 @@ def account_agent_catalog(user: User=Depends(require_user),db: Session=Depends(g
 @router.get("/opencode/connections")
 def account_provider_connections(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Account-scoped connection metadata, without keys or project dependencies."""
+    if native_sessions.enabled():
+        native_sessions.admit(user)
+        return [{'provider_id':pid,'auth_status':'configured','verified':False} for pid in native_provider_accounts.catalog(db,user)['connected'] if native_provider_accounts.owned(db,user,pid)]
     user_provider_credentials.require_schema(db)
     return [{"provider_id":row.provider_id,"last4":row.last4,
              **account_provider_sync.public_status(row,account_provider_sync.services_for(user.id))}
@@ -138,6 +148,11 @@ def account_provider_connections(user: User=Depends(require_user),db: Session=De
 def account_provider_options(provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Real OpenCode authentication choices from a temporary isolated process."""
     require_advanced(db,user)
+    if native_sessions.enabled():
+        native_sessions.admit(user)
+        data=native_provider_accounts.catalog(db,user)
+        providers.resolve_provider(data,provider_id)
+        return {'provider_id':provider_id,'auth_methods':native_provider_accounts.methods(user,provider_id),'models':providers.model_details(data,provider_id,policy.load(db))['models'],'native':True}
     if not 0 < len(provider_id) <= 120:
         raise HTTPException(422, "Invalid provider identifier")
     if not policy.provider_allowed(policy.load(db), provider_id):
@@ -169,6 +184,10 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
 def connect_account_provider(provider_id: str,data: ApiKeyCredential,
                              user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Validate a key without any project and store one credential per account."""
+    if native_sessions.enabled():
+        native_sessions.admit(user);require_advanced(db,user)
+        result=native_provider_accounts.connect(db,user,provider_id,data)
+        require_advanced(db,user,start=True);db.commit();return result
     user_provider_credentials.require_schema(db)
     require_advanced(db,user)
     if not 0 < len(provider_id) <= 120:
@@ -220,6 +239,9 @@ def connect_account_provider(provider_id: str,data: ApiKeyCredential,
 @router.post("/opencode/connections/{provider_id}/oauth/authorize")
 def account_oauth_authorize(provider_id: str,data: OAuthAuthorize,
                             user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():
+        native_sessions.admit(user);require_advanced(db,user)
+        return native_provider_accounts.oauth_authorize(db,user,provider_id,data)
     user_provider_credentials.require_schema(db)
     require_advanced(db,user)
     if not 0 < len(provider_id) <= 120 or not policy.provider_allowed(policy.load(db),provider_id):
@@ -247,6 +269,9 @@ def account_oauth_authorize(provider_id: str,data: OAuthAuthorize,
 @router.post("/opencode/connections/{provider_id}/oauth/callback")
 def account_oauth_callback(provider_id: str,data: OAuthCallback,
                            user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():
+        native_sessions.admit(user);require_advanced(db,user)
+        return native_provider_accounts.oauth_callback(db,user,provider_id,data)
     user_provider_credentials.require_schema(db)
     require_advanced(db,user)
     if not 0 < len(provider_id) <= 120 or not policy.provider_allowed(policy.load(db),provider_id):
@@ -914,6 +939,8 @@ def _remove_account_api_provider(db, user, provider_id):
 def remove_account_provider_connection(provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
     if not provider_id or len(provider_id)>120:
         raise HTTPException(422,"Invalid provider identifier")
+    if native_sessions.enabled():
+        native_sessions.admit(user);native_provider_accounts.disconnect(db,user,provider_id);return
     _remove_account_api_provider(db,user,provider_id)
 
 

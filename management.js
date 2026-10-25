@@ -188,7 +188,7 @@
       const discovery=new AbortController(),onAbort=()=>dlg.close();controller.signal.addEventListener('abort',onAbort,{once:true});
       dlg.addEventListener('close',()=>{discovery.abort();controller.signal.removeEventListener('abort',onAbort);for(const input of dlg.querySelectorAll('input[type=password]'))input.value='';view.connecting=false;host.remove();},{once:true});
       const currentDialog=()=>alive()&&contextCurrent()&&dlg.open;
-      body.append(node('p',tr('API keys are stored encrypted on the server only after OpenCode validates them. There is one 30-day trial, beginning after email verification.','تُحفظ مفاتيح API مشفّرة على الخادم بعد تحقق OpenCode منها. هناك تجربة واحدة لمدة 30 يومًا تبدأ بعد تفعيل البريد.')));
+      body.append(node('p',tr('Credentials are stored on the server. Configuration alone does not verify provider access; test it with a native prompt.','تُحفظ الاعتمادات على الخادم. حفظ الإعداد لا يثبت صلاحية الوصول؛ تحقّق بإرسال طلب أصلي.')));
       dlg.showModal();setFeedback(feedback,tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
       let choices,accountOptions=null;
       try{
@@ -232,11 +232,11 @@
           const values=Object.fromEntries(new FormData(f));submitting=true;submit.disabled=methodPicker.disabled=true;f.setAttribute('aria-busy','true');
           try{
             if(keyMethod){
-              setFeedback(feedback,tr('Installing the credential and validating a real OpenCode model request…','جارٍ تثبيت المفتاح والتحقق منه بطلب نموذج فعلي عبر OpenCode…'));
+              setFeedback(feedback,tr('Saving the credential through OpenCode…','جارٍ حفظ المفتاح عبر OpenCode…'));
               const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:null,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
               f.reset();if(!alive()||!contextCurrent())return;
               if(result.connected!==true||result.persisted!==true)throw new Error(tr('OpenCode connection and credential storage were not confirmed.','لم يتم تأكيد اتصال OpenCode وحفظ المفتاح.'));
-              dlg.close();toast(result.deferred_workspace_count?tr('Connected, but some running workspaces need refresh.','تم الربط، لكن بعض مساحات العمل النشطة تحتاج تحديثًا.'):tr('Provider connected. It is now available in the workspace composer.','تم ربط المزوّد. أصبح متاحًا الآن في محرر مساحة العمل.'));await reload();
+              dlg.close();toast(result.verified===false?tr('Credential configured. Send a native prompt to verify access.','حُفظ الاعتماد. أرسل طلبًا أصليًا للتحقق من صلاحية الوصول.'):tr('Provider connected.','تم ربط المزوّد.'));await reload();
             }else{
               setFeedback(feedback,tr('Starting OpenCode authorization…','جارٍ بدء تفويض OpenCode…'));
               const authorization=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values,...(reauthorizing?{reauthorize:true}:{})})});
@@ -363,27 +363,13 @@
         view.ready=false;
         message(tr('Loading account providers…','جارٍ تحميل مزوّدات الحساب…'));
         try{
-          // Use the authenticated Gateway ownership gate rather than the
-          // legacy /native-probe path, which does not authorize a workspace.
-          const owned=await api('/api/workspaces');
+          const catalog=await api('/api/opencode/catalog/providers/page?limit=50&offset=0',{signal:controller.signal});
           if(!alive()||workspaceId)return;
-          const selected=Array.isArray(owned)?owned.find(w=>w&&w.id):null;
-          if(!selected){
-            snapshot={providers:[]};moreOffset=null;moreQuery='';
-            view.ready=false;customButton.disabled=true;
-            renderOptions();renderConnected();
-            message(tr('Open a project workspace to discover native providers.','افتح مساحة عمل مشروع لاكتشاف المزوّدين.'));
-            return;
-          }
-          const catalog=await window.workspaceRuntime.load(selected.id,{force});
-          if(!alive()||workspaceId)return;
-          const nativeRows=Array.isArray(catalog.providers)?catalog.providers.map(p=>({
-            ...p,connected:false,auth_methods:[],native_only:true
-          })):[];
-          snapshot={providers:nativeRows};moreOffset=null;moreQuery='';
-          view.ready=false;customButton.disabled=true;
+          snapshot={providers:catalog.items||[]};moreOffset=catalog.next_offset;moreQuery='';
+          view.ready=true;customButton.disabled=true;
           renderOptions();renderConnected();
-          message(tr('Native provider catalog (read only)','فهرس المزوّدين المباشرين (قراءة فقط)')+' · '+nativeRows.length);
+          message(tr('OpenCode providers ready','مزوّدو OpenCode جاهزون')+' · '+catalog.total);
+          const selected=snapshot.providers.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
       }

@@ -106,8 +106,10 @@
 // The opt-in native TEST mode reuses this existing interface; no runtime process.
 (() => {
  const previous=window.workspaceRuntime;
- async function load(id,options){if(window.nativeSession&&await window.nativeSession.ready())return window.nativeSession.discovery(id);return previous.load(id,options);}
- window.workspaceRuntime={...previous,load,async loadAgents(id,options){if(window.nativeSession&&await window.nativeSession.ready())return window.nativeSession.discovery(id);return previous.loadAgents(id,options);},
+ async function load(id,options){if(window.nativeSession&&await window.nativeSession.ready())return window.nativeSession.discovery(id,options);return previous.load(id,options);}
+ window.workspaceRuntime={...previous,load,async loadAgents(id,options){if(window.nativeSession&&await window.nativeSession.ready())return window.nativeSession.discovery(id,options);return previous.loadAgents(id,options);},
+ clear(){window.nativeSession?.invalidate();previous.clear();},
+ invalidate(id){window.nativeSession?.invalidate(id);previous.invalidate(id);},
  async loadModels(id,pid){if(!window.nativeSession?.active())return previous.loadModels(id,pid);const s=window.nativeSession.peek(id)||await load(id);const p=s.providers.find(p=>p.id===pid);return {...s,models:p?.models||[],connected:p?.connected===true,allowed:true};},
  peek:id=>window.nativeSession?.active()?window.nativeSession.peek(id):previous.peek(id),peekAgents:id=>window.nativeSession?.active()?window.nativeSession.peek(id):previous.peekAgents(id),
  peekModels(id,pid){if(!window.nativeSession?.active())return previous.peekModels(id,pid);const s=window.nativeSession.peek(id),p=s?.providers.find(p=>p.id===pid);return p?{...s,models:p.models}:null;}

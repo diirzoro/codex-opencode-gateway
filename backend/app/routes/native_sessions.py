@@ -2,11 +2,12 @@
 import os
 import re
 import uuid
+import json
 from pathlib import Path
 from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select
@@ -14,7 +15,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import User, Workspace, WorkspaceSession, Project
-from ..services import workspaces, session_lifecycle
+from ..services import workspaces, session_lifecycle, policy
 from ..services.entitlements import access_payload
 from .dependencies import require_user
 
@@ -27,8 +28,6 @@ def admit(user):
     if not enabled():raise HTTPException(503,'Native TEST transport is not enabled')
     if settings.public_base_url.rstrip('/')!='https://test.opencode-gateway.codes' or settings.database_url.rsplit('/',1)[-1].split('?',1)[0]!='opencode_gateway_test':
         raise HTTPException(503,'Native transport requires the TEST deployment')
-    if str(user.id)!=os.getenv('OPENCODE_NATIVE_TEST_OWNER_ID',''):
-        raise HTTPException(403,'Shared native execution is limited to the TEST owner')
 
 def context(db,user,workspace_id,session_id=None):
     admit(user)
@@ -49,10 +48,12 @@ def context(db,user,workspace_id,session_id=None):
 
 def metadata(method,path,root,data=None):
     # Only ownership/session metadata. No prompts, model responses or events.
-    if not ((path=='/session' and method in {'GET','POST'}) or method=='GET' and re.fullmatch(r'/session/'+ID,path) or path in {'/permission','/question'} and method=='GET'):
+    discovery=path in {'/provider','/agent'} and method=='GET'
+    auth=(method in {'PUT','DELETE'} and re.fullmatch(r'/auth/'+ID,path)) or (method=='POST' and re.fullmatch(r'/provider/'+ID+r'/oauth/(authorize|callback)',path)) or (method=='GET' and path=='/provider/auth')
+    if not (discovery or auth or (path=='/session' and method in {'GET','POST'}) or method in {'GET','PATCH'} and re.fullmatch(r'/session/'+ID,path) or path in {'/permission','/question','/session/status'} and method=='GET'):
         raise HTTPException(403,'Unsupported metadata operation')
     try:
-        with httpx.Client(base_url='http://127.0.0.1:18098',trust_env=False,timeout=15) as client:
+        with httpx.Client(base_url='http://127.0.0.1:'+('18097' if discovery else '18098'),trust_env=False,timeout=15) as client:
             response=client.request(method,path,params={'directory':str(root)},json=data)
             response.raise_for_status()
             if not response.headers.get('content-type','').startswith('application/json') or len(response.content)>4*1024*1024:raise ValueError()
@@ -67,7 +68,7 @@ class Create(BaseModel):
 def state(user:User=Depends(require_user)):
     if not enabled():return {'enabled':False}
     admit(user)
-    return {'enabled':True,'mode':'single-owner-test','version':'1.18.32'}
+    return {'enabled':True,'mode':'authenticated-development-test','version':'1.19.4','public_multi_user_ready':False}
 
 @router.api_route('/api/native-test/workspaces/{workspace_id}/sessions',methods=['GET','POST'])
 def sessions(workspace_id:uuid.UUID,request:Request,data:Create|None=None,user:User=Depends(require_user),db:Session=Depends(get_db)):
@@ -76,7 +77,11 @@ def sessions(workspace_id:uuid.UUID,request:Request,data:Create|None=None,user:U
         if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
         if not access_payload(db,user)['allowed']:raise HTTPException(402,'Workspace access has expired')
         workspaces.require_quota_headroom(workspace)
-        live=metadata('POST','/session',root,{'title':(data or Create()).title,'permission':[{'permission':'external_directory','pattern':'*','action':'deny'}]})
+        permissions=policy.session_permissions(policy.load(db))
+        # Development accounts may use the same native process, but tools must
+        # still wait for review and cannot authorize external-directory access.
+        permissions=[{**rule,'action':'ask' if rule['action']=='allow' else rule['action']} for rule in permissions]
+        live=metadata('POST','/session',root,{'title':(data or Create()).title,'permission':permissions})
         if not isinstance(live,dict) or not re.fullmatch('ses'+ID,str(live.get('id',''))) or not isinstance(live.get('title'),str) or live.get('directory')!=str(root):raise HTTPException(502,'Invalid native session metadata')
         row=WorkspaceSession(id=uuid.uuid4(),user_id=user.id,workspace_id=workspace.id,opencode_session_id=live['id'],title=live['title'][:120],status='idle')
         db.add(row);db.flush();session_lifecycle.set_state(db,row,'active');db.commit()
@@ -101,6 +106,27 @@ def session(session_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depe
     workspace,root,row,live=context(db,user,row.workspace_id,session_id)
     return {**session_lifecycle.payload(row,session_lifecycle.state(db,row)),'runtime_id':row.opencode_session_id,'native':True,'file_base':root.as_uri()+'/','model':live.get('model'),'agent':live.get('agent')}
 
+@router.patch('/api/native-test/sessions/{session_id}')
+def rename(session_id:uuid.UUID,data:Create,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
+    admit(user);row=workspaces.owned(db,WorkspaceSession,session_id,user.id)
+    _,root,row,_=context(db,user,row.workspace_id,session_id)
+    live=metadata('PATCH','/session/'+row.opencode_session_id,root,{'title':data.title})
+    row.title=str(live.get('title',data.title))[:120];db.commit()
+    return session_lifecycle.payload(row,session_lifecycle.state(db,row))
+
+@router.post('/api/native-test/sessions/{session_id}/visibility/{action}')
+def visibility(session_id:uuid.UUID,action:str,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
+    admit(user);row=workspaces.owned(db,WorkspaceSession,session_id,user.id)
+    _,root,row,_=context(db,user,row.workspace_id,session_id)
+    value={'close':'closed','archive':'archived','restore':'closed','reopen':'active','delete':'deleted'}.get(action)
+    if not value:raise HTTPException(404,'Unsupported history action')
+    live=metadata('GET','/session/status',root)
+    if value in {'closed','archived','deleted'} and live.get(row.opencode_session_id,{}).get('type','idle')!='idle':raise HTTPException(409,'Stop native execution before hiding this conversation')
+    session_lifecycle.set_state(db,row,value);db.commit()
+    return session_lifecycle.payload(row,value)
+
 @router.api_route('/native-session/{workspace_id}/{resource:path}',methods=['GET','POST'])
 async def transport(workspace_id:uuid.UUID,resource:str,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
     admit(user)
@@ -112,11 +138,22 @@ async def transport(workspace_id:uuid.UUID,resource:str,request:Request,user:Use
     return await run_in_threadpool(authorize_native,workspace_id,resource,request,user,db,bytes(raw))
 
 def authorize_native(workspace_id,resource,request,user,db,raw):
+    if any(k.lower() in {'x-native-uri','x-accel-redirect','x-opencode-directory','x-native-upstream'} for k in request.headers):raise HTTPException(403,'Caller routing headers are not allowed')
     if request.query_params:raise HTTPException(403,'Caller routing parameters are not allowed')
     write=request.method=='POST'
     if write and request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
     workspace,root,_,_=context(db,user,workspace_id)
     discovery=request.method=='GET' and resource in {'provider','agent'}
+    if discovery:
+        # Provider definitions contain an optional plaintext key and options.
+        # This is management metadata, not an AI response. Never transport it
+        # verbatim to a browser, even through an authenticated Nginx redirect.
+        if resource=='provider':
+            from ..services.native_provider_accounts import catalog
+            data=catalog(db,user,root)
+        else:
+            data=[{k:r[k] for k in ('name','mode','hidden','description') if k in r} for r in metadata('GET','/agent',root) if isinstance(r,dict)]
+        return JSONResponse(data,headers={'Cache-Control':'no-store'})
     match=re.fullmatch(r'session/('+ID+r')(?:/(message|todo|diff|prompt_async|abort))?',resource)
     if resource=='session/status':match=None
     if not discovery and resource not in {'event','permission','question','session/status'} and not match and not re.fullmatch(r'(permission|question)/'+ID+r'/(reply|reject)',resource):
@@ -140,13 +177,31 @@ def authorize_native(workspace_id,resource,request,user,db,raw):
     if write:
         if raw and request.headers.get('content-type','').split(';')[0]!='application/json':raise HTTPException(415,'Native writes require JSON')
         if not resource.endswith(('/abort','/reject')) and not access_payload(db,user)['allowed']:raise HTTPException(402,'Workspace access has expired')
+        if not match:
+            try:body=json.loads(raw or b'{}')
+            except (ValueError,UnicodeError):raise HTTPException(400,'Invalid native JSON') from None
+            if not isinstance(body,dict):raise HTTPException(422,'Invalid native reply')
+            if action.group(1)=='permission':
+                if set(body)!={'reply'} or body['reply'] not in {'once','reject'}:raise HTTPException(422,'Only one-time approval or rejection is allowed')
+                if item.get('permission')=='external_directory' and body['reply']!='reject':raise HTTPException(403,'External-directory access is not allowed')
+            elif action.group(3)=='reply':
+                answers=body.get('answers')
+                if set(body)!={'answers'} or not isinstance(answers,list) or len(answers)>30 or any(not isinstance(a,list) or not a or len(a)>50 or any(not isinstance(v,str) or not 1<=len(v)<=2000 for v in a) or len(set(a))!=len(a) for a in answers):raise HTTPException(422,'Invalid native question answers')
+                if len(answers)!=len(item.get('questions',[])):raise HTTPException(422,'Answer every native question')
         if match and match.group(2)=='prompt_async':
-            import json
             try:body=json.loads(raw)
             except (ValueError,UnicodeError):raise HTTPException(400,'Invalid native JSON') from None
             # Native schema validates models, variants and agents. Only file URIs
             # need Gateway ownership validation before tools may read them.
             if not isinstance(body,dict) or not isinstance(body.get('parts'),list) or any(not isinstance(p,dict) for p in body['parts']):raise HTTPException(422,'Invalid native prompt parts')
+            if set(body)-{'messageID','model','agent','variant','parts'}:raise HTTPException(422,'Unsupported native prompt fields')
+            if not 1<=len(body['parts'])<=25 or any(p.get('type') not in {'text','file'} for p in body['parts']):raise HTTPException(422,'Only text and owned attachments are supported')
+            model=body.get('model')
+            if not isinstance(model,dict) or set(model)!={'providerID','modelID'} or any(not isinstance(v,str) or not 1<=len(v)<=200 for v in model.values()):raise HTTPException(422,'Select a native provider and model')
+            current_policy=policy.load(db)
+            if not policy.provider_allowed(current_policy,model['providerID']) or not policy.model_allowed(current_policy,model['modelID']):raise HTTPException(403,'Model disabled by policy')
+            from ..services.native_provider_accounts import require_model
+            require_model(db,user,root,model['providerID'],model['modelID'])
             for part in body['parts']:
                 if part.get('type')=='file':
                     from urllib.parse import urlsplit,unquote
