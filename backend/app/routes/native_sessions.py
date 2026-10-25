@@ -63,6 +63,68 @@ def tool_access(db,user,workspace,*,project=None):
     return {'project_manager':manager,'shell_authorized':manager,'shell_enabled':False,
             'shell_blocker':'project_execution_boundary_unverified' if manager else 'project_manager_required'}
 
+def file_grants(workspace,root,rules,location=None):
+    """Validate exact Native path rules, never browser patterns or `always` '*'."""
+    if not rules:return []
+    location=location if location is not None else metadata('GET','/path',root)
+    if not isinstance(location,dict) or location.get('directory')!=str(root):raise HTTPException(503,'Native file context is unavailable')
+    worktree=Path(location.get('worktree',''))
+    if not worktree.is_absolute() or not root.is_relative_to(worktree):raise HTTPException(503,'Native worktree is unavailable')
+    result=[]
+    for rule in rules:
+        name,pattern=rule.get('permission'),rule.get('pattern')
+        if name not in policy.NATIVE_FILE_TOOLS or not isinstance(pattern,str) or not pattern or len(pattern)>1000 or re.search(r'[\x00-\x1f\x7f*?\\]',pattern):raise HTTPException(403,'Only exact owned file permissions can be remembered')
+        path=Path(pattern);absolute=path if path.is_absolute() else worktree/path
+        try:relative=absolute.relative_to(root).as_posix()
+        except ValueError:raise HTTPException(403,'Permission is outside this Workspace') from None
+        if relative=='.' or any(p.startswith('.env') or p in {'.opencode','opencode.json','opencode.jsonc','.aws','.config','auth.json','credentials.json'} or p.endswith(('.pem','.key')) for p in Path(relative).parts):raise HTTPException(403,'Protected files cannot be remembered')
+        target=workspaces.safe_path(workspace,relative)
+        if target.is_dir():raise HTTPException(403,'Directory-wide permissions cannot be remembered')
+        candidate={'permission':name,'pattern':pattern,'action':'allow'}
+        if candidate not in result:result.append(candidate)
+    return result
+
+def session_permissions(db,workspace,root,live,location=None):
+    candidates=[r for r in live.get('permission',[]) if isinstance(r,dict) and r.get('action')=='allow' and r.get('permission') in policy.NATIVE_FILE_TOOLS]
+    grants=[]
+    if candidates and location is None:location=metadata('GET','/path',root)
+    # Revalidate each remembered path on every new prompt; invalid/stale grants
+    # disappear, while other valid file decisions stay in Native storage.
+    for candidate in candidates:
+        try:grants.extend(file_grants(workspace,root,[candidate],location))
+        except HTTPException as error:
+            if error.status_code!=403:raise
+    return policy.native_session_permissions(policy.load(db),root,grants)
+
+@router.post('/api/native-test/sessions/{session_id}/permissions/{permission_id}/remember')
+def remember_file_permission(session_id:uuid.UUID,permission_id:str,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
+    admit(user);row=workspaces.owned(db,WorkspaceSession,session_id,user.id)
+    workspace,root,_,_=context(db,user,row.workspace_id)
+    session_lifecycle.lock_workspace(db,workspace)
+    _,_,_,live=context(db,user,row.workspace_id,session_id)
+    if not access_payload(db,user)['allowed']:raise HTTPException(402,'Workspace access has expired')
+    pending=metadata('GET','/permission',root)
+    item=next((r for r in pending if r.get('id')==permission_id and r.get('sessionID')==row.opencode_session_id),None) if isinstance(pending,list) else None
+    if item is None:raise HTTPException(404,'Native request is not owned')
+    allowed=policy.provider_sets(policy.load(db))[2]
+    if item.get('permission') not in policy.NATIVE_FILE_TOOLS or allowed and item['permission'] not in allowed:raise HTTPException(403,'This permission cannot be remembered')
+    patterns=item.get('patterns')
+    if not isinstance(patterns,list) or not 1<=len(patterns)<=20:raise HTTPException(403,'Exact file paths are required')
+    location=metadata('GET','/path',root)
+    additions=file_grants(workspace,root,[{'permission':item['permission'],'pattern':p} for p in patterns],location)
+    existing=session_permissions(db,workspace,root,live,location)
+    grants=[r for r in existing if r['action']=='allow' and r['permission'] in policy.NATIVE_FILE_TOOLS]
+    grants=[r for r in grants if r not in additions]+additions
+    if len(grants)>100:raise HTTPException(409,'Conversation file permission limit reached; use Allow once')
+    permissions=policy.native_session_permissions(policy.load(db),root,grants)
+    updated=metadata('PATCH','/session/'+row.opencode_session_id,root,{'permission':permissions})
+    if not isinstance(updated,dict) or updated.get('permission')!=permissions:raise HTTPException(503,'Native file permissions were not confirmed')
+    db.commit()
+    # The pending tool is still answered through the original Native once flow.
+    # 1.19.4 captures policy at run start: the saved rule takes effect NEXT run.
+    return {'remembered':True,'scope':'next-prompts-in-this-conversation'}
+
 def metadata(method,path,root,data=None):
     # Only ownership/session metadata. No prompts, model responses or events.
     discovery=path in {'/provider','/agent'} and method=='GET'
@@ -240,7 +302,7 @@ def authorize_native(workspace_id,resource,request,user,db,raw):
             # PATCH the supported Native session permission field before any new
             # execution, including sessions created under the older ask-all rules.
             # Never alter a running session and pretend its old tools were revoked.
-            permissions=policy.native_session_permissions(current_policy,root)
+            permissions=session_permissions(db,workspace,root,session_live)
             if session_live.get('permission')!=permissions:
                 statuses=metadata('GET','/session/status',root)
                 if statuses.get(row.opencode_session_id,{}).get('type','idle')!='idle':raise HTTPException(409,'Stop this conversation before applying its new tool restrictions')

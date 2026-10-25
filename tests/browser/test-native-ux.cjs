@@ -114,6 +114,34 @@ async function main(){
   first.onsubmit({preventDefault(){}});await sleep(10);assert.deepEqual(answers.answers,[['Blue'],['Blue','Custom synthetic colour']]);assert.equal(answers.reject,false);f.close();
  });
 
+
+ await test('Native attachment expansion is hidden by synthetic flag, preserving the exact user prompt and file chip',async()=>{
+  const f=fixture(),text='هل تستطيع القراءة؟ Called the Read tool with the following input: example';
+  f.state.history[0].parts=[{type:'text',text},{type:'text',synthetic:true,text:'Called the Read tool with the following input: /private/absolute/path'},{type:'text',synthetic:true,text:'<path>/private/path</path> SYNTHETIC_SECRET'},{type:'file',filename:'/owned/a/config.txt',mime:'text/plain'}];
+  const result=await f.ready();assert.equal(result.value[0].text,text);assert.equal(result.value[0].attachments[0].name,'config.txt');assert(!JSON.stringify(result.value).includes('SYNTHETIC_SECRET'));
+  assert(f.state.history[0].parts[2].text.includes('SYNTHETIC_SECRET')); // UI projection never rewrites Native storage/input
+  await f.w.nativeSession.start();f.state.events[0].onmessage({data:JSON.stringify({type:'message.part.updated',properties:{part:{id:'synthetic-late',messageID:'u1',sessionID:'ses_a',type:'text',synthetic:true,text:'LATE_SYNTHETIC_SECRET'}}})});
+  await sleep(80);assert.equal((await f.load()).value[0].text,text);f.close();
+ });
+ await test('Remembered file decision uses Native session policy management then once, never upstream always',async()=>{
+  const f=fixture();await f.ready();const original=f.c.api;f.c.api=async(path,options={})=>{if(path.endsWith('/remember')){f.state.calls.push({path,options});return {remembered:true}}return original(path,options)};
+  const box=f.d.getElementById('approvalBox');await f.w.nativeSession.permissions(box,[{id:'per1',permission:'edit',patterns:['/owned/a/a.txt']}]);
+  await box.querySelector('[data-reply=remember]').onclick();const calls=f.state.calls.filter(c=>c.path.includes('/permissions/'));assert.equal(calls.length,2);assert(calls[0].path.endsWith('/remember'));assert.equal(JSON.parse(calls[1].options.body).reply,'once');f.close();
+ });
+ await test('Denied remember cannot approve the pending file operation',async()=>{
+  const f=fixture();await f.ready();const original=f.c.api;f.c.api=async(path,options)=>{if(path.endsWith('/remember'))throw Error('Protected file');return original(path,options)};
+  const box=f.d.getElementById('approvalBox');await f.w.nativeSession.permissions(box,[{id:'per1',permission:'edit',patterns:['/owned/a/a.txt']}]);await box.querySelector('[data-reply=remember]').onclick();assert.equal(f.state.calls.filter(c=>c.path.includes('/permissions/')).length,0);assert(!box.querySelector('[data-reply=remember]').disabled);f.close();
+ });
+ await test('Native question cards have bounded height, compact rows and accessible overflow without changing Todo',async()=>{
+  const f=fixture();await f.ready();const css=f.d.getElementById('nativeConversationStyles').textContent;assert(css.includes('max-height:min(360px,46dvh)'));assert(css.includes('overflow:auto;overscroll-behavior:contain'));assert(css.includes('min-height:32px'));assert(!css.includes('workspaceTodoPanel'));f.close();
+ });
+
+ await test('One-click group approval covers only displayed requests and uses once for each owned request',async()=>{
+  const f=fixture();await f.ready();const box=f.d.getElementById('approvalBox');
+  const pending=[{id:'per1',permission:'read',patterns:['/owned/a/a.txt']},{id:'per2',permission:'read',patterns:['/owned/a/b.txt']}];
+  await f.w.nativeSession.permissions(box,pending);const batch=box.querySelector('[data-reply=batch-once]');f.state.permissions.push({id:'new-not-displayed',permission:'read',patterns:['/owned/a/c.txt']});
+  await batch.onclick();const calls=f.state.calls.filter(c=>c.path.includes('/permissions/'));assert.equal(calls.length,2);assert(calls.every(c=>JSON.parse(c.options.body).reply==='once'));assert(calls.every(c=>!c.path.includes('new-not-displayed')));f.close();
+ });
  console.log(passed+' Native UX cases passed; controlled fixtures, not TEST account acceptance');
 }
 main().catch(error=>{console.error(error);process.exitCode=1});

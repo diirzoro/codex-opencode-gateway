@@ -1,3 +1,15 @@
+# CURRENT Three-point Native UX follow-up — 25 October 2026
+
+Owner requests: fewer approval interruptions, smaller question choices, and removal of attachment read scaffolding from the user bubble. Baseline updates bbd1d58203bc84dc178092722aa6e040c2b91ef4 includes concurrent Resend/admin work preserved intact. Read [NATIVE_APPROVALS_AND_ATTACHMENT_UX.md](NATIVE_APPROVALS_AND_ATTACHMENT_UX.md) for exact behavior, pinned1.19.4 findings, test evidence and limitations.
+
+Implemented in existing Native integration: automatic Todo/question capability permission; explicit grouped once for displayed same-tool requests; ownership-validated exact-file Native session permission grants for later prompts; compact680px/min(360px,46dvh) choices; synthetic user attachment expansion hidden using Native's flag while original prompt/file chip/history stay intact. Shell and raw always remain blocked. Native stores the permission rules; Gateway only validates/manages them.
+
+Pinned Native1.19.4 findings supersede historical assumptions: raw always patterns are instance-wide, often '*', evaluated after denies; session policy is captured at run start. Remember applies to later prompts, not guaranteed to the current run. Native cannot classify large/dangerous diffs by permission pattern. No universal automatic permission mode or repeated-request elimination is claimed. File edit remembering includes later large changes to those exact files; once remains available. Pre-existing Native approval cache is unverified and was not modified.
+
+Evidence:55 backend PASS, one native-PostgreSQL-only OAuth concurrency SKIP,20 client/DOM PASS; two Chromium compact-question fixtures PASS, JS/Python syntax/diff clean. Additional affected43 permission tests rerun after helper optimization. Local fixtures only. No TEST deploy, server backup, real login/prompt/tool acceptance or shared engine change in this turn; deployment remains blocked on configured SSH/authenticated dispatch, not routine approval. Next: reviewed TEST-only direct update of the matching runtime files, then actual three-point acceptance and multi-user boundaries. No master/LIVE/Preview/config/ports/IP/storage/secrets changes.
+
+---
+
 # CURRENT Native UX / multi-user acceptance — 25 October 2026
 
 Published UX implementation: `ffb91e6a827bc6e43a2f05e84c791bf7deb6269c` on updates, tested tree `81bdd8c35a9180e92734477eae1b18adef360760`. Source baseline: `e41afab42975ce3b5e411a10632e6f120cee8222`. The next commit records this source checkpoint only. Read [NATIVE_UX_SECURITY_ACCEPTANCE.md](NATIVE_UX_SECURITY_ACCEPTANCE.md) for changes, exact local/live evidence and security matrix. This entry supersedes older deployment-NONE and three-file-only workflow statements below. Architecture master v3.7 was read before changes. The earlier TEST Native deployment succeeded: owner direct-update baseline9055cff followed by Actions run40193999369 deploying backend fixes at8e2a5c60af40f86c6888a4806922c0a537dfb6d2. No infrastructure investigation or Native restart is needed merely to repeat that work. The manual audit/deploy workflow introduced by the owner remains unchanged.

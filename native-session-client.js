@@ -32,10 +32,17 @@
       :root #workspacePage.native-mode .native-permission-group h3{font-size:14px;margin:6px 0}
       :root #workspacePage.native-mode .native-permission-group ul{margin:4px 0;padding-inline-start:20px}
       :root #workspacePage.native-mode .native-permission-group li{unicode-bidi:plaintext;overflow-wrap:anywhere}
-      :root #workspacePage.native-mode .chat-questions fieldset{margin-block:8px;padding:8px 10px}
-      :root #workspacePage.native-mode .chat-questions fieldset>label{flex-direction:row;align-items:center;gap:8px;padding:8px 10px;text-align:start}
+      :root #workspacePage.native-mode .chat-questions{width:min(100%,680px);margin-inline:auto;font-size:13px}
+      :root #workspacePage.native-mode .chat-questions .chat-approval{max-height:min(360px,46dvh);overflow:auto;overscroll-behavior:contain;padding:8px 10px;scroll-padding-block:36px}
+      :root #workspacePage.native-mode .chat-questions fieldset{margin-block:5px;padding:5px 7px;min-width:0}
+      :root #workspacePage.native-mode .chat-questions :is(legend,.question-heading){font-size:13px;line-height:1.4}
+      :root #workspacePage.native-mode .chat-questions fieldset>label{flex-direction:row;align-items:center;gap:6px;padding:5px 8px;margin-block:4px;text-align:start;font-size:13px;line-height:1.4;min-height:32px}
       :root #workspacePage.native-mode .chat-questions fieldset>label>input{width:16px;height:16px;min-height:16px;flex:0 0 16px;margin:0}
-      :root #workspacePage.native-mode .chat-questions fieldset>label>small{flex-basis:100%;margin-inline-start:24px}
+      :root #workspacePage.native-mode .chat-questions fieldset>label>small{flex-basis:100%;margin-inline-start:22px;font-size:11px;line-height:1.4}
+      :root #workspacePage.native-mode .chat-questions input[type=text]{font-size:13px;padding:6px 9px;min-height:32px}
+      :root #workspacePage.native-mode .chat-questions .chat-approval-actions{position:sticky;bottom:-8px;background:var(--panel);padding-block:5px;margin-top:4px;z-index:1}
+      :root #workspacePage.native-mode .chat-questions .chat-approval-actions button{font-size:12px;padding:5px 8px;min-height:32px}
+      :root #workspacePage.native-mode .chat-questions .chat-approval>strong{font-size:13px}
       :root #workspacePage.native-mode .native-activity{margin-top:4px;font-size:13px}
       :root #workspacePage.native-mode .native-activity>summary{cursor:pointer;padding-block:4px}
       :root #workspacePage.native-mode .native-activity .tool-execution{margin:4px 0}
@@ -127,8 +134,11 @@
       const parts=Array.isArray(m.parts)?m.parts:[];
       const tools=new Map();for(const p of parts)if(p.type==='tool'&&p.callID)tools.set(p.callID,p);
       const activity=[...tools.values()].map(p=>toolActivity(p,row));
-      return {id:m.info.id,role:m.info.role,text:parts.filter(p=>p.type==='text'&&!p.ignored).map(p=>p.text||'').join(''),activity,
-        ...(m.info.error?{state:m.info.error.name==='MessageAbortedError'?'cancelled':'failed'}:{}),attachments:parts.filter(p=>p.type==='file').map(p=>({name:p.filename||'Attachment',mime:p.mime}))};
+      // Native expands attachments into synthetic user text (read arguments and
+      // file contents). Keep it available to Native, never in the user's bubble.
+      // Use the original flag, not text/regex heuristics that could erase a prompt.
+      return {id:m.info.id,role:m.info.role,text:parts.filter(p=>p.type==='text'&&!p.ignored&&!(m.info.role==='user'&&p.synthetic===true)).map(p=>p.text||'').join(''),activity,
+        ...(m.info.error?{state:m.info.error.name==='MessageAbortedError'?'cancelled':'failed'}:{}),attachments:parts.filter(p=>p.type==='file').map(p=>({name:typeof p.filename==='string'?p.filename.split(/[\\/]/).at(-1)||'Attachment':'Attachment',mime:p.mime}))};
     });
   }
   async function route(path,options){
@@ -257,17 +267,31 @@
     for(const [permission,items] of groups){
       const section=document.createElement('section');section.className='native-permission-group';
       const heading=document.createElement('h3');heading.textContent=label('Permission requested: ','طلب موافقة: ')+(names[permission]?label(...names[permission]):label('Restricted operation','عملية مقيّدة'))+' · '+items.length;section.append(heading);
+      // One explicit click for this displayed snapshot only; future requests are
+      // never included. Each request still passes the existing server checks.
+      if(items.length>1&&names[permission]){
+        const batch=document.createElement('button');batch.type='button';batch.dataset.reply='batch-once';batch.textContent=label('Allow displayed requests once','السماح للطلبات المعروضة مرة واحدة')+' ('+items.length+')';
+        const keys=items.map(item=>user+':'+id+':'+item.id);batch.disabled=keys.some(key=>permissionReplies.has(key));
+        batch.onclick=async()=>{
+          if(!current(id,user)||keys.some(key=>permissionReplies.has(key)))return;
+          keys.forEach(key=>permissionReplies.add(key));section.querySelectorAll('button').forEach(button=>button.disabled=true);
+          try{for(const item of items){if(!current(id,user))break;await api('/api/sessions/'+id+'/permissions/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({reply:'once'})});}}
+          catch(error){if(current(id,user))toast(error.message);}
+          finally{keys.forEach(key=>permissionReplies.delete(key));if(current(id,user)){box.nativeSignature='';try{await refreshPermissions();}catch(error){section.querySelectorAll('button').forEach(button=>button.disabled=false);toast(error.message);}}}
+        };section.append(batch);
+      }
       for(const item of items){const actionKey=user+':'+id+':'+item.id;const card=document.createElement('div');card.className='chat-approval';card.dataset.permissionId=item.id;
         const candidates=['read','edit','write','apply_patch'].includes(permission)?[item.metadata?.filepath,...(item.patterns||[])]:['glob','grep','list'].includes(permission)?[item.metadata?.path]:[];
         const paths=[...new Set(candidates.map(value=>relativeFile(value,row)).filter(Boolean))].slice(0,8);
         if(paths.length){const list=document.createElement('ul');for(const path of paths){const li=document.createElement('li');li.textContent=path;li.dir='auto';list.append(li);}card.append(list);}
-        const note=document.createElement('small');note.textContent=label('This request only. Gateway verifies ownership and policy.','لهذا الطلب فقط. تتحقق البوابة من الملكية والسياسة.');card.append(note);
+        const rememberFile=['read','edit','write','apply_patch'].includes(permission)&&paths.length>0;
+        const note=document.createElement('small');note.textContent=rememberFile?label('Allow once, or remember these files for later prompts in this conversation. The current run may still ask.','اسمح مرة، أو تذكّر هذه الملفات للرسائل القادمة في هذه المحادثة. قد يظل التشغيل الحالي يطلب الموافقة.'):label('This request only. Gateway verifies ownership and policy.','لهذا الطلب فقط. تتحقق البوابة من الملكية والسياسة.');card.append(note);
         const controls=document.createElement('div');controls.className='chat-approval-actions';
-        for(const [text,reply] of [[label('Allow once','السماح مرة واحدة'),'once'],[label('Reject','رفض'),'reject']]){const button=document.createElement('button');button.textContent=text;button.type='button';button.dataset.reply=reply;
+        for(const [text,reply] of [[label('Allow once','السماح مرة واحدة'),'once'],...(rememberFile?[[label('Remember these files','تذكّر هذه الملفات'),'remember']]:[]),[label('Reject','رفض'),'reject']]){const button=document.createElement('button');button.textContent=text;button.type='button';button.dataset.reply=reply;
           button.disabled=permissionReplies.has(actionKey)||reply==='once'&&!names[permission];
           button.onclick=async()=>{
             if(!current(id,user)||permissionReplies.has(actionKey))return;permissionReplies.add(actionKey);card.dataset.sending='1';card.setAttribute('aria-busy','true');card.querySelectorAll('button').forEach(n=>n.disabled=true);
-            try{await api('/api/sessions/'+id+'/permissions/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({reply})});if(!current(id,user))return;permissionReplies.delete(actionKey);box.nativeSignature='';await refreshPermissions();}
+            try{if(reply==='remember')await api('/api/native-test/sessions/'+id+'/permissions/'+encodeURIComponent(item.id)+'/remember',{method:'POST'});if(!current(id,user))return;await api('/api/sessions/'+id+'/permissions/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({reply:reply==='remember'?'once':reply})});if(!current(id,user))return;permissionReplies.delete(actionKey);box.nativeSignature='';await refreshPermissions();}
             catch(error){permissionReplies.delete(actionKey);if(!current(id,user))return;delete card.dataset.sending;card.removeAttribute('aria-busy');card.querySelectorAll('button').forEach(n=>n.disabled=n.dataset.reply==='once'&&!names[permission]);toast(error.message);}
           };controls.append(button);
         }card.append(controls);section.append(card);

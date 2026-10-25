@@ -137,3 +137,78 @@ def test_github_connection_status_cannot_be_selected_with_other_user_id(boundary
   db.add(models.GithubConnection(id=uuid.uuid4(),user_id=a.id,installation_id=123,account_login='synthetic-owner-a',account_type='User',target_type='User',suspended=False));db.commit()
  response=client.get('/api/github/status',params={'user_id':str(a.id)},headers={'Cookie':config.session_cookie_name+'=fixture-token-b'})
  assert response.status_code==200 and response.json().get('account_login')!='synthetic-owner-a'
+
+@pytest.fixture
+def permissions_boundary(boundary,monkeypatch):
+ client,(a,b),calls,engine,config=boundary
+ states={o.name:{'id':'ses_'+o.name,'directory':str(o.root),'permission':policy.native_session_permissions(NS(allowed_providers='[]',allowed_models='[]',allowed_tools='[]'),o.root)} for o in (a,b)}
+ pending=[{'id':'pending_'+o.name,'sessionID':'ses_'+o.name,'permission':'edit','patterns':[str(o.root/'marker.txt').lstrip('/')],'always':['*']} for o in (a,b)]
+ requests=[]
+ def metadata(method,path,root,data=None):
+  requests.append((method,path,data));owner=next(o for o in (a,b) if o.root==root)
+  if path=='/path':return {'directory':str(root),'worktree':'/'}
+  if path=='/permission':return pending
+  if path.startswith('/session/'):
+   name=path.split('/')[-1].removeprefix('ses_')
+   if method=='PATCH':states[name].update(data)
+   return states[name]
+  raise AssertionError((method,path))
+ monkeypatch.setattr(native,'metadata',metadata)
+ return boundary,states,pending,requests
+
+def test_routine_todo_and_question_use_native_allow_without_blanket_file_or_shell():
+ rules=policy.native_session_permissions(NS(allowed_tools='[]',allowed_models='[]',allowed_providers='[]'),None)
+ def action(name,pattern='*'):
+  import fnmatch
+  return next(r['action'] for r in reversed(rules) if fnmatch.fnmatchcase(name,r['permission']) and fnmatch.fnmatchcase(pattern,r['pattern']))
+ for name in policy.NATIVE_AUTOMATIC_TOOLS:assert action(name)=='allow'
+ for name in ('read','edit','write','glob','grep','list'):assert action(name)=='ask'
+ for name in ('bash','task','execute','external_directory','unknown_mcp'):assert action(name)=='deny'
+ assert action('read','.env.production')=='deny'
+ restricted=policy.native_session_permissions(NS(allowed_tools='["read"]',allowed_models='[]',allowed_providers='[]'),None)
+ assert not any(r['permission']=='todowrite' and r['action']=='allow' for r in restricted)
+
+def test_owned_exact_file_grant_lives_only_in_native_session_and_survives_next_prompt(permissions_boundary):
+ (client,(a,b),_,engine,config),states,pending,requests=permissions_boundary
+ response=authenticated(client,f'/api/native-test/sessions/{a.session}/permissions/pending_a/remember',a,config,'POST')
+ assert response.status_code==200,response.text
+ assert response.json()['scope']=='next-prompts-in-this-conversation'
+ grant={'permission':'edit','pattern':pending[0]['patterns'][0],'action':'allow'}
+ assert grant in states['a']['permission'] and grant not in states['b']['permission']
+ with Session(engine) as db:
+  workspace=db.get(models.Workspace,a.workspace)
+  assert grant in native.session_permissions(db,workspace,a.root,states['a'])
+ assert not any(path.endswith('/reply') for _,path,_ in requests) # original current reply stays Native/Nginx
+ assert not any(data and data.get('reply')=='always' for _,_,data in requests)
+
+@pytest.mark.parametrize('kind',['foreign_session','foreign_pending','wildcard','foreign_path','symlink','secret','config','directory','shell','policy','traversal','no_origin'])
+def test_remember_file_permission_rejects_unsafe_scope_without_native_patch(permissions_boundary,kind,monkeypatch):
+ (client,(a,b),_,engine,config),states,pending,requests=permissions_boundary
+ session=a.session;permission='pending_a';item=pending[0]
+ if kind=='foreign_session':session=b.session
+ if kind=='foreign_pending':permission='pending_b'
+ if kind=='wildcard':item['patterns']=['*']
+ if kind=='foreign_path':item['patterns']=[str(b.root/'marker.txt')]
+ if kind=='symlink':(a.root/'link').symlink_to(b.root/'marker.txt');item['patterns']=[str(a.root/'link')]
+ if kind=='secret':item['patterns']=[str(a.root/'.env.production')]
+ if kind=='config':item['patterns']=[str(a.root/'opencode.json')]
+ if kind=='directory':item['patterns']=[str(a.root)]
+ if kind=='shell':item['permission']='bash'
+ if kind=='policy':monkeypatch.setattr(policy,'load',lambda db:NS(allowed_providers='[]',allowed_models='[]',allowed_tools='["read"]'))
+ if kind=='traversal':item['patterns']=[str(a.root/'..'/'outside')]
+ path=f'/api/native-test/sessions/{session}/permissions/{permission}/remember'
+ response=client.post(path,headers={'Cookie':config.session_cookie_name+'=fixture-token-a'}) if kind=='no_origin' else authenticated(client,path,a,config,'POST')
+ assert response.status_code==(404 if kind in {'foreign_session','foreign_pending'} else 403),(kind,response.text)
+ assert not any(method=='PATCH' for method,_,_ in requests)
+
+def test_stale_or_broad_native_grants_are_removed_and_path_metadata_is_coalesced(permissions_boundary):
+ (_, (a,b),_,engine,_),states,pending,requests=permissions_boundary
+ good={'permission':'read','pattern':str(a.root/'marker.txt').lstrip('/'),'action':'allow'}
+ states['a']['permission'] += [good,{'permission':'edit','pattern':'*','action':'allow'},{'permission':'read','pattern':str(b.root/'marker.txt'),'action':'allow'}]
+ with Session(engine) as db:
+  workspace=db.get(models.Workspace,a.workspace)
+  before=len([r for r in requests if r[1]=='/path']);rules=native.session_permissions(db,workspace,a.root,states['a'])
+  assert len([r for r in requests if r[1]=='/path'])-before==1
+  assert [r for r in rules if r['action']=='allow' and r['permission'] in policy.NATIVE_FILE_TOOLS]==[good]
+  (a.root/'marker.txt').unlink();(a.root/'marker.txt').symlink_to(b.root/'marker.txt')
+  assert good not in native.session_permissions(db,workspace,a.root,{'permission':rules})

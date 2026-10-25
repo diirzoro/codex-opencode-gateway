@@ -65,14 +65,23 @@ def session_permissions(policy):
 NATIVE_REVIEW_TOOLS = frozenset({'read', 'edit', 'write', 'apply_patch', 'glob', 'grep',
                                  'list', 'question', 'todowrite', 'todoread'})
 
-def native_session_permissions(row, root):
+NATIVE_AUTOMATIC_TOOLS = frozenset({'question', 'todowrite', 'todoread'})
+NATIVE_FILE_TOOLS = frozenset({'read', 'edit', 'write', 'apply_patch'})
+
+def native_session_permissions(row, root, grants=()):
     allowed = provider_sets(row)[2]
     rules = [{'permission': '*', 'pattern': '*', 'action': 'deny'}]
     for name in sorted(NATIVE_REVIEW_TOOLS):
         if not allowed or name in allowed:
-            rules.append({'permission': name, 'pattern': '*', 'action': 'ask'})
-    # Session rules follow agent rules in Native. Neither an agent nor an old
-    # always grant should reopen shell, task/subagents, MCP or code-mode execute.
+            rules.append({'permission': name, 'pattern': '*', 'action': 'allow' if name in NATIVE_AUTOMATIC_TOOLS else 'ask'})
+    # Exact, ownership-validated grants are stored only in this Native session.
+    # Never use Native's instance-wide `always` cache: 1.19.4 appends it AFTER
+    # configured deny rules, and built-in file tools propose the wildcard '*'.
+    for grant in sorted(grants, key=lambda rule:(rule['permission'],rule['pattern'])):
+        if grant['permission'] in NATIVE_FILE_TOOLS and (not allowed or grant['permission'] in allowed):
+            rules.append({'permission':grant['permission'],'pattern':grant['pattern'],'action':'allow'})
+    # Session rules follow agent rules. Gateway never forwards `always`;
+    # pre-existing Native instance-cache grants are not revoked by these rules.
     for name in ('bash', 'shell', 'terminal', 'execute', 'task', 'skill', 'lsp', 'external_directory'):
         rules.append({'permission': name, 'pattern': '*', 'action': 'deny'})
     for permission in ('read', 'edit', 'write', 'apply_patch', 'glob', 'grep', 'list'):
