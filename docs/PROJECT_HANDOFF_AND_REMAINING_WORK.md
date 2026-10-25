@@ -1,5 +1,7 @@
 # CURRENT Six-issue source checkpoint — 25 October 2026
 
+Published implementation: `bd1199da2a14fccf1c4b66aac1ccbcf03dbfcdd8` on updates; tree `3b054609e5b4ff16d695fe13de68042760fc662a`. Concurrent owner changes through1dc2fcd36fcd99ddc220fa20a08026ae1d1c1dd5 were preserved. No automatic deployment.
+
 Owner's latest order is **push current changes to updates now; do not deploy automatically**. Baseline7e9b62bdf1a590a5327690dcd8ff83c10e51e889. See [TEST_SIX_ISSUE_SOURCE_CHECKPOINT.md](TEST_SIX_ISSUE_SOURCE_CHECKPOINT.md). Preserve concurrent owner changes.
 
 Implemented: explicit Native Recover Conversation action with authoritative history/status checks and no resend; pre-send receipt journal, accepted SSE wins over lost acknowledgement; compact Native question draft persistence and independent question refresh; long assistant folding and Markdown typography; Resend recovery DB wiring,0021 schema readiness/errors and truthful mail status; professional six-provider/eight-model paged admin visibility controls with search, bulk selection and persistent Gateway policy. Latest owner clarification overrides earlier task5: hidden is not disabled. Manual search, connection, model selection and Native prompt access remain possible under independent security/ownership restrictions. Add-from-catalog uses discovered Native providers only; custom shared-engine configuration remains protected. Provider key error in owner's screenshot is missing original CREDENTIALS_ENCRYPTION_KEY, not invalid vendor key; added safe preflight, no replacement key/config change.
