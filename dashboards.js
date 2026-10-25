@@ -42,6 +42,7 @@
       const data=await api('/api/admin/service-integrations'),e=data.email||{};
       notice.textContent=e.configured?tr('Existing SMTP is configured','تم إعداد SMTP الموجود'):tr('Resend API key not yet configured; no mail sent','لم يتم إدخال مفتاح Resend بعد؛ الإرسال غير مفعّل');
       q('adminEmailProvider').value=e.provider==='resend'?'resend':'smtp';
+      q('adminSmtpSave').disabled=e.provider!=='resend';
       q('adminSmtpHost').value=e.provider==='resend'?'smtp.resend.com':'';
       q('adminSmtpPort').value='587';
       q('adminSmtpUsername').value=e.provider==='resend'?'resend':'';
@@ -66,7 +67,28 @@
       q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
     }));
     q('adminSmtpSecret').value='';
-    q('adminSmtpSecret').disabled=true;
+    q('adminSmtpSave').onclick=async()=>{
+      const button=q('adminSmtpSave'),key=q('adminSmtpSecret');
+      const sender=q('adminSenderEmail').value.trim();
+      if(!sender){q('adminServiceNotice').textContent='أدخل بريد الإرسال أولًا';return;}
+      button.disabled=true;
+      try{
+        const result=await api('/api/admin/service-integrations/email',{
+          method:'PUT',
+          body:JSON.stringify({provider:'resend',smtp_from:sender,...(key.value?{api_key:key.value}:{})})
+        });
+        key.value='';
+        q('adminServiceNotice').textContent=result.configured?'تم حفظ إعدادات Resend مشفرة · Saved securely':'Configuration not ready';
+        await loadServiceCenter();
+      }catch(error){q('adminServiceNotice').textContent=error.message;}
+      finally{key.value='';button.disabled=false;}
+    };
+    q('adminEmailProvider').onchange=()=>{
+      const resend=q('adminEmailProvider').value==='resend';
+      q('adminSmtpSave').disabled=!resend;
+      if(resend){q('adminSmtpHost').value='smtp.resend.com';q('adminSmtpPort').value='587';q('adminSmtpUsername').value='resend';q('adminSmtpTls').value='starttls';}
+      q('adminServiceNotice').textContent=resend?'Resend SMTP':'Generic SMTP provider editing is not implemented yet';
+    };
   }
   async function loadHome(){
     const data=await api('/api/dashboard');const projects=q('homeProjects');projects.replaceChildren();
