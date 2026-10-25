@@ -505,15 +505,15 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
     mail_ready=email_verification.smtp_ready(db)
     required=email_verification.required_for_registration()
     mail=saved or {}
-    provider=mail.get("provider","resend" if os.getenv("SMTP_HOST")=="smtp.resend.com" else "smtp")
+    provider=mail.get("provider","resend")
     return {"email":{"provider":provider,"configured":mail_ready,"sending_ready":mail_ready,
-          "sender":mail.get("smtp_from",os.getenv("SMTP_FROM","")),
+          "sender":mail.get("smtp_from",os.getenv("SMTP_FROM") or "support@opencode-gateway.codes"),
           "verification_required":required,"settings_schema_ready":admin_email_config.schema_ready(db),
           "receiving_configured":bool(mail.get("inbox_api_key")),"delivery_verified":False,
           "credentials_configured":bool(mail.get("smtp_password") or os.getenv("SMTP_PASSWORD")),
-          "smtp_host":mail.get("smtp_host",os.getenv("SMTP_HOST","")),
-          "smtp_port":mail.get("smtp_port",os.getenv("SMTP_PORT","587")),
-          "smtp_username":mail.get("smtp_username",os.getenv("SMTP_USERNAME",""))},
+          "smtp_host":mail.get("smtp_host","smtp.resend.com"),
+          "smtp_port":mail.get("smtp_port",587),
+          "smtp_username":mail.get("smtp_username","resend")},
        "services":[
          {"id":"registration_verification","enabled":required,"available":mail_ready,
           "reason":"" if mail_ready else "Resend API key missing"},
