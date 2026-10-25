@@ -275,6 +275,22 @@
     // The native acknowledgment is final for submission. Live/reconnect SSE
     // reconciles execution; a second status read cannot undo the acknowledgment.
   }
+  // Native owns both cancellation and subsequent execution. Never touch another session.
+  async function replaceRunningModel(id,providerID,modelID){
+    const row=await context(id),messages=await history(id,true);
+    const last=[...messages].reverse().find(m=>m.info?.role==='user'&&m.info?.model);
+    const previous=last?.info?.model;
+    if(!previous||previous.providerID===providerID&&previous.modelID===modelID)
+      throw Error(label('The running model has not changed; wait for this turn or stop it.','لم يتغير النموذج الجاري؛ انتظر انتهاء هذا الرد أو أوقفه.'));
+    const live=await native(row.workspace_id,'session/status');
+    if(live[row.runtime_id]?.type==='idle')return {interrupted:false,previous};
+    await sessionRequest(id,'abort',{});
+    // Confirm native completion before allowing the replacement prompt.
+    const check=await native(row.workspace_id,'session/status');
+    if(check[row.runtime_id]?.type!=='idle')throw Error(label('OpenCode is still stopping. Retry after it becomes idle.','OpenCode ما زال يوقف التنفيذ؛ أعد المحاولة بعد توقفه.'));
+    statuses.set(id,'idle');
+    return {interrupted:true,previous};
+  }
   async function recover(id,{release=false}={}){
     const user=owner(),generation=epoch;
     const result=await coalesce('recover:'+id,async()=>{
@@ -348,6 +364,6 @@
         default_model:providers.default?.[p.id],models:Object.values(p.models||{}).map(m=>({...m,allowed:true}))}))};
     return result;
   }
-  window.nativeSession={ready,active,route,start,stop,send,recover,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
+  window.nativeSession={ready,active,route,start,stop,send,recover,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
 })();
