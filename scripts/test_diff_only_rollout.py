@@ -68,8 +68,8 @@ def main():
     if not auth or len(set(auth))!=1:raise RuntimeError('Existing Native private authorization cannot be verified')
     # Reuse the exact upstream and private header; read-only metadata only.
     addition='''    # Authorized Gateway metadata; TEST loopback only. No new listener.
-    location ~ "^/(?:path|provider/auth|experimental/tool/ids|skill|global/health)$" {
-        limit_except GET { deny all; }
+    location ~ "^/(?:path|provider/auth|experimental/tool/ids|skill|global/health|auth/[A-Za-z0-9_-]{1,120}|provider/[A-Za-z0-9_-]{1,120}/oauth/(?:authorize|callback))$" {
+        limit_except GET POST PUT DELETE { deny all; }
         proxy_pass http://127.0.0.2:4097;
         proxy_set_header Authorization AUTH;
         proxy_set_header Cookie "";
