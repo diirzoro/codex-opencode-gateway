@@ -49,7 +49,15 @@ jobs:
           python3 - <<'PY'
           import pathlib, ast
           versions=sorted(pathlib.Path('backend/alembic/versions').glob('*.py'))
-          assert versions and versions[-1].name=='0023_admin_mail_drafts.py'
+          assert versions and versions[-1].name=='0024_github_app_settings.py'
+          revisions={}
+          for path in versions:
+              tree=ast.parse(path.read_text(encoding='utf-8'))
+              values={node.targets[0].id:ast.literal_eval(node.value) for node in tree.body if isinstance(node,ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and node.targets[0].id in ('revision','down_revision')}
+              assert values.get('revision') and values['revision'] not in revisions, path
+              revisions[values['revision']]=values.get('down_revision')
+          assert revisions['0024_github_app_settings']=='0023_admin_mail_drafts'
+          assert set(revisions.values())-set(revisions)-{None}==set(), 'Broken Alembic revision chain'
           assert pathlib.Path('backend/alembic/versions/0022_email_service_policies.py').is_file()
           assert pathlib.Path('backend/app/services/admin_email_config.py').is_file()
           assert pathlib.Path('index.html').is_file()
