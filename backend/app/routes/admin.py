@@ -365,5 +365,8 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
          {"id":"password_reset","enabled":False,"available":False,"reason":"Secure recovery flow not active"},
          *({"id":i,"enabled":False,"available":False,"reason":"Not implemented"} for i in
            ("welcome_email","subscription_expiry","low_balance","account_suspension",
-            "payment_receipt","renewal_reminder","system_updates"))
+            "payment_receipt","renewal_reminder","system_updates","login_security",
+            "password_changed","email_changed","payment_failed","trial_expiring",
+            "support_received","support_unanswered","service_incident","mail_delivery_failure",
+            "unusual_activity","backup_status"))
        ]}
