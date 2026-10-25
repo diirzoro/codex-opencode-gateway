@@ -181,19 +181,32 @@
           const subject=document.createElement('strong');subject.textContent=msg.subject||tr('(No subject)','(بدون عنوان)');
           const details=document.createElement('small');details.textContent=(sent?(Array.isArray(msg.to)?msg.to.join(', '):''):msg.from)+' · '+msg.created_at+(sent?' · '+msg.status:'');
           row.append(subject,details);
+          const actions=document.createElement('div');actions.style.cssText='display:flex;gap:8px;flex-wrap:wrap;';
+          const open=document.createElement('button');open.type='button';open.className='button ghost small';
+          open.textContent=tr('Open message','قراءة الرسالة');
+          open.onclick=async()=>{
+            open.disabled=true;
+            try{
+              const endpoint=sent?'sent-emails/':'support-inbox/';
+              const item=await api('/api/admin/service-integrations/'+endpoint+encodeURIComponent(msg.id));
+              let body=row.querySelector('.support-mail-text');
+              if(!body){body=document.createElement('pre');body.className='support-mail-text';body.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto';row.append(body);}
+              body.textContent=item.text||tr('No plain text body available','لا يوجد نص للرسالة');
+            }catch(error){toast(error.message);}finally{open.disabled=false;}
+          };
+          actions.append(open);
           if(!sent){
-            const open=document.createElement('button');open.type='button';open.className='button ghost small';
-            open.textContent=tr('Open message','قراءة الرسالة');
-            open.onclick=async()=>{
-              open.disabled=true;
-              try{
-                const item=await api('/api/admin/service-integrations/support-inbox/'+encodeURIComponent(msg.id));
-                let body=row.querySelector('.support-mail-text');
-                if(!body){body=document.createElement('pre');body.className='support-mail-text';body.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto';row.append(body);}
-                body.textContent=item.text||tr('No plain text body','لا يوجد نص للرسالة');
-              }catch(error){toast(error.message);}finally{open.disabled=false;}
-            };row.append(open);
+            const reply=document.createElement('button');reply.type='button';reply.className='button ghost small';
+            reply.textContent=tr('Reply','رد');
+            reply.onclick=()=>{
+              const address=String(msg.from||'').match(/<([^<>@\s]+@[^<>@\s]+)>/)?.[1]||String(msg.from||'');
+              q('adminComposeTo').value=address.trim();
+              q('adminComposeSubject').value=/^re:/i.test(msg.subject||'')?msg.subject:'Re: '+(msg.subject||'');
+              composePanel.hidden=false;q('adminComposeBody').focus();
+            };
+            actions.append(reply);
           }
+          row.append(actions);
           list.append(row);
         }
         if(!result.items.length)list.append(textElement('p',tr('No messages returned by Resend.','لم يُرجع Resend أي رسائل.')));
