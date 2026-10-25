@@ -1,6 +1,6 @@
 # Native UX and ownership acceptance — 25 October 2026
 
-Baseline: updates `e41afab42975ce3b5e411a10632e6f120cee8222`. Architecture master v3.7 read in full. Existing Native deployment is acknowledged; this document records a new source patch, not a repeat infrastructure rollout or completed live acceptance.
+Published implementation: updates `ffb91e6a827bc6e43a2f05e84c791bf7deb6269c` (tested tree `81bdd8c35a9180e92734477eae1b18adef360760`). Baseline: `e41afab42975ce3b5e411a10632e6f120cee8222`. Architecture master v3.7 read in full. Existing Native deployment is acknowledged; this document records a new source patch, not a repeat infrastructure rollout or completed live acceptance.
 
 ## Implemented changes
 
