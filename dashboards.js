@@ -508,7 +508,15 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       await refreshMessages();await window.refreshWorkspaceQuestions?.();await refreshPermissions();
       submissionStatus.textContent=result.blocked?tr('Receipt still uncertain. Draft preserved; no prompt resent.','الاستلام ما زال غير مؤكد. المسودة محفوظة ولم يُعد إرسال الطلب.'):tr('Conversation recovered. Review history; no prompt was resent.','استُعيدت المحادثة. راجع السجل؛ لم يُعد إرسال أي طلب.');
     }finally{recoverConversation.disabled=false;updateSend();}
-  });q('promptForm').before(recoverConversation);
+  });
+  // Exceptional receipt-reconciliation action, not a full-width conversation control.
+  const recoveryAction=document.createElement('div');
+  recoveryAction.hidden=true;
+  recoveryAction.style.cssText='width:fit-content;max-width:100%;margin:4px 0 8px auto;';
+  recoverConversation.classList.add('small');
+  recoverConversation.style.cssText='width:auto;max-width:100%;min-height:32px;padding:5px 12px;white-space:normal;text-align:center;';
+  recoveryAction.append(recoverConversation);
+  q('promptForm').before(recoveryAction);
   const retrySubmission=btn('retrySubmission','Check / retry same submission','تحقق / أعد نفس الطلب',()=>submitPending());retrySubmission.hidden=true;q('promptForm').before(retrySubmission);
   sessionsBody.append(newSessionButton,sessionTabs,search,q('sessionList'));sessionsSection.append(sessionsBody);
   const filesSection=document.createElement('details');filesSection.className='workspace-side-section workspace-files';filesSection.open=true;
@@ -1028,7 +1036,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     // queue in native mode or acknowledge a potentially orphaned prompt.
     const nativeBusy=Boolean(window.nativeSession?.active()&&window.nativeSession.blocked(activeSession?.id));
     manualModel.hidden=!window.nativeSession?.active();
-    recoverConversation.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
+    recoveryAction.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
     q('sendMessage').disabled=sending||queuing||nativeBusy||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
