@@ -35,6 +35,39 @@
   window.openClientView=name=>['ai','github'].includes(name)?openConnections(name==='ai'?'providers':'github'):oldClientView(name);
   q('clientNav').querySelectorAll('[data-client-view]').forEach(button=>button.onclick=()=>window.openClientView(button.dataset.clientView));
   q('adminNav').querySelectorAll('[data-admin-view]').forEach(button=>button.onclick=()=>window.openAdminView(button.dataset.adminView));
+  async function loadServiceCenter(){
+    if(!admin())return;
+    const notice=q('adminServiceNotice');if(!notice)return;
+    try{
+      const data=await api('/api/admin/service-integrations'),e=data.email||{};
+      notice.textContent=e.configured?tr('Existing SMTP is configured','تم إعداد SMTP الموجود'):tr('Resend API key not yet configured; no mail sent','لم يتم إدخال مفتاح Resend بعد؛ الإرسال غير مفعّل');
+      q('adminEmailProvider').value=e.provider==='resend'?'resend':'smtp';
+      q('adminSmtpHost').value=e.provider==='resend'?'smtp.resend.com':'';
+      q('adminSmtpPort').value='587';
+      q('adminSmtpUsername').value=e.provider==='resend'?'resend':'';
+      q('adminSenderEmail').value=e.sender||'';
+      q('adminSmtpSecret').value='';
+      const captions={registration_verification:'التحقق من الحساب الجديد',password_reset:'استعادة كلمة المرور',welcome_email:'رسائل الترحيب',subscription_expiry:'انتهاء الاشتراك',low_balance:'انخفاض الرصيد',account_suspension:'تعليق الحساب',payment_receipt:'إيصالات الدفع',renewal_reminder:'تذكير التجديد',system_updates:'تحديث النظام'};
+      const list=q('adminServiceToggles');list.replaceChildren();
+      for(const item of data.services||[]){
+        const row=document.createElement('label');row.className='check';row.style.cssText='display:flex;align-items:center;gap:10px;padding:9px 0;';
+        const input=document.createElement('input');input.type='checkbox';input.checked=!!item.enabled;input.disabled=true;
+        const label=document.createElement('span');label.textContent=(captions[item.id]||item.id)+' · '+(item.available?'متاح': 'غير متاح');
+        row.append(input,label);list.append(row);
+      }
+    }catch(error){notice.textContent=error.message;}
+  }
+  if(q('adminServiceCenter')){
+    q('adminNav').querySelector('[data-admin-view="settings"]')?.addEventListener('click',loadServiceCenter);
+    q('adminServiceRefresh')?.addEventListener('click',loadServiceCenter);
+    q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(button=>button.addEventListener('click',()=>{
+      const provider=button.dataset.serviceTab==='providers';
+      q('adminProvidersTab').hidden=!provider;q('adminServicesTab').hidden=provider;
+      q('adminServiceCenter').querySelectorAll('[data-service-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
+    }));
+    q('adminSmtpSecret').value='';
+    q('adminSmtpSecret').disabled=true;
+  }
   async function loadHome(){
     const data=await api('/api/dashboard');const projects=q('homeProjects');projects.replaceChildren();
     for(const project of data.projects){for(const workspace of project.workspaces){const row=textElement('div','','home-project-row');row.append(textElement('strong',project.name),textElement('small',(project.repository||tr('Local project','مشروع محلي'))+' · '+workspace.status));if(workspace.cache?.warning||workspace.cache?.expired)row.append(textElement('small',window.workspaceRetentionNotice(workspace.cache),'project-retention-warning'));row.append(btn('home-open-'+workspace.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace)),btn('home-session-'+workspace.id,'New session','جلسة جديدة',async()=>{await openWorkspace(project,workspace);await createWorkspaceSession();}));projects.append(row);}}
