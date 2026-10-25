@@ -1,5 +1,7 @@
 # Native 1.19.4 development checkpoint — 25 October 2026
 
+**Latest storage-first follow-up:** [NATIVE_CATALOG_MAINTENANCE.md](NATIVE_CATALOG_MAINTENANCE.md) supersedes this checkpoint’s maintenance/bundle descriptions. Its source is `5ec99c23b2d62ecf374bc794cf8fe7a7aef58871`; current full-bundle and final verification details are in that document. Evidence below remains historical for the first source checkpoint.
+
 Source baseline: `6a04264d94f7b175cf5e0ba087fc9f407a88e693` on `updates`.
 Published implementation SHA: `cf9039f49b3ad671956cdb5ffb5efe722c009dac`. This is a source/local checkpoint, **not a TEST deployment or a claim that A–G are entirely accepted**.
 
