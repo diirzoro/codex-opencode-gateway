@@ -388,6 +388,76 @@ def save_inbox_credential(data:SupportInboxCredential,actor:User=Depends(require
     admin_email_config.save(db,actor.id,config)
     return {"configured":True,"address":"support@opencode-gateway.codes"}
 
+class AdminDraftWrite(BaseModel):
+    model_config=ConfigDict(extra="forbid", str_strip_whitespace=True)
+    to: str = Field(default="",max_length=254)
+    subject: str = Field(default="",max_length=300)
+    body: str = Field(default="",max_length=50000)
+
+@router.get("/service-integrations/drafts")
+def list_admin_mail_drafts(actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from sqlalchemy import text
+    from ..services import credentials
+    if not credentials.available():
+        raise HTTPException(503,"Encrypted drafts require CREDENTIALS_ENCRYPTION_KEY")
+    rows=db.execute(text("""SELECT id, ciphertext, updated_at FROM admin_mail_drafts
+                            WHERE admin_id=:admin ORDER BY updated_at DESC LIMIT 50"""),
+                    {"admin":actor.id}).all()
+    items=[]
+    for row in rows:
+        try: draft=json.loads(credentials.decrypt(row.ciphertext))
+        except Exception:raise HTTPException(503,"Cannot decrypt a stored draft") from None
+        items.append({"id":str(row.id),"to":draft.get("to",""),"subject":draft.get("subject",""),
+                      "preview":draft.get("body","")[:140],"updated_at":row.updated_at.isoformat()})
+    return {"items":items}
+
+@router.get("/service-integrations/drafts/{draft_id}")
+def get_admin_mail_draft(draft_id:_uuid.UUID,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from sqlalchemy import text
+    from ..services import credentials
+    token=db.execute(text("""SELECT ciphertext FROM admin_mail_drafts
+                            WHERE id=:id AND admin_id=:admin"""),
+                     {"id":draft_id,"admin":actor.id}).scalar_one_or_none()
+    if token is None:raise HTTPException(404,"Draft not found")
+    try: draft=json.loads(credentials.decrypt(token))
+    except Exception:raise HTTPException(503,"Cannot decrypt a stored draft") from None
+    return {"id":str(draft_id),**{field:draft.get(field,"") for field in ("to","subject","body")}}
+
+@router.post("/service-integrations/drafts")
+def create_admin_mail_draft(data:AdminDraftWrite,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from sqlalchemy import text
+    from ..services import credentials
+    token=credentials.encrypt(data.model_dump_json())
+    draft_id=_uuid.uuid4()
+    db.execute(text("""INSERT INTO admin_mail_drafts(id,admin_id,ciphertext)
+                       VALUES(:id,:admin,:token)"""),{"id":draft_id,"admin":actor.id,"token":token})
+    db.commit()
+    return {"id":str(draft_id),"saved":True}
+
+@router.put("/service-integrations/drafts/{draft_id}")
+def update_admin_mail_draft(draft_id:_uuid.UUID,data:AdminDraftWrite,
+                            actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from sqlalchemy import text
+    from ..services import credentials
+    token=credentials.encrypt(data.model_dump_json())
+    updated=db.execute(text("""UPDATE admin_mail_drafts SET ciphertext=:token,
+                              updated_at=CURRENT_TIMESTAMP WHERE id=:id AND admin_id=:admin
+                              RETURNING id"""),
+                       {"token":token,"id":draft_id,"admin":actor.id}).scalar_one_or_none()
+    if updated is None:db.rollback();raise HTTPException(404,"Draft not found")
+    db.commit()
+    return {"id":str(draft_id),"saved":True}
+
+@router.delete("/service-integrations/drafts/{draft_id}")
+def delete_admin_mail_draft(draft_id:_uuid.UUID,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from sqlalchemy import text
+    deleted=db.execute(text("""DELETE FROM admin_mail_drafts
+                               WHERE id=:id AND admin_id=:admin RETURNING id"""),
+                       {"id":draft_id,"admin":actor.id}).scalar_one_or_none()
+    if deleted is None:db.rollback();raise HTTPException(404,"Draft not found")
+    db.commit()
+    return {"deleted":True}
+
 class AdminComposeEmail(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     to: str = Field(min_length=3,max_length=254)
