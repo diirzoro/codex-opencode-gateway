@@ -7,7 +7,7 @@ from __future__ import annotations
 import hashlib, hmac, json, secrets
 from datetime import datetime, timedelta, timezone
 import httpx
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from fastapi import HTTPException
 from sqlalchemy import select
 from ..config import settings
@@ -98,6 +98,22 @@ def begin_install(db, user) -> str:
     db.commit()
     return install_url(state,cfg)
 
+def begin_authorization(db, user) -> str:
+    """Reauthorize an existing GitHub App without requiring a second installation.
+
+    A one-time state binds the OAuth code to the signed-in Gateway account.
+    The callback separately verifies this user's installation membership.
+    """
+    cfg=github_app_config.effective(settings,db)
+    require_configured(cfg)
+    state=secrets.token_urlsafe(32)
+    db.add(GithubAuthState(state=state,user_id=user.id,
+                           expires_at=datetime.now(timezone.utc)+timedelta(minutes=STATE_TTL_MINUTES)))
+    db.commit()
+    params=urlencode({'client_id':cfg.github_client_id,'redirect_uri':cfg.github_callback_url,'state':state})
+    return cfg.github_web_base.rstrip('/')+'/login/oauth/authorize?'+params
+
+
 def connection_status(db, user) -> dict:
     if not configured(db):
         return {"connected": False, "available": False, "configured": False, "reason": "GitHub App integration is not configured"}
@@ -134,8 +150,8 @@ def connection_for(db, user) -> GithubConnection:
 def handle_callback(db, state: str, installation_id: int | None, setup_action: str | None, code: str | None = None):
     cfg=github_app_config.effective(settings,db)
     require_configured(cfg)
-    if not state or not installation_id:
-        raise HTTPException(422, "Missing GitHub installation parameters")
+    if not state or not code:
+        raise HTTPException(422, "Missing GitHub authorization parameters")
     now = datetime.now(timezone.utc)
     record = db.scalar(select(GithubAuthState).where(GithubAuthState.state==state).with_for_update())
     if record is None or record.consumed:
@@ -147,16 +163,34 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
     if not user or user.status!='active' or not code: raise HTTPException(403,'Active account and GitHub user authorization required')
     require_advanced(db, user)
     token=exchange_code(code,config=cfg)
-    authorized=False
+    # GitHub OAuth reauthorization has a code but may not include installation_id.
+    # Resolve only installations of THIS App that the authenticated user can access.
+    # If several are available, never silently attach the wrong organization.
+    eligible=[]
     for page in range(1,101):
         items=(_api('GET','/user/installations',token=token['access_token'],params={'per_page':100,'page':page}) or {}).get('installations',[])
-        if any(item.get('id')==installation_id for item in items): authorized=True; break
-        if len(items)<100: break
-    if not authorized: raise HTTPException(403,'Installation is not authorized for this GitHub user')
+        for item in items:
+            if item.get('app_id')==cfg.github_app_id and isinstance(item.get('id'),int):
+                eligible.append(item['id'])
+        if len(items)<100:break
+    if installation_id is None:
+        previous=db.scalar(select(GithubConnection).where(GithubConnection.user_id==record.user_id))
+        if previous and previous.installation_id in eligible:
+            installation_id=previous.installation_id
+        elif len(eligible)==1:
+            installation_id=eligible[0]
+        elif not eligible:
+            raise HTTPException(409,'Install the GitHub App on a repository before authorizing')
+        else:
+            raise HTTPException(409,'Multiple GitHub installations available; choose an installation before linking')
+    if installation_id not in eligible:
+        raise HTTPException(403,'Installation is not authorized for this GitHub user')
     existing=db.scalar(select(GithubConnection).where(GithubConnection.installation_id==installation_id,GithubConnection.user_id!=record.user_id))
     if existing: raise HTTPException(409,'Installation is already linked to another account')
     # Verify App identity as well as the authenticated user's installation membership.
     info = _api("GET", f"/app/installations/{installation_id}", jwt_token=_jwt(cfg))
+    if info.get('app_id')!=cfg.github_app_id:
+        raise HTTPException(403,'Installation belongs to a different GitHub App')
     account = info.get("account") or {}
     login = account.get("login") or "unknown"
     record.consumed = True
