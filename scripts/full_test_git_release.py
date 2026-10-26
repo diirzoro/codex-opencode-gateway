@@ -239,10 +239,10 @@ from sqlalchemy import create_engine,text
 with create_engine(os.environ["DATABASE_URL"]).connect() as conn:
     if conn.execute(text("select current_database()")).scalar_one()!="opencode_gateway_test":
         raise SystemExit("Incorrect migration database")
-    owns=conn.execute(text("""select pg_has_role(current_user,c.relowner,'USAGE')
+    owns=conn.execute(text('''select pg_has_role(current_user,c.relowner,'USAGE')
       from pg_class c join pg_namespace n on c.relnamespace=n.oid
       where n.nspname=current_schema() and c.relname='email_verifications'
-      and c.relkind in ('r','p')""")).scalar_one_or_none()
+      and c.relkind in ('r','p')''')).scalar_one_or_none()
     if owns is None:raise SystemExit("Missing TEST verification table")
     print("OWNER" if owns else "NOT_OWNER")
 """
