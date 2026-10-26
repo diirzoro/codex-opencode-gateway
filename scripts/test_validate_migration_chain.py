@@ -82,7 +82,12 @@ class TestOnlyAlembicDeployTests(unittest.TestCase):
             self.assertEqual(path.parent.stat().st_mode&0o777,0o700)
             self.assertEqual([call[0][0] for call in recorded],["pg_dump","pg_restore"])
             self.assertNotIn("SECRET"," ".join(map(str,recorded[0][0])))
-            self.assertIn("postgresql://fixture:SECRET",recorded[0][1]["env"]["PGDATABASE"])
+            env_used=recorded[0][1]["env"]
+            self.assertEqual(env_used["PGDATABASE"],"opencode_gateway_test")
+            self.assertEqual(env_used["PGHOST"],"localhost")
+            self.assertEqual(env_used["PGUSER"],"fixture")
+            self.assertEqual(env_used["PGPASSWORD"],"SECRET")
+            self.assertNotIn("SECRET"," ".join(map(str,recorded[0][0])))
 
     def test_deploy_runs_existing_alembic_without_privileged_migration_runner(self):
         steps=[]
