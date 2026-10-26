@@ -66,6 +66,8 @@
       for(const id of ['adminInboxMessages','adminMailReader'])q(id)?.replaceChildren();
       for(const id of ['adminComposeTo','adminComposeSubject','adminComposeBody','adminSmtpSecret','adminInboxApiKey'])if(q(id))q(id).value='';
       if(q('adminMailCompose'))q('adminMailCompose').hidden=true;
+      if(q('adminMailComposeBackdrop'))q('adminMailComposeBackdrop').hidden=true;
+      if(q('adminMailSendReceipt'))q('adminMailSendReceipt').textContent='';
     }
     try{
       const data=await api('/api/admin/service-integrations');if(!admin()||currentUser.id!==owner)return;const e=data.email||{};
@@ -92,36 +94,33 @@
     q('adminSmtpSecret').value='';
       const captionsAr={registration_verification:'التحقق من الحساب الجديد',password_reset:'استعادة كلمة المرور',welcome_email:'رسائل الترحيب',subscription_expiry:'انتهاء الاشتراك',low_balance:'انخفاض الرصيد',account_suspension:'تعليق الحساب',payment_receipt:'إيصالات الدفع',renewal_reminder:'تذكير التجديد',system_updates:'تحديث النظام',login_security:'تنبيه دخول جديد',password_changed:'تغيير كلمة المرور',email_changed:'تغيير البريد',payment_failed:'فشل الدفع',trial_expiring:'قرب انتهاء الفترة التجريبية',support_received:'رسالة دعم جديدة',support_unanswered:'رسائل دون رد',service_incident:'أعطال الخدمة',mail_delivery_failure:'فشل تسليم البريد',unusual_activity:'نشاط غير معتاد',backup_status:'حالة النسخ الاحتياطي'};
       const captionsEn={registration_verification:'New account verification',password_reset:'Password reset',welcome_email:'Welcome email',subscription_expiry:'Subscription expiry',low_balance:'Low balance',account_suspension:'Account suspension',payment_receipt:'Payment receipt',renewal_reminder:'Renewal reminder',system_updates:'System updates',login_security:'New sign-in alert',password_changed:'Password changed',email_changed:'Email changed',payment_failed:'Payment failed',trial_expiring:'Trial expiring',support_received:'New support message',support_unanswered:'Unanswered support',service_incident:'Service incidents',mail_delivery_failure:'Mail delivery failure',unusual_activity:'Unusual activity',backup_status:'Backup status'};
-      const list=q('adminServiceToggles');list.replaceChildren();list.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;align-items:stretch;';
+      const list=q('adminServiceToggles');list.replaceChildren();list.className='email-service-cards';
+      const upcoming=document.createElement('details');upcoming.className='email-services-upcoming';
+      const upcomingList=document.createElement('ul');let upcomingCount=0;
       for(const item of data.services||[]){
-        const card=document.createElement('article');card.className='manage-card';
-        card.style.cssText='display:flex;flex-direction:column;justify-content:space-between;gap:10px;margin:0;padding:14px 16px;min-height:88px;border-radius:12px;border:1px solid var(--surface-edge, #d8dee7);box-shadow:none;min-width:0;';
-        const name=document.createElement('strong');name.textContent=(lang==='ar'?captionsAr:captionsEn)[item.id]||item.id;
-        const state=document.createElement('small');state.style.cssText='opacity:.8;line-height:1.4;';
-        state.textContent=item.available?(item.enabled?tr('Enabled','مفعّل'):tr('Available','متاح')):tr('Not implemented','غير منفّذ');
-        const toggle=document.createElement('input');
-        toggle.type='checkbox';toggle.checked=Boolean(item.enabled);
-        toggle.disabled=!item.editable;
-        toggle.title=item.editable?tr('Save service preference','حفظ تفضيل الخدمة'):item.available?tr('Uses the configured email sender','يستخدم مرسل البريد المهيأ'):tr('Service is not yet implemented','الخدمة غير منفذة بعد');
-        if(item.editable)toggle.onchange=async()=>{
-          const requested=toggle.checked;toggle.disabled=true;
-          try{
-            const saved=await api('/api/admin/service-integrations/services/'+encodeURIComponent(item.id),{
-              method:'PUT',body:JSON.stringify({enabled:requested})
-            });
-            toggle.checked=Boolean(saved.enabled);
-            state.textContent=toggle.checked?tr('Enabled','مفعّل'):tr('Disabled','معطّل');
-          }catch(error){toggle.checked=!requested;notice.textContent=error.message;}
-          finally{toggle.disabled=false;}
-        };
-        toggle.setAttribute('aria-label',name.textContent);
-        const top=document.createElement('div');top.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:12px;';
-        top.append(name,toggle);
-        card.append(top,state);
-        // Only a real backend-controlled toggle may become interactive.
-        // Unimplemented services are informational, not disabled fake switches.
-        list.append(card);
+        const caption=(lang==='ar'?captionsAr:captionsEn)[item.id]||item.id;
+        if(!item.available){upcomingList.append(textElement('li',caption));upcomingCount++;continue;}
+        const card=document.createElement(item.editable?'label':'article');card.className='email-service-card';
+        const name=textElement('strong',caption),state=textElement('small');
+        const describe=()=>{state.textContent=item.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل');if(item.enabled&&!e.configured)state.textContent+=' · '+tr('Email sender setup required','يلزم إعداد مرسل البريد');};describe();
+        const top=document.createElement('div');top.className='email-service-card-head';top.append(name);
+        if(item.editable){
+          const toggle=document.createElement('input');toggle.type='checkbox';toggle.setAttribute('role','switch');toggle.checked=Boolean(item.enabled);
+          toggle.id='email-service-'+item.id;toggle.setAttribute('aria-label',caption);card.htmlFor=toggle.id;top.append(toggle);
+          toggle.onchange=async()=>{
+            if(!admin()||currentUser.id!==owner)return;
+            const previous=Boolean(item.enabled),requested=toggle.checked;toggle.disabled=true;
+            try{
+              const saved=await api('/api/admin/service-integrations/services/'+encodeURIComponent(item.id),{method:'PUT',body:JSON.stringify({enabled:requested})});
+              if(!admin()||currentUser.id!==owner)return;
+              item.enabled=Boolean(saved.enabled);toggle.checked=item.enabled;describe();notice.textContent=tr('Service preference saved.','حُفظ إعداد الخدمة.');
+            }catch(error){if(admin()&&currentUser.id===owner){toggle.checked=previous;notice.textContent=error.message;}}
+            finally{if(admin()&&currentUser.id===owner)toggle.disabled=false;}
+          };
+        }
+        card.append(top,state);list.append(card);
       }
+      if(upcomingCount){upcoming.append(textElement('summary',tr('Services awaiting implementation','خدمات تحتاج تنفيذًا')+' · '+upcomingCount),textElement('p',tr('These notifications have no active backend event integration yet.','هذه التنبيهات لم تُربط بأحداث الخلفية بعد.')),upcomingList);list.append(upcoming);}
     }catch(error){if(admin()&&currentUser.id===owner)notice.textContent=error.message;}
   }
   window.gatewayLoadServiceCenter=loadServiceCenter;
@@ -137,6 +136,15 @@
     }));
     let mailFolder='received';
     let currentDraftId=null;
+    let composeReturnFocus=null;
+    function setComposeOpen(open,focusId){
+      const panel=q('adminMailCompose');
+      if(open&&panel.hidden)composeReturnFocus=document.activeElement;
+      panel.hidden=!open;q('adminMailComposeBackdrop').hidden=!open;
+      if(open&&focusId)q(focusId).focus();
+      if(!open&&composeReturnFocus?.isConnected)composeReturnFocus.focus();
+    }
+
     let mailRevision=0, readerRevision=0;
     const mailAlive=owner=>admin()&&currentUser?.id===owner&&q('adminInboxTab')?.isConnected;
     function updateMailFolders(){
@@ -150,7 +158,7 @@
     }
     function preserveCompose(){
       if(q('adminComposeTo').value||q('adminComposeSubject').value||q('adminComposeBody').value){
-        q('adminMailCompose').hidden=false;
+        setComposeOpen(true);
         q('adminComposeStatus').textContent=tr('Finish or save the current draft before opening another message.','أكمل المسودة الحالية أو احفظها قبل إنشاء رسالة أخرى.');return false;
       }
       return true;
@@ -189,7 +197,7 @@
               const item=await api(endpoint+'/'+encodeURIComponent(msg.id));if(!selected())return;
               if(drafts){
                 currentDraftId=item.id;q('adminComposeTo').value=item.to;q('adminComposeSubject').value=item.subject;q('adminComposeBody').value=item.body;
-                q('adminComposeStatus').textContent='';composePanel.hidden=false;q('adminComposeBody').focus();
+                q('adminComposeStatus').textContent='';setComposeOpen(true);q('adminComposeBody').focus();
               }
               reader.replaceChildren();
               const back=textElement('button',tr('← Back to messages','العودة للرسائل'),'button ghost small');back.type='button';
@@ -215,7 +223,7 @@
                   if(!selected()||!preserveCompose())return;
                   currentDraftId=null;q('adminComposeTo').value=(String(msg.from||'').match(/<([^<>@\s]+@[^<>@\s]+)>/)?.[1]||String(msg.from||'')).trim();
                   q('adminComposeSubject').value=/^re:/i.test(subject)?subject:'Re: '+subject;q('adminComposeBody').value='';
-                  q('adminComposeStatus').textContent='';composePanel.hidden=false;q('adminComposeBody').focus();
+                  q('adminComposeStatus').textContent='';setComposeOpen(true);q('adminComposeBody').focus();
                 };reader.append(reply);
               }
             }catch(error){if(selected())reader.replaceChildren(textElement('p',error.message));}
@@ -228,10 +236,25 @@
     }
     q('adminMailSearch').oninput=filterMail;
     const composePanel=q('adminMailCompose');
+    q('adminComposeClose').onclick=()=>setComposeOpen(false);
+    q('adminComposeExpand').onclick=()=>{
+      const expanded=composePanel.classList.toggle('is-expanded');
+      q('adminComposeExpand').setAttribute('aria-pressed',String(expanded));
+      q('adminComposeExpand').textContent=expanded?tr('Restore size','حجم عادي'):tr('Expand','تكبير');
+    };
+    composePanel.addEventListener('keydown',event=>{
+      if(event.key==='Escape'){event.preventDefault();setComposeOpen(false);return;}
+      if(event.key!=='Tab')return;
+      const fields=[...composePanel.querySelectorAll('button,input,textarea,select,[tabindex]')].filter(el=>!el.disabled&&el.tabIndex>=0);
+      const first=fields[0],last=fields[fields.length-1];
+      if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
+      else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+    });
+
     q('adminMailComposeOpen').onclick=()=>{
-      if(q('adminComposeTo').value||q('adminComposeSubject').value||q('adminComposeBody').value){composePanel.hidden=false;q('adminComposeBody').focus();return;}
+      if(q('adminComposeTo').value||q('adminComposeSubject').value||q('adminComposeBody').value){setComposeOpen(true);q('adminComposeBody').focus();return;}
       currentDraftId=null;q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
-      q('adminComposeStatus').textContent='';composePanel.hidden=false;q('adminComposeTo').focus();
+      q('adminComposeStatus').textContent='';setComposeOpen(true);q('adminComposeTo').focus();
     };
     q('adminComposeSaveDraft').onclick=async()=>{
       if(!admin())return;const owner=currentUser.id;
@@ -244,34 +267,35 @@
         if(!mailAlive(owner))return;
         currentDraftId=null;q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
         status.textContent=tr('Draft saved securely.','تم حفظ المسودة مشفرة.');
-        composePanel.hidden=true;
+        setComposeOpen(false);
         mailFolder='drafts';await readSupportInbox();
       }catch(error){status.textContent=error.message;}
       finally{button.disabled=false;}
     };
-    q('adminComposeCancel').onclick=()=>{composePanel.hidden=true;q('adminComposeStatus').textContent='';};
+    q('adminComposeCancel').onclick=()=>{setComposeOpen(false);q('adminComposeStatus').textContent='';};
     q('adminComposeSend').onclick=async()=>{
-      if(!admin())return;const owner=currentUser.id;
-      const send=q('adminComposeSend'),status=q('adminComposeStatus');
+      const send=q('adminComposeSend'),status=q('adminComposeStatus'),receipt=q('adminMailSendReceipt');
+      if(!admin()||send.disabled)return;const owner=currentUser.id;
       const to=q('adminComposeTo').value.trim(),subject=q('adminComposeSubject').value.trim(),body=q('adminComposeBody').value;
-      if(!to||!subject||!body.trim()){status.textContent=tr('Recipient, subject, and message are required.','المستلم والموضوع والرسالة مطلوبة.');return;}
-      send.disabled=true;status.textContent=tr('Sending…','جارٍ الإرسال…');
+      if(!to||!q('adminComposeTo').reportValidity()||!subject||!body.trim()){status.textContent=tr('Recipient, subject, and message are required.','المستلم والموضوع والرسالة مطلوبة.');return;}
+      const controls=['adminComposeTo','adminComposeSubject','adminComposeBody','adminComposeSaveDraft'].map(q);
+      controls.forEach(control=>control.disabled=true);send.disabled=true;status.textContent=tr('Sending…','جارٍ الإرسال…');receipt.textContent='';
       try{
         const result=await api('/api/admin/service-integrations/send-email',{method:'POST',body:JSON.stringify({to,subject,body})});
         if(!mailAlive(owner))return;
-        if(!result.sent)throw Error('Sending was not confirmed');
+        if(!result.sent)throw Error(tr('Sending was not confirmed. Your draft was kept; no automatic retry was made.','لم يُؤكد الإرسال. احتُفظ بالمسودة ولم تُعد المحاولة تلقائيًا.'));
         q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
-        
-        if(currentDraftId){
-          const savedId=currentDraftId;currentDraftId=null;
+        const savedId=currentDraftId;currentDraftId=null;
+        receipt.textContent=tr('✓ Message accepted for sending to ','✓ قُبلت الرسالة للإرسال إلى ')+to+tr('. Inbox delivery is not yet verified.','؛ وصولها إلى الوارد لم يُتحقق منه بعد.');
+        receipt.dataset.state='success';setComposeOpen(false);toast(tr('Message accepted for sending','قُبلت الرسالة للإرسال'));
+        if(savedId){
           try{await api('/api/admin/service-integrations/drafts/'+encodeURIComponent(savedId),{method:'DELETE'});}
-          catch(error){status.textContent=tr('Sent; old draft could not be removed.','تم الإرسال، لكن تعذّر حذف المسودة القديمة.');}
+          catch(error){if(mailAlive(owner))receipt.textContent+=' '+tr('The old saved draft could not be removed.','تعذّر حذف المسودة المحفوظة القديمة.');}
         }
-        if(!status.textContent.includes('draft')&&!status.textContent.includes('المسودة'))
-          status.textContent=tr('The selected provider accepted the email; inbox delivery is not yet verified.','قبل المزوّد المختار الرسالة؛ لم يُتحقق من وصولها إلى الوارد بعد.');
-        mailFolder='sent';await readSupportInbox();
-      }catch(error){status.textContent=error.message;}
-      finally{send.disabled=false;}
+        if(mailAlive(owner)){mailFolder='sent';await readSupportInbox();}
+      }catch(error){
+        if(mailAlive(owner)){status.textContent=error.message;setComposeOpen(true);}
+      }finally{if(mailAlive(owner)){send.disabled=false;controls.forEach(control=>control.disabled=false);}}
     };
     q('adminMailReceived').onclick=()=>{mailFolder='received';readSupportInbox();};
     q('adminMailSent').onclick=()=>{mailFolder='sent';readSupportInbox();};

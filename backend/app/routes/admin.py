@@ -393,6 +393,8 @@ def save_inbox_credential(data:SupportInboxCredential,actor:User=Depends(require
     config=admin_email_config.read(db)
     if config is None:
         raise HTTPException(409,"Configure the Resend sender first")
+    from ..services.email_delivery import read_resend
+    read_resend("/emails/receiving?limit=1",data.api_key)
     config["inbox_api_key"]=data.api_key
     admin_email_config.save(db,actor.id,config)
     return {"configured":True,"address":"support@opencode-gateway.codes"}
@@ -493,17 +495,11 @@ def admin_compose_send(data:AdminComposeEmail,actor:User=Depends(require_admin),
 def resend_sent_emails(_:User=Depends(require_admin),db:Session=Depends(get_db)):
     """Read real Resend sent-email metadata. No keys or HTML returned to browsers."""
     from ..services import admin_email_config
-    from urllib.request import Request, urlopen
-    from urllib.error import HTTPError, URLError
     cfg=admin_email_config.read(db) or {}
     key=cfg.get("inbox_api_key")
     if not key:return {"configured":False,"items":[],"reason":"Resend read-capable API key is required"}
-    request=Request("https://api.resend.com/emails?limit=50",
-                    headers={"Authorization":"Bearer "+key,"Accept":"application/json"})
-    try:
-        with urlopen(request,timeout=10) as response:payload=json.load(response)
-    except (HTTPError,URLError,TimeoutError,ValueError):
-        raise HTTPException(502,"Resend sent-email API unavailable; verify API key permissions") from None
+    from ..services.email_delivery import read_resend
+    payload=read_resend("/emails?limit=50",key)
     return {"configured":True,"items":[
         {"id":str(item.get("id","")),"to":item.get("to",[])[:10] if isinstance(item.get("to"),list) else [],
          "subject":str(item.get("subject",""))[:300],
@@ -516,17 +512,11 @@ def resend_sent_emails(_:User=Depends(require_admin),db:Session=Depends(get_db))
 def support_inbox(_:User=Depends(require_admin),db:Session=Depends(get_db)):
     """Admin-only, read-only metadata for messages addressed to support mailbox."""
     from ..services import admin_email_config
-    from urllib.request import Request, urlopen
-    from urllib.error import HTTPError, URLError
     cfg=admin_email_config.read(db) or {}
     key=cfg.get("inbox_api_key")
     if not key:return {"configured":False,"items":[],"reason":"Receiving API key has not been configured"}
-    request=Request("https://api.resend.com/emails/receiving?limit=50",headers={"Authorization":"Bearer "+key,"Accept":"application/json"})
-    try:
-        with urlopen(request,timeout=10) as response:
-            payload=json.load(response)
-    except (HTTPError,URLError,TimeoutError,ValueError):
-        raise HTTPException(502,"Receiving API unavailable; verify API key permissions") from None
+    from ..services.email_delivery import read_resend
+    payload=read_resend("/emails/receiving?limit=50",key)
     items=[]
     for message in payload.get("data",[]):
         if not isinstance(message,dict):continue
@@ -542,17 +532,11 @@ def support_inbox(_:User=Depends(require_admin),db:Session=Depends(get_db)):
 def resend_sent_message(message_id:_uuid.UUID,_:User=Depends(require_admin),db:Session=Depends(get_db)):
     """Read a sent message from Resend, returning bounded text only."""
     from ..services import admin_email_config
-    from urllib.request import Request, urlopen
-    from urllib.error import HTTPError, URLError
     cfg=admin_email_config.read(db) or {}
     key=cfg.get("inbox_api_key")
     if not key:raise HTTPException(503,"Resend read key is not configured")
-    request=Request("https://api.resend.com/emails/"+str(message_id),
-                    headers={"Authorization":"Bearer "+key,"Accept":"application/json"})
-    try:
-        with urlopen(request,timeout=10) as response:mail=json.load(response)
-    except (HTTPError,URLError,TimeoutError,ValueError):
-        raise HTTPException(502,"Could not retrieve sent email") from None
+    from ..services.email_delivery import read_resend
+    mail=read_resend("/emails/"+str(message_id),key)
     recipients=mail.get("to") or []
     return {"id":str(message_id),"subject":str(mail.get("subject",""))[:300],
             "to":recipients[:10] if isinstance(recipients,list) else [],
@@ -564,18 +548,11 @@ def resend_sent_message(message_id:_uuid.UUID,_:User=Depends(require_admin),db:S
 @router.get("/service-integrations/support-inbox/{message_id}")
 def support_inbox_message(message_id:_uuid.UUID,_:User=Depends(require_admin),db:Session=Depends(get_db)):
     from ..services import admin_email_config
-    from urllib.request import Request, urlopen
-    from urllib.error import HTTPError,URLError
     cfg=admin_email_config.read(db) or {}
     key=cfg.get("inbox_api_key")
     if not key:raise HTTPException(503,"Receiving API key has not been configured")
-    request=Request("https://api.resend.com/emails/receiving/"+str(message_id),
-                    headers={"Authorization":"Bearer "+key,"Accept":"application/json"})
-    try:
-        with urlopen(request,timeout=10) as response:
-            email=json.load(response)
-    except (HTTPError,URLError,TimeoutError,ValueError):
-        raise HTTPException(502,"Could not retrieve support email") from None
+    from ..services.email_delivery import read_resend
+    email=read_resend("/emails/receiving/"+str(message_id),key)
     recipients=email.get("to") or []
     if not isinstance(recipients,list) or not any(str(x).lower()=="support@opencode-gateway.codes" for x in recipients):
         raise HTTPException(404,"Support email not found")
@@ -612,6 +589,8 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
     mail=email_verification.smtp_settings(db)
     mail_ready=email_delivery.ready(mail)
     required=email_verification.required_for_registration(db)
+    from ..services import email_service_policies
+    recovery_enabled=email_service_policies.enabled(db,"password_reset",True)
     accounts=dict((saved or {}).get('provider_accounts') or {})
     if mail.get('provider','resend') in email_delivery.PROVIDERS:accounts[mail.get('provider','resend')]=mail
     return {"email":{**email_delivery.public_config(mail),"sending_ready":mail_ready,
@@ -624,7 +603,7 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
        "services":[
          {"id":"registration_verification","enabled":required,"available":True,"editable":True,
           "reason":"" if mail_ready else "Selected email provider API key is missing"},
-         {"id":"password_reset","enabled":mail_ready,"available":True,"editable":False,"reason":"Uses the configured email sender"},
+         {"id":"password_reset","enabled":recovery_enabled,"available":True,"editable":True,"delivery_ready":mail_ready,"reason":"Uses the configured email sender"},
          *({"id":i,"enabled":False,"available":False,"reason":"Not implemented"} for i in
            ("welcome_email","subscription_expiry","low_balance","account_suspension",
             "payment_receipt","renewal_reminder","system_updates","login_security",

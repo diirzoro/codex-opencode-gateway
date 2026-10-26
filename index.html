@@ -656,6 +656,7 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
     <label class="mailbox-search"><span class="sr-only">بحث في الرسائل المحملة · Search loaded messages</span><input id="adminMailSearch" type="search" placeholder="بحث في الرسائل · Search mail" aria-label="Search loaded messages"></label>
     <button type="button" class="button ghost small" id="adminInboxRead" data-i18n="adminMailRefresh">Refresh messages</button>
   </header>
+  <p id="adminMailSendReceipt" class="mail-send-receipt" role="status" aria-live="polite"></p>
   <p id="adminInboxStatus" role="status"></p>
   <div class="mailbox-columns">
     <div id="adminInboxMessages" class="mailbox-list" aria-live="polite"></div>
@@ -663,22 +664,25 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   </div>
 </div>
 </div>
-<div id="adminMailCompose" hidden class="manage-card mailbox-compose">
-  <h3>رسالة جديدة · New message</h3>
+<div id="adminMailComposeBackdrop" class="mailbox-compose-backdrop" hidden></div>
+<div id="adminMailCompose" hidden class="mailbox-compose" role="dialog" aria-modal="true" aria-labelledby="adminComposeTitle">
+  <header class="mail-compose-head"><h3 id="adminComposeTitle">رسالة جديدة · New message</h3><div><button type="button" id="adminComposeExpand" class="button ghost small" aria-pressed="false" aria-label="Expand composer">تكبير · Expand</button><button type="button" id="adminComposeClose" class="button ghost small" aria-label="Close composer">×</button></div></header>
+  <div class="mail-compose-fields">
   <label class="field"><span>إلى · To</span><input type="email" id="adminComposeTo" maxlength="254" autocomplete="off" required></label>
   <label class="field"><span>الموضوع · Subject</span><input type="text" id="adminComposeSubject" maxlength="300" required></label>
   <label class="field"><span>الرسالة · Message</span><textarea id="adminComposeBody" rows="9" maxlength="100000" required></textarea></label>
-  <p class="lead">المسودات تحفظ مشفّرة على الخادم. الرسائل نصية فقط بدون مرفقات.</p>
-  <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="button" id="adminComposeSend">إرسال · Send</button><button type="button" class="button ghost" id="adminComposeSaveDraft">حفظ مسودة · Save draft</button><button type="button" class="button ghost" id="adminComposeCancel">إلغاء · Cancel</button></div>
-  <p id="adminComposeStatus" role="status"></p>
+  </div>
+  <footer class="mail-compose-footer"><p class="mail-compose-hint">رسالة نصية · بدون مرفقات / Plain text · no attachments</p>
+  <div class="mail-compose-actions"><button type="button" class="button" id="adminComposeSend">إرسال · Send</button><button type="button" class="button ghost" id="adminComposeSaveDraft">حفظ مسودة · Save draft</button><button type="button" class="button ghost" id="adminComposeCancel">إلغاء · Cancel</button></div>
+  <p id="adminComposeStatus" role="status"></p></footer>
 </div>
 
 <details style="margin-top:18px"><summary data-i18n="adminMailConnection">Connection diagnostics</summary>
-<p class="lead" data-i18n="adminMailConnectionHelp">Messages are retrieved from Resend, not fabricated.</p>
+<p class="lead" data-i18n="adminMailConnectionHelp">Messages are retrieved from Resend, not fabricated.</p><p>للقراءة استخدم مفتاح Resend بصلاحية Full access؛ مفتاح Sending access للإرسال فقط. يُحفظ مفتاح القراءة منفصلًا ولا يغيّر مفتاح الإرسال. / Use a Resend Full access key for mailbox reads; sending credentials stay separate.</p>
 <label class="field"><span data-i18n="adminMailReadKey">Read-capable Resend API key</span><input id="adminInboxApiKey" type="password" autocomplete="new-password"></label>
 <button type="button" class="button ghost small" id="adminInboxSaveKey" data-i18n="adminMailSaveKey">Save encrypted key</button>
 </details></section>
-<section id="adminServicesTab" hidden><h2>تفعيل الخدمات · Service Toggles</h2><div id="adminServiceToggles" aria-live="polite"></div><p class="lead">التفعيل يعتمد على تكامل فعلي في الخادم. الخيارات غير الجاهزة معطّلة وليست موافقات شكلية.</p></section>
+<section id="adminServicesTab" hidden><h2>تفعيل الخدمات · Service Toggles</h2><div id="adminServiceToggles" aria-live="polite"></div><p class="lead">اضغط بطاقة الخدمة لتغيير إعدادها. الخدمات غير المنفّذة موضحة في القسم المطوي.</p></section>
 </div></section>
   <section class="admin-view" data-admin-panel="security"><div class="page-head"><div><h1 data-i18n="adminSecurity">Security</h1><p class="lead" data-i18n="aNay">Not available yet.</p></div></div><div class="admin-section"><p data-i18n="aAdminSecurityNotAvail">Admin security settings are not available yet.</p></div></section>
   <section class="admin-view" data-admin-panel="account"><div class="page-head"><div><h1 data-i18n="adminPersonal">Personal account</h1><p class="lead" data-i18n="aPersonalLead">Your own account. Administrative controls are on the other pages.</p></div></div><div id="adminAccountPanel"></div></section>
@@ -836,6 +840,11 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   #workspacePage .workspace-session-picker .new-session{padding:6px;margin:6px 0;font-size:12px}
   #workspacePage .agent-column{position:relative;min-width:0}
 
+.email-service-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:14px;max-width:1000px}
+.email-service-card{display:flex;flex-direction:column;justify-content:space-between;gap:14px;padding:20px;border:1px solid var(--line);border-radius:14px;background:var(--panel);min-height:112px}
+label.email-service-card{cursor:pointer}label.email-service-card:hover{border-color:var(--primary);background:var(--soft)}.email-service-card:focus-within{outline:2px solid var(--primary);outline-offset:2px}
+.email-service-card-head{display:flex;align-items:center;justify-content:space-between;gap:20px}.email-service-card input[role=switch]{width:20px;height:20px;accent-color:var(--primary);cursor:pointer;flex-shrink:0}.email-service-card small{color:var(--muted);line-height:1.6}
+.email-services-upcoming{grid-column:1/-1;padding:16px 20px;border:1px solid var(--line);border-radius:14px}.email-services-upcoming summary{cursor:pointer;font-weight:600}.email-services-upcoming ul{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin:16px 0;color:var(--muted)}
 /* Scoped mailbox: native Resend data, separate folder/list/reader surfaces. */
 #adminInboxTab .mailbox{display:grid;grid-template-columns:190px minmax(0,1fr);border:1px solid var(--line);border-radius:18px;overflow:hidden;min-height:540px;background:var(--panel)}
 #adminInboxTab .mailbox-folders{padding:20px 12px;background:var(--panel2);border-inline-end:1px solid var(--line)}
@@ -845,6 +854,7 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
 #adminInboxTab .mailbox-address{font-size:11px;overflow-wrap:anywhere;margin:24px 8px;opacity:.7}
 #adminInboxTab .mailbox-main{min-width:0}#adminInboxTab .mailbox-toolbar{display:flex;gap:12px;align-items:center;padding:14px;border-bottom:1px solid var(--line)}
 #adminInboxTab .mailbox-search{flex:1;min-width:0}#adminMailSearch{width:100%;border-radius:12px;padding:11px 14px}
+#adminMailSendReceipt:empty{display:none}#adminMailSendReceipt{margin:12px 16px;padding:12px 16px;border:1px solid var(--primary);background:var(--soft);color:var(--text);border-radius:12px;font-size:14px;overflow-wrap:anywhere}
 #adminInboxStatus{margin:0;padding:10px 16px;font-size:13px;min-height:38px}#adminInboxTab .mailbox-columns{display:grid;grid-template-columns:minmax(210px,.85fr) minmax(0,1.15fr)}
 #adminInboxTab .mailbox-list{min-width:0;max-height:620px;overflow:auto;border-inline-end:1px solid var(--line)}
 #adminInboxTab .mailbox-row{display:grid;width:100%;gap:6px;text-align:start;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:16px;background:transparent;color:inherit;cursor:pointer;font:inherit}
@@ -854,8 +864,20 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
 #adminInboxTab .mailbox-reader{min-width:0;padding:22px;max-height:620px;overflow:auto}#adminInboxTab .mailbox-reader h3{margin:14px 0;font-size:20px;overflow-wrap:anywhere}
 #adminInboxTab .support-mail-text{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:14px;line-height:1.85;border-top:1px solid var(--line);padding-top:20px;unicode-bidi:plaintext}
 #adminInboxTab .mailbox-empty{padding:40px 20px;text-align:center;line-height:1.8;opacity:.75}
-#adminInboxTab .mailbox-compose{position:fixed;inset-inline-end:24px;bottom:16px;width:min(560px,calc(100vw - 32px));max-height:85dvh;overflow:auto;z-index:90;padding:20px;border:1px solid var(--line);box-shadow:0 20px 70px #10203930;background:var(--panel);border-radius:18px}
-#adminInboxTab .mailbox-compose[hidden]{display:none}#adminInboxTab .mailbox-compose textarea{resize:vertical;min-height:150px;line-height:1.7}
+#adminInboxTab .mailbox-compose-backdrop{position:fixed;inset:0;background:#0f172a66;backdrop-filter:blur(3px);z-index:89}
+#adminInboxTab .mailbox-compose{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(920px,calc(100vw - 48px));max-height:calc(100dvh - 48px);min-height:min(650px,calc(100dvh - 48px));display:flex;flex-direction:column;box-sizing:border-box;z-index:90;padding:0;overflow:hidden;border:1px solid var(--line);box-shadow:0 28px 100px #10203945;background:var(--panel);border-radius:20px;color:var(--text)}
+#adminInboxTab .mailbox-compose[hidden],#adminInboxTab .mailbox-compose-backdrop[hidden]{display:none}
+#adminInboxTab .mail-compose-head{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:18px 24px;border-bottom:1px solid var(--line);background:var(--panel2)}
+#adminInboxTab .mail-compose-head h3{font-size:19px;margin:0}#adminInboxTab .mail-compose-head>div{display:flex;gap:8px}
+#adminInboxTab .mail-compose-fields{padding:22px 26px;overflow:auto;display:flex;flex-direction:column;gap:16px;flex:1;min-height:0}
+#adminInboxTab .mailbox-compose .field{display:flex;flex-direction:column;align-items:stretch;gap:8px;width:100%;min-width:0;margin:0;font-size:13px;font-weight:600}
+#adminInboxTab .mailbox-compose :is(input,textarea){display:block;width:100%;max-width:100%;min-width:0;box-sizing:border-box;margin:0;padding:12px 14px;font:inherit;font-size:15px;font-weight:400}
+#adminInboxTab .mailbox-compose textarea{resize:vertical;min-height:300px;height:35dvh;line-height:1.8;unicode-bidi:plaintext}
+#adminInboxTab .mail-compose-footer{padding:14px 26px 18px;border-top:1px solid var(--line);background:var(--panel)}
+#adminInboxTab .mail-compose-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}#adminInboxTab .mail-compose-actions .button{min-height:42px;padding:10px 20px}
+#adminInboxTab .mail-compose-hint{font-size:12px;color:var(--muted);margin:0 0 12px}#adminComposeStatus{margin:10px 0 0;font-size:13px;overflow-wrap:anywhere}
+#adminInboxTab .mailbox-compose.is-expanded{width:calc(100vw - 32px);height:calc(100dvh - 32px);max-height:calc(100dvh - 32px)}
+@media(max-width:650px){#adminInboxTab .mailbox-compose{width:calc(100vw - 16px);max-height:calc(100dvh - 16px);min-height:calc(100dvh - 32px);border-radius:14px}#adminInboxTab .mail-compose-fields{padding:16px}#adminInboxTab .mail-compose-head,#adminInboxTab .mail-compose-footer{padding:14px 16px}#adminInboxTab .mailbox-compose textarea{min-height:230px}#adminInboxTab .mail-compose-head h3{font-size:16px}}
 @media(max-width:1050px){#adminInboxTab .mailbox{grid-template-columns:155px minmax(0,1fr)}#adminInboxTab .mailbox-columns{grid-template-columns:1fr}#adminInboxTab .mailbox-reader{border-top:1px solid var(--line)}}
 @media(max-width:650px){#adminInboxTab .mailbox{grid-template-columns:1fr;min-height:400px}#adminInboxTab .mailbox-folders{padding:14px;border-inline-end:0}#adminInboxTab .mailbox-folders h2,#adminInboxTab .mailbox-address{display:none}#adminInboxTab .mailbox-folders nav{display:flex;margin-top:12px}#adminInboxTab .mailbox-folders nav button{flex:1;text-align:center;padding:9px}#adminInboxTab .mailbox-reader{display:none}#adminInboxTab .mailbox.has-selection .mailbox-reader{display:block}#adminInboxTab .mailbox.has-selection .mailbox-list{display:none}#adminInboxTab .mailbox-toolbar{flex-wrap:wrap}#adminInboxTab .mailbox-search{flex-basis:100%}}
 .mailbox-compose input[type=email]{direction:ltr;text-align:start}
@@ -865,7 +887,7 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   <script defer src="enhancements.js?v=20261026-platform-app-setup"></script>
   <script type="application/json" id="managementAsset" data-src="management.js?v=20261026-native-github-settings"></script>
   <script defer src="runtime-client.js?v=20261008-phase2"></script>
-  <script defer src="dashboards.js?v=20261026-mail-addresses"></script>
+  <script defer src="dashboards.js?v=20261026-compose-reader-errors"></script>
   <script>
   // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
   document.addEventListener('DOMContentLoaded',function(){

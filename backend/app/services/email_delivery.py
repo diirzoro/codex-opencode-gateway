@@ -61,3 +61,28 @@ def send(config, message, *, error_status=502, timeout=15):
             client.send_message(message)
     except (OSError,smtplib.SMTPException,ValueError):
         raise HTTPException(error_status,'SMTP rejected or could not send the email; delivery is unconfirmed') from None
+
+
+def read_resend(path, key):
+    """Read fixed Resend endpoints; distinguish credentials from transport errors."""
+    import json
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+    import re
+    if not re.fullmatch(r'/emails(?:/receiving)?(?:/[0-9a-f-]{36})?(?:\?limit=(?:1|50))?', path):
+        raise ValueError('Unsupported Resend read endpoint')
+    request=Request('https://api.resend.com'+path,headers={'Authorization':'Bearer '+key,'Accept':'application/json'})
+    try:
+        with urlopen(request,timeout=10) as response:payload=json.load(response)
+    except HTTPError as error:
+        if error.code in (401,403):
+            raise HTTPException(502,f'Resend refused mailbox access (HTTP {error.code}). Sending access cannot read email. Save a valid Resend Full access key in Connection diagnostics; the sending key remains unchanged.') from None
+        if error.code==429:raise HTTPException(503,'Resend mailbox rate limit reached (HTTP 429). Try again later; no automatic retry was made') from None
+        if error.code==404:raise HTTPException(404,'Resend email resource was not found (HTTP 404)') from None
+        raise HTTPException(502,f'Resend mailbox request failed (HTTP {error.code}); no permission verdict was made') from None
+    except (URLError,TimeoutError,OSError):
+        raise HTTPException(502,'Cannot connect to Resend mailbox API. Check server connectivity; this does not prove the API key is invalid') from None
+    except ValueError:
+        raise HTTPException(502,'Resend mailbox API returned an invalid response') from None
+    if not isinstance(payload,dict) or ('?limit=' in path and not isinstance(payload.get('data'),list)):raise HTTPException(502,'Resend mailbox API returned an invalid response')
+    return payload

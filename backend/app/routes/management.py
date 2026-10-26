@@ -55,6 +55,8 @@ class Reset(BaseModel):
 @router.post('/auth/forgot-password',status_code=202)
 def forgot(data:Forgot,db:Session=Depends(get_db)):
     message={'message':'If an eligible account matches and email delivery is available, a recovery link will be sent.'}
+    from ..services.email_service_policies import enabled
+    if not enabled(db,'password_reset',True):return message
     user=db.scalar(select(User).where(func.lower(User.email)==str(data.email).lower(),User.status.in_(['active','archived'])))
     if user and user.status=='archived' and not reactivation_eligible(user): return message
     if not user: return message

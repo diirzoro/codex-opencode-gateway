@@ -4,6 +4,9 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException
 
 def send_reset(email, token, db=None):
+    if db is not None:
+        from .email_service_policies import enabled
+        if not enabled(db,"password_reset",True):raise HTTPException(503,"Password recovery email is disabled by the administrator")
     from .email_verification import smtp_settings
     smtp_config=smtp_settings(db)
     from ..config import settings

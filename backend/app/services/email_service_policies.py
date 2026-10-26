@@ -1,8 +1,8 @@
 """Persistent, narrowly scoped admin email-service preferences."""
 from sqlalchemy import text
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, OperationalError
 
-SUPPORTED = frozenset({"registration_verification"})
+SUPPORTED = frozenset({"registration_verification", "password_reset"})
 
 def enabled(db, service_id: str, fallback: bool = True) -> bool:
     if service_id not in SUPPORTED:
@@ -15,8 +15,10 @@ def enabled(db, service_id: str, fallback: bool = True) -> bool:
                 {"name": service_id},
             ).scalar_one_or_none()
             return fallback if value is None else bool(value)
-    except ProgrammingError as exc:
-        if getattr(getattr(exc, "orig", None), "sqlstate", "") == "42P01":
+    except (ProgrammingError, OperationalError) as exc:
+        missing_postgres=getattr(getattr(exc, "orig", None), "sqlstate", "") == "42P01"
+        missing_fixture=db.bind.dialect.name=="sqlite" and str(getattr(exc,"orig",""))=="no such table: email_service_policies"
+        if missing_postgres or missing_fixture:
             return fallback
         raise
 
