@@ -51,6 +51,7 @@ def test_brevo_is_used_for_compose_verification_and_password_recovery(mail_accep
         assert req.headers['api-key']=='SYNTHETIC_BREVO_KEY'
         body=json.loads(req.content);assert body['sender']=={'email':'no-reply@opencode-gateway.codes','name':'OpenCode Gateway'}
         assert 'textContent' in body and 'htmlContent' not in body
+        assert body['replyTo']=={'email':'support@opencode-gateway.codes'}
         calls.append(body);return httpx.Response(201,json={'messageId':'synthetic-accepted-id'})
     monkeypatch.setattr(email_delivery.httpx,'Client',lambda **kwargs:original(transport=httpx.MockTransport(handler),**kwargs))
     def forbidden(*args,**kwargs):raise AssertionError('Brevo API must not use SMTP')

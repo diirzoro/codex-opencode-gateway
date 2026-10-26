@@ -8,6 +8,7 @@ from fastapi import HTTPException
 BREVO_URL = 'https://api.brevo.com/v3/smtp/email'
 DEFAULT_SENDER = 'no-reply@opencode-gateway.codes'
 DEFAULT_NAME = 'OpenCode Gateway'
+DEFAULT_REPLY_TO = 'support@opencode-gateway.codes'
 PROVIDERS = ('resend', 'brevo')
 
 
@@ -22,6 +23,7 @@ def public_config(config):
     return {'provider': provider, 'configured': ready(config),
             'sender': config.get('smtp_from') or DEFAULT_SENDER,
             'sender_name': config.get('sender_name') or DEFAULT_NAME,
+            'reply_to': DEFAULT_REPLY_TO,
             'transport': 'https' if provider == 'brevo' else 'smtp',
             'smtp_host': BREVO_URL if provider == 'brevo' else config.get('smtp_host', 'smtp.resend.com'),
             'smtp_port': None if provider == 'brevo' else config.get('smtp_port', 587),
@@ -31,10 +33,12 @@ def public_config(config):
 def send(config, message, *, error_status=502, timeout=15):
     if not ready(config):
         raise HTTPException(503, 'Email delivery is not configured')
+    if 'Reply-To' not in message:message['Reply-To']=DEFAULT_REPLY_TO
     if config.get('provider') == 'brevo':
         sender={'email':config['smtp_from'], 'name':config.get('sender_name') or DEFAULT_NAME}
         payload={'sender':sender,'to':[{'email':str(message['To'])}],
-                 'subject':str(message['Subject']),'textContent':message.get_content()}
+                 'subject':str(message['Subject']),'textContent':message.get_content(),
+                 'replyTo':{'email':DEFAULT_REPLY_TO}}
         try:
             with httpx.Client(timeout=timeout, follow_redirects=False) as client:
                 response=client.post(BREVO_URL, headers={'api-key':config['api_key'],'accept':'application/json'}, json=payload)

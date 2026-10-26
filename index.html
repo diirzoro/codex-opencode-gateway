@@ -627,6 +627,7 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
 <label class="field"><span>مزوّد البريد · Provider</span><select id="adminEmailProvider"><option value="resend">Resend · SMTP</option><option value="brevo">Brevo · HTTPS API</option><option value="smtp" disabled>Existing SMTP · read only</option></select></label>
 <label class="field"><span>اسم المرسل · Sender name</span><input id="adminSenderName" value="OpenCode Gateway" maxlength="120" autocomplete="off" placeholder="OpenCode Gateway"></label>
 <label class="field"><span>بريد المرسل · Sender email</span><input id="adminSenderEmail" value="no-reply@opencode-gateway.codes" type="email" maxlength="254" autocomplete="off" placeholder="no-reply@opencode-gateway.codes"></label>
+<label class="field"><span>بريد الرد والدعم · Reply-To</span><input id="adminEmailReplyTo" type="email" readonly value="support@opencode-gateway.codes"></label>
 <label class="field"><span>SMTP host · الخادم</span><input id="adminSmtpHost" readonly maxlength="253" autocomplete="off" placeholder="smtp.resend.com"></label>
 <label class="field"><span>Port · المنفذ</span><input id="adminSmtpPort" readonly type="number" min="1" max="65535" value="587"></label>
 <label class="field"><span>التشفير · TLS</span><select id="adminSmtpTls" disabled><option value="starttls">STARTTLS (587)</option><option value="https">HTTPS · Brevo API</option></select></label>
@@ -864,7 +865,7 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   <script defer src="enhancements.js?v=20261026-platform-app-setup"></script>
   <script type="application/json" id="managementAsset" data-src="management.js?v=20261026-native-github-settings"></script>
   <script defer src="runtime-client.js?v=20261008-phase2"></script>
-  <script defer src="dashboards.js?v=20261026-no-reply-default"></script>
+  <script defer src="dashboards.js?v=20261026-mail-addresses"></script>
   <script>
   // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
   document.addEventListener('DOMContentLoaded',function(){

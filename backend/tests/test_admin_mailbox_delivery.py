@@ -54,6 +54,7 @@ def test_existing_compose_uses_saved_resend_credentials_and_tls(mail_acceptance,
     response=request(f,'/api/admin/service-integrations/send-email',True,'POST',{'to':'owned@example.com','subject':'Synthetic test','body':'Harmless test body'})
     assert response.status_code==200 and response.json()['sent'] is True
     assert len(sent)==1 and sent[0]['To']=='owned@example.com'
+    assert sent[0]['Reply-To']=='support@opencode-gateway.codes'
     assert request(f,'/api/admin/service-integrations').json()['email']['delivery_verified'] is False
 
 
