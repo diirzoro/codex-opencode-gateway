@@ -65,4 +65,4 @@ def test_recovery_toggle_persists_and_blocks_real_delivery_and_token_creation(ma
     with Session(f[2]) as db:assert db.scalar(select(func.count()).select_from(models.PasswordReset))==before
     assert request(f,endpoint,True,'PUT',{'enabled':True}).status_code==200
     assert next(item for item in request(f,'/api/admin/service-integrations').json()['services'] if item['id']=='password_reset')['enabled'] is True
-    assert request(f,'/api/admin/service-integrations/services/welcome_email',True,'PUT',{'enabled':True}).status_code==409
+    assert request(f,'/api/admin/service-integrations/services/low_balance',True,'PUT',{'enabled':True}).status_code==409

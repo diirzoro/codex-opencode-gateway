@@ -103,8 +103,8 @@
         const caption=(lang==='ar'?captionsAr:captionsEn)[item.id]||item.id;
         const card=document.createElement('tr');
         const toggleCell=document.createElement('td');
-        const name=textElement('strong',caption),state=textElement('small');
-        const describe=()=>{state.textContent=item.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل');if(item.enabled&&!e.configured)state.textContent+=' · '+tr('Email sender setup required','يلزم إعداد مرسل البريد');};describe();
+        const name=textElement('strong',caption),state=textElement('small');let reportButton=null;
+        const describe=()=>{if(reportButton)reportButton.disabled=!item.enabled;state.textContent=item.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل');if(item.reason==='Requires an authorized Resend Full access read key')state.textContent+=' · '+tr('Requires authorized Resend inbox reading','يلزم تفويض قراءة صندوق Resend');if(item.reason==='Manual administrator report')state.textContent+=' · '+tr('Manual administrator report','تقرير يدوي من الإدارة');if(item.enabled&&!e.configured)state.textContent+=' · '+tr('Email sender setup required','يلزم إعداد مرسل البريد');};describe();
         const top=document.createElement('td');const label=document.createElement('label');label.textContent=caption;top.append(label);
         const statusCell=document.createElement('td');statusCell.append(state);
         if(item.editable&&item.available){
@@ -121,7 +121,15 @@
             finally{if(admin()&&currentUser.id===owner)toggle.disabled=false;}
           };
         }
-        else{const toggle=document.createElement('input');toggle.type='checkbox';toggle.disabled=true;toggle.setAttribute('aria-label',caption);toggleCell.append(toggle);state.textContent=tr('Not available yet — no active event integration','غير متاحة بعد — لم تُربط بأحداث الخلفية');}
+        else{const toggle=document.createElement('input');toggle.type='checkbox';toggle.disabled=true;toggle.setAttribute('aria-label',caption);toggleCell.append(toggle);state.textContent=item.reason==='Apply migration 0027'?tr('Requires database migration 0027','يلزم ترحيل قاعدة البيانات 0027'):tr('Not available yet — no active event integration','غير متاحة بعد — لم تُربط بأحداث الخلفية');}
+        if(item.available&&item.reason==='Manual administrator report'){
+          reportButton=document.createElement('button');reportButton.type='button';reportButton.className='button ghost small';reportButton.textContent=tr('Send report to my admin inbox','إرسال تقرير إلى بريدي الإداري');reportButton.disabled=!item.enabled;
+          reportButton.onclick=async()=>{
+            const detail=await window.requestInput(tr('Actual report text (no keys or passwords). The report is sent to your own admin email.','نص التقرير الفعلي دون مفاتيح أو كلمات مرور. يُرسل إلى بريد حسابك الإداري.'),'');if(!detail?.trim())return;
+            reportButton.disabled=true;
+            try{const result=await api('/api/admin/service-integrations/services/'+encodeURIComponent(item.id)+'/report',{method:'POST',body:JSON.stringify({user_id:owner,event_id:crypto.randomUUID(),detail:detail.trim()})});if(currentUser?.id===owner)notice.textContent=result.accepted?tr('Provider accepted the report; delivery is not yet verified.','قبل المزوّد التقرير؛ لم يُتحقق من وصوله بعد.'):tr('Submission is uncertain; do not resend automatically.','نتيجة الإرسال غير مؤكدة؛ لا تُعد الإرسال تلقائيًا.');}catch(error){if(currentUser?.id===owner)notice.textContent=error.message;}finally{if(currentUser?.id===owner)reportButton.disabled=!item.enabled;}
+          };statusCell.append(reportButton);
+        }
         card.append(top,toggleCell,statusCell);rows.append(card);
       }
 

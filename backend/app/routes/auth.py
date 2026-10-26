@@ -30,6 +30,8 @@ def set_session(response: Response, db: Session, user: User):
     session = AuthSession(user_id=user.id, token_hash=hashed, last_seen_at=now,
                           expires_at=now+timedelta(days=settings.session_days))
     db.add(session)
+    from ..models import AccountAudit
+    db.add(AccountAudit(subject_id=user.id,action='session.login'))
     db.commit()
     # A browser-session cookie, with authoritative server-side idle expiry.
     response.set_cookie(settings.session_cookie_name, raw, httponly=True, secure=settings.cookie_secure, samesite="strict", path="/")
@@ -79,6 +81,9 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
             challenge,code=email_verification.create_code(db,user)
             db.flush()
             email_verification.send_code(email,code,db)
+        if user.status=='active':
+            from ..models import AccountAudit
+            db.add(AccountAudit(subject_id=user.id,action='account.registered_active'))
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -103,6 +108,8 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     user.trial_started_at = now
     user.trial_ends_at = now + timedelta(days=CORE_TRIAL_DAYS)
     verification.used_at = now
+    from ..models import AccountAudit
+    db.add(AccountAudit(subject_id=user.id,action='account.email_verified'))
     db.commit()
     return RedirectResponse("/#email=verified", status_code=303)
 
@@ -163,7 +170,8 @@ def verify_email_code(data:VerifyEmailCode,response:Response,db:Session=Depends(
     user=pending_code_user(db,data.challenge_id)
     verification,now=email_verification.verify_code(db,data.challenge_id,data.code)
     user.status='active';user.trial_started_at=now;user.trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS);user.last_login_at=now;verification.used_at=now
-    db.commit();set_session(response,db,user)
+    from ..models import AccountAudit
+    db.add(AccountAudit(subject_id=user.id,action='account.email_verified'));db.commit();set_session(response,db,user)
     return user_payload(user)
 
 @router.post('/resend-verification-code')
@@ -175,7 +183,11 @@ def resend_email_code(data:ResendVerificationCode,db:Session=Depends(get_db)):
 def login(data: LoginRequest, response: Response, db: Session = Depends(get_db)):
     identity = data.identity.strip().lower()
     user = db.scalar(select(User).where(or_(func.lower(User.email) == identity, func.lower(User.username) == identity)))
-    if not user or not verify_password(data.password, user.password_hash): raise HTTPException(401, "Invalid credentials")
+    if not user or not verify_password(data.password, user.password_hash):
+        if user:
+            from ..models import AccountAudit
+            db.add(AccountAudit(subject_id=user.id,action='security.failed_login'));db.commit()
+        raise HTTPException(401, 'Invalid credentials')
     if user.status == "pending_email":raise HTTPException(403,"Confirm your email using the verification code; use Resend verification if needed")
     if user.status != "active": raise HTTPException(403, "Account is not active")
     response.delete_cookie('gateway_login_signup', path='/api/auth', secure=settings.cookie_secure, httponly=True, samesite='strict')

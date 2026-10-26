@@ -1,0 +1,56 @@
+"""Real HTTP/ORM with synthetic accounts; never operate on TEST user rows."""
+from unittest.mock import Mock
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+from backend.tests.test_native_control_plane import boundary,authenticated
+from backend.app import models
+from backend.app.routes import admin
+
+
+def setup(boundary,monkeypatch):
+    client,(actor,target),calls,engine,config=boundary
+    client.app.include_router(admin.router)
+    for model in (models.Plan,models.Country,models.Region,models.City,models.PasswordReset,models.EmailVerification):model.__table__.create(engine,checkfirst=True)
+    with Session(engine) as db:
+        user=db.get(models.User,actor.id);user.role='admin';db.commit()
+    monkeypatch.setattr(admin.opencode,'stop_workspace',Mock())
+    return client,actor,target,engine,config
+
+
+def test_admin_updates_real_profile_and_preserves_other_users(boundary,monkeypatch):
+    client,actor,target,engine,config=setup(boundary,monkeypatch)
+    result=authenticated(client,f'/api/admin/users/{target.id}',actor,config,'PATCH',{'username':'qa_updated','email':'qa_updated@example.org','phone':'+967770123456','postal_code':'+967','preferred_language':'en','preferred_theme':'dark'})
+    assert result.status_code==200,result.text
+    assert result.json()['username']=='qa_updated'
+    with Session(engine) as db:
+        user=db.get(models.User,target.id)
+        assert user.email=='qa_updated@example.org' and user.phone=='+967770123456'
+        assert db.get(models.User,actor.id).username=='fixture-a'
+    duplicate=authenticated(client,f'/api/admin/users/{target.id}',actor,config,'PATCH',{'username':'fixture-a'})
+    assert duplicate.status_code==409,duplicate.text
+    invalid=authenticated(client,f'/api/admin/users/{target.id}',actor,config,'PATCH',{'email':None})
+    assert invalid.status_code==422
+
+
+def test_archive_revokes_sessions_and_preserves_projects_and_files(boundary,monkeypatch):
+    client,actor,target,engine,config=setup(boundary,monkeypatch)
+    assert authenticated(client,f'/api/admin/users/{target.id}',target,config,'DELETE').status_code==403
+    assert authenticated(client,f'/api/admin/users/{actor.id}',actor,config,'DELETE').status_code==403
+    response=authenticated(client,f'/api/admin/users/{target.id}',actor,config,'DELETE')
+    assert response.status_code==200,response.text
+    assert response.json()['data_preserved'] is True
+    with Session(engine) as db:
+        assert db.get(models.User,target.id).status=='archived'
+        assert all(row.revoked_at is not None for row in db.scalars(select(models.AuthSession).where(models.AuthSession.user_id==target.id)))
+        assert db.get(models.Project,target.project) is not None
+        assert db.get(models.WorkspaceSession,target.session) is not None
+        assert target.root.joinpath('marker.txt').read_text()=='synthetic-marker-b'
+    assert authenticated(client,'/api/profile',target,config).status_code in (401,403,404)
+    assert authenticated(client,f'/api/admin/users/{target.id}',actor,config,'DELETE').status_code==200
+
+
+def test_admin_cannot_archive_another_administrator(boundary,monkeypatch):
+    client,actor,target,engine,config=setup(boundary,monkeypatch)
+    with Session(engine) as db:
+        db.get(models.User,target.id).role='admin';db.commit()
+    assert authenticated(client,f'/api/admin/users/{target.id}',actor,config,'DELETE').status_code==403

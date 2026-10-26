@@ -3,8 +3,9 @@ import json
 import uuid as _uuid
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from pydantic import BaseModel, ConfigDict, Field, EmailStr, field_validator
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
@@ -54,8 +55,17 @@ class PlanPatch(BaseModel):
     active: bool | None = None
     sort_order: int | None = Field(default=None, ge=0, le=10000)
 
-class UserAdminPatch(BaseModel):
+from ..schemas import ProfilePatch
+
+class UserAdminPatch(ProfilePatch):
     model_config = ConfigDict(extra="forbid")
+    username: str | None = Field(default=None,min_length=6,max_length=50,pattern=r'^[A-Za-z0-9_.-]+$')
+    email: EmailStr | None = None
+    @field_validator('username','email')
+    @classmethod
+    def identity_required(cls,value):
+        if value is None:raise ValueError('Identity cannot be empty')
+        return value.strip().lower()
     plan_id: int | None = None
     status: str | None = Field(default=None, pattern="^(active|suspended)$")
     role: str | None = Field(default=None, pattern="^(customer|support|finance|admin|owner)$")
@@ -90,7 +100,7 @@ def users(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     rows = list(db.scalars(select(User).order_by(User.created_at.desc())))
     project_counts = dict(db.execute(select(Project.user_id, func.count()).group_by(Project.user_id)).all())
     workspace_counts = dict(db.execute(select(Workspace.user_id, func.count()).group_by(Workspace.user_id)).all())
-    return [{**user_payload(u), "plan_id": u.plan_id, "plan": u.plan.name if u.plan else None,
+    return [{**user_payload(u), "country_id":u.country_id,"region_id":u.region_id,"city_id":u.city_id,"created_at":u.created_at,"plan_id": u.plan_id, "plan": u.plan.name if u.plan else None,
              "projects_count": project_counts.get(u.id, 0), "workspaces_count": workspace_counts.get(u.id, 0)} for u in rows]
 
 @router.patch("/users/{user_id}")
@@ -106,6 +116,26 @@ def update_user(user_id: str, data: UserAdminPatch, actor: User = Depends(requir
         raise HTTPException(403, 'Cannot change this administrator account')
     if data.role is not None and actor.role != 'owner':
         raise HTTPException(403, 'Owner role required')
+    values=data.model_dump(exclude_unset=True,exclude={'plan_id','status','role','trial_days'})
+    if any(key in values for key in ('country_id','region_id','city_id')):
+        from ..services.location_validation import validate_locations
+        validate_locations(db,values.get('country_id',user.country_id),values.get('region_id',user.region_id),values.get('city_id',user.city_id))
+    if 'phone' in values:
+        from ..security.identities import normalized_phone
+        values['phone']=normalized_phone(values['phone'],values.get('postal_code',user.postal_code))
+        if values['phone'] is None:raise HTTPException(422,'Enter a valid international phone number')
+    for key,value in values.items():setattr(user,key,value)
+    # Database unique indexes remain authoritative, including concurrent edits.
+    try:db.flush()
+    except IntegrityError:
+        db.rollback();raise HTTPException(409,'Email, username or phone is already registered') from None
+    if 'email' in values or 'username' in values:
+        from .management import revoke
+        revoke(db,user)
+    if 'email' in values:
+        from ..models import PasswordReset,EmailVerification
+        db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
+        db.execute(update(EmailVerification).where(EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None)).values(used_at=datetime.now(timezone.utc)))
     if "plan_id" in data.model_fields_set:
         if data.plan_id is not None and db.get(Plan, data.plan_id) is None:
             raise HTTPException(422, "Unknown plan")
@@ -125,8 +155,23 @@ def update_user(user_id: str, data: UserAdminPatch, actor: User = Depends(requir
         if user.trial_started_at is None: user.trial_started_at = now
     from .management import audit
     audit(db, actor, 'account.admin_updated', user.id)
+    if data.status=='suspended':audit(db,actor,'account.admin_suspended',user.id)
+    if 'email' in values:audit(db,actor,'account.email_changed',user.id)
     db.commit(); db.refresh(user)
     return {**user_payload(user), "plan_id": user.plan_id, "plan": user.plan.name if user.plan else None}
+
+@router.delete('/users/{user_id}')
+def archive_user(user_id:_uuid.UUID,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Reversible account removal: preserve every owned record and foreign key."""
+    user=db.scalar(select(User).where(User.id==user_id).with_for_update())
+    if user is None:raise HTTPException(404,'User not found')
+    if user.id==actor.id or user.role in {'admin','owner'}:
+        raise HTTPException(403,'Administrator accounts cannot be removed')
+    from .management import stop_work,revoke,audit
+    if user.status!='archived':
+        stop_work(db,user);revoke(db,user);user.status='archived'
+        audit(db,actor,'account.admin_archived',user.id);db.commit()
+    return {'archived':True,'data_preserved':True,'id':str(user.id)}
 
 @router.get("/overview")
 def overview(_: User = Depends(require_admin), db: Session = Depends(get_db)):
@@ -572,12 +617,32 @@ def update_email_service(service_id:str, data:EmailServiceToggle,
     from ..services import email_service_policies
     if service_id not in email_service_policies.SUPPORTED:
         raise HTTPException(409,"This email service is not implemented")
+    if service_id not in {'registration_verification','password_reset'}:
+        from ..services import email_notifications
+        if not email_notifications.ready(db):raise HTTPException(503,'Apply email notification migration 0027 before changing this service')
     try:
         email_service_policies.set_enabled(db, service_id, data.enabled)
     except Exception:
         db.rollback()
         raise
     return {"id":service_id,"enabled":data.enabled,"saved":True}
+
+class NotificationReport(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    user_id:_uuid.UUID
+    event_id:_uuid.UUID
+    detail:str=Field(min_length=1,max_length=2000)
+
+@router.post('/service-integrations/services/{service_id}/report')
+def notification_report(service_id:str,data:NotificationReport,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from ..services import email_notifications
+    if service_id not in email_notifications.MANUAL:raise HTTPException(409,'This service is driven by its original event source')
+    target=db.get(User,data.user_id)
+    if target is None:raise HTTPException(404,'User not found')
+    result=email_notifications.deliver(db,target,service_id,'manual:'+str(data.event_id),data.detail)
+    if result=='disabled':raise HTTPException(409,'Enable this notification before sending')
+    if result in {'migration_required','sender_unavailable'}:raise HTTPException(503,'Notification storage or configured sender is unavailable')
+    return {'accepted':result=='accepted','state':result}
 
 @router.get("/service-integrations")
 def service_integrations(_: User = Depends(require_admin), db: Session = Depends(get_db)):
@@ -591,6 +656,8 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
     required=email_verification.required_for_registration(db)
     from ..services import email_service_policies
     recovery_enabled=email_service_policies.enabled(db,"password_reset",True)
+    from ..services import email_notifications
+    notification_schema=email_notifications.ready(db)
     accounts=dict((saved or {}).get('provider_accounts') or {})
     if mail.get('provider','resend') in email_delivery.PROVIDERS:accounts[mail.get('provider','resend')]=mail
     return {"email":{**email_delivery.public_config(mail),"sending_ready":mail_ready,
@@ -604,7 +671,7 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
          {"id":"registration_verification","enabled":required,"available":True,"editable":True,
           "reason":"" if mail_ready else "Selected email provider API key is missing"},
          {"id":"password_reset","enabled":recovery_enabled,"available":True,"editable":True,"delivery_ready":mail_ready,"reason":"Uses the configured email sender"},
-         *({"id":i,"enabled":False,"available":False,"reason":"Not implemented"} for i in
+         *({"id":i,"available":i in email_service_policies.SUPPORTED and notification_schema,"editable":i in email_service_policies.SUPPORTED and notification_schema,"enabled":email_service_policies.enabled(db,i,False),"reason":"Apply migration 0027" if i in email_service_policies.SUPPORTED and not notification_schema else "Requires an authorized Resend Full access read key" if i=="support_received" else "Manual administrator report" if i in {"system_updates","service_incident","backup_status"} else "Gateway event notification" if i in email_service_policies.SUPPORTED else "Source event integration is not available"} for i in
            ("welcome_email","subscription_expiry","low_balance","account_suspension",
             "payment_receipt","renewal_reminder","system_updates","login_security",
             "password_changed","email_changed","payment_failed","trial_expiring",

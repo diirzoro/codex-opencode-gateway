@@ -1368,13 +1368,13 @@
           ['icon-edit', tr('Edit user', 'تعديل المستخدم'), function () { openUserModal(u, true); }],
           ['icon-close', u.status==='active'?tr('Suspend','تعليق'):tr('Activate','تفعيل'), function(){return adminPatchUser(u.id,{status:u.status==='active'?'suspended':'active'});},u.id===currentUser.id||u.role==='owner'||(currentUser.role!=='owner'&&u.role==='admin')],
           ['icon-plus',tr('Extend trial','تمديد التجربة'),async function(){var value=await window.requestInput(tr('Trial days','أيام التجربة'),'10');if(value===null)return;var days=Number(value);if(!Number.isInteger(days)||days<0||days>3650){toast(tr('Invalid days','عدد أيام غير صالح'));return;}await adminPatchUser(u.id,{trial_days:days});}],
-          ['icon-trash', tr('Permanent deletion blocked to preserve account data', 'الحذف الدائم محظور لحفظ بيانات الحساب'), null, true],
+          ['icon-trash',tr('Remove account access (archive, preserve data)','حذف الوصول للحساب (أرشفة مع حفظ البيانات)'),async function(){if(!await window.confirmAction(tr('Remove this account from use? Sessions will be revoked. Projects, conversations and billing records are preserved.','حذف الحساب من الاستخدام؟ تُلغى جلساته وتُحفظ المشاريع والمحادثات والفواتير.')))return;try{await api('/api/admin/users/'+u.id,{method:'DELETE'});apiMessage('adminUserMessage',tr('Account archived; all data preserved.','أُرشف الحساب مع حفظ جميع البيانات.'));await gridUsers();}catch(error){apiMessage('adminUserMessage',error.message,true);}},u.id===currentUser.id||['admin','owner'].includes(u.role)||u.status==='archived'],
         ]);
       },
     });
   }
 
-  function openUserModal(u, editable) {
+  async function openUserModal(u, editable) {
     var pairs = [
       [tr('Username', 'اسم المستخدم'), u.username],
       [tr('Email', 'البريد'), u.email],
@@ -1405,7 +1405,22 @@
     });
     var trialIn = document.createElement('input');
     trialIn.type = 'number'; trialIn.min = '0'; trialIn.max = '3650'; trialIn.value = '0';
-    var body = el('div');
+    var body = el('div'),profileFields={};
+    for(const [key,en,ar,type] of [['username','Username','اسم المستخدم','text'],['email','Email','البريد الإلكتروني','email'],['phone','Phone (international)','الهاتف الدولي','tel'],['postal_code','Postal / calling code','الرمز البريدي / رمز البلد','text']]){
+      const input=document.createElement('input');input.type=type;input.value=u[key]||'';input.required=true;input.name=key;
+      input.maxLength=key==='username'?50:key==='email'?254:key==='phone'?30:24;
+      profileFields[key]=input;body.append(labeled(tr(en,ar),input));
+    }
+    for(const [key,en,ar,options] of [['preferred_language','Language','اللغة',['ar','en']],['preferred_theme','Theme','المظهر',['light','dark']]]){
+      const input=document.createElement('select');input.name=key;for(const value of options){const option=document.createElement('option');option.value=option.textContent=value;input.append(option);}input.value=u[key]||options[0];profileFields[key]=input;body.append(labeled(tr(en,ar),input));
+    }
+    body.append(kv([[tr('Location','الموقع'),[u.country,u.region,u.city].filter(Boolean).join(' / ')||'—'],[tr('Created','تاريخ الإنشاء'),fmtDate(u.created_at)],[tr('Last login','آخر دخول'),fmtDate(u.last_login_at)],[tr('Projects / Workspaces','المشاريع / مساحات العمل'),(u.projects_count||0)+' / '+(u.workspaces_count||0)]]));
+    const locationInputs={};
+    for(const [key,en,ar] of [['country_id','Country','الدولة'],['region_id','Region','المحافظة'],['city_id','City','المدينة']]){const select=document.createElement('select');select.name=key;const option=document.createElement('option');option.value=u[key]||'';option.textContent=u[key.replace('_id','')]||tr('Not assigned','غير محدد');select.append(option);select.disabled=true;locationInputs[key]=select;body.append(labeled(tr(en,ar),select));}
+    async function loadLocation(key,path,selected){const select=locationInputs[key];select.disabled=true;const entries=path?await api(path):[];select.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent=tr('Not assigned','غير محدد');select.append(empty);for(const entry of entries){const option=document.createElement('option');option.value=entry.id;option.textContent=entry.name;select.append(option);}if(selected&&!entries.some(entry=>String(entry.id)===String(selected))){const current=document.createElement('option');current.value=selected;current.textContent=u[key.replace('_id','')]||String(selected);select.append(current);}select.value=selected||'';select.disabled=false;}
+    locationInputs.country_id.onchange=async()=>{try{await loadLocation('region_id',locationInputs.country_id.value?'/api/locations/countries/'+locationInputs.country_id.value+'/regions':null,null);await loadLocation('city_id',null,null);}catch(error){toast(error.message);}};
+    locationInputs.region_id.onchange=async()=>{try{await loadLocation('city_id',locationInputs.region_id.value?'/api/locations/regions/'+locationInputs.region_id.value+'/cities':null,null);}catch(error){toast(error.message);}};
+    var planSel=document.createElement('select');const currentPlan=document.createElement('option');currentPlan.value=u.plan_id||'';currentPlan.textContent=u.plan||tr('Not assigned','غير محدد');planSel.append(currentPlan);planSel.disabled=true;body.append(labeled(tr('Plan','الخطة'),planSel));
     body.append(
       labeled(tr('Role', 'الدور'), roleSel),
       labeled(tr('Status', 'الحالة'), statusSel),
@@ -1416,11 +1431,18 @@
     save.onclick = async function () {
       save.disabled = true;
       var days=Number(trialIn.value);if(!Number.isInteger(days)||days<0||days>3650){save.disabled=false;toast(tr('Invalid days','عدد أيام غير صالح'));return;}
-      var patch={status:statusSel.value};if(days>0)patch.trial_days=days;
+      if(!Array.from(Object.values(profileFields)).every(input=>input.reportValidity())){save.disabled=false;return;}
+      var patch={};if(statusSel.value!==u.status)patch.status=statusSel.value;if(days>0)patch.trial_days=days;
+      for(const [key,input] of Object.entries(profileFields)){if(input.value!==String(u[key]||''))patch[key]=input.value;}
+      for(const [key,input] of Object.entries(locationInputs)){if(!input.disabled&&String(u[key]||'')!==input.value)patch[key]=input.value?Number(input.value):null;}
+      if(!planSel.disabled&&String(u.plan_id||'')!==planSel.value)patch.plan_id=planSel.value?Number(planSel.value):null;
       if(currentUser.role==='owner' && roleSel.value!==u.role)patch.role=roleSel.value;
       try{if(await adminPatchUser(u.id,patch))modal.close();}catch(error){toast(error.message);}finally{save.disabled=false;}
     };
     openModal(tr('Edit user', 'تعديل المستخدم') + ' · ' + u.username, body, [save]);
+    try{await loadLocation('country_id','/api/locations/countries',u.country_id);await loadLocation('region_id',u.country_id?'/api/locations/countries/'+u.country_id+'/regions':null,u.region_id);await loadLocation('city_id',u.region_id?'/api/locations/regions/'+u.region_id+'/cities':null,u.city_id);}catch(error){body.append(el('p','',tr('Location lookup unavailable; existing values are preserved.','تعذر تحميل المواقع؛ تُحفظ القيم الحالية.')));}
+    try{const plans=await api('/api/admin/plans');planSel.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent=tr('Not assigned','غير محدد');planSel.append(empty);for(const plan of plans){const option=document.createElement('option');option.value=plan.id;option.textContent=plan.name;planSel.append(option);}planSel.value=u.plan_id||'';planSel.disabled=false;}catch(error){body.append(el('p','',tr('Plan lookup unavailable; existing plan will be preserved.','تعذر تحميل الخطط؛ ستُحفظ الخطة الحالية.')));}
+
   }
 
   async function gridPlans() {
@@ -1449,7 +1471,7 @@
           ['icon-edit', tr('Edit plan', 'تعديل الخطة'), function () { openPlanModal(plan); }],
           ['icon-close', u.status==='active'?tr('Suspend','تعليق'):tr('Activate','تفعيل'), function(){return adminPatchUser(u.id,{status:u.status==='active'?'suspended':'active'});},u.id===currentUser.id||u.role==='owner'||(currentUser.role!=='owner'&&u.role==='admin')],
           ['icon-plus',tr('Extend trial','تمديد التجربة'),async function(){var value=await window.requestInput(tr('Trial days','أيام التجربة'),'10');if(value===null)return;var days=Number(value);if(!Number.isInteger(days)||days<0||days>3650){toast(tr('Invalid days','عدد أيام غير صالح'));return;}await adminPatchUser(u.id,{trial_days:days});}],
-          ['icon-trash', tr('Permanent deletion blocked to preserve account data', 'الحذف الدائم محظور لحفظ بيانات الحساب'), null, true],
+          ['icon-trash',tr('Remove account access (archive, preserve data)','حذف الوصول للحساب (أرشفة مع حفظ البيانات)'),async function(){if(!await window.confirmAction(tr('Remove this account from use? Sessions will be revoked. Projects, conversations and billing records are preserved.','حذف الحساب من الاستخدام؟ تُلغى جلساته وتُحفظ المشاريع والمحادثات والفواتير.')))return;try{await api('/api/admin/users/'+u.id,{method:'DELETE'});apiMessage('adminUserMessage',tr('Account archived; all data preserved.','أُرشف الحساب مع حفظ جميع البيانات.'));await gridUsers();}catch(error){apiMessage('adminUserMessage',error.message,true);}},u.id===currentUser.id||['admin','owner'].includes(u.role)||u.status==='archived'],
         ]);
       },
     });
