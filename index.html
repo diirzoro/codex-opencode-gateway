@@ -7,7 +7,7 @@
     try { var savedPage=localStorage.getItem('og-page'); if(['workspacePage','connectionsPage','workspaceHomePage','clientPage','adminPage'].includes(savedPage))document.documentElement.dataset.restorePage=savedPage; } catch(error) {}
   </script>
   <meta name="theme-color" content="#ffffff"><meta name="description" content="Your projects, conversations, and reviewed code changes in one OpenCode workspace."><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 20'%3E%3Cpath fill='%2324272d' d='M12 4H4V16H12V4ZM16 20H0V0H16V20Z'/%3E%3C/svg%3E"><title>OpenCode Gateway — Hosted OpenCode</title>
-  <link rel="stylesheet" href="styles.css?v=20261026-project-panel">
+  <link rel="stylesheet" href="styles.css?v=20261026-admin-tables">
   <style>
     html.bootstrapping .page { display:none!important }
     html.bootstrapping .page.active { display:block!important }
@@ -895,10 +895,10 @@ label.email-service-card{cursor:pointer}label.email-service-card:hover{border-co
 .mailbox-search .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 </style>
   <script defer src="app.js?v=20261026-github-new-link"></script>
-  <script defer src="enhancements.js?v=20261026-email-codes"></script>
+  <script defer src="enhancements.js?v=20261026-admin-tables"></script>
   <script type="application/json" id="managementAsset" data-src="management.js?v=20261026-github-new-link"></script>
   <script defer src="runtime-client.js?v=20261008-phase2"></script>
-  <script defer src="dashboards.js?v=20261026-project-panel"></script>
+  <script defer src="dashboards.js?v=20261026-admin-tables"></script>
   <script>
   // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
   document.addEventListener('DOMContentLoaded',function(){

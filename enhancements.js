@@ -105,8 +105,8 @@
   }
 
   async function adminPatchUser(id, payload) {
-    try { await api('/api/admin/users/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); apiMessage('adminUserMessage', 'Saved'); await loadAdminUsersData(); }
-    catch (error) { apiMessage('adminUserMessage', error.message, true); }
+    try { await api('/api/admin/users/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); apiMessage('adminUserMessage', 'Saved'); await gridUsers(); return true; }
+    catch (error) { apiMessage('adminUserMessage', error.message, true); return false; }
   }
 
   async function loadAdminUsersData() {
@@ -1366,7 +1366,9 @@
         return cellActions([
           ['icon-eye', tr('View details', 'عرض التفاصيل'), function () { openUserModal(u, false); }],
           ['icon-edit', tr('Edit user', 'تعديل المستخدم'), function () { openUserModal(u, true); }],
-          ['icon-trash', tr('Delete is not available yet', 'الحذف غير متاح بعد'), null, true],
+          ['icon-close', u.status==='active'?tr('Suspend','تعليق'):tr('Activate','تفعيل'), function(){return adminPatchUser(u.id,{status:u.status==='active'?'suspended':'active'});},u.id===currentUser.id||u.role==='owner'||(currentUser.role!=='owner'&&u.role==='admin')],
+          ['icon-plus',tr('Extend trial','تمديد التجربة'),async function(){var value=await window.requestInput(tr('Trial days','أيام التجربة'),'10');if(value===null)return;var days=Number(value);if(!Number.isInteger(days)||days<0||days>3650){toast(tr('Invalid days','عدد أيام غير صالح'));return;}await adminPatchUser(u.id,{trial_days:days});}],
+          ['icon-trash', tr('Permanent deletion blocked to preserve account data', 'الحذف الدائم محظور لحفظ بيانات الحساب'), null, true],
         ]);
       },
     });
@@ -1402,7 +1404,7 @@
       statusSel.append(o);
     });
     var trialIn = document.createElement('input');
-    trialIn.type = 'number'; trialIn.min = '0'; trialIn.max = '3650'; trialIn.value = String(u.trial_remaining_days);
+    trialIn.type = 'number'; trialIn.min = '0'; trialIn.max = '3650'; trialIn.value = '0';
     var body = el('div');
     body.append(
       labeled(tr('Role', 'الدور'), roleSel),
@@ -1413,11 +1415,10 @@
     save.type = 'button';
     save.onclick = async function () {
       save.disabled = true;
-      var patch={status:statusSel.value,trial_days:Number(trialIn.value)};
+      var days=Number(trialIn.value);if(!Number.isInteger(days)||days<0||days>3650){save.disabled=false;toast(tr('Invalid days','عدد أيام غير صالح'));return;}
+      var patch={status:statusSel.value};if(days>0)patch.trial_days=days;
       if(currentUser.role==='owner' && roleSel.value!==u.role)patch.role=roleSel.value;
-      await adminPatchUser(u.id,patch);
-      save.disabled = false;
-      modal.close();
+      try{if(await adminPatchUser(u.id,patch))modal.close();}catch(error){toast(error.message);}finally{save.disabled=false;}
     };
     openModal(tr('Edit user', 'تعديل المستخدم') + ' · ' + u.username, body, [save]);
   }
@@ -1446,7 +1447,9 @@
             ]), []);
           }],
           ['icon-edit', tr('Edit plan', 'تعديل الخطة'), function () { openPlanModal(plan); }],
-          ['icon-trash', tr('Delete is not available yet', 'الحذف غير متاح بعد'), null, true],
+          ['icon-close', u.status==='active'?tr('Suspend','تعليق'):tr('Activate','تفعيل'), function(){return adminPatchUser(u.id,{status:u.status==='active'?'suspended':'active'});},u.id===currentUser.id||u.role==='owner'||(currentUser.role!=='owner'&&u.role==='admin')],
+          ['icon-plus',tr('Extend trial','تمديد التجربة'),async function(){var value=await window.requestInput(tr('Trial days','أيام التجربة'),'10');if(value===null)return;var days=Number(value);if(!Number.isInteger(days)||days<0||days>3650){toast(tr('Invalid days','عدد أيام غير صالح'));return;}await adminPatchUser(u.id,{trial_days:days});}],
+          ['icon-trash', tr('Permanent deletion blocked to preserve account data', 'الحذف الدائم محظور لحفظ بيانات الحساب'), null, true],
         ]);
       },
     });

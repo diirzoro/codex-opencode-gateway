@@ -973,3 +973,20 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 #workspacePage .message-preview-action{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
 #workspacePage .message-preview-action small{color:var(--muted);overflow-wrap:anywhere}
 #workspacePage .conversation-name[aria-busy=true]::after{content:'…';margin-inline-start:6px;color:var(--muted)}
+
+/* Real admin tables: preserve native table layout at every viewport width. */
+#adminPage [data-admin-panel=users]{min-width:0;max-width:100%}
+#adminPage [data-admin-panel=users] .grid-scroll,.admin-service-table-wrap{max-width:100%;overflow-x:auto}
+#adminPage [data-admin-panel=users] table{display:table;table-layout:auto;min-width:1200px;width:100%}
+#adminPage [data-admin-panel=users] thead{display:table-header-group}
+#adminPage [data-admin-panel=users] tbody{display:table-row-group}
+#adminPage [data-admin-panel=users] tr,.admin-service-table tr{display:table-row}
+#adminPage [data-admin-panel=users] :is(th,td),.admin-service-table :is(th,td){display:table-cell;padding:14px 16px;word-break:normal;overflow-wrap:normal;white-space:nowrap;text-align:start;vertical-align:middle}
+#adminPage [data-admin-panel=users] tbody tr:nth-child(odd),.admin-service-table tbody tr:nth-child(odd){background:color-mix(in srgb,#3795e5 9%,var(--panel))}
+#adminPage [data-admin-panel=users] tbody tr:nth-child(even),.admin-service-table tbody tr:nth-child(even){background:var(--panel)}
+#adminPage [data-admin-panel=users] .grid-actions{display:flex;flex-wrap:nowrap;gap:6px}
+.admin-service-table{display:table;width:100%;min-width:520px;border-collapse:collapse}
+.admin-service-table label{margin:0;font:inherit;cursor:pointer}
+.admin-service-table input[type=checkbox]{display:inline-block;width:17px;height:17px;margin:0;accent-color:var(--primary);cursor:pointer}
+.admin-service-table input:disabled{cursor:not-allowed}
+.admin-service-table td:last-child{white-space:normal;min-width:180px}

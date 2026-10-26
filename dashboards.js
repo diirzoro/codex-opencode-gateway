@@ -94,19 +94,22 @@
     q('adminSmtpSecret').value='';
       const captionsAr={registration_verification:'التحقق من الحساب الجديد',password_reset:'استعادة كلمة المرور',welcome_email:'رسائل الترحيب',subscription_expiry:'انتهاء الاشتراك',low_balance:'انخفاض الرصيد',account_suspension:'تعليق الحساب',payment_receipt:'إيصالات الدفع',renewal_reminder:'تذكير التجديد',system_updates:'تحديث النظام',login_security:'تنبيه دخول جديد',password_changed:'تغيير كلمة المرور',email_changed:'تغيير البريد',payment_failed:'فشل الدفع',trial_expiring:'قرب انتهاء الفترة التجريبية',support_received:'رسالة دعم جديدة',support_unanswered:'رسائل دون رد',service_incident:'أعطال الخدمة',mail_delivery_failure:'فشل تسليم البريد',unusual_activity:'نشاط غير معتاد',backup_status:'حالة النسخ الاحتياطي'};
       const captionsEn={registration_verification:'New account verification',password_reset:'Password reset',welcome_email:'Welcome email',subscription_expiry:'Subscription expiry',low_balance:'Low balance',account_suspension:'Account suspension',payment_receipt:'Payment receipt',renewal_reminder:'Renewal reminder',system_updates:'System updates',login_security:'New sign-in alert',password_changed:'Password changed',email_changed:'Email changed',payment_failed:'Payment failed',trial_expiring:'Trial expiring',support_received:'New support message',support_unanswered:'Unanswered support',service_incident:'Service incidents',mail_delivery_failure:'Mail delivery failure',unusual_activity:'Unusual activity',backup_status:'Backup status'};
-      const list=q('adminServiceToggles');list.replaceChildren();list.className='email-service-cards';
-      const upcoming=document.createElement('details');upcoming.className='email-services-upcoming';
-      const upcomingList=document.createElement('ul');let upcomingCount=0;
+      const list=q('adminServiceToggles');list.replaceChildren();list.className='admin-service-table-wrap';
+      const table=document.createElement('table');table.className='admin-service-table';
+      const head=document.createElement('thead'),header=document.createElement('tr');
+      for(const label of [tr('Service','الخدمة'),tr('Enabled','تفعيل'),tr('Actual status','الحالة الفعلية')])header.append(textElement('th',label));
+      head.append(header);const rows=document.createElement('tbody');table.append(head,rows);list.append(table);
       for(const item of data.services||[]){
         const caption=(lang==='ar'?captionsAr:captionsEn)[item.id]||item.id;
-        if(!item.available){upcomingList.append(textElement('li',caption));upcomingCount++;continue;}
-        const card=document.createElement(item.editable?'label':'article');card.className='email-service-card';
+        const card=document.createElement('tr');
+        const toggleCell=document.createElement('td');
         const name=textElement('strong',caption),state=textElement('small');
         const describe=()=>{state.textContent=item.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل');if(item.enabled&&!e.configured)state.textContent+=' · '+tr('Email sender setup required','يلزم إعداد مرسل البريد');};describe();
-        const top=document.createElement('div');top.className='email-service-card-head';top.append(name);
-        if(item.editable){
+        const top=document.createElement('td');const label=document.createElement('label');label.textContent=caption;top.append(label);
+        const statusCell=document.createElement('td');statusCell.append(state);
+        if(item.editable&&item.available){
           const toggle=document.createElement('input');toggle.type='checkbox';toggle.setAttribute('role','switch');toggle.checked=Boolean(item.enabled);
-          toggle.id='email-service-'+item.id;toggle.setAttribute('aria-label',caption);card.htmlFor=toggle.id;top.append(toggle);
+          toggle.id='email-service-'+item.id;toggle.setAttribute('aria-label',caption);label.htmlFor=toggle.id;toggleCell.append(toggle);
           toggle.onchange=async()=>{
             if(!admin()||currentUser.id!==owner)return;
             const previous=Boolean(item.enabled),requested=toggle.checked;toggle.disabled=true;
@@ -118,9 +121,10 @@
             finally{if(admin()&&currentUser.id===owner)toggle.disabled=false;}
           };
         }
-        card.append(top,state);list.append(card);
+        else{const toggle=document.createElement('input');toggle.type='checkbox';toggle.disabled=true;toggle.setAttribute('aria-label',caption);toggleCell.append(toggle);state.textContent=tr('Not available yet — no active event integration','غير متاحة بعد — لم تُربط بأحداث الخلفية');}
+        card.append(top,toggleCell,statusCell);rows.append(card);
       }
-      if(upcomingCount){upcoming.append(textElement('summary',tr('Services awaiting implementation','خدمات تحتاج تنفيذًا')+' · '+upcomingCount),textElement('p',tr('These notifications have no active backend event integration yet.','هذه التنبيهات لم تُربط بأحداث الخلفية بعد.')),upcomingList);list.append(upcoming);}
+
     }catch(error){if(admin()&&currentUser.id===owner)notice.textContent=error.message;}
   }
   window.gatewayLoadServiceCenter=loadServiceCenter;
