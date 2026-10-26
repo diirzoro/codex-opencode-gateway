@@ -46,6 +46,11 @@ jobs:
       - name: Test GitHub customer authorization and repository policy
         run: python -m pytest -q backend/tests/test_github_boundaries.py
 
+      - name: Test TEST-only deployment migration path
+        run: |
+          python -m py_compile scripts/full_test_git_release.py
+          python -m unittest discover -s scripts -p 'test_*.py'
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
