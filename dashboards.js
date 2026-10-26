@@ -47,7 +47,7 @@
     q('adminSmtpHost').value=brevo?'https://api.brevo.com/v3/smtp/email':'smtp.resend.com';
     q('adminSmtpPort').value=brevo?'':'587';q('adminSmtpPort').disabled=brevo;
     q('adminSmtpUsername').value=brevo?'':'resend';q('adminSmtpTls').value=brevo?'https':'starttls';
-    q('adminSenderEmail').value=cfg.sender||'support@opencode-gateway.codes';
+    q('adminSenderEmail').value=cfg.sender||'no-reply@opencode-gateway.codes';
     q('adminSenderName').value=cfg.sender_name||'OpenCode Gateway';
     q('adminSmtpSecret').value='';
     q('adminSmtpSave').disabled=!['resend','brevo'].includes(provider)||emailStatus?.settings_schema_ready===false||emailStatus?.credential_storage_ready===false;

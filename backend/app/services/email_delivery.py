@@ -6,7 +6,7 @@ import httpx
 from fastapi import HTTPException
 
 BREVO_URL = 'https://api.brevo.com/v3/smtp/email'
-DEFAULT_SENDER = 'support@opencode-gateway.codes'
+DEFAULT_SENDER = 'no-reply@opencode-gateway.codes'
 DEFAULT_NAME = 'OpenCode Gateway'
 PROVIDERS = ('resend', 'brevo')
 

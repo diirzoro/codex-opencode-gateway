@@ -20,7 +20,7 @@ def save(f,**body):
 def test_key_only_defaults_switch_back_preserves_each_provider_and_resend_read_key(mail_acceptance):
     f=mail_acceptance;initialize(f)
     first=save(f,api_key='SYNTHETIC_RESEND_KEY');assert first.status_code==200,first.text
-    assert first.json()['sender']=='support@opencode-gateway.codes'
+    assert first.json()['sender']=='no-reply@opencode-gateway.codes'
     assert first.json()['sender_name']=='OpenCode Gateway'
     assert save(f,provider='brevo').status_code==422
     second=save(f,provider='brevo',api_key='SYNTHETIC_BREVO_KEY');assert second.status_code==200,second.text
@@ -49,7 +49,7 @@ def test_brevo_is_used_for_compose_verification_and_password_recovery(mail_accep
     def handler(req):
         assert str(req.url)==email_delivery.BREVO_URL
         assert req.headers['api-key']=='SYNTHETIC_BREVO_KEY'
-        body=json.loads(req.content);assert body['sender']=={'email':'support@opencode-gateway.codes','name':'OpenCode Gateway'}
+        body=json.loads(req.content);assert body['sender']=={'email':'no-reply@opencode-gateway.codes','name':'OpenCode Gateway'}
         assert 'textContent' in body and 'htmlContent' not in body
         calls.append(body);return httpx.Response(201,json={'messageId':'synthetic-accepted-id'})
     monkeypatch.setattr(email_delivery.httpx,'Client',lambda **kwargs:original(transport=httpx.MockTransport(handler),**kwargs))
