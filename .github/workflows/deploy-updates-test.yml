@@ -112,4 +112,4 @@ jobs:
       - name: Report scope
         if: always()
         run: |
-          echo "TEST only: full tracked application source, excluding server .env, protected runtime, OS/Nginx/systemd configuration, Preview, LIVE and Native engine. Database upgrades require explicit safe gate; rollback is by Git commit, not backup copies." >> "$GITHUB_STEP_SUMMARY"
+          echo "TEST only: approved source update with automatic Alembic upgrade head using the running TEST service environment, verified TEST database identity and a private pg_dump backup. No separate privileged migration gate. Existing rollback restores Git source only; database schema is not automatically reversed. LIVE, Native engine and Preview are excluded." >> "$GITHUB_STEP_SUMMARY"
