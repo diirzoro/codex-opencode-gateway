@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from urllib.parse import quote, urlencode
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from ..config import settings
 from ..models import GithubAuthState, GithubConnection, User
 from . import credentials, github_app_config
@@ -213,11 +213,16 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
     return row
 
 def disconnect(db, user):
+    # Revoking the Gateway link must also invalidate authorization states minted
+    # before disconnect. Otherwise a delayed OAuth callback could silently
+    # recreate the supposedly disconnected account link.
+    db.execute(delete(GithubAuthState).where(GithubAuthState.user_id == user.id))
     row = db.scalar(select(GithubConnection).where(GithubConnection.user_id == user.id))
-    if row is None:
-        raise HTTPException(404, "No GitHub connection to remove")
-    db.delete(row)
+    if row is not None:
+        db.delete(row)
     db.commit()
+    # Installed GitHub Apps and imported project files remain intact; fresh
+    # Gateway authorization is mandatory before remote repository operations.
 
 def list_repositories(connection: GithubConnection) -> list[dict]:
     token = installation_token(connection)
