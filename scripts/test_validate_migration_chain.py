@@ -100,6 +100,29 @@ class TestOnlyAlembicDeployTests(unittest.TestCase):
         self.assertTrue(any(args[:4]==("python-from-test","-m","alembic","-c") and args[-2:]==("upgrade","head") for args in steps))
         self.assertFalse(any("opencode-gateway-test-migrate" in " ".join(args) for args in steps))
 
+    def test_migration_failure_reports_safe_duplicate_category(self):
+        import subprocess
+        failure=subprocess.CalledProcessError(1,["python","-m","alembic"],
+            stderr=b"RuntimeError: Existing normalized account duplicates require owner reconciliation; email=2")
+        with patch.object(release,"run",side_effect=failure):
+            with patch("builtins.print") as notice:
+                with self.assertRaisesRegex(RuntimeError,"TEST Alembic upgrade failed"):
+                    release.apply_test_migrations("python",{"DATABASE_URL":"postgresql://secret"})
+        message=str(notice.call_args.args[0])
+        self.assertIn("EXISTING_ACCOUNT_DUPLICATES",message)
+        self.assertNotIn("email=2",message)
+        self.assertNotIn("secret",message)
+
+    def test_migration_unknown_error_does_not_log_sensitive_stderr(self):
+        import subprocess
+        failure=subprocess.CalledProcessError(1,["python"],stderr=b"unexpected DATABASE_URL=private-password")
+        with patch.object(release,"run",side_effect=failure):
+            with patch("builtins.print") as notice:
+                with self.assertRaises(RuntimeError):
+                    release.apply_test_migrations("python",{})
+        self.assertIn("UNCLASSIFIED_ALEMBIC_ERROR",str(notice.call_args.args[0]))
+        self.assertNotIn("private-password",str(notice.call_args.args[0]))
+
     def test_audit_does_not_connect_to_database(self):
         with patch.object(release,"files",return_value=[]),patch.object(release,"test_service_environment",side_effect=AssertionError("DB reached")),patch.object(release,"run",side_effect=AssertionError("command reached")):
             release.rollout("a"*40,"audit")
