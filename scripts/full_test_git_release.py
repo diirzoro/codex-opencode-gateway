@@ -152,20 +152,20 @@ with engine.connect() as c:
     if not revision.isascii() or not all(ch.isalnum() or ch=="_" for ch in revision):
         raise SystemExit("Invalid TEST migration revision identifier")
     print("TEST_ALEMBIC_CURRENT_REVISION:",revision)
-    row=c.execute(text("""SELECT c.relowner,
+    row=c.execute(text('''SELECT c.relowner,
           pg_get_userbyid(c.relowner) AS relowner_name,
           pg_has_role(current_user,c.relowner,'USAGE') AS is_owner_member
         FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname=current_schema() AND c.relname='email_verifications'
-        AND c.relkind IN ('r','p')""")).one_or_none()
+        AND c.relkind IN ('r','p')''')).one_or_none()
     if row is None:
         print("TEST_0025_TABLE_STATUS: MISSING")
     else:
         print("TEST_0025_TABLE_STATUS: PRESENT")
         print("TEST_0025_TABLE_OWNER_ACCESS:", "YES" if row.is_owner_member else "NO")
-        columns=set(c.execute(text("""SELECT column_name FROM information_schema.columns
+        columns=set(c.execute(text('''SELECT column_name FROM information_schema.columns
           WHERE table_schema=current_schema() AND table_name='email_verifications'
-          AND column_name IN ('verification_method','code_attempts')""")).scalars())
+          AND column_name IN ('verification_method','code_attempts')''')).scalars())
         print("TEST_0025_COLUMNS:",",".join(
             name+("=present" if name in columns else "=missing")
             for name in ("verification_method","code_attempts")))
