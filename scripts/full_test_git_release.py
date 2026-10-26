@@ -208,6 +208,28 @@ def apply_test_migrations(python, environment):
             print("TEST_MIGRATION_FAILED: PYTHON_DEPENDENCY_ERROR; verify TEST virtualenv requirements",flush=True)
         else:
             print("TEST_MIGRATION_FAILED: UNCLASSIFIED_ALEMBIC_ERROR; inspect protected TEST diagnostics without exposing credentials",flush=True)
+        # Only print whitelisted metadata. Never echo arbitrary exception text,
+        # SQL statements, emails, usernames, DB URLs, or Python traceback paths.
+        known={
+            "OperationalError","ProgrammingError","IntegrityError","DataError",
+            "InterfaceError","InternalError","DatabaseError","UndefinedTable",
+            "UndefinedColumn","DuplicateTable","DuplicateColumn","UniqueViolation",
+            "InsufficientPrivilege","InvalidTextRepresentation","NotNullViolation",
+            "ForeignKeyViolation","SyntaxError","TypeError","AttributeError",
+            "KeyError","ValueError","RuntimeError","ModuleNotFoundError",
+            "ImportError","CommandError","ResolutionError","NoSuchModuleError",
+            "AssertionError","ArgumentError","InvalidRequestError"
+        }
+        types=re.findall(r"(?m)^(?:[a-zA-Z_][\\w.]*\\.)?([A-Za-z_][A-Za-z_0-9]*):",detail)
+        last_type=next((name for name in reversed(types) if name in known),None)
+        if last_type:
+            print("TEST_MIGRATION_EXCEPTION_TYPE:",last_type,flush=True)
+        revisions=re.findall(r"(?m)Running upgrade (?:[a-zA-Z0-9_]+|) -> ([0-9]{4}_[a-zA-Z0-9_]+)",detail)
+        if revisions:
+            print("TEST_MIGRATION_LAST_STARTED_REVISION:",revisions[-1],flush=True)
+        states=re.findall(r"(?i)(?:SQLSTATE[=: ]+|sqlstate )([0-9A-Z]{5})",detail)
+        if states:
+            print("TEST_MIGRATION_SQLSTATE:",states[-1],flush=True)
         raise RuntimeError("TEST Alembic upgrade failed; no source release marked") from None
 
 def rollout(target,mode):
