@@ -4,7 +4,7 @@
 
 التحقق: اختبارDOM جديد ينفذ الدوال الفعلية ويمر بالعربية/الإنجليزية ويختبر الأسماء الآمنة وإخفاءالمعرّف والطي والفتح وزرالاستيراد؛ ناجح.17اختبارpreview-controller ناجحة،node --check وdiff --check ناجحان. فحصproject-folders-scroll القديم تعذر بسببwindowغيرمعرّف فيfixture؛ وفحصCSScascade تعذر لغيابcss-tree. لم تُحذف الاختبارات ولم يُدّع نجاحهما. لا قبولpixel أو TEST حي لهذهالدفعة، ولا نشر تلقائي.
 
-مراجعة معاينة التطبيقات: المصدر يستخدم preview/status/start ومسارWorkerالمعزول مع ملفات تشغيلNext/Vite/Angular/Nuxt/Django/Laravel وغيرها، ثمfallbackHTMLمعلن. لا يُدّعى أن كل إطار يعمل فعليًا علىTEST. لم يُغيّرBackendالمعاينة أو الحاويات أوNative أو الخدمات. CloudflareWorkerPreviews خيار نشر منفصل لمشاريع متوافقة، وليس حلًا تلقائيًا لتشغيل أيWorkspace؛ راجع https://developers.cloudflare.com/workers/previews/ وhttps://developers.cloudflare.com/workers/framework-guides/web-apps/nextjs/ . لم يُنشأ حساب أو نشر أوتكاملCloudflare. تغييرهذهالدفعةواجهةفقط،updatesفقط،master/LIVEلميمسا. يُوثقSHAبعدالرفع.
+مراجعة معاينة التطبيقات: المصدر يستخدم preview/status/start ومسارWorkerالمعزول مع ملفات تشغيلNext/Vite/Angular/Nuxt/Django/Laravel وغيرها، ثمfallbackHTMLمعلن. لا يُدّعى أن كل إطار يعمل فعليًا علىTEST. لم يُغيّرBackendالمعاينة أو الحاويات أوNative أو الخدمات. CloudflareWorkerPreviews خيار نشر منفصل لمشاريع متوافقة، وليس حلًا تلقائيًا لتشغيل أيWorkspace؛ راجع https://developers.cloudflare.com/workers/previews/ وhttps://developers.cloudflare.com/workers/framework-guides/web-apps/nextjs/ . لم يُنشأ حساب أو نشر أوتكاملCloudflare. تغييرهذهالدفعةواجهةفقط،updatesفقط،master/LIVEلميمسا. التزام الإصلاح المنشور: `0c82938edd338d81f47e61e24a26ccbe127dfb71`.
 
 ---
 
