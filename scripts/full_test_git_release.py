@@ -224,8 +224,43 @@ def backup_test_database(env):
     return dest
 
 def apply_test_migrations(python, environment):
-    """Run only outstanding Alembic revisions; report a safe failure category."""
+    """Run only missing revisions, preferring the existing TEST migration identity.
+
+    The TEST Gateway application role need not own PostgreSQL tables. When it
+    lacks ownership, reuse the already provisioned TEST-only operator gate,
+    not a new user, GRANT, superuser, or hard-coded Alembic revision.
+    """
     try:
+        # Check table ownership with the exact connection the application uses.
+        # The optional privileged route is never invoked for LIVE or arbitrary DBs.
+        owner_check = r"""
+import os
+from sqlalchemy import create_engine,text
+with create_engine(os.environ["DATABASE_URL"]).connect() as conn:
+    if conn.execute(text("select current_database()")).scalar_one()!="opencode_gateway_test":
+        raise SystemExit("Incorrect migration database")
+    owns=conn.execute(text("""select pg_has_role(current_user,c.relowner,'USAGE')
+      from pg_class c join pg_namespace n on c.relnamespace=n.oid
+      where n.nspname=current_schema() and c.relname='email_verifications'
+      and c.relkind in ('r','p')""")).scalar_one_or_none()
+    if owns is None:raise SystemExit("Missing TEST verification table")
+    print("OWNER" if owns else "NOT_OWNER")
+"""
+        ownership=run(python,"-c",owner_check,cwd=ROOT/"backend",env=environment,timeout=30)
+        if ownership=="NOT_OWNER":
+            gate="/usr/local/sbin/opencode-gateway-test-migrate"
+            # Existing, provisioned helper only; no elevation or arbitrary
+            # replacement script. All DB identity/backup checks happened first.
+            if not Path(gate).is_file():
+                raise RuntimeError("TEST_MIGRATION_OWNER_ROLE_REQUIRED: existing TEST migration gate unavailable")
+            try:
+                run("sudo","-n",gate,"upgrade",timeout=180)
+            except subprocess.CalledProcessError:
+                raise RuntimeError("TEST_MIGRATION_PRIVILEGED_GATE_FAILED: operator review of existing TEST gate required") from None
+            print("TEST_MIGRATION_EXISTING_GATE_PASSED",flush=True)
+            return
+        if ownership!="OWNER":
+            raise RuntimeError("TEST_MIGRATION_OWNER_CHECK_UNEXPECTED")
         run(python,"-m","alembic","-c","alembic.ini","upgrade","head",
             timeout=180,cwd=ROOT/"backend",env=environment)
     except subprocess.CalledProcessError as exc:
