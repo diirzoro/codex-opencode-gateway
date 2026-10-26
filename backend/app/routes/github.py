@@ -5,7 +5,7 @@ public because GitHub performs a cross-site top-level redirect (SameSite=Strict 
 not sent), so it is authenticated by the one-time server-side state instead of a cookie.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
@@ -18,7 +18,10 @@ router = APIRouter(prefix="/api/github", tags=["github"])
 
 @router.get("/status")
 def status(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    return github.connection_status(db, user)
+    # A disconnected customer must never see a cached 'connected' response
+    # when returning to the Gateway from GitHub or reloading the client UI.
+    return JSONResponse(github.connection_status(db, user),
+                        headers={"Cache-Control": "private, no-store"})
 
 @router.get("/install")
 def install(user: User = Depends(require_user), db: Session = Depends(get_db)):
@@ -57,7 +60,8 @@ def disconnect(user: User = Depends(require_user), db: Session = Depends(get_db)
 @router.get("/repositories")
 def repositories(user: User = Depends(require_user), db: Session = Depends(get_db)):
     connection = github.connection_for(db, user)
-    return github.list_repositories(connection)
+    return JSONResponse(github.list_repositories(connection),
+                        headers={"Cache-Control": "private, no-store"})
 
 @router.get("/branches")
 def branches(repository: str, user: User = Depends(require_user), db: Session = Depends(get_db)):
