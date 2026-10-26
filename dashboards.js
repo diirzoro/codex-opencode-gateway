@@ -1208,7 +1208,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
     newSessionButton.disabled=newTask.disabled=!workAccess||(!window.nativeSession?.active()&&busy)||sending||Boolean(sessionCreating)||Boolean(pendingSubmission);
     closeSessionButton.disabled=!activeSession||sending||Boolean(pendingSubmission);
-    q('stopAgent').disabled=(!busy&&!sending&&!pendingSubmission)||Boolean(cancelRequested);
+    // Unconfirmed Native receipt is still an actionable stop: even an idle
+    // runtime needs a verified session-scoped stop to unblock the saved draft.
+    q('stopAgent').disabled=(!busy&&!sending&&!pendingSubmission&&!nativeBusy)||Boolean(cancelRequested);
   }
   // Existing entitlement rendering also updates workspace buttons. Reapply the
   // session/submission guards without changing subscription or billing logic.
