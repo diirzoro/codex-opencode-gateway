@@ -140,7 +140,7 @@ def reactivation_password(data:ReactivationPassword,response:Response,user:User=
     return {'message':'Account reactivated. Sign in with your fresh password.'}
 
 @router.post('/auth/reset-password')
-def reset(data:Reset,db:Session=Depends(get_db)):
+def reset(data:Reset,response:Response,db:Session=Depends(get_db)):
     record=recovery_record(db,data.token,lock=True)
     user=db.scalar(select(User).where(User.id==record.user_id).with_for_update().execution_options(populate_existing=True))
     if not user or user.status!='active': raise HTTPException(400,'Use account reactivation to renew this archived account')
@@ -152,6 +152,9 @@ def reset(data:Reset,db:Session=Depends(get_db)):
     audit(db,user,'password.reset')
     if finishing_reactivation: audit(db,user,'account.reactivation_completed')
     db.commit()
+    from ..config import settings
+    response.delete_cookie(settings.session_cookie_name,path='/',secure=settings.cookie_secure,httponly=True,samesite='strict')
+    response.delete_cookie(reactivation_cookie_name(),path='/api',secure=settings.cookie_secure,httponly=True,samesite='strict')
     return {'message':'Password reset. Sign in with your new password.'}
 
 class Lifecycle(BaseModel):

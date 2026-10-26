@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 from ..database import get_db
 from ..models import User, AccountAudit
 from ..schemas import ProfilePatch, UserOut
@@ -44,5 +46,14 @@ def patch_profile(data: ProfilePatch, user: User = Depends(require_user), db: Se
     values = data.model_dump(exclude_unset=True)
     country_id = values.get("country_id", user.country_id); region_id = values.get("region_id", user.region_id); city_id = values.get("city_id", user.city_id)
     if any(k in values for k in ("country_id", "region_id", "city_id")): validate_locations(db, country_id, region_id, city_id)
+    if 'phone' in values:
+        from ..security.identities import normalized_phone
+        phone=normalized_phone(values['phone'],values.get('postal_code',user.postal_code))
+        if phone is None:raise HTTPException(422,'Enter a valid international phone number')
+        if db.scalar(select(User.id).where(User.phone_identity==phone,User.id!=user.id)) is not None:raise HTTPException(409,'Phone number is already registered')
+        values['phone']=phone
     for key, value in values.items(): setattr(user, key, value)
-    db.commit(); db.refresh(user); return user_payload(user)
+    try:db.commit()
+    except IntegrityError:
+        db.rollback();raise HTTPException(409,'Account identifier is already registered') from None
+    db.refresh(user); return user_payload(user)

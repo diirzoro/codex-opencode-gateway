@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 import secrets, uuid
 from ..services import social_login
 from sqlalchemy import or_, select, func
@@ -36,17 +36,24 @@ def set_session(response: Response, db: Session, user: User):
     response.delete_cookie(reactivation_cookie_name(), path="/api", secure=settings.cookie_secure, httponly=True, samesite="strict")
     response.headers["X-Session-Idle-Expires-At"] = idle_expires_at(session).isoformat()
 
-@router.post("/register", response_model=UserOut, status_code=201)
+class RegistrationOut(UserOut):
+    verification_challenge: str | None = None
+    verification_expires_in: int | None = None
+
+@router.post("/register", response_model=RegistrationOut, status_code=201)
 def register(data: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
-    email = data.email.lower()
+    email = str(data.email).strip().casefold()
     require_permanent_email(email)
     username = data.username.strip().lower() if data.username else "user_" + uuid.uuid4().hex[:24]
-    if db.scalar(select(User).where(or_(func.lower(User.username) == username, func.lower(User.email) == email))):
-        raise HTTPException(409, "Username or email already exists")
+    from ..security.identities import normalized_phone
+    phone=normalized_phone(data.phone,data.postal_code)
+    if phone is None:raise HTTPException(422,'Enter a valid international phone number')
+    if db.scalar(select(User).where(or_(func.lower(User.username)==username,func.lower(User.email)==email,User.phone_identity==phone))):
+        raise HTTPException(409,'Username, email or phone number is already registered')
     validate_locations(db, data.country_id, data.region_id, data.city_id)
     now = datetime.now(timezone.utc)
     verified_social = False
-    user = User(username=username, email=email, password_hash=hash_password(data.password), phone=data.phone.strip(), postal_code=data.postal_code.strip(), country_id=data.country_id, region_id=data.region_id, city_id=data.city_id, trial_started_at=now, trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS), last_login_at=None, status="pending_email")
+    user = User(username=username, email=email, password_hash=hash_password(data.password), phone=phone, postal_code=data.postal_code.strip(), country_id=data.country_id, region_id=data.region_id, city_id=data.city_id, trial_started_at=now, trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS), last_login_at=None, status="pending_email")
     pending = request.cookies.get(social_login.SIGNUP_COOKIE)
     if pending:
         identity = social_login.unseal(pending, 'signup')
@@ -63,24 +70,28 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
     # Mail delivery remains mandatory when the verification policy is enabled.
     if not verified_social and verification_required and not email_verification.smtp_ready(db):
         raise HTTPException(503, "Email verification is unavailable; registration cannot proceed")
+    if not verified_social and verification_required:email_verification.require_code_schema(db)
+    challenge=None
     db.add(user)
     try:
         db.flush()
         if not verified_social and verification_required:
-            token = email_verification.create_pending(db, user)
+            challenge,code=email_verification.create_code(db,user)
             db.flush()
-            email_verification.send_link(email, token, db)
+            email_verification.send_code(email,code,db)
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(409, "Username or email already exists") from None
+        raise HTTPException(409, "Username, email or phone number is already registered") from None
     except Exception:
         db.rollback()
         raise
     db.refresh(user)
     if verified_social or not verification_required:
         set_session(response, db, user)
-    return user_payload(user)
+    payload=user_payload(user)
+    if challenge:payload.update(verification_challenge=str(challenge),verification_expires_in=600)
+    return payload
 
 @router.get("/verify-email")
 def verify_email(token: str, db: Session = Depends(get_db)):
@@ -112,22 +123,52 @@ def resend_verification(data: ResendEmailVerification, db: Session = Depends(get
         raise HTTPException(401, "Invalid credentials")
     if user.status != "pending_email":
         raise HTTPException(409, "Account is not awaiting email verification")
-    if not email_verification.smtp_ready(db):
-        raise HTTPException(503, "Email verification delivery is unavailable")
-    now = datetime.now(timezone.utc)
-    recent = db.scalar(select(EmailVerification).where(
-        EmailVerification.user_id == user.id).order_by(
-        EmailVerification.created_at.desc()).limit(1))
-    if recent and recent.created_at and (now - (recent.created_at if recent.created_at.tzinfo else recent.created_at.replace(tzinfo=timezone.utc))).total_seconds() < 120:
-        raise HTTPException(429, "Try again after two minutes")
-    for record in db.scalars(select(EmailVerification).where(
-        EmailVerification.user_id == user.id, EmailVerification.used_at.is_(None))):
-        record.used_at = now
-    raw = email_verification.create_pending(db, user)
-    db.flush()
-    email_verification.send_link(user.email, raw, db)
-    db.commit()
-    return {"sent": True}
+    return resend_code_for_user(db,user)
+
+
+def resend_code_for_user(db,user):
+    email_verification.require_code_schema(db)
+    if not email_verification.smtp_ready(db):raise HTTPException(503,'Email verification delivery is unavailable')
+    now=datetime.now(timezone.utc)
+    recent=db.scalar(select(EmailVerification).where(EmailVerification.user_id==user.id).order_by(EmailVerification.created_at.desc()).limit(1))
+    if recent and recent.created_at and (now-(recent.created_at if recent.created_at.tzinfo else recent.created_at.replace(tzinfo=timezone.utc))).total_seconds()<120:
+        raise HTTPException(429,'Wait two minutes before requesting another verification code')
+    count=db.scalar(select(func.count()).select_from(EmailVerification).where(EmailVerification.user_id==user.id,EmailVerification.created_at>now-timedelta(hours=1)))
+    if count>=5:raise HTTPException(429,'Verification code request limit reached; try again later')
+    for record in db.scalars(select(EmailVerification).where(EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None))):record.used_at=now
+    challenge,code=email_verification.create_code(db,user);db.flush();email_verification.send_code(user.email,code,db);db.commit()
+    return {'sent':True,'email':user.email,'verification_challenge':str(challenge),'verification_expires_in':600}
+
+
+class VerifyEmailCode(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    challenge_id: uuid.UUID
+    code: str=Field(pattern=r'^[0-9]{6}$')
+
+class ResendVerificationCode(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    challenge_id: uuid.UUID
+
+
+def pending_code_user(db,challenge):
+    email_verification.require_code_schema(db)
+    record=db.get(EmailVerification,challenge)
+    if record is None:raise HTTPException(400,'Verification request is no longer available')
+    user=db.scalar(select(User).where(User.id==record.user_id).with_for_update().execution_options(populate_existing=True))
+    if user is None or user.status!='pending_email':raise HTTPException(400,'Verification request is no longer available')
+    return user
+
+@router.post('/verify-email-code',response_model=UserOut)
+def verify_email_code(data:VerifyEmailCode,response:Response,db:Session=Depends(get_db)):
+    user=pending_code_user(db,data.challenge_id)
+    verification,now=email_verification.verify_code(db,data.challenge_id,data.code)
+    user.status='active';user.trial_started_at=now;user.trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS);user.last_login_at=now;verification.used_at=now
+    db.commit();set_session(response,db,user)
+    return user_payload(user)
+
+@router.post('/resend-verification-code')
+def resend_email_code(data:ResendVerificationCode,db:Session=Depends(get_db)):
+    return resend_code_for_user(db,pending_code_user(db,data.challenge_id))
 
 
 @router.post("/login", response_model=UserOut)
@@ -135,6 +176,7 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
     identity = data.identity.strip().lower()
     user = db.scalar(select(User).where(or_(func.lower(User.email) == identity, func.lower(User.username) == identity)))
     if not user or not verify_password(data.password, user.password_hash): raise HTTPException(401, "Invalid credentials")
+    if user.status == "pending_email":raise HTTPException(403,"Confirm your email using the verification code; use Resend verification if needed")
     if user.status != "active": raise HTTPException(403, "Account is not active")
     response.delete_cookie('gateway_login_signup', path='/api/auth', secure=settings.cookie_secure, httponly=True, samesite='strict')
     user.last_login_at = datetime.now(timezone.utc); db.commit(); set_session(response, db, user)

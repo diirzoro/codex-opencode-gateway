@@ -8,7 +8,7 @@
   const section=(root,title)=>{const s=node('section','','manage-card');s.append(node('h2',title));root.append(s);return s};
   const input=(form,label,name,type='text',value='')=>{const l=node('label',label),i=node('input');i.name=name;i.type=type;i.value=value;l.append(i);form.append(l);return i};
   const select=(form,label,name,options)=>{const l=node('label',label),i=node('select');i.name=name;options.forEach(([v,t])=>i.add(new Option(t,v)));l.append(i);form.append(l);return i};
-  const form=(root,fields,label,run)=>{const f=node('form','','manage-form');fields(f);const b=node('button',label,'button');b.type='submit';f.append(b);f.onsubmit=async e=>{e.preventDefault();b.disabled=true;try{await run(Object.fromEntries(new FormData(f)),f);if(f.formDialog?.open)f.formDialog.close()}catch(error){let status=f.querySelector('[role=alert]');if(!status){status=node('p');status.setAttribute('role','alert');f.append(status)}status.textContent=error.message;toast(error.message)}finally{b.disabled=false}};root.append(f);window.mountFormDialog(root,f,root.querySelector('h2')?.textContent||label);if(root.closest('.recovery-box')){f.formDialog.addEventListener('close',()=>{if(window.passwordRecoveryActive)closeRecovery().catch(error=>toast(error.message));});f.openDialog();}return f};
+  const form=(root,fields,label,run)=>{const f=node('form','','manage-form');fields(f);const b=node('button',label,'button');b.type='submit';f.append(b);f.onsubmit=async e=>{e.preventDefault();b.disabled=true;try{await run(Object.fromEntries(new FormData(f)),f);if(f.formDialog?.open)f.formDialog.close()}catch(error){let status=f.querySelector('[role=alert]');if(!status){status=node('p');status.setAttribute('role','alert');f.append(status)}status.textContent=error.message;toast(error.message)}finally{b.disabled=false}};root.append(f);if(root.classList.contains('recovery-box'))return f;window.mountFormDialog(root,f,root.querySelector('h2')?.textContent||label);return f};
   const gridMap=new WeakMap();
   const gridIcon=(id,label)=>{const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),use=document.createElementNS('http://www.w3.org/2000/svg','use');svg.classList.add('ui-icon');svg.setAttribute('aria-hidden','true');use.setAttribute('href','#'+id);svg.append(use);return svg};
   const row=(root,title,detail,actions=[])=>{let grid=gridMap.get(root);if(!grid){const wrap=node('div','','manage-grid-wrap'),table=node('table','','manage-grid'),head=node('thead'),tr=node('tr');for(const label of [trLabel('Record','السجل'),trLabel('Details','التفاصيل'),trLabel('Actions','الإجراءات')])tr.append(node('th',label));head.append(tr);const tbody=node('tbody');table.append(head,tbody);wrap.append(table);root.append(wrap);grid={tbody};gridMap.set(root,grid)}const tr=node('tr','','manage-grid-row'),titleCell=node('th',title),detailCell=node('td',detail),actionCell=node('td'),actionsBox=node('div','','manage-actions');titleCell.scope='row';for(const action of actions){const label=action.textContent.trim();if(!label)continue;const iconId=/delete|disable|disconnect|remove|archive|suspend/i.test(label)?'icon-trash':/edit|change|rename/i.test(label)?'icon-edit':/view|open|details/i.test(label)?'icon-eye':/connect|authorize/i.test(label)?'icon-link':null;if(iconId){action.classList.add('grid-crud-button');action.title=label;action.setAttribute('aria-label',label);const icon=gridIcon(iconId,label);action.replaceChildren(icon)}else action.classList.add('grid-row-action');actionsBox.append(action)}actionCell.append(actionsBox);tr.append(titleCell,detailCell,actionCell);grid.tbody.append(tr)};
@@ -503,6 +503,12 @@
     billingPanel.classList.remove('active');$('#billingCancel').hidden=true;
   }
   function resetRecovery(){restoreBilling();window.passwordRecoveryActive=false;recovery.hidden=true;$('#authPage .auth-shell').hidden=false;}
+  function finishPasswordReset(form){
+    if(form?.elements?.password)form.elements.password.value='';
+    resetToken=null;
+    clearAuthenticatedState('authPage');resetRecovery();window.openAuthLogin();
+    apiMessage('loginMessage',tr('Password reset. Sign in with your username or email and new password.','تم تعيين كلمة المرور. ادخل باسم المستخدم أو البريد وكلمة المرور الجديدة.'));
+  }
   async function closeRecovery(){
     if(window.reactivationAccount)await window.logoutSession();
     resetToken=null;resetRecovery();window.openAuthLogin();window.scrollTo(0,0);
@@ -544,7 +550,7 @@
     }else{
       form(recovery,f=>{const i=input(f,tr(reset?'New password: 8+, number and symbol':'Account email',reset?'كلمة جديدة: 8 أحرف ورقم ورمز':'بريد الحساب'),reset?'password':'email',reset?'password':'email');i.required=true;if(reset){i.minLength=8;i.maxLength=128;i.autocomplete='new-password';}},tr(reset?'Reset':'Send recovery link',reset?'إعادة تعيين':'إرسال رابط الاستعادة'),async(values,f)=>{
         const data=await api(reset?'/api/auth/reset-password':'/api/auth/forgot-password',{method:'POST',body:JSON.stringify(reset?{token:resetToken,password:values.password}:values)});
-        if(reset){f.elements.password.value='';resetToken=null;resetRecovery();await window.logoutSession();toast(tr('Password reset. Sign in with your new password.','تم تعيين كلمة المرور. سجّل الدخول بكلمة المرور الجديدة.'));}
+        if(reset){finishPasswordReset(f);}
         else toast(tr('If an eligible account matches, a recovery link will be emailed. Archived customers can verify ownership to renew.','إذا وُجد حساب مؤهل، سيُرسل رابط استعادة إلى البريد. يمكن للعميل المؤرشف إثبات الملكية للتجديد.'));
       });
     }

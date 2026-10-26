@@ -61,11 +61,12 @@ const api=async(path,options={})=>{
  invalidateProviderMutation(path,options.method);return body;
 };
 function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');setTimeout(()=>$('#toast').classList.remove('show'),3500)}
-function clearAuthenticatedState(destination='authPage'){
+function clearAuthenticatedState(destination='authPage',options={}){
+ if(!options.preserveEmailVerification)window.clearEmailCodeState?.();
  authenticationRevision++;for(const controller of authenticatedRequests)controller.abort();authenticatedRequests.clear();
  window.authSession?.stop();window.workspaceRuntime?.clear();stopEvents();eventCursors.clear();
  currentUser=null;activeWorkspace=activeProject=activeSession=null;workspaceSelectionRevision++;sessionSelectionRevision++;messageRenderRevision++;
- try{for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('og-'))sessionStorage.removeItem(key);}for(const key of ['og-workspace','og-page','og-clientview'])localStorage.removeItem(key);}catch(error){}
+ try{for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('og-')&&!(options.preserveEmailVerification&&key==='og-email-verification'))sessionStorage.removeItem(key);}for(const key of ['og-workspace','og-page','og-clientview'])localStorage.removeItem(key);}catch(error){}
  for(const dialog of $$('dialog[open]'))if(dialog.id!=='authDialog')dialog.close();
  for(const root of $$('[data-management-section]')){root.providerController?.abort();root.providerView=null;}
  $('#agentFeed').messageSnapshot=null;
@@ -151,7 +152,7 @@ const value=id=>$('#'+id).value.trim();
 function textElement(tag,text,className){const el=document.createElement(tag);el.textContent=text;if(className)el.className=className;return el}
 async function fillSelect(id,path,placeholder){const el=$('#'+id);el.replaceChildren(new Option(placeholder,''));if(path)for(const row of await api(path))el.add(new Option(row.name,row.id))}
 function renderProfile(user){
- currentUser=user;updateNavigation();
+ currentUser=user;if(user.status==='active')window.clearEmailCodeState?.();updateNavigation();
  window.authSession?.start();
  const fields={profileStatus:user.status,profileTrial:user.trial_remaining_days,profileUsername:user.username,profileEmail:user.email,profilePhone:user.phone,profileLocation:[user.country,user.region,user.city,user.postal_code].filter(Boolean).join(' · '),profilePreferences:lang+' · '+(dark?'dark':'light')};
  for(const [id,text] of Object.entries(fields)){const field=document.getElementById(id);if(field)field.textContent=text??'—';}
@@ -163,7 +164,51 @@ $$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));$$('[data-start]
 $$('[data-auth-tab]').forEach(el=>el.onclick=()=>{$$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-auth-form]').forEach(f=>f.classList.toggle('active',f.dataset.authForm===el.dataset.authTab))});
 $('#registerCountry').onchange=async()=>{try{await fillSelect('registerRegion',value('registerCountry')?`/api/locations/countries/${value('registerCountry')}/regions`:null,'Optional');await fillSelect('registerCity',null,'Optional')}catch(error){toast(error.message)}};
 $('#registerRegion').onchange=async()=>{try{await fillSelect('registerCity',value('registerRegion')?`/api/locations/regions/${value('registerRegion')}/cities`:null,'Optional')}catch(error){toast(error.message)}};
-$('#registerForm').onsubmit=async event=>{event.preventDefault();if($('#registerSubmit').disabled||!event.currentTarget.reportValidity())return;if(value('registerUsername')&&value('registerUsername').length<6){apiMessage('registerMessage',t('usernameHint'),true);return}const password=$('#registerPassword').value;if(password.length<8||!/[0-9]/.test(password)||![...password].some(c=>passwordSymbols.includes(c))){apiMessage('registerMessage',t('passwordHint'),true);return}const button=$('#registerSubmit');button.disabled=true;try{const prefs={preferred_language:lang,preferred_theme:dark?'dark':'light'};const registered=await api('/api/auth/register',{method:'POST',body:JSON.stringify(registrationPayload())});if(registered.status==='pending_email'){ $('#registerPassword').value='';apiMessage('registerMessage',lang==='ar'?'تم إرسال رابط التفعيل إلى بريدك. افتح الرسالة للتحقق ثم سجل الدخول.':'Check your email for the verification link, then sign in.');return;}renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));$('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('registerMessage',error.message,true)}finally{button.disabled=false}};
+/* One-time email code UI; no password/code persisted and no automatic submission. */
+let verificationState=null,verificationTimer=null;
+function clearEmailCodeState(){
+ verificationState=null;if(verificationTimer)clearTimeout(verificationTimer);verificationTimer=null;
+ try{sessionStorage.removeItem('og-email-verification');}catch(error){}
+ const code=$('#verifyEmailCode');if(code)code.value='';$('#verifyEmailForm')?.classList.remove('active');
+}
+window.clearEmailCodeState=clearEmailCodeState;
+function showEmailCodeStep(result,email){
+ if(!result.verification_challenge||!$('#verifyEmailForm'))throw Error(lang==='ar'?'حدّث صفحة التسجيل والخلفية المتوافقة لتفعيل الرمز.':'Refresh the matching registration page and backend to use verification codes.');
+ verificationState={challenge:result.verification_challenge,email:email||result.email||'',expiresAt:result.expiresAt||Date.now()+600000,resendAt:result.resendAt||Date.now()+120000};
+ try{sessionStorage.setItem('og-email-verification',JSON.stringify(verificationState));}catch(error){}
+ $$('[data-auth-form]').forEach(form=>form.classList.remove('active'));$('#verifyEmailForm').classList.add('active');
+ $('#verifyEmailDestination').textContent=(lang==='ar'?'أرسلنا الرمز إلى ':'Code sent to ')+verificationState.email;
+ $('#verifyEmailCode').value='';apiMessage('verifyEmailMessage','');$('#verifyEmailCode').focus();
+ if(verificationTimer)clearTimeout(verificationTimer);
+ function tick(){
+  if(!verificationState)return;const seconds=Math.max(0,Math.ceil((verificationState.resendAt-Date.now())/1000));
+  $('#resendVerificationCode').disabled=seconds>0;$('#resendVerificationCode').textContent=(lang==='ar'?'إعادة إرسال الرمز':'Resend code')+(seconds?' · '+seconds+'s':'');
+  if(seconds)verificationTimer=setTimeout(tick,1000);
+ }
+ tick();
+}
+window.showEmailCodeStep=showEmailCodeStep;
+if($('#verifyEmailForm')){
+ $('#verifyEmailCode').addEventListener('input',event=>{event.target.value=event.target.value.replace(/[٠-٩]/g,c=>String(c.charCodeAt(0)-1632)).replace(/[۰-۹]/g,c=>String(c.charCodeAt(0)-1776));});
+ $('#verifyEmailForm').onsubmit=async event=>{
+  event.preventDefault();const button=$('#verifyEmailSubmit');if(!verificationState||button.disabled||!event.currentTarget.reportValidity())return;
+  const challenge=verificationState.challenge;button.disabled=true;
+  try{
+   const user=await api('/api/auth/verify-email-code',{method:'POST',body:JSON.stringify({challenge_id:challenge,code:$('#verifyEmailCode').value.trim()})});
+   if(verificationState?.challenge!==challenge)return;
+   clearEmailCodeState();renderProfile(user);toast(lang==='ar'?'تم تفعيل حسابك بنجاح.':'Your account is verified.');await openWorkspaceAfterLogin();
+  }catch(error){apiMessage('verifyEmailMessage',error.message,true);}finally{button.disabled=false;}
+ };
+ $('#resendVerificationCode').onclick=async()=>{
+  const button=$('#resendVerificationCode');if(!verificationState||button.disabled)return;button.disabled=true;
+  const state=verificationState;
+  try{const result=await api('/api/auth/resend-verification-code',{method:'POST',body:JSON.stringify({challenge_id:state.challenge})});if(verificationState===state)showEmailCodeStep(result,state.email);}
+  catch(error){apiMessage('verifyEmailMessage',error.message,true);button.disabled=false;}
+ };
+ $('#verifyEmailBack').onclick=()=>{clearEmailCodeState();window.openAuthLogin();};
+ document.addEventListener('click',event=>{if(event.target.closest('[data-auth-tab="register"]')&&verificationState)showEmailCodeStep({verification_challenge:verificationState.challenge,...verificationState},verificationState.email);});
+}
+$('#registerForm').onsubmit=async event=>{event.preventDefault();if($('#registerSubmit').disabled||!event.currentTarget.reportValidity())return;if(value('registerUsername')&&value('registerUsername').length<6){apiMessage('registerMessage',t('usernameHint'),true);return}const password=$('#registerPassword').value;if(password.length<8||!/[0-9]/.test(password)||![...password].some(c=>passwordSymbols.includes(c))){apiMessage('registerMessage',t('passwordHint'),true);return}const button=$('#registerSubmit');button.disabled=true;try{const prefs={preferred_language:lang,preferred_theme:dark?'dark':'light'};const registered=await api('/api/auth/register',{method:'POST',body:JSON.stringify(registrationPayload())});if(registered.status==='pending_email'){ $('#registerPassword').value='';showEmailCodeStep(registered,value('registerEmail'));return;}renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));$('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)}catch(error){apiMessage('registerMessage',error.message,true)}finally{button.disabled=false}};
 // Successful sign-in should land in the customer's existing workspace, not Account.
 // Never create a project automatically or reuse an unverified cross-account ID.
 async function openWorkspaceAfterLogin(){
@@ -191,7 +236,7 @@ async function openWorkspaceAfterLogin(){
  try{return await job.promise;}finally{if(openWorkspaceAfterLogin.pending===job)openWorkspaceAfterLogin.pending=null;}
 }
 $('#loginForm').onsubmit=async event=>{event.preventDefault();if($('#loginSubmit').disabled||!event.currentTarget.reportValidity())return;const button=$('#loginSubmit');button.disabled=true;try{renderProfile(await api('/api/auth/login',{method:'POST',body:JSON.stringify({identity:value('loginIdentity'),password:$('#loginPassword').value})}));$('#loginPassword').value='';try{if($('#rememberIdentity').checked)localStorage.setItem('og-login-identity',value('loginIdentity'));else localStorage.removeItem('og-login-identity');}catch(error){}await openWorkspaceAfterLogin();}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
-$('#resendEmailVerification').onclick=async()=>{const identity=value('loginIdentity').trim();const password=$('#loginPassword').value;if(!identity||!password){apiMessage('loginMessage',lang==='ar'?'أدخل البريد أو اسم المستخدم وكلمة المرور لإعادة إرسال التفعيل.':'Enter your email or username and password to resend verification.',true);return}const button=$('#resendEmailVerification');button.disabled=true;try{await api('/api/auth/resend-verification',{method:'POST',body:JSON.stringify({identity,password})});apiMessage('loginMessage',lang==='ar'?'أُرسلت رسالة تفعيل جديدة. افتح بريدك للتحقق.':'A new verification email was sent. Please check your inbox.')}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
+$('#resendEmailVerification').onclick=async()=>{const identity=value('loginIdentity').trim();const password=$('#loginPassword').value;if(!identity||!password){apiMessage('loginMessage',lang==='ar'?'أدخل البريد أو اسم المستخدم وكلمة المرور لإعادة إرسال التفعيل.':'Enter your email or username and password to resend verification.',true);return}const button=$('#resendEmailVerification');button.disabled=true;try{const result=await api('/api/auth/resend-verification',{method:'POST',body:JSON.stringify({identity,password})});$('#loginPassword').value='';showEmailCodeStep(result,result.email||identity)}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
 $('#logoutButton').onclick=()=>window.logoutSession().catch(error=>toast(error.message));
 
 $$('[data-preview-action]').forEach(el=>{el.disabled=true;el.title='Not available yet'});
@@ -477,7 +522,7 @@ const authReady=(async()=>{
  catch(error){
   if(error.status===401){
    let hadWorkspace=false;try{hadWorkspace=Boolean(localStorage.getItem('og-workspace'));}catch(ignored){}
-   window.authRestoreExpired=hadWorkspace||error.message!=='Authentication required';clearAuthenticatedState('landing');
+   window.authRestoreExpired=hadWorkspace||error.message!=='Authentication required';clearAuthenticatedState('landing',{preserveEmailVerification:true});
    if(error.message==='Account reactivation required'){
     try{
      window.reactivationAccount=await api('/api/auth/reactivation',{allowAnonymous:true});window.passwordRecoveryActive=true;
@@ -679,3 +724,18 @@ function registrationPayload(){
  return {email:value('registerEmail'),password:$('#registerPassword').value,phone:number.startsWith('+')?number:value('registerPostal')+number,postal_code:value('registerPostal'),country_id:value('registerCountry')?Number(value('registerCountry')):null,region_id:value('registerRegion')?Number(value('registerRegion')):null,city_id:value('registerCity')?Number(value('registerCity')):null,...(value('registerUsername')?{username:value('registerUsername')}:{})};
 }
 applyPrefs();
+
+Object.assign(copy.en,{registrationUsername:'Username',emailCodeTitle:'Verify your email',emailCodeHint:'Enter the 6-digit code from your email. It expires in 10 minutes.',emailCodeLabel:'Verification code',emailCodeConfirm:'Verify and continue',emailCodeResend:'Resend code',emailCodeLogin:'Back to sign in'});
+Object.assign(copy.ar,{registrationUsername:'اسم المستخدم',emailCodeTitle:'تفعيل البريد الإلكتروني',emailCodeHint:'أدخل رمز التفعيل المكوّن من 6 أرقام. تنتهي صلاحيته خلال 10 دقائق.',emailCodeLabel:'رمز التفعيل',emailCodeConfirm:'تفعيل ومتابعة',emailCodeResend:'إعادة إرسال الرمز',emailCodeLogin:'رجوع للدخول'});
+navigationReady.then(()=>{
+ if(new URLSearchParams(location.hash.slice(1)).get('email')==='verified'){
+  history.replaceState(null,'',location.pathname+location.search);
+  if(!currentUser){window.openAuthLogin();apiMessage('loginMessage',lang==='ar'?'تم تفعيل بريدك. ادخل باسم المستخدم أو البريد وكلمة المرور.':'Email verified. Sign in with your username or email and password.');}
+  else toast(lang==='ar'?'تم تفعيل البريد الإلكتروني.':'Email verified.');
+  return;
+ }
+ if(currentUser)return;
+ try{const state=JSON.parse(sessionStorage.getItem('og-email-verification')||'null');if(state?.challenge&&state.expiresAt>Date.now()){
+  showPage('authPage');showEmailCodeStep({verification_challenge:state.challenge,...state},state.email);
+ }else clearEmailCodeState();}catch(error){clearEmailCodeState();}
+}).catch(()=>{});

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Integer, func, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..database import Base
 
@@ -30,6 +30,9 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    username_identity: Mapped[str | None] = mapped_column(String(50), nullable=True, unique=True, index=True)
+    email_identity: Mapped[str | None] = mapped_column(String(254), nullable=True, unique=True, index=True)
+    phone_identity: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     github_subject: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
     google_subject: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
@@ -73,4 +76,13 @@ class EmailVerification(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_method: Mapped[str] = mapped_column(String(8), default="link", server_default="link")
+    code_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+@event.listens_for(User,'before_insert')
+@event.listens_for(User,'before_update')
+def synchronize_account_identities(mapper,connection,user):
+    from ..security.identities import account_keys
+    user.username_identity,user.email_identity,user.phone_identity=account_keys(user.username,user.email,user.phone,user.postal_code)
