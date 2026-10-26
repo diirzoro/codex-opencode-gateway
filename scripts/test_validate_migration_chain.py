@@ -94,8 +94,10 @@ class TestOnlyAlembicDeployTests(unittest.TestCase):
         def command(*args,**kwargs):
             steps.append(args)
             if args[:2]==("systemctl","show"):return "4242"
+            if len(args)>=3 and args[1:3]==("-c",release.TEST_SCHEMA_CHECK):return ""
+            if len(args)>=2 and args[1]=="-c":return "OWNER"
             return ""
-        with patch.object(release,"files",return_value=[]),patch.object(release,"run",side_effect=command),patch.object(release,"service",return_value=True),patch.object(release,"active_revision",return_value="a"*40),patch.object(release,"test_service_environment",return_value={"DATABASE_URL":"synthetic"}),patch.object(release,"test_backend_python",return_value="python-from-test"),patch.object(release,"verified_test_database"),patch.object(release,"backup_test_database"),patch.object(release,"replace"),patch.object(release.time,"sleep"):
+        with patch.object(release,"files",return_value=[]),patch.object(release,"run",side_effect=command),patch.object(release,"service",return_value=True),patch.object(release,"active_revision",return_value="a"*40),patch.object(release,"test_service_environment",return_value={"DATABASE_URL":"synthetic"}),patch.object(release,"test_backend_python",return_value="python-from-test"),patch.object(release,"verified_test_database"),patch.object(release,"inspect_test_schema"),patch.object(release,"backup_test_database"),patch.object(release,"replace"),patch.object(release.time,"sleep"):
             release.rollout("b"*40,"deploy")
         self.assertTrue(any(args[:4]==("python-from-test","-m","alembic","-c") and args[-2:]==("upgrade","head") for args in steps))
         self.assertFalse(any("opencode-gateway-test-migrate" in " ".join(args) for args in steps))
