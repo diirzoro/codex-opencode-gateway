@@ -614,7 +614,7 @@ def update_email_service(service_id:str, data:EmailServiceToggle,
 def service_integrations(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     import os
     from ..services import email_verification
-    from ..services import admin_email_config
+    from ..services import admin_email_config, credentials
     saved=admin_email_config.read(db)
     mail_ready=email_verification.smtp_ready(db)
     required=email_verification.required_for_registration(db)
@@ -623,6 +623,7 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
     return {"email":{"provider":provider,"configured":mail_ready,"sending_ready":mail_ready,
           "sender":mail.get("smtp_from",os.getenv("SMTP_FROM") or "support@opencode-gateway.codes"),
           "verification_required":required,"settings_schema_ready":admin_email_config.schema_ready(db),
+          "credential_storage_ready":credentials.available(),
           "receiving_configured":bool(mail.get("inbox_api_key")),"delivery_verified":False,
           "credentials_configured":bool(mail.get("smtp_password") or os.getenv("SMTP_PASSWORD")),
           "smtp_host":mail.get("smtp_host","smtp.resend.com"),
@@ -631,7 +632,7 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
        "services":[
          {"id":"registration_verification","enabled":required,"available":True,"editable":True,
           "reason":"" if mail_ready else "Resend API key missing"},
-         {"id":"password_reset","enabled":False,"available":False,"reason":"Password reset endpoint not implemented"},
+         {"id":"password_reset","enabled":mail_ready,"available":True,"editable":False,"reason":"Uses the configured email sender"},
          *({"id":i,"enabled":False,"available":False,"reason":"Not implemented"} for i in
            ("welcome_email","subscription_expiry","low_balance","account_suspension",
             "payment_receipt","renewal_reminder","system_updates","login_security",

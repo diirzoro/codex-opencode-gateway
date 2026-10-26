@@ -625,26 +625,44 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
 <div class="field-grid">
 <label class="field"><span>نوع الخدمة · Category</span><select disabled><option>Transactional Email · البريد الإلكتروني</option><option>Payments · المدفوعات — لاحقًا</option><option>SMS / Push — غير متاحة بعد</option></select></label>
 <label class="field"><span>مزوّد البريد · Provider</span><select id="adminEmailProvider"><option value="resend">Resend SMTP</option><option value="smtp">Generic SMTP</option></select></label>
-<label class="field"><span>اسم المرسل · Sender name</span><input id="adminSenderName" maxlength="120" autocomplete="off" placeholder="OpenCode Gateway"></label>
+<label class="field"><span>اسم المرسل · Sender name</span><input id="adminSenderName" disabled title="Sender display name editing is not supported yet" maxlength="120" autocomplete="off" placeholder="OpenCode Gateway"></label>
 <label class="field"><span>بريد المرسل · Sender email</span><input id="adminSenderEmail" type="email" maxlength="254" autocomplete="off" placeholder="verify@opencode-gateway.codes"></label>
-<label class="field"><span>SMTP host · الخادم</span><input id="adminSmtpHost" maxlength="253" autocomplete="off" placeholder="smtp.resend.com"></label>
-<label class="field"><span>Port · المنفذ</span><input id="adminSmtpPort" type="number" min="1" max="65535" value="587"></label>
-<label class="field"><span>التشفير · TLS</span><select id="adminSmtpTls"><option value="starttls">STARTTLS (587)</option><option value="implicit">Implicit TLS (465) — requires integration</option></select></label>
-<label class="field"><span>اسم المستخدم · SMTP username</span><input id="adminSmtpUsername" maxlength="254" autocomplete="off" placeholder="resend"></label>
-<label class="field"><span>API Key / SMTP Password — أدخله لاحقًا</span><input id="adminSmtpSecret" type="password" autocomplete="new-password" maxlength="4096" placeholder="فارغ حتى ربط المزوّد" value=""></label>
+<label class="field"><span>SMTP host · الخادم</span><input id="adminSmtpHost" readonly maxlength="253" autocomplete="off" placeholder="smtp.resend.com"></label>
+<label class="field"><span>Port · المنفذ</span><input id="adminSmtpPort" readonly type="number" min="1" max="65535" value="587"></label>
+<label class="field"><span>التشفير · TLS</span><select id="adminSmtpTls" disabled><option value="starttls">STARTTLS (587)</option><option value="implicit">Implicit TLS (465) — requires integration</option></select></label>
+<label class="field"><span>اسم المستخدم · SMTP username</span><input id="adminSmtpUsername" readonly maxlength="254" autocomplete="off" placeholder="resend"></label>
+<label class="field"><span>Resend API Key · مفتاح الإرسال</span><input id="adminSmtpSecret" type="password" autocomplete="new-password" maxlength="4096" placeholder="أدخل المفتاح للحفظ الآمن" value=""></label>
 <label class="field"><span>بريد اختبار الإرسال · Test recipient</span><input id="adminSmtpTestRecipient" type="email" maxlength="254" autocomplete="off" placeholder="admin-owned@example.com"></label>
 </div>
 <p class="lead">أدخل مفتاح Resend عندما تصبح جاهزًا للتفعيل. يُحفظ مشفرًا ولا يعرضه الخادم مرة أخرى. يتطلب تفعيل قاعدة البيانات والمفتاح الرئيسي للتشفير على TEST.</p>
-<button type="button" class="button" id="adminSmtpSave">حفظ وتفعيل Resend · Save &amp; Activate</button>
-<button type="button" class="button ghost" id="adminSmtpTest" disabled title="Live email test awaits TEST deployment acceptance">اختبار الإرسال · Test (coming after deployment)</button>
+<button type="button" class="button" id="adminSmtpSave">حفظ إعدادات Resend · Save settings</button>
+<button type="button" class="button ghost" id="adminSmtpTest" disabled>إرسال رسالة اختبار · Send test email</button>
 </section>
 <section id="adminInboxTab" hidden>
-<h2 data-i18n="adminMailMessagesTitle">Email Messages</h2>
-<div class="row-between" style="gap:12px;flex-wrap:wrap;margin:12px 0">
-<div style="display:flex;gap:8px"><button type="button" class="button ghost small" id="adminMailReceived" data-i18n="adminMailReceived">Received</button><button type="button" class="button ghost small" id="adminMailSent" data-i18n="adminMailSent">Sent</button><button type="button" class="button ghost small" id="adminMailDrafts">مسودات · Drafts</button></div>
-<button type="button" class="button ghost small" id="adminInboxRead" data-i18n="adminMailRefresh">Refresh messages</button></div>
-<button type="button" class="button small" id="adminMailComposeOpen">+ رسالة جديدة · Compose</button>
-<div id="adminMailCompose" hidden class="manage-card" style="padding:16px;margin:12px 0;max-width:720px">
+<div class="mailbox">
+<aside class="mailbox-folders" aria-label="Mail folders">
+  <h2 data-i18n="adminMailMessagesTitle">Email Messages</h2>
+  <button type="button" class="button" id="adminMailComposeOpen">+ رسالة جديدة · Compose</button>
+  <nav aria-label="Mail folders">
+    <button type="button" id="adminMailReceived" data-i18n="adminMailReceived" aria-current="page">Received</button>
+    <button type="button" id="adminMailSent" data-i18n="adminMailSent">Sent</button>
+    <button type="button" id="adminMailDrafts">مسودات · Drafts</button>
+  </nav>
+  <p class="mailbox-address" dir="ltr">support@opencode-gateway.codes</p>
+</aside>
+<div class="mailbox-main">
+  <header class="mailbox-toolbar">
+    <label class="mailbox-search"><span class="sr-only">بحث في الرسائل المحملة · Search loaded messages</span><input id="adminMailSearch" type="search" placeholder="بحث في الرسائل · Search mail" aria-label="Search loaded messages"></label>
+    <button type="button" class="button ghost small" id="adminInboxRead" data-i18n="adminMailRefresh">Refresh messages</button>
+  </header>
+  <p id="adminInboxStatus" role="status"></p>
+  <div class="mailbox-columns">
+    <div id="adminInboxMessages" class="mailbox-list" aria-live="polite"></div>
+    <section id="adminMailReader" class="mailbox-reader" aria-label="Message reader"><p>اختر رسالة لقراءتها · Select a message to read</p></section>
+  </div>
+</div>
+</div>
+<div id="adminMailCompose" hidden class="manage-card mailbox-compose">
   <h3>رسالة جديدة · New message</h3>
   <label class="field"><span>إلى · To</span><input type="email" id="adminComposeTo" maxlength="254" autocomplete="off" required></label>
   <label class="field"><span>الموضوع · Subject</span><input type="text" id="adminComposeSubject" maxlength="300" required></label>
@@ -653,7 +671,7 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="button" id="adminComposeSend">إرسال · Send</button><button type="button" class="button ghost" id="adminComposeSaveDraft">حفظ مسودة · Save draft</button><button type="button" class="button ghost" id="adminComposeCancel">إلغاء · Cancel</button></div>
   <p id="adminComposeStatus" role="status"></p>
 </div>
-<p id="adminInboxStatus" role="status"></p><div id="adminInboxMessages" aria-live="polite"></div>
+
 <details style="margin-top:18px"><summary data-i18n="adminMailConnection">Connection diagnostics</summary>
 <p class="lead" data-i18n="adminMailConnectionHelp">Messages are retrieved from Resend, not fabricated.</p>
 <label class="field"><span data-i18n="adminMailReadKey">Read-capable Resend API key</span><input id="adminInboxApiKey" type="password" autocomplete="new-password"></label>
@@ -816,12 +834,37 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   #workspacePage .workspace-session-picker .session{display:block;width:100%;text-align:start}
   #workspacePage .workspace-session-picker .new-session{padding:6px;margin:6px 0;font-size:12px}
   #workspacePage .agent-column{position:relative;min-width:0}
-  </style>
+
+/* Scoped mailbox: native Resend data, separate folder/list/reader surfaces. */
+#adminInboxTab .mailbox{display:grid;grid-template-columns:190px minmax(0,1fr);border:1px solid var(--line);border-radius:18px;overflow:hidden;min-height:540px;background:var(--panel)}
+#adminInboxTab .mailbox-folders{padding:20px 12px;background:var(--panel2);border-inline-end:1px solid var(--line)}
+#adminInboxTab .mailbox-folders h2{font-size:16px;margin:0 8px 20px}#adminInboxTab .mailbox-folders nav{display:grid;gap:4px;margin-top:20px}
+#adminInboxTab .mailbox-folders nav button{border:0;background:transparent;color:inherit;text-align:start;border-radius:10px;padding:11px 14px;font:inherit;cursor:pointer}
+#adminInboxTab .mailbox-folders nav button[aria-current=page]{background:var(--soft);font-weight:700;color:var(--text,#182d49)}
+#adminInboxTab .mailbox-address{font-size:11px;overflow-wrap:anywhere;margin:24px 8px;opacity:.7}
+#adminInboxTab .mailbox-main{min-width:0}#adminInboxTab .mailbox-toolbar{display:flex;gap:12px;align-items:center;padding:14px;border-bottom:1px solid var(--line)}
+#adminInboxTab .mailbox-search{flex:1;min-width:0}#adminMailSearch{width:100%;border-radius:12px;padding:11px 14px}
+#adminInboxStatus{margin:0;padding:10px 16px;font-size:13px;min-height:38px}#adminInboxTab .mailbox-columns{display:grid;grid-template-columns:minmax(210px,.85fr) minmax(0,1.15fr)}
+#adminInboxTab .mailbox-list{min-width:0;max-height:620px;overflow:auto;border-inline-end:1px solid var(--line)}
+#adminInboxTab .mailbox-row{display:grid;width:100%;gap:6px;text-align:start;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:16px;background:transparent;color:inherit;cursor:pointer;font:inherit}
+#adminInboxTab .mailbox-row[hidden]{display:none}
+#adminInboxTab .mailbox-row:hover,#adminInboxTab .mailbox-row[aria-pressed=true]{background:var(--soft)}#adminInboxTab .mailbox-row strong{font-size:14px;line-height:1.5;overflow-wrap:anywhere}
+#adminInboxTab .mailbox-row small{font-size:12px;opacity:.75;overflow-wrap:anywhere}#adminInboxTab .mailbox-row:focus-visible{outline:2px solid var(--primary);outline-offset:-3px}
+#adminInboxTab .mailbox-reader{min-width:0;padding:22px;max-height:620px;overflow:auto}#adminInboxTab .mailbox-reader h3{margin:14px 0;font-size:20px;overflow-wrap:anywhere}
+#adminInboxTab .support-mail-text{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:14px;line-height:1.85;border-top:1px solid var(--line);padding-top:20px;unicode-bidi:plaintext}
+#adminInboxTab .mailbox-empty{padding:40px 20px;text-align:center;line-height:1.8;opacity:.75}
+#adminInboxTab .mailbox-compose{position:fixed;inset-inline-end:24px;bottom:16px;width:min(560px,calc(100vw - 32px));max-height:85dvh;overflow:auto;z-index:90;padding:20px;border:1px solid var(--line);box-shadow:0 20px 70px #10203930;background:var(--panel);border-radius:18px}
+#adminInboxTab .mailbox-compose[hidden]{display:none}#adminInboxTab .mailbox-compose textarea{resize:vertical;min-height:150px;line-height:1.7}
+@media(max-width:1050px){#adminInboxTab .mailbox{grid-template-columns:155px minmax(0,1fr)}#adminInboxTab .mailbox-columns{grid-template-columns:1fr}#adminInboxTab .mailbox-reader{border-top:1px solid var(--line)}}
+@media(max-width:650px){#adminInboxTab .mailbox{grid-template-columns:1fr;min-height:400px}#adminInboxTab .mailbox-folders{padding:14px;border-inline-end:0}#adminInboxTab .mailbox-folders h2,#adminInboxTab .mailbox-address{display:none}#adminInboxTab .mailbox-folders nav{display:flex;margin-top:12px}#adminInboxTab .mailbox-folders nav button{flex:1;text-align:center;padding:9px}#adminInboxTab .mailbox-reader{display:none}#adminInboxTab .mailbox.has-selection .mailbox-reader{display:block}#adminInboxTab .mailbox.has-selection .mailbox-list{display:none}#adminInboxTab .mailbox-toolbar{flex-wrap:wrap}#adminInboxTab .mailbox-search{flex-basis:100%}}
+.mailbox-compose input[type=email]{direction:ltr;text-align:start}
+.mailbox-search .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+</style>
   <script defer src="app.js?v=20261026-repository-only-github"></script>
   <script defer src="enhancements.js?v=20261026-platform-app-setup"></script>
   <script type="application/json" id="managementAsset" data-src="management.js?v=20261026-native-github-settings"></script>
   <script defer src="runtime-client.js?v=20261008-phase2"></script>
-  <script defer src="dashboards.js?v=20261025-github-panel-loader"></script>
+  <script defer src="dashboards.js?v=20261026-mailbox"></script>
   <script>
   // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
   document.addEventListener('DOMContentLoaded',function(){

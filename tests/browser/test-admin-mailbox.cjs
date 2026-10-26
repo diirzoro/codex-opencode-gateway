@@ -1,0 +1,30 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict'),{JSDOM}=require('jsdom');
+const source=fs.readFileSync('dashboards.js','utf8'),html=fs.readFileSync('index.html','utf8');
+const start=source.indexOf('  let serviceOwner=null;'),end=source.indexOf('  async function loadHome()',start);
+function fixture(){
+ const dom=new JSDOM(html,{url:'https://test.example/'}),document=dom.window.document,calls=[];
+ const q=id=>document.getElementById(id),c={document,window:dom.window,q,lang:'en',currentUser:{id:'admin-a',role:'admin'},tr:en=>en,toast(){},
+ textElement(tag,value='',cls=''){const n=document.createElement(tag);n.textContent=value;n.className=cls;return n;}};
+ c.admin=()=>['admin','owner'].includes(c.currentUser?.role);
+ c.api=async(path,options)=>{calls.push({path,options});if(path==='/api/admin/service-integrations')return {email:{configured:true,credentials_configured:true,credential_storage_ready:true,provider:'resend',settings_schema_ready:true,sender:'support@opencode-gateway.codes',smtp_host:'smtp.resend.com'},services:[]};
+ if(path.endsWith('/send-email'))return {sent:true};if(path.endsWith('/drafts'))return {items:[]};
+ if(/\/support-inbox$/.test(path))return {configured:true,items:[{id:'a',subject:'Synthetic question',from:'test@example.com',created_at:'2026-10-26'},{id:'b',subject:'Other message',from:'other@example.com'}]};
+ if(path.endsWith('/support-inbox/a'))return {text:'<img src=x onerror=alert(1)>\nSynthetic body'};
+ if(path.endsWith('/support-inbox/b'))return {text:'Second body'};
+ if(path.endsWith('/sent-emails'))return {configured:true,items:[]};throw Error('Unexpected '+path);};
+ vm.createContext(c);vm.runInContext(source.slice(start,end),c);
+ return {dom,document,q,c,calls,close(){dom.window.close()}};
+}
+(async()=>{
+ let count=0;async function test(name,run){await run();count++;console.log('PASS '+name)}
+ await test('actual mailbox has folder navigation, search, message list, reader and compose',async()=>{const f=fixture();for(const id of ['adminMailSearch','adminMailReader','adminMailCompose','adminMailDrafts'])assert.ok(f.q(id));await f.q('adminInboxRead').onclick();assert.equal(f.q('adminInboxMessages').querySelectorAll('.mailbox-row').length,2);assert.equal(f.q('adminMailReceived').getAttribute('aria-current'),'page');f.close()});
+ await test('opening message uses existing read API and renders untrusted content as plain text',async()=>{const f=fixture();await f.q('adminInboxRead').onclick();await f.q('adminInboxMessages').querySelector('button').onclick();assert.match(f.q('adminMailReader').textContent,/Synthetic body/);assert.equal(f.q('adminMailReader').querySelector('img'),null);assert.ok(f.calls.some(r=>r.path.endsWith('/support-inbox/a')));f.close()});
+ await test('search filters loaded rows without extra API calls',async()=>{const f=fixture();await f.q('adminInboxRead').onclick();const before=f.calls.length;f.q('adminMailSearch').value='question';f.q('adminMailSearch').oninput();const rows=[...f.q('adminInboxMessages').querySelectorAll('button')];assert.equal(rows[0].hidden,false);assert.equal(rows[1].hidden,true);assert.equal(f.calls.length,before);assert.ok(html.includes('.mailbox-row[hidden]{display:none}'));f.close()});
+ await test('test button sends exactly one synthetic message through existing authorized compose API',async()=>{const f=fixture();await f.c.window.gatewayLoadServiceCenter();assert.equal(f.q('adminSmtpTest').disabled,false);f.q('adminSmtpTestRecipient').value='owned@example.com';await f.q('adminSmtpTest').onclick();const sent=f.calls.filter(r=>r.path.endsWith('/send-email'));assert.equal(sent.length,1);assert.equal(JSON.parse(sent[0].options.body).to,'owned@example.com');assert.match(f.q('adminServiceNotice').textContent,/accepted/);assert.match(f.q('adminServiceNotice').textContent,/confirm delivery/);f.close()});
+ await test('unconfigured Resend blocks tests and reports missing key rather than claiming connected',async()=>{const f=fixture();f.c.api=async()=>({email:{configured:false,provider:'resend',credential_storage_ready:true,settings_schema_ready:true,credentials_configured:false},services:[]});await f.c.window.gatewayLoadServiceCenter();assert.equal(f.q('adminSmtpTest').disabled,true);assert.match(f.q('adminServiceNotice').textContent,/key is missing/);f.close()});
+ await test('switching provider no longer references an undefined e variable',async()=>{const f=fixture();f.q('adminEmailProvider').value='resend';f.q('adminEmailProvider').onchange();assert.equal(f.q('adminSmtpPort').value,'587');f.close()});
+ await test('late message list and reader responses are discarded after account switching',async()=>{const f=fixture();let resolve;f.c.api=()=>new Promise(r=>resolve=r);const pending=f.q('adminInboxRead').onclick();f.c.currentUser={id:'customer-b',role:'customer'};resolve({configured:true,items:[{id:'x',subject:'PRIVATE_MARKER'}]});await pending;assert.ok(!f.q('adminInboxMessages').textContent.includes('PRIVATE_MARKER'));f.close()});
+ await test('cancel keeps unsent draft and Compose resumes it',async()=>{const f=fixture();f.q('adminMailComposeOpen').onclick();f.q('adminComposeBody').value='Unsent synthetic draft';f.q('adminComposeCancel').onclick();assert.equal(f.q('adminMailCompose').hidden,true);f.q('adminMailComposeOpen').onclick();assert.equal(f.q('adminComposeBody').value,'Unsent synthetic draft');assert.equal(f.q('adminMailCompose').hidden,false);f.close()});
+ await test('overlapping reader requests keep the latest selected message',async()=>{const f=fixture();await f.q('adminInboxRead').onclick();const waiting=[];f.c.api=()=>new Promise(r=>waiting.push(r));const rows=f.q('adminInboxMessages').querySelectorAll('button'),a=rows[0].onclick(),b=rows[1].onclick();waiting[1]({text:'LATEST_BODY'});await b;waiting[0]({text:'STALE_BODY'});await a;assert.match(f.q('adminMailReader').textContent,/LATEST_BODY/);assert.ok(!f.q('adminMailReader').textContent.includes('STALE_BODY'));f.close()});
+ console.log(count+' mailbox DOM checks passed');
+})().catch(error=>{console.error(error);process.exitCode=1});

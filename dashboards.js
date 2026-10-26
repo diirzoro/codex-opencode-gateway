@@ -39,19 +39,44 @@
   window.openClientView=name=>['ai','github'].includes(name)?openConnections(name==='ai'?'providers':'github'):oldClientView(name);
   q('clientNav').querySelectorAll('[data-client-view]').forEach(button=>button.onclick=()=>window.openClientView(button.dataset.clientView));
   q('adminNav').querySelectorAll('[data-admin-view]').forEach(button=>button.onclick=()=>window.openAdminView(button.dataset.adminView));
+  let serviceOwner=null;
   async function loadServiceCenter(){
     if(!admin())return;
     const notice=q('adminServiceNotice');if(!notice)return;
+    const owner=currentUser.id;
+    if(serviceOwner!==owner){
+      serviceOwner=owner;
+      for(const id of ['adminInboxMessages','adminMailReader'])q(id)?.replaceChildren();
+      for(const id of ['adminComposeTo','adminComposeSubject','adminComposeBody','adminSmtpSecret','adminInboxApiKey'])if(q(id))q(id).value='';
+      if(q('adminMailCompose'))q('adminMailCompose').hidden=true;
+    }
     try{
-      const data=await api('/api/admin/service-integrations'),e=data.email||{};
+      const data=await api('/api/admin/service-integrations');if(!admin()||currentUser.id!==owner)return;const e=data.email||{};
       notice.textContent=e.configured?tr('Email configured · delivery not yet tested','البريد مهيّأ · لم يُختبر التسليم بعد'):tr('Email delivery is not configured','إرسال البريد غير مهيّأ');if(e.settings_schema_ready===false)notice.textContent+=' · '+tr('Apply TEST migration 0021 before saving settings','يلزم تطبيق ترحيل TEST رقم 0021 قبل حفظ الإعدادات');
       q('adminEmailProvider').value=e.provider==='resend'?'resend':'smtp';
-      q('adminSmtpSave').disabled=e.provider!=='resend'||e.settings_schema_ready===false;
+      q('adminSmtpSave').disabled=e.provider!=='resend'||e.settings_schema_ready===false||e.credential_storage_ready===false;
+      q('adminSmtpTest').disabled=!e.configured;
+      q('adminSmtpTest').title=e.configured?tr('Sends one real test email to the specified recipient','يرسل رسالة اختبار حقيقية واحدة إلى العنوان المحدد'):tr('Save a Resend key and sender first','احفظ مفتاح Resend والمرسل أولاً');
+      if(!e.credentials_configured)notice.textContent+=' · '+tr('Resend API key is missing. Verification messages cannot be sent.','مفتاح Resend غير موجود. لا يمكن إرسال رسائل التفعيل.');
+      if(e.credential_storage_ready===false)notice.textContent+=' · '+tr('Gateway credential encryption is not configured.','تشفير اعتمادات Gateway غير مُعدّ.');
       q('adminSmtpHost').value=e.smtp_host||'';
       q('adminSmtpPort').value=String(e.smtp_port||587);
       q('adminSmtpUsername').value=e.smtp_username||'';
       q('adminSenderEmail').value=e.sender||'';
-      q('adminSmtpSecret').value='';
+      q('adminSmtpTest').onclick=async()=>{
+      const button=q('adminSmtpTest'),field=q('adminSmtpTestRecipient'),status=q('adminServiceNotice');
+      if(button.disabled||!admin())return;
+      const to=field.value.trim();if(!to||!field.reportValidity()){status.textContent=tr('Enter a valid test recipient you control.','أدخل بريد اختبار صحيحًا تملكه.');return;}
+      const owner=currentUser.id;button.disabled=true;status.textContent=tr('Sending one test email…','جارٍ إرسال رسالة اختبار واحدة…');
+      try{
+        const result=await api('/api/admin/service-integrations/send-email',{method:'POST',body:JSON.stringify({to,subject:'OpenCode Gateway TEST · email delivery test',body:'This is a test email requested from the TEST administration panel. SMTP acceptance does not prove inbox delivery. No action is required.'})});
+        if(!admin()||currentUser.id!==owner)return;
+        if(!result.sent)throw Error(tr('Sending was not confirmed.','لم يُؤكد الإرسال.'));
+        status.textContent=tr('Resend accepted the test email. Check the recipient inbox and spam folder to confirm delivery.','قبل Resend رسالة الاختبار. تحقق من الوارد والبريد المزعج لدى المستلم لتأكيد وصولها.');
+      }catch(error){if(admin()&&currentUser.id===owner)status.textContent=error.message;}
+      finally{if(admin()&&currentUser.id===owner)button.disabled=false;}
+    };
+    q('adminSmtpSecret').value='';
       const captionsAr={registration_verification:'التحقق من الحساب الجديد',password_reset:'استعادة كلمة المرور',welcome_email:'رسائل الترحيب',subscription_expiry:'انتهاء الاشتراك',low_balance:'انخفاض الرصيد',account_suspension:'تعليق الحساب',payment_receipt:'إيصالات الدفع',renewal_reminder:'تذكير التجديد',system_updates:'تحديث النظام',login_security:'تنبيه دخول جديد',password_changed:'تغيير كلمة المرور',email_changed:'تغيير البريد',payment_failed:'فشل الدفع',trial_expiring:'قرب انتهاء الفترة التجريبية',support_received:'رسالة دعم جديدة',support_unanswered:'رسائل دون رد',service_incident:'أعطال الخدمة',mail_delivery_failure:'فشل تسليم البريد',unusual_activity:'نشاط غير معتاد',backup_status:'حالة النسخ الاحتياطي'};
       const captionsEn={registration_verification:'New account verification',password_reset:'Password reset',welcome_email:'Welcome email',subscription_expiry:'Subscription expiry',low_balance:'Low balance',account_suspension:'Account suspension',payment_receipt:'Payment receipt',renewal_reminder:'Renewal reminder',system_updates:'System updates',login_security:'New sign-in alert',password_changed:'Password changed',email_changed:'Email changed',payment_failed:'Payment failed',trial_expiring:'Trial expiring',support_received:'New support message',support_unanswered:'Unanswered support',service_incident:'Service incidents',mail_delivery_failure:'Mail delivery failure',unusual_activity:'Unusual activity',backup_status:'Backup status'};
       const list=q('adminServiceToggles');list.replaceChildren();list.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;align-items:stretch;';
@@ -64,7 +89,7 @@
         const toggle=document.createElement('input');
         toggle.type='checkbox';toggle.checked=Boolean(item.enabled);
         toggle.disabled=!item.editable;
-        toggle.title=item.editable?tr('Save service preference','حفظ تفضيل الخدمة'):tr('Service is not yet implemented','الخدمة غير منفذة بعد');
+        toggle.title=item.editable?tr('Save service preference','حفظ تفضيل الخدمة'):item.available?tr('Uses the configured email sender','يستخدم مرسل البريد المهيأ'):tr('Service is not yet implemented','الخدمة غير منفذة بعد');
         if(item.editable)toggle.onchange=async()=>{
           const requested=toggle.checked;toggle.disabled=true;
           try{
@@ -84,7 +109,7 @@
         // Unimplemented services are informational, not disabled fake switches.
         list.append(card);
       }
-    }catch(error){notice.textContent=error.message;}
+    }catch(error){if(admin()&&currentUser.id===owner)notice.textContent=error.message;}
   }
   window.gatewayLoadServiceCenter=loadServiceCenter;
   if(q('adminServiceCenter')){
@@ -99,113 +124,128 @@
     }));
     let mailFolder='received';
     let currentDraftId=null;
+    let mailRevision=0, readerRevision=0;
+    const mailAlive=owner=>admin()&&currentUser?.id===owner&&q('adminInboxTab')?.isConnected;
+    function updateMailFolders(){
+      for(const [id,folder] of [['adminMailReceived','received'],['adminMailSent','sent'],['adminMailDrafts','drafts']]){
+        if(mailFolder===folder)q(id).setAttribute('aria-current','page');else q(id).removeAttribute('aria-current');
+      }
+    }
+    function filterMail(){
+      const term=q('adminMailSearch').value.trim().toLocaleLowerCase();
+      for(const row of q('adminInboxMessages').querySelectorAll('[data-mail-search]'))row.hidden=!row.dataset.mailSearch.includes(term);
+    }
+    function preserveCompose(){
+      if(q('adminComposeTo').value||q('adminComposeSubject').value||q('adminComposeBody').value){
+        q('adminMailCompose').hidden=false;
+        q('adminComposeStatus').textContent=tr('Finish or save the current draft before opening another message.','أكمل المسودة الحالية أو احفظها قبل إنشاء رسالة أخرى.');return false;
+      }
+      return true;
+    }
     async function readSupportInbox(){
-      const status=q('adminInboxStatus'),list=q('adminInboxMessages');
-      status.textContent=tr('Loading messages…','جارٍ تحميل الرسائل…');
-      list.replaceChildren();
+      if(!admin())return;
+      const owner=currentUser.id,revision=++mailRevision,folder=mailFolder;
+      ++readerRevision;updateMailFolders();
+      const status=q('adminInboxStatus'),list=q('adminInboxMessages'),reader=q('adminMailReader');
+      const current=()=>mailAlive(owner)&&mailRevision===revision&&mailFolder===folder;
+      status.textContent=tr('Loading messages…','جارٍ تحميل الرسائل…');list.replaceChildren();reader.replaceChildren();
+      q('adminInboxTab').querySelector('.mailbox')?.classList.remove('has-selection');
+      reader.append(textElement('p',tr('Select a message to read','اختر رسالة لقراءتها'),'mailbox-empty'));
       try{
-        if(mailFolder==='drafts'){
-          const drafts=await api('/api/admin/service-integrations/drafts');
-          status.textContent=tr('Drafts: ','المسودات: ')+drafts.items.length;
-          for(const item of drafts.items){
-            const card=document.createElement('article');card.className='manage-card';card.style.cssText='padding:14px;margin:8px 0;display:grid;gap:8px;';
-            const heading=document.createElement('strong');heading.textContent=item.subject||tr('(No subject)','(بدون موضوع)');
-            const meta=document.createElement('small');meta.textContent=(item.to||tr('No recipient','بدون مستلم'))+' · '+item.updated_at;
-            const preview=document.createElement('p');preview.textContent=item.preview||'';
-            const actions=document.createElement('div');actions.style.cssText='display:flex;gap:8px;';
-            const edit=document.createElement('button');edit.type='button';edit.className='button ghost small';edit.textContent=tr('Edit draft','تعديل المسودة');
-            edit.onclick=async()=>{
-              edit.disabled=true;
-              try{
-                const draft=await api('/api/admin/service-integrations/drafts/'+encodeURIComponent(item.id));
-                currentDraftId=draft.id;
-                q('adminComposeTo').value=draft.to;
-                q('adminComposeSubject').value=draft.subject;
-                q('adminComposeBody').value=draft.body;
-                composePanel.hidden=false;q('adminComposeBody').focus();
-              }catch(error){toast(error.message);}finally{edit.disabled=false;}
-            };
-            const remove=document.createElement('button');remove.type='button';remove.className='button ghost small';remove.textContent=tr('Delete','حذف');
-            remove.onclick=async()=>{
-              remove.disabled=true;
-              try{await api('/api/admin/service-integrations/drafts/'+encodeURIComponent(item.id),{method:'DELETE'});await readSupportInbox();}
-              catch(error){toast(error.message);remove.disabled=false;}
-            };
-            actions.append(edit,remove);card.append(heading,meta,preview,actions);list.append(card);
-          }
-          if(!drafts.items.length)list.append(textElement('p',tr('No saved drafts.','لا توجد مسودات محفوظة.')));
-          return;
-        }
-        const sent=mailFolder==='sent';
-        const result=await api(sent?'/api/admin/service-integrations/sent-emails':'/api/admin/service-integrations/support-inbox');
-        if(!result.configured){
-          status.textContent=tr('Message access needs a read-capable Resend key. See Connection diagnostics.','قراءة الرسائل تحتاج مفتاح Resend بصلاحية القراءة. راجع تفاصيل الاتصال.');
-          return;
-        }
-        status.textContent=tr('Messages: ','الرسائل: ')+result.items.length;
+        const sent=folder==='sent',drafts=folder==='drafts';
+        const endpoint='/api/admin/service-integrations/'+(drafts?'drafts':sent?'sent-emails':'support-inbox');
+        const result=await api(endpoint);if(!current())return;
+        if(!drafts&&!result.configured){status.textContent=tr('Message access needs a read-capable Resend key. See Connection diagnostics.','قراءة الرسائل تحتاج مفتاح Resend بصلاحية القراءة. راجع تفاصيل الاتصال.');return;}
+        status.textContent=tr('Messages: ','الرسائل: ')+result.items.length+(result.has_more?tr(' · Showing the first 50',' · عرض أول 50 رسالة'):'');
         for(const msg of result.items){
-          const row=document.createElement('article');row.className='manage-card';
-          row.style.cssText='padding:14px;margin:8px 0;display:flex;flex-direction:column;gap:5px;';
-          const subject=document.createElement('strong');subject.textContent=msg.subject||tr('(No subject)','(بدون عنوان)');
-          const details=document.createElement('small');details.textContent=(sent?(Array.isArray(msg.to)?msg.to.join(', '):''):msg.from)+' · '+msg.created_at+(sent?' · '+msg.status:'');
-          row.append(subject,details);
-          const actions=document.createElement('div');actions.style.cssText='display:flex;gap:8px;flex-wrap:wrap;';
-          const open=document.createElement('button');open.type='button';open.className='button ghost small';
-          open.textContent=tr('Open message','قراءة الرسالة');
-          open.onclick=async()=>{
-            open.disabled=true;
+          const row=document.createElement('button');row.type='button';row.className='mailbox-row';row.setAttribute('aria-pressed','false');
+          const subject=msg.subject||tr('(No subject)','(بدون موضوع)');
+          const party=drafts?msg.to:(sent?(Array.isArray(msg.to)?msg.to.join(', '):''):msg.from);
+          row.dataset.mailSearch=[subject,party,msg.preview||''].join(' ').toLocaleLowerCase();
+          row.append(textElement('strong',subject),textElement('small',party||tr('No recipient','بدون مستلم')),textElement('small',(msg.created_at||msg.updated_at||'')+(sent?' · '+msg.status:'')));
+          if(drafts&&msg.preview)row.append(textElement('small',msg.preview));
+          row.onclick=async()=>{
+            if(!current())return;
+            if(drafts&&!preserveCompose())return;
+            const token=++readerRevision;
+            const selected=()=>current()&&readerRevision===token;
+            for(const item of list.querySelectorAll('.mailbox-row'))item.setAttribute('aria-pressed',String(item===row));
+            reader.replaceChildren(textElement('p',tr('Loading message…','جارٍ تحميل الرسالة…')));
+            q('adminInboxTab').querySelector('.mailbox')?.classList.add('has-selection');
             try{
-              const endpoint=sent?'sent-emails/':'support-inbox/';
-              const item=await api('/api/admin/service-integrations/'+endpoint+encodeURIComponent(msg.id));
-              let body=row.querySelector('.support-mail-text');
-              if(!body){body=document.createElement('pre');body.className='support-mail-text';body.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto';row.append(body);}
-              body.textContent=item.text||tr('No plain text body available','لا يوجد نص للرسالة');
-            }catch(error){toast(error.message);}finally{open.disabled=false;}
+              const item=await api(endpoint+'/'+encodeURIComponent(msg.id));if(!selected())return;
+              if(drafts){
+                currentDraftId=item.id;q('adminComposeTo').value=item.to;q('adminComposeSubject').value=item.subject;q('adminComposeBody').value=item.body;
+                q('adminComposeStatus').textContent='';composePanel.hidden=false;q('adminComposeBody').focus();
+              }
+              reader.replaceChildren();
+              const back=textElement('button',tr('← Back to messages','العودة للرسائل'),'button ghost small');back.type='button';
+              back.onclick=()=>{q('adminInboxTab').querySelector('.mailbox')?.classList.remove('has-selection');row.focus();};
+              reader.append(back,textElement('h3',subject),textElement('p',party||''));
+              const body=textElement('div',drafts?item.body:(item.text||tr('No plain text body available','لا يوجد نص للرسالة')),'support-mail-text');body.dir='auto';reader.append(body);
+              if(drafts){
+                const remove=textElement('button',tr('Delete draft','حذف المسودة'),'button ghost');remove.type='button';
+                remove.onclick=async()=>{
+                  if(!selected())return;
+                  if(!await window.confirmAction(tr('Delete this saved draft?','حذف هذه المسودة المحفوظة؟')))return;
+                  if(!selected())return;remove.disabled=true;
+                  try{
+                    await api(endpoint+'/'+encodeURIComponent(msg.id),{method:'DELETE'});if(!selected())return;
+                    if(currentDraftId===msg.id)currentDraftId=null;
+                    await readSupportInbox();
+                  }catch(error){if(selected()){toast(error.message);remove.disabled=false;}}
+                };reader.append(remove);
+              }
+              if(!sent&&!drafts){
+                const reply=textElement('button',tr('Reply','رد'),'button ghost');reply.type='button';
+                reply.onclick=()=>{
+                  if(!selected()||!preserveCompose())return;
+                  currentDraftId=null;q('adminComposeTo').value=(String(msg.from||'').match(/<([^<>@\s]+@[^<>@\s]+)>/)?.[1]||String(msg.from||'')).trim();
+                  q('adminComposeSubject').value=/^re:/i.test(subject)?subject:'Re: '+subject;q('adminComposeBody').value='';
+                  q('adminComposeStatus').textContent='';composePanel.hidden=false;q('adminComposeBody').focus();
+                };reader.append(reply);
+              }
+            }catch(error){if(selected())reader.replaceChildren(textElement('p',error.message));}
           };
-          actions.append(open);
-          if(!sent){
-            const reply=document.createElement('button');reply.type='button';reply.className='button ghost small';
-            reply.textContent=tr('Reply','رد');
-            reply.onclick=()=>{
-              const address=String(msg.from||'').match(/<([^<>@\s]+@[^<>@\s]+)>/)?.[1]||String(msg.from||'');
-              q('adminComposeTo').value=address.trim();
-              q('adminComposeSubject').value=/^re:/i.test(msg.subject||'')?msg.subject:'Re: '+(msg.subject||'');
-              composePanel.hidden=false;q('adminComposeBody').focus();
-            };
-            actions.append(reply);
-          }
-          row.append(actions);
           list.append(row);
         }
-        if(!result.items.length)list.append(textElement('p',tr('No messages returned by Resend.','لم يُرجع Resend أي رسائل.')));
-      }catch(error){status.textContent=error.message;}
+        if(!result.items.length)list.append(textElement('p',drafts?tr('No saved drafts.','لا توجد مسودات محفوظة.'):tr('No messages returned by Resend.','لم يُرجع Resend أي رسائل.'),'mailbox-empty'));
+        filterMail();
+      }catch(error){if(current())status.textContent=error.message;}
     }
+    q('adminMailSearch').oninput=filterMail;
     const composePanel=q('adminMailCompose');
     q('adminMailComposeOpen').onclick=()=>{
+      if(q('adminComposeTo').value||q('adminComposeSubject').value||q('adminComposeBody').value){composePanel.hidden=false;q('adminComposeBody').focus();return;}
       currentDraftId=null;q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
       q('adminComposeStatus').textContent='';composePanel.hidden=false;q('adminComposeTo').focus();
     };
     q('adminComposeSaveDraft').onclick=async()=>{
+      if(!admin())return;const owner=currentUser.id;
       const button=q('adminComposeSaveDraft'),status=q('adminComposeStatus');
       const draft={to:q('adminComposeTo').value.trim(),subject:q('adminComposeSubject').value.trim(),body:q('adminComposeBody').value};
       button.disabled=true;
       try{
         const url='/api/admin/service-integrations/drafts'+(currentDraftId?'/'+encodeURIComponent(currentDraftId):'');
         const result=await api(url,{method:currentDraftId?'PUT':'POST',body:JSON.stringify(draft)});
-        currentDraftId=result.id;
+        if(!mailAlive(owner))return;
+        currentDraftId=null;q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
         status.textContent=tr('Draft saved securely.','تم حفظ المسودة مشفرة.');
+        composePanel.hidden=true;
         mailFolder='drafts';await readSupportInbox();
       }catch(error){status.textContent=error.message;}
       finally{button.disabled=false;}
     };
     q('adminComposeCancel').onclick=()=>{composePanel.hidden=true;q('adminComposeStatus').textContent='';};
     q('adminComposeSend').onclick=async()=>{
+      if(!admin())return;const owner=currentUser.id;
       const send=q('adminComposeSend'),status=q('adminComposeStatus');
       const to=q('adminComposeTo').value.trim(),subject=q('adminComposeSubject').value.trim(),body=q('adminComposeBody').value;
       if(!to||!subject||!body.trim()){status.textContent=tr('Recipient, subject, and message are required.','المستلم والموضوع والرسالة مطلوبة.');return;}
       send.disabled=true;status.textContent=tr('Sending…','جارٍ الإرسال…');
       try{
         const result=await api('/api/admin/service-integrations/send-email',{method:'POST',body:JSON.stringify({to,subject,body})});
+        if(!mailAlive(owner))return;
         if(!result.sent)throw Error('Sending was not confirmed');
         q('adminComposeTo').value='';q('adminComposeSubject').value='';q('adminComposeBody').value='';
         
@@ -215,7 +255,7 @@
           catch(error){status.textContent=tr('Sent; old draft could not be removed.','تم الإرسال، لكن تعذّر حذف المسودة القديمة.');}
         }
         if(!status.textContent.includes('draft')&&!status.textContent.includes('المسودة'))
-          status.textContent=tr('Sent successfully.','تم إرسال الرسالة بنجاح.');
+          status.textContent=tr('Resend accepted the email; inbox delivery is not yet verified.','قبل Resend الرسالة؛ لم يُتحقق من وصولها إلى الوارد بعد.');
         mailFolder='sent';await readSupportInbox();
       }catch(error){status.textContent=error.message;}
       finally{send.disabled=false;}
@@ -254,7 +294,7 @@
     q('adminEmailProvider').onchange=()=>{
       const resend=q('adminEmailProvider').value==='resend';
       q('adminSmtpSave').disabled=!resend;
-      if(resend){q('adminSmtpHost').value='smtp.resend.com';q('adminSmtpPort').value=String(e.smtp_port||587);q('adminSmtpUsername').value='resend';q('adminSmtpTls').value='starttls';}
+      if(resend){q('adminSmtpHost').value='smtp.resend.com';q('adminSmtpPort').value='587';q('adminSmtpUsername').value='resend';q('adminSmtpTls').value='starttls';}
       q('adminServiceNotice').textContent=resend?'Resend SMTP':'Generic SMTP provider editing is not implemented yet';
     };
   }
