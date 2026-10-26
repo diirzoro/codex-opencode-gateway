@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
@@ -356,7 +356,10 @@ def runtime_status(user: User=Depends(require_user)):
 
 @router.get("/github/status")
 def github_status(user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return github.connection_status(db,user)
+    # Match the dedicated GitHub route: disconnection must not be masked by
+    # a cached response regardless of router registration order.
+    return JSONResponse(github.connection_status(db,user),
+                        headers={"Cache-Control":"private, no-store"})
 
 @router.get("/templates")
 def templates(user: User=Depends(require_user)):
