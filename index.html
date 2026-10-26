@@ -624,18 +624,18 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
 <h2 data-i18n="adminEmailDelivery">Email Delivery</h2>
 <div class="field-grid">
 <label class="field"><span>نوع الخدمة · Category</span><select disabled><option>Transactional Email · البريد الإلكتروني</option><option>Payments · المدفوعات — لاحقًا</option><option>SMS / Push — غير متاحة بعد</option></select></label>
-<label class="field"><span>مزوّد البريد · Provider</span><select id="adminEmailProvider"><option value="resend">Resend SMTP</option><option value="smtp">Generic SMTP</option></select></label>
-<label class="field"><span>اسم المرسل · Sender name</span><input id="adminSenderName" disabled title="Sender display name editing is not supported yet" maxlength="120" autocomplete="off" placeholder="OpenCode Gateway"></label>
-<label class="field"><span>بريد المرسل · Sender email</span><input id="adminSenderEmail" type="email" maxlength="254" autocomplete="off" placeholder="verify@opencode-gateway.codes"></label>
+<label class="field"><span>مزوّد البريد · Provider</span><select id="adminEmailProvider"><option value="resend">Resend · SMTP</option><option value="brevo">Brevo · HTTPS API</option><option value="smtp" disabled>Existing SMTP · read only</option></select></label>
+<label class="field"><span>اسم المرسل · Sender name</span><input id="adminSenderName" value="OpenCode Gateway" maxlength="120" autocomplete="off" placeholder="OpenCode Gateway"></label>
+<label class="field"><span>بريد المرسل · Sender email</span><input id="adminSenderEmail" value="support@opencode-gateway.codes" type="email" maxlength="254" autocomplete="off" placeholder="verify@opencode-gateway.codes"></label>
 <label class="field"><span>SMTP host · الخادم</span><input id="adminSmtpHost" readonly maxlength="253" autocomplete="off" placeholder="smtp.resend.com"></label>
 <label class="field"><span>Port · المنفذ</span><input id="adminSmtpPort" readonly type="number" min="1" max="65535" value="587"></label>
-<label class="field"><span>التشفير · TLS</span><select id="adminSmtpTls" disabled><option value="starttls">STARTTLS (587)</option><option value="implicit">Implicit TLS (465) — requires integration</option></select></label>
+<label class="field"><span>التشفير · TLS</span><select id="adminSmtpTls" disabled><option value="starttls">STARTTLS (587)</option><option value="https">HTTPS · Brevo API</option></select></label>
 <label class="field"><span>اسم المستخدم · SMTP username</span><input id="adminSmtpUsername" readonly maxlength="254" autocomplete="off" placeholder="resend"></label>
-<label class="field"><span>Resend API Key · مفتاح الإرسال</span><input id="adminSmtpSecret" type="password" autocomplete="new-password" maxlength="4096" placeholder="أدخل المفتاح للحفظ الآمن" value=""></label>
+<label class="field"><span>API Key · مفتاح المزوّد المختار</span><input id="adminSmtpSecret" type="password" autocomplete="new-password" maxlength="4096" placeholder="أدخل المفتاح للحفظ الآمن" value=""></label>
 <label class="field"><span>بريد اختبار الإرسال · Test recipient</span><input id="adminSmtpTestRecipient" type="email" maxlength="254" autocomplete="off" placeholder="admin-owned@example.com"></label>
 </div>
-<p class="lead">أدخل مفتاح Resend عندما تصبح جاهزًا للتفعيل. يُحفظ مشفرًا ولا يعرضه الخادم مرة أخرى. يتطلب تفعيل قاعدة البيانات والمفتاح الرئيسي للتشفير على TEST.</p>
-<button type="button" class="button" id="adminSmtpSave">حفظ إعدادات Resend · Save settings</button>
+<p class="lead" id="adminEmailTransportNote">إعدادات Resend جاهزة افتراضيًا. أدخل API Key واحفظ. يجب أن يكون المرسل موثقًا لدى المزوّد المختار؛ الحفظ وحده لا يثبت وصول البريد.</p>
+<button type="button" class="button" id="adminSmtpSave">حفظ مزوّد الإرسال · Save provider</button>
 <button type="button" class="button ghost" id="adminSmtpTest" disabled>إرسال رسالة اختبار · Send test email</button>
 </section>
 <section id="adminInboxTab" hidden>
@@ -864,7 +864,7 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   <script defer src="enhancements.js?v=20261026-platform-app-setup"></script>
   <script type="application/json" id="managementAsset" data-src="management.js?v=20261026-native-github-settings"></script>
   <script defer src="runtime-client.js?v=20261008-phase2"></script>
-  <script defer src="dashboards.js?v=20261026-mailbox"></script>
+  <script defer src="dashboards.js?v=20261026-brevo-defaults"></script>
   <script>
   // Unified App Shell (behavior). Loaded after app.js and enhancements.js.
   document.addEventListener('DOMContentLoaded',function(){

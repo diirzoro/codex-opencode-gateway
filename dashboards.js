@@ -40,6 +40,23 @@
   q('clientNav').querySelectorAll('[data-client-view]').forEach(button=>button.onclick=()=>window.openClientView(button.dataset.clientView));
   q('adminNav').querySelectorAll('[data-admin-view]').forEach(button=>button.onclick=()=>window.openAdminView(button.dataset.adminView));
   let serviceOwner=null;
+  let emailProviderConfig={},emailStatus=null;
+  function showEmailProvider(provider){
+    const cfg=emailProviderConfig[provider]||{};
+    const brevo=provider==='brevo';
+    q('adminSmtpHost').value=brevo?'https://api.brevo.com/v3/smtp/email':'smtp.resend.com';
+    q('adminSmtpPort').value=brevo?'':'587';q('adminSmtpPort').disabled=brevo;
+    q('adminSmtpUsername').value=brevo?'':'resend';q('adminSmtpTls').value=brevo?'https':'starttls';
+    q('adminSenderEmail').value=cfg.sender||'support@opencode-gateway.codes';
+    q('adminSenderName').value=cfg.sender_name||'OpenCode Gateway';
+    q('adminSmtpSecret').value='';
+    q('adminSmtpSave').disabled=!['resend','brevo'].includes(provider)||emailStatus?.settings_schema_ready===false||emailStatus?.credential_storage_ready===false;
+    q('adminSmtpTest').disabled=!emailStatus?.configured||provider!==emailStatus.provider;
+    if(q('adminEmailTransportNote'))q('adminEmailTransportNote').textContent=brevo?
+      tr('Brevo uses its HTTPS API key, not an SMTP key. Sender authorization in Brevo is still required. The mailbox below continues to read Resend; switching senders does not migrate mail.','يستخدم Brevo مفتاح API عبر HTTPS وليس مفتاح SMTP. يجب توثيق المرسل لدى Brevo. يظل صندوق البريد أدناه تابعًا لـResend؛ تبديل الإرسال لا ينقل الرسائل.'):
+      tr('Resend SMTP defaults are ready. Add the API key and save. Sending-only keys cannot read mail; mailbox access requires an appropriately authorized read key.','إعدادات Resend SMTP جاهزة. أضف مفتاح API واحفظ. مفتاح الإرسال فقط لا يقرأ البريد؛ القراءة تحتاج مفتاحًا بالصلاحية المناسبة.');
+  }
+
   async function loadServiceCenter(){
     if(!admin())return;
     const notice=q('adminServiceNotice');if(!notice)return;
@@ -53,16 +70,12 @@
     try{
       const data=await api('/api/admin/service-integrations');if(!admin()||currentUser.id!==owner)return;const e=data.email||{};
       notice.textContent=e.configured?tr('Email configured · delivery not yet tested','البريد مهيّأ · لم يُختبر التسليم بعد'):tr('Email delivery is not configured','إرسال البريد غير مهيّأ');if(e.settings_schema_ready===false)notice.textContent+=' · '+tr('Apply TEST migration 0021 before saving settings','يلزم تطبيق ترحيل TEST رقم 0021 قبل حفظ الإعدادات');
-      q('adminEmailProvider').value=e.provider==='resend'?'resend':'smtp';
-      q('adminSmtpSave').disabled=e.provider!=='resend'||e.settings_schema_ready===false||e.credential_storage_ready===false;
-      q('adminSmtpTest').disabled=!e.configured;
-      q('adminSmtpTest').title=e.configured?tr('Sends one real test email to the specified recipient','يرسل رسالة اختبار حقيقية واحدة إلى العنوان المحدد'):tr('Save a Resend key and sender first','احفظ مفتاح Resend والمرسل أولاً');
-      if(!e.credentials_configured)notice.textContent+=' · '+tr('Resend API key is missing. Verification messages cannot be sent.','مفتاح Resend غير موجود. لا يمكن إرسال رسائل التفعيل.');
+      emailStatus=e;emailProviderConfig=e.provider_configurations||{[e.provider||'resend']:e};
+      q('adminEmailProvider').value=['resend','brevo'].includes(e.provider)?e.provider:'smtp';showEmailProvider(q('adminEmailProvider').value);
+      q('adminSmtpTest').title=e.configured?tr('Sends one real test email to the specified recipient','يرسل رسالة اختبار حقيقية واحدة إلى العنوان المحدد'):tr('Save the selected provider API key first','احفظ مفتاح API للمزوّد المختار أولاً');
+      if(!e.credentials_configured)notice.textContent+=' · '+tr('Selected provider API key is missing. Verification messages cannot be sent.','مفتاح API للمزوّد المختار غير موجود. لا يمكن إرسال رسائل التفعيل.');
       if(e.credential_storage_ready===false)notice.textContent+=' · '+tr('Gateway credential encryption is not configured.','تشفير اعتمادات Gateway غير مُعدّ.');
-      q('adminSmtpHost').value=e.smtp_host||'';
-      q('adminSmtpPort').value=String(e.smtp_port||587);
-      q('adminSmtpUsername').value=e.smtp_username||'';
-      q('adminSenderEmail').value=e.sender||'';
+      if(!q('adminSmtpTestRecipient').value)q('adminSmtpTestRecipient').value=currentUser.email||'';
       q('adminSmtpTest').onclick=async()=>{
       const button=q('adminSmtpTest'),field=q('adminSmtpTestRecipient'),status=q('adminServiceNotice');
       if(button.disabled||!admin())return;
@@ -72,7 +85,7 @@
         const result=await api('/api/admin/service-integrations/send-email',{method:'POST',body:JSON.stringify({to,subject:'OpenCode Gateway TEST · email delivery test',body:'This is a test email requested from the TEST administration panel. SMTP acceptance does not prove inbox delivery. No action is required.'})});
         if(!admin()||currentUser.id!==owner)return;
         if(!result.sent)throw Error(tr('Sending was not confirmed.','لم يُؤكد الإرسال.'));
-        status.textContent=tr('Resend accepted the test email. Check the recipient inbox and spam folder to confirm delivery.','قبل Resend رسالة الاختبار. تحقق من الوارد والبريد المزعج لدى المستلم لتأكيد وصولها.');
+        status.textContent=tr('The selected provider accepted the test email. Check the recipient inbox and spam folder to confirm delivery.','قبل المزوّد المختار رسالة الاختبار. تحقق من الوارد والبريد المزعج لدى المستلم لتأكيد وصولها.');
       }catch(error){if(admin()&&currentUser.id===owner)status.textContent=error.message;}
       finally{if(admin()&&currentUser.id===owner)button.disabled=false;}
     };
@@ -255,7 +268,7 @@
           catch(error){status.textContent=tr('Sent; old draft could not be removed.','تم الإرسال، لكن تعذّر حذف المسودة القديمة.');}
         }
         if(!status.textContent.includes('draft')&&!status.textContent.includes('المسودة'))
-          status.textContent=tr('Resend accepted the email; inbox delivery is not yet verified.','قبل Resend الرسالة؛ لم يُتحقق من وصولها إلى الوارد بعد.');
+          status.textContent=tr('The selected provider accepted the email; inbox delivery is not yet verified.','قبل المزوّد المختار الرسالة؛ لم يُتحقق من وصولها إلى الوارد بعد.');
         mailFolder='sent';await readSupportInbox();
       }catch(error){status.textContent=error.message;}
       finally{send.disabled=false;}
@@ -283,19 +296,17 @@
       try{
         const result=await api('/api/admin/service-integrations/email',{
           method:'PUT',
-          body:JSON.stringify({provider:'resend',smtp_from:sender,...(key.value?{api_key:key.value}:{})})
+          body:JSON.stringify({provider:q('adminEmailProvider').value,smtp_from:sender,sender_name:q('adminSenderName').value.trim()||'OpenCode Gateway',...(key.value?{api_key:key.value}:{})})
         });
         key.value='';
-        q('adminServiceNotice').textContent=result.configured?'تم حفظ إعدادات Resend مشفرة · Saved securely':'Configuration not ready';
+        q('adminServiceNotice').textContent=result.configured?'حُفظ مزوّد الإرسال المختار بأمان · Saved securely':'Configuration not ready';
         await loadServiceCenter();
       }catch(error){q('adminServiceNotice').textContent=error.message;}
       finally{key.value='';button.disabled=false;}
     };
     q('adminEmailProvider').onchange=()=>{
-      const resend=q('adminEmailProvider').value==='resend';
-      q('adminSmtpSave').disabled=!resend;
-      if(resend){q('adminSmtpHost').value='smtp.resend.com';q('adminSmtpPort').value='587';q('adminSmtpUsername').value='resend';q('adminSmtpTls').value='starttls';}
-      q('adminServiceNotice').textContent=resend?'Resend SMTP':'Generic SMTP provider editing is not implemented yet';
+      showEmailProvider(q('adminEmailProvider').value);
+      q('adminServiceNotice').textContent=tr('Provider selection is not active until saved. Previously saved provider credentials are preserved.','لا يتفعّل اختيار المزوّد إلا بعد الحفظ. تُحفظ بيانات المزوّد السابق للعودة إليه.');
     };
   }
   async function loadHome(){

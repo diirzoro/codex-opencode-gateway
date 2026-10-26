@@ -349,32 +349,37 @@ def native_provider_policy_catalog(offset:int=Query(0,ge=0),limit:int=Query(50,g
 
 class EmailDeliveryUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    provider: Literal["resend"] = "resend"
-    smtp_from: str = Field(min_length=6,max_length=254)
+    provider: Literal["resend", "brevo"] = "resend"
+    smtp_from: str | None = Field(default=None,min_length=6,max_length=254)
+    sender_name: str | None = Field(default=None,min_length=1,max_length=120)
     api_key: str | None = Field(default=None,min_length=5,max_length=4096)
 
 @router.put("/service-integrations/email")
 def save_email_delivery(data: EmailDeliveryUpdate, actor: User = Depends(require_admin), db: Session = Depends(get_db)):
-    from ..services import admin_email_config
-    sender=data.smtp_from
+    from ..services import admin_email_config, email_delivery
+    existing=admin_email_config.read(db) or {}
+    accounts=dict(existing.get('provider_accounts') or {})
+    old_provider=existing.get('provider','resend')
+    if old_provider in email_delivery.PROVIDERS:
+        accounts[old_provider]={key:value for key,value in existing.items() if key not in ('provider_accounts','inbox_api_key')}
+    selected=accounts.get(data.provider,{})
+    sender=data.smtp_from or selected.get('smtp_from') or email_delivery.DEFAULT_SENDER
     if not sender.endswith("@opencode-gateway.codes") or any(c in sender for c in "\r\n<> ,"):
-        raise HTTPException(422,"Sender must use verified opencode-gateway.codes domain")
-    existing=admin_email_config.read(db)
-    key=data.api_key if data.api_key is not None else (existing or {}).get("smtp_password")
-    if not key:
-        raise HTTPException(422,"Enter your Resend API key first")
-    cfg={"provider":"resend","smtp_host":"smtp.resend.com","smtp_port":587,
-         "smtp_username":"resend","smtp_password":key,"smtp_from":sender}
-    if existing and existing.get("inbox_api_key"):
-        cfg["inbox_api_key"]=existing["inbox_api_key"]
-    elif data.api_key:
-        # One full-access Resend key may serve both SMTP and message reads.
-        # Dedicated read credentials, when present, remain unchanged.
-        cfg["inbox_api_key"]=data.api_key
-    admin_email_config.save(db, actor.id, cfg)
-    return {"provider":"resend","configured":True,"credentials_configured":True,
-            "sender":sender,"smtp_host":"smtp.resend.com","smtp_port":587,
-            "smtp_username":"resend"}
+        raise HTTPException(422,"Sender must use the authorized opencode-gateway.codes domain")
+    name=data.sender_name or selected.get('sender_name') or email_delivery.DEFAULT_NAME
+    if any(c in name for c in '\r\n'):raise HTTPException(422,'Invalid sender name')
+    key=data.api_key or selected.get('api_key' if data.provider=='brevo' else 'smtp_password')
+    if not key:raise HTTPException(422,'Enter an API key for the selected email provider')
+    cfg={'provider':data.provider,'smtp_from':sender,'sender_name':name}
+    if data.provider=='brevo':cfg['api_key']=key
+    else:cfg.update(smtp_host='smtp.resend.com',smtp_port=587,smtp_username='resend',smtp_password=key)
+    accounts[data.provider]=dict(cfg)
+    cfg['provider_accounts']=accounts
+    # Read credentials belong to Resend, independent of the active sender.
+    if existing.get('inbox_api_key'):cfg['inbox_api_key']=existing['inbox_api_key']
+    elif data.provider=='resend' and data.api_key:cfg['inbox_api_key']=data.api_key
+    admin_email_config.save(db,actor.id,cfg)
+    return {**email_delivery.public_config(cfg),'credentials_configured':True,'delivery_verified':False}
 
 class SupportInboxCredential(BaseModel):
     model_config=ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -470,31 +475,18 @@ class AdminComposeEmail(BaseModel):
 
 @router.post("/service-integrations/send-email")
 def admin_compose_send(data:AdminComposeEmail,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
-    """Send an actual admin-authored email through configured Resend SMTP; no fake sent status."""
+    """Send admin-authored mail through the saved sender; acceptance is not inbox delivery."""
     import re
-    import smtplib
-    import ssl
     from email.message import EmailMessage
-    from ..services import email_verification
+    from ..services import email_verification, email_delivery
     if not re.fullmatch(r"[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+",data.to):
         raise HTTPException(422,"Invalid recipient address")
     cfg=email_verification.smtp_settings(db)
-    if not email_verification.smtp_ready(db):
-        raise HTTPException(503,"Configure Resend and encryption before sending")
-    if cfg.get("smtp_host")!="smtp.resend.com":
-        raise HTTPException(503,"Admin compose requires the configured Resend SMTP provider")
-    message=EmailMessage()
-    message["From"]=cfg["smtp_from"]
-    message["To"]=data.to
-    message["Subject"]=data.subject
-    message.set_content(data.body)
-    try:
-        with smtplib.SMTP("smtp.resend.com",int(cfg["smtp_port"]),timeout=15) as smtp:
-            smtp.starttls(context=ssl.create_default_context())
-            smtp.login(cfg["smtp_username"],cfg["smtp_password"])
-            smtp.send_message(message)
-    except (OSError,smtplib.SMTPException,ValueError):
-        raise HTTPException(502,"Resend rejected or could not send the email") from None
+    if not email_delivery.ready(cfg):raise HTTPException(503,'Configure an email provider and encryption before sending')
+    if cfg.get('provider','resend') not in email_delivery.PROVIDERS or (cfg.get('provider','resend')=='resend' and cfg.get('smtp_host')!='smtp.resend.com'):
+        raise HTTPException(503,'Admin compose requires a supported configured email provider')
+    message=EmailMessage();message['From']=cfg['smtp_from'];message['To']=data.to;message['Subject']=data.subject;message.set_content(data.body)
+    email_delivery.send(cfg,message)
     return {"sent":True,"to":data.to}
 
 @router.get("/service-integrations/sent-emails")
@@ -615,23 +607,23 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
     import os
     from ..services import email_verification
     from ..services import admin_email_config, credentials
+    from ..services import email_delivery
     saved=admin_email_config.read(db)
-    mail_ready=email_verification.smtp_ready(db)
+    mail=email_verification.smtp_settings(db)
+    mail_ready=email_delivery.ready(mail)
     required=email_verification.required_for_registration(db)
-    mail=saved or {}
-    provider=mail.get("provider","resend")
-    return {"email":{"provider":provider,"configured":mail_ready,"sending_ready":mail_ready,
-          "sender":mail.get("smtp_from",os.getenv("SMTP_FROM") or "support@opencode-gateway.codes"),
+    accounts=dict((saved or {}).get('provider_accounts') or {})
+    if mail.get('provider','resend') in email_delivery.PROVIDERS:accounts[mail.get('provider','resend')]=mail
+    return {"email":{**email_delivery.public_config(mail),"sending_ready":mail_ready,
           "verification_required":required,"settings_schema_ready":admin_email_config.schema_ready(db),
           "credential_storage_ready":credentials.available(),
-          "receiving_configured":bool(mail.get("inbox_api_key")),"delivery_verified":False,
-          "credentials_configured":bool(mail.get("smtp_password") or os.getenv("SMTP_PASSWORD")),
-          "smtp_host":mail.get("smtp_host","smtp.resend.com"),
-          "smtp_port":mail.get("smtp_port",587),
-          "smtp_username":mail.get("smtp_username","resend")},
+          "receiving_configured":bool((saved or {}).get("inbox_api_key")),"delivery_verified":False,
+          "credentials_configured":bool(mail.get('api_key') if mail.get('provider')=='brevo' else mail.get('smtp_password')),
+          "message_provider":"resend",
+          "provider_configurations":{pid:email_delivery.public_config(accounts.get(pid,{'provider':pid})) for pid in email_delivery.PROVIDERS}},
        "services":[
          {"id":"registration_verification","enabled":required,"available":True,"editable":True,
-          "reason":"" if mail_ready else "Resend API key missing"},
+          "reason":"" if mail_ready else "Selected email provider API key is missing"},
          {"id":"password_reset","enabled":mail_ready,"available":True,"editable":False,"reason":"Uses the configured email sender"},
          *({"id":i,"enabled":False,"available":False,"reason":"Not implemented"} for i in
            ("welcome_email","subscription_expiry","low_balance","account_suspension",
