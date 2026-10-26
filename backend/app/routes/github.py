@@ -25,14 +25,30 @@ def install(user: User = Depends(require_user), db: Session = Depends(get_db)):
     require_advanced(db, user)  # The timer starts only after successful authorization.
     return RedirectResponse(github.begin_install(db, user), status_code=302)
 
+@router.get("/authorize")
+def authorize(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_advanced(db, user)
+    return RedirectResponse(github.begin_authorization(db, user), status_code=302)
+
 @router.get("/callback")
-def callback(state: str | None = None, installation_id: int | None = None, setup_action: str | None = None, code: str | None = None, db: Session = Depends(get_db)):
+def callback(state: str | None = None, installation_id: int | None = None, setup_action: str | None = None, code: str | None = None, error: str | None = None, db: Session = Depends(get_db)):
     destination = f"{settings.public_base_url}/?github="
+    if error:
+        return RedirectResponse(destination + "denied", status_code=302)
     try:
         github.handle_callback(db, state, installation_id, setup_action, code)
         return RedirectResponse(destination + "connected", status_code=302)
-    except HTTPException:
-        return RedirectResponse(destination + "error", status_code=302)
+    except HTTPException as exc:
+        # Fixed, user-safe UI outcomes; never put vendor tokens or secrets in URLs.
+        if exc.detail == 'Install the GitHub App on a repository before authorizing':
+            outcome='install-required'
+        elif exc.detail == 'Multiple GitHub installations available; choose an installation before linking':
+            outcome='multiple-installations'
+        elif exc.status_code == 503:
+            outcome='configuration'
+        else:
+            outcome='error'
+        return RedirectResponse(destination + outcome, status_code=302)
 
 @router.post("/disconnect", status_code=204)
 def disconnect(user: User = Depends(require_user), db: Session = Depends(get_db)):
