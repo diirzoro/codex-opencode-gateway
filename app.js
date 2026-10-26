@@ -515,34 +515,7 @@ $('#promptForm').onsubmit=event=>event.preventDefault();
 $('#stopAgent').onclick=async()=>{if(activeSession)try{await api(`/api/sessions/${activeSession.id}/stop`,{method:'POST'})}catch(error){toast(error.message)}};
 const promptInput=$('#promptInput');if(promptInput){const growPrompt=()=>{promptInput.style.height='auto';promptInput.style.height=(promptInput.value?Math.max(40,Math.min(promptInput.scrollHeight,120)):40)+'px'};window.resizeWorkspaceComposer=growPrompt;promptInput.addEventListener('input',growPrompt);promptInput.addEventListener('focus',growPrompt);window.addEventListener('resize',growPrompt);promptInput.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!event.repeat)promptInput.closest('form')?.requestSubmit();}});growPrompt();}
 function overlay(open){$('#backdrop').classList.toggle('open',open)}$('#openSessions').onclick=()=>{$('#sessionSidebar').classList.add('open');overlay(true)};$('#closeSessions').onclick=()=>{$('#sessionSidebar').classList.remove('open');overlay(false)};$('#backdrop').onclick=()=>{overlay(false);$('#sessionSidebar').classList.remove('open')};
-async function loadAdminUsers(){
- try{const overview=await api('/api/admin/overview');$$('[data-overview]').forEach(el=>el.textContent=overview.users[el.dataset.overview]??'—')}catch(error){toast(error.message)}
- const body=$('#adminUsersBody');body.replaceChildren();
- const icon=(name)=>{const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('width','17');svg.setAttribute('height','17');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.8');svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');svg.setAttribute('aria-hidden','true');const paths={user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',phone:'<path d="M7 3h3l1.5 4-2 2a15 15 0 0 0 5.5 5.5l2-2L21 14v3a4 4 0 0 1-4 4A14 14 0 0 1 3 7a4 4 0 0 1 4-4Z"/>',calendar:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/>',shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',pin:'<path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>'};svg.innerHTML=paths[name]||paths.user;return svg};
- const detail=(parent,name,label,value)=>{const item=document.createElement('div');item.className='admin-user-detail';const glyph=document.createElement('span');glyph.className='admin-user-detail-icon';glyph.append(icon(name));const texts=document.createElement('span');texts.className='admin-user-detail-text';const heading=document.createElement('small');heading.textContent=label;const content=document.createElement('span');content.textContent=value===null||value===undefined||value===''?'—':String(value);texts.append(heading,content);item.append(glyph,texts);parent.append(item)};
- try{
-  const users=await api('/api/admin/users');
-  if(!users.length){const empty=document.createElement('p');empty.className='admin-users-empty';empty.textContent=lang==='ar'?'لا يوجد مستخدمون بعد.':'No users found.';body.append(empty);return}
-  for(const user of users){
-   const card=document.createElement('article');card.className='admin-user-card';card.setAttribute('role','listitem');
-   const header=document.createElement('div');header.className='admin-user-card-header';
-   const avatar=document.createElement('span');avatar.className='admin-user-avatar';avatar.append(icon('user'));
-   const identity=document.createElement('div');identity.className='admin-user-identity';
-   const name=document.createElement('strong');name.textContent=user.username||'—';name.title=user.username||'';
-   const email=document.createElement('span');email.textContent=user.email||'—';email.title=user.email||'';
-   identity.append(name,email);
-   const status=document.createElement('span');status.className='admin-user-status';status.dataset.state=user.status||'unknown';status.textContent=user.status||'—';
-   header.append(avatar,identity,status);
-   const details=document.createElement('div');details.className='admin-user-details';
-   detail(details,'shield',lang==='ar'?'الدور':'Role',user.role);
-   detail(details,'phone',lang==='ar'?'الهاتف':'Phone',user.phone);
-   detail(details,'pin',lang==='ar'?'الموقع':'Location',[user.country,user.region,user.city].filter(Boolean).join(' · '));
-   detail(details,'clock',lang==='ar'?'المتبقي من التجربة':'Trial remaining',user.trial_remaining_days==null?'—':user.trial_remaining_days+' '+(lang==='ar'?'يوم':'days'));
-   detail(details,'calendar',lang==='ar'?'آخر دخول':'Last login',user.last_login_at||'—');
-   card.append(header,details);body.append(card);
-  }
- }catch(error){const msg=document.createElement('p');msg.className='admin-users-empty';msg.textContent=error.message;body.append(msg)}
-}
+async function loadAdminUsers(){try{const overview=await api('/api/admin/overview');$$('[data-overview]').forEach(el=>el.textContent=overview.users[el.dataset.overview]??'—')}catch(error){toast(error.message)}const body=$('#adminUsersBody');body.replaceChildren();try{for(const user of await api('/api/admin/users')){const row=document.createElement('tr');for(const text of [user.username+' · '+user.email,user.phone,[user.country,user.region,user.city].filter(Boolean).join(' · '),user.trial_remaining_days+' days','Not available yet','Not available yet',user.trial_remaining_days+' days','Not available yet','—',user.last_login_at||'Never',user.status])row.append(textElement('td',text));body.append(row)}}catch(error){const row=document.createElement('tr');const cell=textElement('td',error.message);cell.colSpan=11;row.append(cell);body.append(row)}}
 applyPrefs();updateNavigation();
 const authReady=(async()=>{
  try{renderProfile(await api('/api/auth/me',{allowAnonymous:true}));}
