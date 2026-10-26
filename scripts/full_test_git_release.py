@@ -185,6 +185,31 @@ def backup_test_database(env):
     print("TEST_DB_BACKUP_VERIFIED",flush=True)
     return dest
 
+def apply_test_migrations(python, environment):
+    """Run only outstanding Alembic revisions; report a safe failure category."""
+    try:
+        run(python,"-m","alembic","-c","alembic.ini","upgrade","head",
+            timeout=180,cwd=ROOT/"backend",env=environment)
+    except subprocess.CalledProcessError as exc:
+        # Never forward raw subprocess stderr: it can include DATABASE_URL,
+        # credentials, or rows of private account data.
+        detail=(exc.stderr or b"").decode("utf-8","replace")
+        if "Existing normalized account duplicates require owner reconciliation" in detail:
+            print("TEST_MIGRATION_FAILED: EXISTING_ACCOUNT_DUPLICATES; preserve users; reconcile TEST data before retry",flush=True)
+        elif "permission denied" in detail.lower():
+            print("TEST_MIGRATION_FAILED: DATABASE_PERMISSION_DENIED; check TEST role/schema ownership",flush=True)
+        elif "duplicate column" in detail.lower() or "duplicate table" in detail.lower():
+            print("TEST_MIGRATION_FAILED: EXISTING_SCHEMA_CONFLICT; inspect Alembic current and schema before retry",flush=True)
+        elif "does not exist" in detail.lower() or "undefinedcolumn" in detail.lower():
+            print("TEST_MIGRATION_FAILED: MISSING_SCHEMA_DEPENDENCY; inspect TEST migration history",flush=True)
+        elif "can't locate revision" in detail.lower() or "can't locate revision identified by" in detail.lower():
+            print("TEST_MIGRATION_FAILED: UNKNOWN_DATABASE_REVISION; inspect Alembic version table",flush=True)
+        elif "ModuleNotFoundError" in detail or "ImportError" in detail:
+            print("TEST_MIGRATION_FAILED: PYTHON_DEPENDENCY_ERROR; verify TEST virtualenv requirements",flush=True)
+        else:
+            print("TEST_MIGRATION_FAILED: UNCLASSIFIED_ALEMBIC_ERROR; inspect protected TEST diagnostics without exposing credentials",flush=True)
+        raise RuntimeError("TEST Alembic upgrade failed; no source release marked") from None
+
 def rollout(target,mode):
     source=files(target)
     changes=[]
@@ -209,8 +234,7 @@ def rollout(target,mode):
     for name,dest,data in changes:replace(dest,data);print("UPDATED",name,flush=True)
     try:
         if mode=="deploy":
-            run(python,"-m","alembic","-c","alembic.ini","upgrade","head",
-                timeout=180,cwd=ROOT/"backend",env=environment)
+            apply_test_migrations(python,environment)
             verified_test_database(python,environment,post=True)
         run("sudo","-n","/usr/bin/systemctl","restart",GATEWAY)
         time.sleep(3)
