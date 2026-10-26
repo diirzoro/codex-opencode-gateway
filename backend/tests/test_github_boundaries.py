@@ -75,6 +75,7 @@ def test_reauthorization_starts_user_oauth_without_reinstall(monkeypatch):
     assert parsed.path=='/login/oauth/authorize'
     assert args['client_id']==['IvTestReauth']
     assert args['redirect_uri']==[cfg.github_callback_url]
+    assert args['prompt']==['select_account']
     assert len(args['state'][0])>=30
     assert len(added)==1 and added[0].user_id==owner.id
     assert added[0].state==args['state'][0]

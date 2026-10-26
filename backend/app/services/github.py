@@ -110,7 +110,7 @@ def begin_authorization(db, user) -> str:
     db.add(GithubAuthState(state=state,user_id=user.id,
                            expires_at=datetime.now(timezone.utc)+timedelta(minutes=STATE_TTL_MINUTES)))
     db.commit()
-    params=urlencode({'client_id':cfg.github_client_id,'redirect_uri':cfg.github_callback_url,'state':state})
+    params=urlencode({'client_id':cfg.github_client_id,'redirect_uri':cfg.github_callback_url,'state':state,'prompt':'select_account'})
     return cfg.github_web_base.rstrip('/')+'/login/oauth/authorize?'+params
 
 
