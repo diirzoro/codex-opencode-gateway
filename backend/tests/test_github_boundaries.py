@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi import HTTPException
 from backend.app.services import github,workspaces
+from backend.tests.test_native_control_plane import boundary  # Reuse existing isolated HTTP/ORM fixture
 
 
 def connection(expired=False):
