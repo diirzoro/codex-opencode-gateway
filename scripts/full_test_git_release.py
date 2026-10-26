@@ -220,7 +220,7 @@ def apply_test_migrations(python, environment):
             "ImportError","CommandError","ResolutionError","NoSuchModuleError",
             "AssertionError","ArgumentError","InvalidRequestError"
         }
-        types=re.findall(r"(?m)^(?:[a-zA-Z_][\\w.]*\\.)?([A-Za-z_][A-Za-z_0-9]*):",detail)
+        types=re.findall(r"(?m)^(?:[A-Za-z_][A-Za-z0-9_.]*[.])?([A-Za-z_][A-Za-z_0-9]*):",detail)
         last_type=next((name for name in reversed(types) if name in known),None)
         if last_type:
             print("TEST_MIGRATION_EXCEPTION_TYPE:",last_type,flush=True)
