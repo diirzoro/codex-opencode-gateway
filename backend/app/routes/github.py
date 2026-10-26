@@ -39,7 +39,9 @@ def callback(state: str | None = None, installation_id: int | None = None, setup
     if error:
         return RedirectResponse(destination + "denied", status_code=302)
     try:
-        github.handle_callback(db, state, installation_id, setup_action, code)
+        result=github.handle_callback(db, state, installation_id, setup_action, code)
+        if isinstance(result,dict) and result.get('redirect'):
+            return RedirectResponse(result['redirect'],status_code=302)
         return RedirectResponse(destination + "connected", status_code=302)
     except HTTPException as exc:
         # Fixed, user-safe UI outcomes; never put vendor tokens or secrets in URLs.

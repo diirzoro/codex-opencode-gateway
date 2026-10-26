@@ -2,7 +2,7 @@
 (() => {
   let identity='',configuration=null,configurationPending=null,stream=null;
   const rows=new Map(),snapshots=new Map(),statuses=new Map(),statusEvents=new Map(),statusReads=new Map();
-  const permissionReplies=new Set();
+  const permissionReplies=new Set(),submissionsInFlight=new Map(),sendGenerations=new Map();
   const histories=new Map(),pendingReads=new Map(),discoveryReads=new Map(),selections=new Map(),uncertain=new Map();let epoch=0;
   const owner=()=>String(currentUser?.id||'');
   const label=(en,ar)=>typeof lang!=='undefined'&&lang==='ar'?ar:en;
@@ -17,7 +17,7 @@
     if(configuration.enabled)presentationStyle();
     return configuration.enabled;
   }
-  function clear(){epoch++;stream?.close();stream=null;identity='';configuration=null;configurationPending=null;document.getElementById('workspacePage')?.classList.remove('native-mode');permissionReplies.clear();for(const map of [rows,snapshots,statuses,statusEvents,statusReads,histories,pendingReads,discoveryReads,selections,uncertain])map.clear();}
+  function clear(){epoch++;for(const controller of submissionsInFlight.values())controller.abort();submissionsInFlight.clear();sendGenerations.clear();stream?.close();stream=null;identity='';configuration=null;configurationPending=null;document.getElementById('workspacePage')?.classList.remove('native-mode');permissionReplies.clear();for(const map of [rows,snapshots,statuses,statusEvents,statusReads,histories,pendingReads,discoveryReads,selections,uncertain])map.clear();}
   function presentationStyle(){
     if(!document.head||document.getElementById('nativeConversationStyles'))return;
     const style=document.createElement('style');style.id='nativeConversationStyles';style.textContent=`
@@ -71,10 +71,14 @@
   function selection(id){if(!selections.has(id)){try{selections.set(id,JSON.parse(localStorage.getItem(storageKey('selection',id))||'null'));}catch{}}return selections.get(id);}
   function select(id,value){if(!id)return;selections.set(id,value);try{localStorage.setItem(storageKey('selection',id),JSON.stringify(value));}catch{}const row=rows.get(id);if(row){row.model={providerID:value.providerID,id:value.modelID,variant:value.variant};row.agent=value.agent;}}
   function remember(row){const saved=selection(row.id);if(saved)row={...row,model:{providerID:saved.providerID,id:saved.modelID,variant:saved.variant},agent:saved.agent};rows.set(row.id,row);return row;}
-  async function context(id){if(rows.has(id))return rows.get(id);const generation=epoch,user=owner(),value=await api('/api/native-test/sessions/'+encodeURIComponent(id));if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');return remember(value);}
+  async function context(id){if(rows.has(id))return rows.get(id);const generation=epoch,user=owner(),value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');return remember(value);}
   const url=(workspace,path)=>'/native-session/'+encodeURIComponent(workspace)+'/'+path;
-  async function native(workspace,path,body){
-    return api(url(workspace,path),body===undefined?{}:{method:'POST',body:JSON.stringify(body)});
+  async function native(workspace,path,body,{signal,timeout=15000}={}){
+    const controller=new AbortController(),cancel=()=>controller.abort();
+    if(signal?.aborted)controller.abort();else signal?.addEventListener('abort',cancel,{once:true});
+    const timer=setTimeout(cancel,timeout);
+    try{return await api(url(workspace,path),{...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)}),signal:controller.signal});}
+    finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
   }
   async function sessionRequest(id,suffix,body){const row=await context(id);return native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+(suffix?'/'+suffix:''),body);}
   async function coalesce(key,read){
@@ -95,7 +99,7 @@
     const last=messages.findLast(m=>m.info.role==='user'&&m.info.model)?.info;
     if(last&&!selection(id))select(id,{providerID:last.model.providerID,modelID:last.model.modelID,agent:last.agent,variant:last.model.variant});
     let pending=uncertain.get(id);try{pending??=JSON.parse(sessionStorage.getItem(storageKey('uncertain',id))||'null');}catch{}
-    if(pending){if(messages.some(m=>m.info.id===(pending.messageID||pending))){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}else uncertain.set(id,pending);}
+    if(pending){if(messages.some(m=>m.info.id===(pending.messageID||pending))){if(typeof pending==='object')pending.accepted=true;uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}else uncertain.set(id,pending);}
   }
   async function history(id,force=false){
     if(pendingReads.has('history:'+id))return pendingReads.get('history:'+id);
@@ -167,25 +171,7 @@
     if(tail==='messages'&&method==='GET')return {value:display(await history(id),row)};
     if(tail==='todos')return {value:{supported:true,items:await coalesce('todos:'+id,()=>sessionRequest(id,'todo'))}};
     if(tail==='diff')return {value:await sessionRequest(id,'diff')};
-    if(tail==='stop'){
-      // Stop this owned Native session only. Never restart the shared engine or
-      // mark an uncertain prompt as stopped on the abort HTTP response alone.
-      const generation=epoch,row=await context(id);
-      const before=await native(row.workspace_id,'session/status');
-      if(!before||typeof before!=='object'||Array.isArray(before))throw Error('Native session status is unavailable');
-      if((before[row.runtime_id]?.type||'idle')!=='idle')await sessionRequest(id,'abort',{});
-      const after=await native(row.workspace_id,'session/status');
-      if(!after||typeof after!=='object'||Array.isArray(after))throw Error('Native session status is unavailable');
-      if((after[row.runtime_id]?.type||'idle')!=='idle')
-        throw Error(label('OpenCode is still stopping. Check this session again.','OpenCode ما زال يوقف التنفيذ؛ تحقق من هذه المحادثة مجددًا.'));
-      if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');
-      // Only a confirmed idle session can release the local uncertain receipt.
-      // Native history, project files and the unsent composer draft are retained.
-      uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
-      statuses.set(id,'idle');
-      if(current(id,user))activeSession.execution_status='idle';
-      return {value:{status:'idle'}};
-    }
+    if(tail==='stop')return {value:await forceStop(id)};
     if(tail==='questions')return {value:{requests:await requests('question',id)}};
     if(tail==='permissions')return {value:await requests('permission',id)};
     const reply=tail.match(/^(questions|permissions)\/([^/]+)$/);
@@ -268,37 +254,63 @@
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
   }
   function stop(){stream?.close();stream=null;}
+  async function forceStop(id){
+    const user=owner(),generation=epoch;
+    sendGenerations.set(id,(sendGenerations.get(id)||0)+1);
+    submissionsInFlight.get(id)?.abort();
+    return coalesce('abort:'+id,async()=>{
+      const row=await context(id);let stopped=false;
+      // Always deliver abort first: a lost prompt receipt/status read must not
+      // prevent cancellation. Repeating abort is bounded and session-scoped.
+      for(let attempt=0;attempt<3;attempt++){
+        if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
+        await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/abort',{}, {timeout:8000});
+        const live=await native(row.workspace_id,'session/status',undefined,{timeout:8000});
+        if(!live||typeof live!=='object'||Array.isArray(live))throw Error('Native session status is unavailable');
+        if((live[row.runtime_id]?.type||'idle')==='idle'){stopped=true;break;}
+      }
+      if(!stopped)throw Error(label('Native did not confirm cancellation. The draft is saved; this session stays blocked.','لم يؤكد Native إيقاف التنفيذ. المسودة محفوظة وتبقى المحادثة محظورة.'));
+      if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
+      uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
+      statuses.set(id,'idle');if(current(id,user))activeSession.execution_status='idle';
+      return {status:'idle'};
+    });
+  }
   async function send(id,{text,providerID,modelID,agent,variant,files=[]}){
     const row=await context(id);
     if(blocked(id))throw Error(label('Recover this conversation before sending. Your draft is preserved.','استعد هذه المحادثة قبل الإرسال. مسودتك محفوظة.'));
-    const user=owner();select(id,{providerID,modelID,agent,variant});
+    const user=owner(),sendEpoch=epoch,sendGeneration=sendGenerations.get(id)||0;select(id,{providerID,modelID,agent,variant});
     const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
     const messageID='msg_'+((BigInt(Date.now())*4096n)&0xffffffffffffn).toString(16).padStart(12,'0')+Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');
     const parts=[{type:'text',text},...files.map(f=>({type:'file',mime:f.mime||({'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','pdf':'application/pdf'}[f.path.split('.').at(-1)]||'application/octet-stream'),url:row.file_base+f.path.split('/').map(encodeURIComponent).join('/'),filename:f.path.split('/').at(-1)}))];
     const pending={messageID,text,files,providerID,modelID,agent,variant};uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}
+    const submissionController=new AbortController();submissionsInFlight.set(id,submissionController);
     try{await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
-      messageID,model:{providerID,modelID},...(variant?{variant}:{}),...(agent?{agent}:{}),parts});}
+      messageID,model:{providerID,modelID},...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,timeout:30000});}
     catch(error){
       // The HTTP response can fail after Native accepted an async prompt.
       // Resolve the exact Native message ID against authoritative history
       // before reporting uncertainty. Never send the prompt a second time.
-      let confirmed=false;
-      if(owner()===user){
+      let confirmed=Boolean(pending.accepted);
+      if(!confirmed&&owner()===user&&epoch===sendEpoch){
         try{
           const messages=await history(id,true);
-          confirmed=messages.some(message=>message.info?.id===messageID);
+          confirmed=Boolean(pending.accepted)||messages.some(message=>message.info?.id===messageID);
         }catch(_historyError){
           // Keep the original transport error and uncertain receipt.
         }
       }
+      if(epoch!==sendEpoch||owner()!==user)throw Error('Authenticated account changed');
+      if((sendGenerations.get(id)||0)!==sendGeneration)throw Error(label('Submission interrupted by Stop. Review history before sending again.','قوطع الطلب بالإيقاف. راجع السجل قبل الإرسال مجددًا.'));
       if(!confirmed){
-        if(owner()===user&&(!error.status||error.status>=500))
+        if(owner()===user&&(!error.status||error.status===408||error.status>=500))
           error.message=label('OpenCode receipt could not be confirmed. Your draft is saved; check session status.','تعذر تأكيد استلام OpenCode للطلب. المسودة محفوظة؛ تحقق من حالة الجلسة.');
         else if(owner()===user){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}
         throw error;
       }
-    }
-    if(owner()!==user)return;
+    }finally{if(submissionsInFlight.get(id)===submissionController)submissionsInFlight.delete(id);}
+
+    if(owner()!==user||epoch!==sendEpoch||(sendGenerations.get(id)||0)!==sendGeneration)return;
     uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
     statuses.set(id,'submitted');
     if(activeSession?.id===id)activeSession.execution_status='submitted';
@@ -433,6 +445,6 @@
         default_model:providers.default?.[p.id],models:Object.values(p.models||{}).map(m=>({...m,allowed:true}))}))};
     return result;
   }
-  window.nativeSession={ready,active,route,start,stop,send,recover,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
+  window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
 })();

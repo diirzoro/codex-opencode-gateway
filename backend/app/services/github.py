@@ -89,16 +89,21 @@ def _api(method: str, path: str, token: str | None = None, jwt_token: str | None
         raise HTTPException(502, "GitHub API returned an error")
     return response.json() if response.content else None
 
-def begin_install(db, user) -> str:
+def _begin_installation(db, user) -> str:
     cfg=github_app_config.effective(settings,db)
     require_configured(cfg)
-    state = secrets.token_urlsafe(32)
+    state = 'setup_'+secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     db.add(GithubAuthState(state=state, user_id=user.id, expires_at=now + timedelta(minutes=STATE_TTL_MINUTES)))
     db.commit()
     return install_url(state,cfg)
 
-def begin_authorization(db, user) -> str:
+def begin_install(db,user) -> str:
+    # Never expose installation settings through the browser's old GitHub login
+    # before this Gateway account completes an explicit account-selection flow.
+    return begin_authorization(db,user,for_install=True)
+
+def begin_authorization(db, user, *, for_install=False) -> str:
     """Reauthorize an existing GitHub App without requiring a second installation.
 
     A one-time state binds the OAuth code to the signed-in Gateway account.
@@ -106,7 +111,7 @@ def begin_authorization(db, user) -> str:
     """
     cfg=github_app_config.effective(settings,db)
     require_configured(cfg)
-    state=secrets.token_urlsafe(32)
+    state=('install_' if for_install else '')+secrets.token_urlsafe(32)
     db.add(GithubAuthState(state=state,user_id=user.id,
                            expires_at=datetime.now(timezone.utc)+timedelta(minutes=STATE_TTL_MINUTES)))
     db.commit()
@@ -150,7 +155,7 @@ def connection_for(db, user) -> GithubConnection:
 def handle_callback(db, state: str, installation_id: int | None, setup_action: str | None, code: str | None = None):
     cfg=github_app_config.effective(settings,db)
     require_configured(cfg)
-    if not state or not code:
+    if not state:
         raise HTTPException(422, "Missing GitHub authorization parameters")
     now = datetime.now(timezone.utc)
     record = db.scalar(select(GithubAuthState).where(GithubAuthState.state==state).with_for_update())
@@ -160,8 +165,13 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
     if expires <= now:
         raise HTTPException(400, "GitHub authorization state expired")
     user=db.get(User,record.user_id)
-    if not user or user.status!='active' or not code: raise HTTPException(403,'Active account and GitHub user authorization required')
+    if not user or user.status!='active': raise HTTPException(403,'Active account and GitHub user authorization required')
     require_advanced(db, user)
+    if not code:
+        if state.startswith('setup_') and setup_action in {'install','update'}:
+            record.consumed=True
+            return {'redirect':begin_authorization(db,user)}
+        raise HTTPException(422,'Missing GitHub authorization parameters')
     token=exchange_code(code,config=cfg)
     # GitHub OAuth reauthorization has a code but may not include installation_id.
     # Resolve only installations of THIS App that the authenticated user can access.
@@ -173,6 +183,13 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
             if item.get('app_id')==cfg.github_app_id and isinstance(item.get('id'),int):
                 eligible.append(item['id'])
         if len(items)<100:break
+    if state.startswith('install_'):
+        # Do not route this account into an installation assigned to another
+        # Gateway customer, even if the browser is logged into its GitHub owner.
+        foreign=db.scalar(select(GithubConnection).where(GithubConnection.installation_id.in_(eligible),GithubConnection.user_id!=record.user_id)) if eligible else None
+        if foreign:raise HTTPException(409,'Installation is already linked to another account')
+        record.consumed=True
+        return {'redirect':_begin_installation(db,user)}
     if installation_id is None:
         previous=db.scalar(select(GithubConnection).where(GithubConnection.user_id==record.user_id))
         if previous and previous.installation_id in eligible:

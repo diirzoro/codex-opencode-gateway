@@ -10,7 +10,7 @@ function fixture(){
  const id='11111111-1111-4111-8111-111111111111',row={id,workspace_id:'workspace-a',runtime_id:'ses_a',file_base:'file:///owned/a/'};
  const state={calls:[],events:[],files:0,permissions:[],questions:[],history:[{info:{id:'u1',role:'user'},parts:[{type:'text',text:'Synthetic test'}]},{info:{id:'a1',role:'assistant'},parts:[{id:'text1',type:'text',text:''}]}]};
  const textElement=(tag,text='',className='')=>{const n=d.createElement(tag);n.textContent=text;n.className=className;return n;};
- const c={window:w,document:d,currentUser:{id:'owner-a'},activeWorkspace:{id:'workspace-a'},activeSession:{id,execution_status:'submitted'},lang:'en',localStorage:w.localStorage,sessionStorage:w.sessionStorage,crypto:require('node:crypto').webcrypto,URL,Uint8Array,setTimeout,clearTimeout,Date,console,
+ const c={window:w,document:d,currentUser:{id:'owner-a'},activeWorkspace:{id:'workspace-a'},activeSession:{id,execution_status:'submitted'},lang:'en',localStorage:w.localStorage,sessionStorage:w.sessionStorage,crypto:require('node:crypto').webcrypto,URL,AbortController,AbortSignal,Uint8Array,setTimeout,clearTimeout,Date,console,
   $:q=>d.querySelector(q),textElement,tr:(en)=>en,toast:()=>{},refreshPermissions:async()=>{},refreshMessages:async()=>c.window.nativeSession.route('/api/sessions/'+id+'/messages',{}),};
  c.api=async(path,options={})=>{state.calls.push({path,options});
   if(path==='/api/native-test/state')return {enabled:true,version:'1.19.4'};
@@ -166,6 +166,20 @@ async function main(){
   const f=fixture();await f.ready();await f.w.nativeSession.start();const original=f.c.api;
   f.c.api=async(path,options)=>{if(path.endsWith('/prompt_async')){const id=JSON.parse(options.body).messageID;f.state.events[0].onmessage({data:JSON.stringify({type:'message.updated',properties:{info:{id,sessionID:'ses_a',role:'user'}}})});throw Error('Lost acknowledgement');}return original(path,options)};
   await f.w.nativeSession.send(f.id,{text:'synthetic',providerID:'p',modelID:'m'});assert(!f.w.nativeSession.blocked(f.id));f.close();
+ });
+ await test('Stop aborts a hanging submission before status checks and cannot be undone by its late catch',async()=>{
+  const f=fixture();await f.ready();const original=f.c.api;let aborts=0;
+  f.c.api=async(path,options={})=>{if(path.endsWith('/prompt_async'))return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Error('aborted transport')),{once:true}));if(path.endsWith('/abort')){aborts++;return true;}return original(path,options);};
+  const sent=f.w.nativeSession.send(f.id,{text:'saved synthetic draft',providerID:'p',modelID:'m'}).catch(error=>error);await sleep(1);
+  assert(f.w.nativeSession.blocked(f.id));const result=await f.w.nativeSession.forceStop(f.id);const failure=await sent;
+  assert.equal(aborts,1);assert.equal(result.status,'idle');assert.equal(f.c.activeSession.execution_status,'idle');assert(!f.w.nativeSession.blocked(f.id));assert.match(failure.message,/Stop/);f.close();
+ });
+ await test('A still-busy Native session gets at most three aborts and keeps the uncertain draft block',async()=>{
+  const f=fixture();await f.ready();const original=f.c.api;let aborts=0;
+  f.c.api=async(path,options)=>{if(path.endsWith('/prompt_async'))throw Error('lost receipt');return original(path,options);};
+  await assert.rejects(f.w.nativeSession.send(f.id,{text:'saved',providerID:'p',modelID:'m'}));
+  f.c.api=async(path,options)=>{if(path.endsWith('/abort')){aborts++;return true;}if(path.endsWith('/session/status'))return {ses_a:{type:'busy'}};return original(path,options);};
+  await assert.rejects(f.w.nativeSession.forceStop(f.id),/did not confirm/);assert.equal(aborts,3);assert(f.w.nativeSession.blocked(f.id));f.close();
  });
  await test('Long assistant folding keeps full rich content and toggles without a fetch',async()=>{
   const f=fixture();vm.runInContext(app.slice(app.indexOf('function foldLongAssistantMessage('),app.indexOf('async function refreshMessages(')),f.c);

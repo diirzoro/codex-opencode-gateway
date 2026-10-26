@@ -729,12 +729,17 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }finally{recoverConversation.disabled=false;updateSend();}
   });
   // Exceptional receipt-reconciliation action, not a full-width conversation control.
+  const forceStopConversation=btn('forceStopNativeConversation','Stop and recover','إيقاف واستعادة',async()=>{
+    const id=activeSession?.id,user=currentUser?.id;if(!id||!window.nativeSession?.active())return;
+    forceStopConversation.disabled=true;
+    try{await window.nativeSession.forceStop(id);if(activeSession?.id!==id||currentUser?.id!==user)return;await refreshMessages();await window.refreshWorkspaceQuestions?.();await refreshPermissions();submissionStatus.textContent=tr('Native confirmed this conversation is stopped. History and draft are preserved; nothing was resent.','أكد Native توقف هذه المحادثة. السجل والمسودة محفوظان؛ لم يُعد إرسال شيء.');}catch(error){if(activeSession?.id===id&&currentUser?.id===user)submissionStatus.textContent=error.message;}finally{forceStopConversation.disabled=false;updateSend();}
+  });
   const recoveryAction=document.createElement('div');
   recoveryAction.hidden=true;
   recoveryAction.style.cssText='width:fit-content;max-width:100%;margin:4px 0 8px auto;';
   recoverConversation.classList.add('small');
   recoverConversation.style.cssText='width:auto;max-width:100%;min-height:32px;padding:5px 12px;white-space:normal;text-align:center;';
-  recoveryAction.append(recoverConversation);
+  recoveryAction.append(recoverConversation,forceStopConversation);
   q('promptForm').before(recoveryAction);
   const cancelAttachment=btn('cancelPendingAttachment','Cancel pending attachment','إلغاء طلب المرفق',async()=>{
     const id=activeSession?.id,owner=currentUser?.id;

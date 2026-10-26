@@ -225,3 +225,50 @@ def test_explicit_fresh_oauth_request_does_not_link_before_callback(boundary,mon
         assert db.scalar(select(models.GithubAuthState).where(models.GithubAuthState.state==state,
                          models.GithubAuthState.user_id==owner.id)) is not None
         assert db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id==owner.id)) is None
+
+
+def test_install_starts_account_picker_instead_of_installation_settings(monkeypatch):
+    from urllib.parse import urlparse,parse_qs
+    import uuid
+    cfg=SimpleNamespace(github_web_base='https://github.com',github_client_id='fixture-client',github_callback_url='https://test.example/api/github/callback')
+    monkeypatch.setattr(github.github_app_config,'effective',lambda *a:cfg)
+    monkeypatch.setattr(github,'require_configured',lambda *a:None)
+    states=[];db=SimpleNamespace(add=states.append,commit=lambda:None)
+    result=github.begin_install(db,SimpleNamespace(id=uuid.uuid4()))
+    args=parse_qs(urlparse(result).query)
+    assert urlparse(result).path=='/login/oauth/authorize'
+    assert args['prompt']==['select_account'] and args['state'][0].startswith('install_')
+
+
+def test_install_continuation_refuses_foreign_gateway_installation(monkeypatch):
+    db,state=_reauthorization_context(monkeypatch,[{'id':42,'app_id':5470256}])
+    original=db.scalar
+    def scalar(query):
+        if db.lookups==0:return original(query)
+        return SimpleNamespace(user_id='other-gateway-owner')
+    db.scalar=scalar
+    with pytest.raises(HTTPException) as error:github.handle_callback(db,'install_fixture',None,None,'code')
+    assert error.value.status_code==409
+    assert not state.consumed and not db.added
+
+
+def test_valid_account_selection_mints_new_install_state_without_connecting(monkeypatch):
+    db,state=_reauthorization_context(monkeypatch,[{'id':42,'app_id':5470256}])
+    continuation=Mock(return_value='https://github.com/apps/fixture/installations/new?state=setup_fixture')
+    monkeypatch.setattr(github,'_begin_installation',continuation)
+    result=github.handle_callback(db,'install_fixture',None,None,'code')
+    assert result['redirect'].startswith('https://github.com/apps/fixture/')
+    assert state.consumed and not db.added
+    continuation.assert_called_once()
+
+
+def test_setup_return_without_oauth_code_only_starts_fresh_authorization(monkeypatch):
+    db,state=_reauthorization_context(monkeypatch,[])
+    start=Mock(return_value='https://github.com/login/oauth/authorize?state=fresh_fixture')
+    monkeypatch.setattr(github,'begin_authorization',start)
+    exchange=Mock(side_effect=AssertionError('No code must not create a connection'))
+    monkeypatch.setattr(github,'exchange_code',exchange)
+    result=github.handle_callback(db,'setup_fixture',123,'update',None)
+    assert state.consumed and result['redirect'].startswith('https://github.com/login/oauth/authorize')
+    assert not db.added
+    exchange.assert_not_called()
