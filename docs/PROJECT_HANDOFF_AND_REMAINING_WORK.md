@@ -10,7 +10,7 @@
 
 **العودةبعدSave:**توثيقGitHubيفرّقCallbackURLلـOAuthعنSetupURLمعRedirect on updateلتعديلمستودعاتالتثبيت. لايمكنفرضهذهالعودةبـJSفيGatewayإذاكانGitHubلايردإليه. راجعhttps://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url . لمتُفحصأوتُغيّرإعداداتتطبيقGitHubالحسابية،فهذهعقبةمتبقيةللقبولالحي. مرجعprompt:https://github.blog/changelog/2024-06-07-account-picker-updates-for-oauth-and-github-app-sign-in/ .
 
-**الاختبارات:**19Backendمركزةناجحةفيtest_github_boundariesتغطيملكيةمشروعودورًاوالمستودعاتواعتمادالمستخدموانتهاءهوالفصلوإبطالcallbackقديموالتثبيتالأجنبيوالمبهم،معassertللمنتقيالجديد؛ تحذيرAnyIOواحد.3حالاتJSناجحةلتوقيفfullcopyالعرضيةوتمريرمساراتsparseوالنسخةالكاملةالموافقعليها. JS/Pythonsyntaxوdiffcheckناجحة. ليستاختباراتGitHubحيأوحسابينعلىTEST،ولاإثباتاختبارمستودعكبير. المتبقي:تسويةالنسخةالمنشورةيدويًاوفقإجراءالمالك،تأكيدإعدادعودةGitHub،وقبولحيللعزل. لا يُعلنحلإعداداتGitHubالخارجيةبإصلاحواجهة. يُوثقSHAبعدالرفع.
+**الاختبارات:**19Backendمركزةناجحةفيtest_github_boundariesتغطيملكيةمشروعودورًاوالمستودعاتواعتمادالمستخدموانتهاءهوالفصلوإبطالcallbackقديموالتثبيتالأجنبيوالمبهم،معassertللمنتقيالجديد؛ تحذيرAnyIOواحد.3حالاتJSناجحةلتوقيفfullcopyالعرضيةوتمريرمساراتsparseوالنسخةالكاملةالموافقعليها. JS/Pythonsyntaxوdiffcheckناجحة. ليستاختباراتGitHubحيأوحسابينعلىTEST،ولاإثباتاختبارمستودعكبير. المتبقي:تسويةالنسخةالمنشورةيدويًاوفقإجراءالمالك،تأكيدإعدادعودةGitHub،وقبولحيللعزل. لا يُعلنحلإعداداتGitHubالخارجيةبإصلاحواجهة. التزام المصدر: `3c6d7e9260b04c9c66326d3c606f44f0e6eae073`.
 
 ---
 
