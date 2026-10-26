@@ -39,30 +39,17 @@ jobs:
           [[ "$GITHUB_REF" == "refs/heads/updates" ]]
       - uses: actions/checkout@v4
         with:
-          ref: updates
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Validate full TEST source and migration chain
         run: |
           set -euo pipefail
           python3 -m py_compile scripts/full_test_git_release.py
           python3 -m compileall -q backend/app backend/alembic/versions
-          python3 - <<'PY'
-          import pathlib, ast
-          versions=sorted(pathlib.Path('backend/alembic/versions').glob('*.py'))
-          assert versions and versions[-1].name=='0024_github_app_settings.py'
-          revisions={}
-          for path in versions:
-              tree=ast.parse(path.read_text(encoding='utf-8'))
-              values={node.targets[0].id:ast.literal_eval(node.value) for node in tree.body if isinstance(node,ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and node.targets[0].id in ('revision','down_revision')}
-              assert values.get('revision') and values['revision'] not in revisions, path
-              revisions[values['revision']]=values.get('down_revision')
-          assert revisions['0024_github_app_settings']=='0023_admin_mail_drafts'
-          assert set(revisions.values())-set(revisions)-{None}==set(), 'Broken Alembic revision chain'
-          assert pathlib.Path('backend/alembic/versions/0022_email_service_policies.py').is_file()
-          assert pathlib.Path('backend/app/services/admin_email_config.py').is_file()
-          assert pathlib.Path('index.html').is_file()
-          print('FULL_SOURCE_PREFLIGHT_SUCCESS',len(versions),'migrations')
-          PY
+          python3 scripts/validate_migration_chain.py
+          python3 -m unittest discover -s scripts -p 'test_validate_migration_chain.py'
+          test -f backend/app/services/admin_email_config.py
+          test -f index.html
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
