@@ -1,51 +1,70 @@
-# TEST-only database migration deployment prerequisite
+# TEST database migrations during deploy-test
 
-> Status (2026-10-25): source commit 7fad35fc restores a fail-closed
-> deployment gate for TEST. The referenced root-owned
-> `deployment/test-only-migrate.sh` is NOT present on this branch.
-> Consequently a fresh deploy currently **fails closed** until an audited
-> root-owned runner is installed. Do not run the legacy install command
-> below against a missing file, do not fake its output, and do not regard
-> this source fix as execution of migrations on the VPS.
-> The operator must verify the effective TEST systemd EnvironmentFiles
-> (including rollback environment paths), confirm a TEST backup, verify
-> database identity `opencode_gateway_test`, execute Alembic through the
-> approved runner and confirm `0024_github_app_settings` before marking
-> the environment ready. This restriction applies to deploy-test, not
-> audit-test. LIVE/master must remain untouched.
+**Current source behavior (26 October 2026).** The old mandatory
+`sudo -n /usr/local/sbin/opencode-gateway-test-migrate upgrade` dependency
+has been removed. There is **no need to install or invoke** a separate
+root-owned migration script, modify sudoers, or manually advance Alembic
+for every release. The former `deployment/test-only-migrate.sh` instructions
+were stale and the file is not tracked in this branch.
 
-The TEST deployment script now fails closed if Alembic is not executed and verified.
-Do NOT point this runner at production. It asserts current_database() = opencode_gateway_test.
+`scripts/full_test_git_release.py` now performs the following in the existing
+TEST release procedure:
 
-On the VPS as a sudo-authorized operator, after pulling updates:
+1. Confirm the running `opencode-gateway-test.service` is owned by the
+   deployment account and its working directory is the TEST backend.
+2. Obtain `DATABASE_URL` and related configuration from that **running
+   TEST service process**, not from the workflow shell or an assumed
+   `.env` file. The effective systemd environment may have overrides.
+   No credentials or connection URLs are printed.
+3. Connect with the existing TEST Python environment and confirm that
+   `SELECT current_database()` returns **`opencode_gateway_test`**.
+   Mismatched or unreadable environments stop the operation rather than
+   risking an unintended database.
+4. Create a private custom-format `pg_dump` backup under
+   `/home/tahir/.opencode-gateway-test-db-backups/`, owned by the
+   deployment user and protected with directory mode `0700`.
+   Validate its format with `pg_restore --list`; retain the backup
+   for operator recovery. This uses standard existing PostgreSQL
+   utilities, not an additional service or worker.
+5. Sync the approved GitHub `updates` source to the TEST working tree.
+6. Execute `python -m alembic -c alembic.ini upgrade head` as the
+   existing TEST user in its existing virtualenv. This upgrades all
+   pending revisions in the checked-out linear chain.
+7. Verify `current_database()` **again** and assert the
+   `alembic_version` revision equals the current Alembic head.
+   Only after success restart **the TEST Gateway service** and mark
+   the approved release SHA. OpenCode Native is not restarted.
 
-```bash
-sudo install -o root -g root -m 0750 /home/tahir/opencode-gateway-test/deployment/test-only-migrate.sh /usr/local/sbin/opencode-gateway-test-migrate
-sudo visudo -f /etc/sudoers.d/opencode-gateway-test-migrate
-```
+`audit-test` remains read-only and does not connect to or migrate the
+database. `rollback-test` restores source code only; it **does not**
+automatically reverse database schema revisions. Existing repository
+and project file preservation policies remain in force.
 
-Add this one line via visudo:
+## If a deploy fails
 
-```
-tahir ALL=(root) NOPASSWD: /usr/local/sbin/opencode-gateway-test-migrate upgrade
-```
+The release is **not** successful when an actual migration fails. Failure
+may be caused by missing `pg_dump`/`pg_restore`, inaccessible effective
+service environment, unavailable TEST virtualenv, database identity
+mismatch, database permissions, or a real Alembic/data conflict.
+The uniqueness migration `0026_unique_registration_identities`,
+for example, deliberately refuses existing normalized duplicate
+accounts instead of deleting or modifying them silently.
 
-Then verify securely (after confirming a TEST DB backup exists):
+Review the failed TEST job and inspect only sanitized database
+diagnostics. Do not weaken the TEST database-identity check, skip a
+failing Alembic revision, or run the release against LIVE to work around
+an error. The existing source rollback attempts to restore prior Git
+source if source replacement/restart fails; it **cannot** undo an already
+committed database migration.
 
-```bash
-sudo -n /usr/local/sbin/opencode-gateway-test-migrate upgrade
-```
+## Scope
 
-Expect TEST_DATABASE_CONFIRMED, Alembic current, TEST_DB_MIGRATION_OK.
-Use only the same protected TEST systemd environment files loaded by
-opencode-gateway-test.service. No credentials are printed or stored in Git.
-The root-owned runner uses transient systemd units under User=tahir and
-passes the protected EnvironmentFile paths to systemd. It never sources
-writable files into a root shell or prints secrets. If the TEST rollback
-environment path changes, an authorized operator must update and reinstall
-the runner. Transient units do not create persistent workers.
+Changes apply to the `updates` branch and the explicit TEST
+`deploy-test` workflow only. This does not mutate LIVE, `master`,
+systemd configuration, environment/secret files, Nginx, OpenCode Native,
+or the separately protected Preview infrastructure.
 
-The release script copies migrations before executing this runner and restarts
-the TEST gateway only on successful migration. A failed migration aborts and
-restores application source; database migration rollbacks are NOT automatic.
-Do not run this procedure for the live gateway.
+The source implementation and CI checks are not by themselves proof
+that an actual TEST database backup/migration succeeded. Only a
+successful pinned `deploy-test` run and TEST acceptance can establish
+that.
