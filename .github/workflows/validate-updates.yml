@@ -43,6 +43,9 @@ jobs:
           count="$(python -m alembic heads | grep -c '(head)' || true)"
           test "$count" -eq 1
 
+      - name: Test GitHub customer authorization and repository policy
+        run: python -m pytest -q backend/tests/test_github_boundaries.py
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
