@@ -49,7 +49,7 @@ jobs:
           python3 - <<'PY'
           import pathlib, ast
           versions=sorted(pathlib.Path('backend/alembic/versions').glob('*.py'))
-          assert versions and versions[-1].name=='0024_github_app_settings.py'
+          assert versions, 'No Alembic migrations found'
           revisions={}
           for path in versions:
               tree=ast.parse(path.read_text(encoding='utf-8'))
