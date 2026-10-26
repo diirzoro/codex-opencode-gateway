@@ -648,12 +648,12 @@ try{const remembered=localStorage.getItem('og-login-identity');if(remembered){$(
 let socialOptions;
 async function loadSocialOptions(){
  if(!socialOptions)socialOptions=api('/api/auth/social/options',{allowAnonymous:true}).catch(error=>{socialOptions=null;throw error;});
- try{const options=await socialOptions;for(const button of $$('[data-social-login]')){button.disabled=!options[button.dataset.socialLogin];button.title=button.disabled?(lang==='ar'?'غير مهيأ على هذا الخادم':'Not configured on this server'):'';}}
+ try{const options=await socialOptions;for(const button of $$('[data-social-login]')){if(button.dataset.socialLogin==='github'){button.hidden=true;button.disabled=true;continue;}button.disabled=!options[button.dataset.socialLogin];button.title=button.disabled?(lang==='ar'?'غير مهيأ على هذا الخادم':'Not configured on this server'):'';}}
  catch(error){$('#socialLoginNote').textContent=error.message;}
 }
-$$('[data-social-login]').forEach(button=>{button.disabled=true;button.onclick=()=>location.assign('/api/auth/social/'+button.dataset.socialLogin+'/start');});
+$$('[data-social-login]').forEach(button=>{button.disabled=true;if(button.dataset.socialLogin==='github'){button.hidden=true;return;}button.onclick=()=>location.assign('/api/auth/social/'+button.dataset.socialLogin+'/start');});
 new MutationObserver(()=>{if($('#authPage').classList.contains('active'))loadSocialOptions();}).observe($('#authPage'),{attributes:true,attributeFilter:['class']});
-window.linkSignInProvider=provider=>location.assign('/api/auth/social/'+provider+'/start');
+window.linkSignInProvider=provider=>{if(provider==='github')return;location.assign('/api/auth/social/'+provider+'/start');};
 navigationReady.then(async()=>{
  const result=new URLSearchParams(location.hash.slice(1)).get('social');if(!result)return;
  history.replaceState(null,'',location.pathname+location.search);

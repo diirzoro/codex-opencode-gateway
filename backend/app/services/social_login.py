@@ -16,6 +16,8 @@ SIGNUP_COOKIE = 'gateway_login_signup'
 TTL = 600
 
 def available(provider):
+    # Owner scope: GitHub is for repository authorization, never platform sign-in.
+    if provider == 'github': return False
     base=urlsplit(settings.public_base_url)
     if (base.scheme != 'https' and not (base.scheme=='http' and base.hostname in {'127.0.0.1','localhost','::1'})) or base.username or base.password or base.query or base.fragment:
         return False

@@ -22,7 +22,9 @@ class Element{constructor(){this.children=[];this.dataset={};}append(...nodes){t
 }
 {
  const buttons=[{dataset:{socialLogin:'github'}},{dataset:{socialLogin:'google'}}],c={$$:()=>buttons,location:{assign(path){c.path=path;}}};vm.createContext(c);
- const line=source.split('\n').find(line=>line.startsWith("$$('[data-social-login]').forEach"));vm.runInContext(line,c);for(const b of buttons){assert.equal(b.disabled,true);b.onclick();assert.equal(c.path,'/api/auth/social/'+b.dataset.socialLogin+'/start');}
+ const line=source.split('\n').find(line=>line.startsWith("$$('[data-social-login]').forEach"));vm.runInContext(line,c);for(const b of buttons){assert.equal(b.disabled,true);if(b.dataset.socialLogin==='github'){assert.equal(b.hidden,true);assert.equal(b.onclick,undefined);}else{b.onclick();assert.equal(c.path,'/api/auth/social/google/start');}}
+ assert.ok(!fs.readFileSync('index.html','utf8').includes('data-social-login="github"'));
+ assert.ok(fs.readFileSync('index.html','utf8').includes('data-social-login="google"'));
 }
 {
  const c={copy:{en:{},ar:{}},localStorage:{getItem(){return null;}}};vm.createContext(c);vm.runInContext(source.slice(source.indexOf("Object.assign(copy.en,{benefitsTitle:"),source.indexOf('\nlet socialOptions')),c);

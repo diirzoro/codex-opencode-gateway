@@ -1,3 +1,25 @@
+# التوجيه الأحدث — GitHub للمستودعات فقط / بحث Native — 26 أكتوبر 2026
+
+**قرار المالك:** لا يريد تسجيل الدخول إلى المنصة عبر GitHub. العميل يدخل بحساب Gateway الحالي، ثم يفوّض مستودعات GitHub الخاصة به فقط. Google/Gmail مؤجل؛ لم يُفعّل أو يُعدّل إعداداته هذا العمل. تفويض OAuth للوصول إلى مستودع لا يساوي إنشاء هوية دخول إلى المنصة. هذا القرار يلغي توجيهات GitHub social-sign-in في أقسام25 أكتوبر دون حذف سجلات الهويات السابقة أو رموز المستودعات.
+
+**تطبيق القرار في الكود:** أزيل زر GitHub من نموذج الدخول، مع حجب الزر في الأصول القديمة أيضًا؛ أزيل ربط GitHub كهوية دخول من صفحة الحساب. public social/options يعيدgithub=false حتى عند حفظ App ID/Client Secret صالحين. مسارا /api/auth/social/github/start و/callback يعيدان404 في Backend قبل تنفيذ التدفق. لم تُحذف بيانات الحسابات أو اتصالاتها. /api/github/install و/callback و/repositories و/branches وتفويض ملكية المستودعات وإعدادات تطبيق المنصة بقيت متاحة وفق الصلاحيات المعتادة. أزيل طلب social/options غير الضروري من صفحة إعدادات GitHub؛ لم تعد الصفحة تخلط حالة دخول المنصة بحالة المستودعات. لا ترحيل جديد لهذه الدفعة، ولا تعديل على Native أو Preview أو master/LIVE أو ملفات الإعدادات أو العمليات أو المنافذ.
+
+**البحث الرسمي قبل أي تأسيس إضافي:** نعم، خدمات وأدوات GitHub موجودة وتجب إعادة استخدامها بدل بناء أدوات AI/GitHub مكررة:
+
+- [GitHub داخل OpenCode](https://opencode.ai/docs/github/): الأمرopencode github install يجهّز GitHub App/workflow/secrets لتشغيل الوكيل في GitHub Actions من Issues وPRs. ليس هو واجهة دخول العملاء إلى Gateway. لم يُشغّل هذا الأمر ولم يُضف أي workflow.
+- [GitHub Copilot provider](https://opencode.ai/docs/providers/#github-copilot): /connect يربط اشتراك نماذج Copilot؛ لا يثبت تفويض استيراد مستودعات كل عميل.
+- [MCP في OpenCode](https://opencode.ai/docs/mcp-servers/): يدعم أدوات خارجية وإدارة OAuth من العميل الأصلي، بلا Python AI executor جديد.
+- [دليل GitHub الرسمي لتثبيت MCP داخل OpenCode](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-opencode.md): مسار remote مستضاف من GitHub يستخدم PAT في المثال، ومسار local رسمي يدعم OAuth علىgithub.com ويأتي باعتمادات التطبيق الخاصة به؛ ليس إنشاء GitHub App خاص شرطًا لجميع المسارات. المسار المحلي يضيف عملية/حاوية ومنافذ callback، ولذلك لم يُثبّت أو يُفعّل تحت القيود الحالية. [README الرسمي](https://github.com/github/github-mcp-server) يوضح أن OAuth remote يحتاج إعداد GitHub App/OAuth App من التطبيق المضيف. لا يُفترض أن كل عميل MCP يدعم التدفق نفسه تلقائيًا.
+- روجع مصدرOpenCode المثبّت إصدارv1.19.4 قراءةً فقط من المصدر الرسمي: [mcp/auth.ts](https://raw.githubusercontent.com/anomalyco/opencode/v1.19.4/packages/opencode/src/mcp/auth.ts)، [github.ts](https://raw.githubusercontent.com/anomalyco/opencode/v1.19.4/packages/opencode/src/cli/cmd/github.ts)، [server.ts](https://raw.githubusercontent.com/anomalyco/opencode/v1.19.4/packages/opencode/src/server/server.ts). أوامرGitHub هيinstall/run للوكيل؛ تخزين MCP فيmcp-auth.json مفهرس باسمMCP معserverUrl، وليس بمعرّف مستخدم Gateway. هذه ملاحظة مصدر، وليست اختبار عزل فعلي. لا يجوز تفعيل اعتماد مشترك باسمgithub لجميع العملاء وافتراض فصل حساباتهم. التوثيق الحالي وحده لا يثبت توافق أو عزل كل خيار على المحرك المشترك1.19.4.
+
+**الخلاصة التنفيذية:** لا نبني أدوات GitHub أو منفّذًا موازيًا لما يوفره MCP/OpenCode. اختيار المسار النهائي لربط المستودعات ما زال يحتاج مطابقة مصادقة العميل وعزل الاعتمادات وواجهات اختيار/استيراد المستودع مع Gateway. لم يُثبت البحث خدمة جاهزة بديلة لكل إدارة مستخدمي Gateway وملكياتهم، ولا يشكّل مبررًا لنقل هوية المنصة إلى اعتماد Native مشترك. لم تُثبّت إضافة أو خدمة أو نسخة OpenCode، ولم يُفعّل MCP أو GitHub App على مستودع عميل.
+
+**آخر دليل يقدمه المالك عن TEST:** الصور اللاحقة تُظهر النموذج المعدّل مع جاهزية مخططGitHub ورأسAlembic0024؛ هذا دليل صورة المالك على تقدم النشر، لا نشرًا أو استعلامPostgreSQL نفذته هذه الجلسة. أمرEnvironmentFiles أظهر runtime.env داخلstate/rollback-80275b121918462c920af81e6fde2145 و/etc/opencode-gateway-test/native-release.env. الفحص الذي نفذه المالك أعادMISSING لمفتاحCREDENTIALS_ENCRYPTION_KEY في الملفين وفي العملية. البحث المحدود المقترح أعاد0 ملفات مرشحة. أكد المالك صراحةً عدم وجود سجلات مشفّرة سابقة ويريد إعدادًا أوليًا جديدًا؛ هذه إفادة مالك، وليست نتيجة تعداد قاعدة نفذناه. أوقف البحث المتكرر عن مفتاح قديم، ولم يُنشأ مفتاح جديد أو تُكتب إعدادات بعد؛ خطوات التهيئة الإضافية موقوفة حاليًا بطلب مراجعة خدماتOpenCode أولًا.
+
+**التحقق لهذه الدفعة:**22 حالةBackend مركزة ناجحة، تشمل حفظ إعداداتApp مع استمرار عمل مدخل تفويض المستودعات وJWT، وبقاءgithub sign-in غير متاح، ورفض الطلب المباشرstart/callback404.8 اختباراتDOM لإدارةGitHub و6 سيناريوهاتAuth wiring ناجحة؛ Google وبقية التسجيل المعتاد محفوظة، وإخفاءGitHub مع أصولHTML قديمة مختبر. صياغةJS/Python وgit diff --check ناجحة. لا قبول حيًّا جديدًا لـMCP أوOAuth أواستيراد المستودعات، ولا نشر تلقائي. تغييرات نشر/ترحيلات المالك حتى7d1f25d احتُفظ بها؛ لم تُعدّل workflows أو أدوات الترحيل في هذه الدفعة.
+
+---
+
 # السجل الموحّد لهذه الجلسة — 25 أكتوبر 2026
 
 هذا الملخص هو المرجع الأحدث لتسلسل العمل في هذه الجلسة. التفاصيل والأدلة محفوظة في الأقسام التالية؛ الأقسام الأقدم تسجّل الحالة وقت تنفيذها ولا تلغي الإصلاحات اللاحقة. **رفع الكود إلى GitHub وإنشاء تطبيق GitHub لا يعنيان نشره أو تفعيل OAuth على TEST.**

@@ -191,6 +191,7 @@ def social_pending(request: Request):
 
 @router.get('/social/{provider}/start')
 def social_start(provider: str, request: Request, db: Session = Depends(get_db)):
+    if provider == 'github': raise HTTPException(404, 'GitHub sign-in is disabled; repository authorization is separate')
     session = None
     if request.cookies.get(settings.session_cookie_name):
         require_user(request, db)
@@ -204,6 +205,7 @@ def social_start(provider: str, request: Request, db: Session = Depends(get_db))
 @router.get('/social/{provider}/callback')
 def social_callback(provider: str, request: Request, state: str = '', code: str = '',
                     error: str | None = None, db: Session = Depends(get_db)):
+    if provider == 'github': raise HTTPException(404, 'GitHub sign-in is disabled; repository authorization is separate')
     response = RedirectResponse('/#social=error', status_code=303)
     response.delete_cookie(social_login.FLOW_COOKIE, path='/api/auth/social', secure=settings.cookie_secure, httponly=True, samesite='lax')
     try:

@@ -178,10 +178,9 @@
     const webhookSecret=secretField('Webhook Secret (optional)','webhook_secret');webhookSecret.maxLength=4096;
     const save=textElement('button',tr('Save GitHub App settings','حفظ إعدادات تطبيق GitHub'),'button');save.type='submit';save.disabled=true;
     const saveStatus=textElement('p');saveStatus.setAttribute('role','status');
-    const signIn=textElement('p');signIn.setAttribute('role','status');
     const connections=textElement('div');connections.id='adminGithubConnections';
     form.append(grid,credentialsPanel,save,saveStatus);
-    panel.append(heading,note,status,form,urls,configuration,database,connection,signIn,authorize,refresh,connections);
+    panel.append(heading,note,status,form,urls,configuration,database,connection,authorize,refresh,connections);
     form.onsubmit=async event=>{
       event.preventDefault();if(save.disabled||!current())return;
       save.disabled=true;saveStatus.textContent=tr('Saving encrypted settings…','جارٍ حفظ الإعدادات مشفّرة…');
@@ -229,8 +228,7 @@
       }catch(error){if(current())connection.textContent=tr('Account status unavailable: ','تعذر فحص اتصال الحساب: ')+error.message;}
     };
     const entry={owner};adminGithubLoad=entry;
-    const showSignIn=async()=>{try{const value=await api('/api/auth/social/options');if(current())signIn.textContent=value.github?tr('GitHub sign-in is configured; a real sign-in test is still required.','الدخول عبر GitHub مهيأ؛ ما زال اختبار الدخول الحقيقي مطلوبًا.'):tr('GitHub sign-in is not configured.','الدخول عبر GitHub غير مهيأ.');}catch(error){if(current())signIn.textContent=error.message;}};
-    entry.promise=Promise.all([showConfig(),showConnection(),showSignIn()]).then(async()=>{
+    entry.promise=Promise.all([showConfig(),showConnection()]).then(async()=>{
       if(!current())return;
       authorize.disabled=authorize.dataset.available!=='true'||!database.dataset.ready;
       // This child alone is owned by the connections renderer. Never give it the
@@ -1012,7 +1010,7 @@
       var storage=document.createElement('details');storage.append(textElement('summary',tr('Local project storage (50 MB each)','تخزين المشاريع المحلية (50 MB لكل مشروع)')));var usage=textElement('div','');storage.append(usage);extras.append(storage);var loaded=false;
       storage.ontoggle=async()=>{if(!storage.open||loaded)return;loaded=true;usage.replaceChildren(textElement('p',tr('Loading storage usage…','جارٍ تحميل استخدام التخزين…')));try{var rows=await Promise.all(data.projects.filter(p=>p.source_type!=='github').flatMap(p=>p.workspaces.map(async w=>{var s=await api('/api/workspaces/'+w.id+'/storage');return p.name+' · '+s.used_mb+' / '+s.limit_mb+' MB';})));if(currentUser?.id!==user.id)return;usage.replaceChildren(...rows.map(value=>textElement('p',value)));if(!rows.length)usage.append(textElement('p',tr('No local projects yet','لا توجد مشاريع محلية بعد')));}catch(error){loaded=false;usage.replaceChildren(textElement('p',error.message));}};
       var signIns=textElement('div','','account-sign-ins');signIns.append(textElement('h4',tr('Link a sign-in identity','ربط هوية للدخول')));extras.append(signIns);
-      api('/api/auth/social/options').then(function(options){if(currentUser?.id!==user.id||!signIns.isConnected)return;for(const provider of ['github','google']){var link=textElement('button',tr('Link sign-in with ','ربط الدخول عبر ')+provider,'button ghost small');link.disabled=!options[provider];link.title=link.disabled?tr('Not configured on this server','غير مهيأ على هذا الخادم'):'';link.onclick=()=>window.linkSignInProvider(provider);signIns.append(link);}signIns.append(textElement('p',tr('Sign-in identity does not authorize GitHub repositories. Linking requires an active sign-in session.','هوية الدخول لا تمنح صلاحية لمستودعات GitHub. الربط يتطلب جلسة دخول نشطة.')));}).catch(function(error){signIns.append(textElement('p',error.message));});
+      api('/api/auth/social/options').then(function(options){if(currentUser?.id!==user.id||!signIns.isConnected)return;for(const provider of ['google']){var link=textElement('button',tr('Link sign-in with ','ربط الدخول عبر ')+provider,'button ghost small');link.disabled=!options[provider];link.title=link.disabled?tr('Not configured on this server','غير مهيأ على هذا الخادم'):'';link.onclick=()=>window.linkSignInProvider(provider);signIns.append(link);}signIns.append(textElement('p',tr('Sign-in identity does not authorize GitHub repositories. Linking requires an active sign-in session.','هوية الدخول لا تمنح صلاحية لمستودعات GitHub. الربط يتطلب جلسة دخول نشطة.')));}).catch(function(error){signIns.append(textElement('p',error.message));});
       extras.append(textElement('h4',tr('How your data is handled','كيف تُدار بياناتك')),textElement('p',tr('Local projects remain on Gateway. GitHub repositories remain in your GitHub account; OpenCode uses a server-side working copy. Credentials are encrypted server-side. Trial expiry does not delete files. Local project files are cleaned after 7 days of meaningful inactivity; temporary GitHub worktrees after 73 hours. Customer records are archived after 90 days of expired access; identity, billing history and explicit marketing-consent state are preserved, while operational secrets are removed. Hardware isolation is not provided.','تبقى المشاريع المحلية في Gateway ومستودعات GitHub في حسابك؛ يستخدم OpenCode نسخة عمل على الخادم. تُشفّر بيانات الاعتماد على الخادم. انتهاء التجربة لا يحذف الملفات. تُنظّف ملفات المشاريع المحلية بعد 7 أيام من الخمول الحقيقي ونسخ GitHub المؤقتة بعد 73 ساعة. يُؤرشف العميل بعد 90 يومًا من انتهاء الوصول مع حفظ الهوية وسجل الفوترة وحالة الموافقة التسويقية الصريحة، وتنظيف بيانات التشغيل الحساسة. لا يُقدّم عزل عتادي.')));
     } catch(error){if(currentUser?.id===user.id)information.replaceChildren(textElement('p',error.message));}
   }

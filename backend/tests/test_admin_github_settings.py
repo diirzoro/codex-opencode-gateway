@@ -36,7 +36,7 @@ def send(f,method='GET',data=None,customer=False):
  client,owner,other,_,runtime,_=f
  return authenticated(client,'/api/admin/github-configuration',other if customer else owner,runtime,method,data)
 
-def test_encrypted_save_activates_native_github_flows_without_exposing_secrets(setup):
+def test_encrypted_save_activates_repository_linking_without_platform_signin_or_secret_leak(setup):
  client,owner,customer,engine,runtime,payload=setup
  response=send(setup,'PUT',payload)
  assert response.status_code==200,response.text
@@ -50,9 +50,10 @@ def test_encrypted_save_activates_native_github_flows_without_exposing_secrets(s
   assert github.connection_status(db,db.get(models.User,customer.id))['configured']
   assert not github.connection_status(db,db.get(models.User,customer.id))['connected']
   assert list(db.scalars(select(models.GithubConnection)))==[]
- assert social_login.available('github')
- url,_=social_login.begin('github');assert 'IvTestClient' in url and 'social%2Fgithub%2Fcallback' in url
- assert authenticated(client,'/api/auth/social/options',customer,runtime).json()['github']
+ assert social_login.available('github') is False
+ assert authenticated(client,'/api/auth/social/options',customer,runtime).json()['github'] is False
+ assert authenticated(client,'/api/auth/social/github/start',customer,runtime).status_code==404
+ assert authenticated(client,'/api/auth/social/github/callback',customer,runtime).status_code==404
  assert 'synthetic-gateway-test' in github.install_url('test-state')
  import jwt
  public=serialization.load_pem_private_key(payload['private_key'].encode(),password=None).public_key()
