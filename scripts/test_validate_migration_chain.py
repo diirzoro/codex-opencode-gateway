@@ -123,6 +123,21 @@ class TestOnlyAlembicDeployTests(unittest.TestCase):
         self.assertIn("UNCLASSIFIED_ALEMBIC_ERROR",str(notice.call_args.args[0]))
         self.assertNotIn("private-password",str(notice.call_args.args[0]))
 
+    def test_safe_migration_trace_metadata(self):
+        import subprocess
+        failure=subprocess.CalledProcessError(1,["python"],
+            stderr=(b"INFO [alembic.runtime.migration] Running upgrade 0025_email_verification_codes -> 0026_unique_registration_identities, add identities\\n"
+                    b"sqlalchemy.exc.ProgrammingError: SECRET=private-password\\nSQLSTATE: 42703\\n"))
+        with patch.object(release,"run",side_effect=failure):
+            with patch("builtins.print") as notices:
+                with self.assertRaises(RuntimeError):
+                    release.apply_test_migrations("python",{})
+        printed=" ".join(str(c.args) for c in notices.call_args_list)
+        self.assertIn("ProgrammingError",printed)
+        self.assertIn("0026_unique_registration_identities",printed)
+        self.assertIn("42703",printed)
+        self.assertNotIn("private-password",printed)
+
     def test_audit_does_not_connect_to_database(self):
         with patch.object(release,"files",return_value=[]),patch.object(release,"test_service_environment",side_effect=AssertionError("DB reached")),patch.object(release,"run",side_effect=AssertionError("command reached")):
             release.rollout("a"*40,"audit")
