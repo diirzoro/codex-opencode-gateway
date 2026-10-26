@@ -152,9 +152,28 @@ def backup_test_database(env):
     fd,name=tempfile.mkstemp(prefix="test-pre-migration-",suffix=".dump",dir=BACKUP_DIR)
     os.close(fd)
     dest=Path(name)
+    # libpq environment variables must contain individual fields. A whole
+    # SQLAlchemy URL in PGDATABASE is treated as a database *name* by pg_dump,
+    # not reliably parsed as a connection URI. Keep passwords out of argv.
+    from urllib.parse import urlsplit, unquote, parse_qs
+    parts=urlsplit(url)
+    if parts.scheme!="postgresql" or not parts.hostname or not parts.path.startswith("/"):
+        raise RuntimeError("Invalid TEST PostgreSQL backup connection")
+    database=unquote(parts.path[1:])
+    if database!=EXPECTED_TEST_DATABASE:
+        raise RuntimeError("Refusing backup of non-TEST database")
     backup_env=env.copy()
-    # libpq accepts a PostgreSQL URI via PGDATABASE without leaking it in argv.
-    backup_env["PGDATABASE"]=url
+    for key in ("PGHOST","PGPORT","PGUSER","PGPASSWORD","PGDATABASE","PGSSLMODE","PGSSLROOTCERT"):
+        backup_env.pop(key,None)
+    backup_env["PGHOST"]=parts.hostname
+    backup_env["PGPORT"]=str(parts.port or 5432)
+    backup_env["PGDATABASE"]=database
+    if parts.username is not None:backup_env["PGUSER"]=unquote(parts.username)
+    if parts.password is not None:backup_env["PGPASSWORD"]=unquote(parts.password)
+    options=parse_qs(parts.query,keep_blank_values=True)
+    for parameter,variable in (("sslmode","PGSSLMODE"),("sslrootcert","PGSSLROOTCERT")):
+        if parameter in options and len(options[parameter])==1:
+            backup_env[variable]=options[parameter][0]
     try:
         run("pg_dump","--format=custom","--file",str(dest),timeout=180,env=backup_env)
         run("pg_restore","--list",str(dest),timeout=30,env=backup_env)
