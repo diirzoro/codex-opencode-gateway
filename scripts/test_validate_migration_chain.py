@@ -126,8 +126,8 @@ class TestOnlyAlembicDeployTests(unittest.TestCase):
     def test_safe_migration_trace_metadata(self):
         import subprocess
         failure=subprocess.CalledProcessError(1,["python"],
-            stderr=(b"INFO [alembic.runtime.migration] Running upgrade 0025_email_verification_codes -> 0026_unique_registration_identities, add identities\\n"
-                    b"sqlalchemy.exc.ProgrammingError: SECRET=private-password\\nSQLSTATE: 42703\\n"))
+            stderr=(b"INFO [alembic.runtime.migration] Running upgrade 0025_email_verification_codes -> 0026_unique_registration_identities, add identities\n"
+                    b"sqlalchemy.exc.ProgrammingError: SECRET=private-password\nSQLSTATE: 42703\n"))
         with patch.object(release,"run",side_effect=failure):
             with patch("builtins.print") as notices:
                 with self.assertRaises(RuntimeError):
