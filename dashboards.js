@@ -393,8 +393,9 @@
     void runtimeJob;
     await providersJob;
   }
+  let githubConnectionRender=0;
   async function loadConnectionsGithub(){
-    const github=q('connectionsGithub'),owner=currentUser?.id;
+    const github=q('connectionsGithub'),owner=currentUser?.id,render=++githubConnectionRender;
     github.replaceChildren(title('GitHub account / authorization','حساب GitHub / التفويض'));
     const result=new URLSearchParams(location.search).get('github');
     const messages={
@@ -405,13 +406,21 @@
       configuration:['GitHub App credentials or encryption are unavailable on Gateway.','بيانات تطبيق GitHub أو مفتاح التشفير غير متاحة على Gateway.'],
       error:['GitHub authorization could not be confirmed; no new repository was imported.','تعذر تأكيد تفويض GitHub؛ لم يُستورد أي مستودع جديد.']
     };
-    if(messages[result])github.append(textElement('p',tr(...messages[result]),'api-message'));
-    const status=await api('/api/github/status');if(owner!==currentUser?.id)return;
+    const status=await api('/api/github/status');if(owner!==currentUser?.id||render!==githubConnectionRender)return;
+    if(messages[result]){
+      const message=result==='connected'&&!status.connected
+        ?tr('This GitHub connection is no longer active. Start a new link to continue.','هذا الربط مع GitHub لم يعد نشطًا. ابدأ ربطًا جديدًا للمتابعة.')
+        :tr(...messages[result]);
+      github.append(textElement('p',message,'api-message'));
+    }
     github.append(textElement('p',status.connected?(status.account_login||'GitHub'):tr('Not connected','غير متصل')));
     if(!status.configured)github.append(textElement('p',tr('The administrator must configure GitHub App credentials before customer authorization.','يجب أن تكمل الإدارة بيانات تطبيق GitHub قبل تفويض العملاء.'),'api-message'));
     // User authorization is distinct from App installation. Never reinstall
     // merely because Gateway disconnected or an expiring user token was lost.
-    const authorize=btn('settingsAuthorizeGithub',status.connected?'Reauthorize GitHub':'Connect / reconnect GitHub',status.connected?'تجديد تفويض GitHub':'ربط / إعادة ربط GitHub',async()=>{
+    if(!status.connected)github.append(textElement('p',
+      tr('GitHub is disconnected from your Gateway account. A new explicit link is required before repository access; an installed GitHub App does not mean this account is connected.','GitHub مفصول عن حسابك في Gateway. يلزم بدء ربط جديد صراحةً قبل الوصول للمستودعات؛ بقاء التطبيق مثبتًا على GitHub لا يعني استمرار ربط الحساب.'),
+      'muted-small'));
+    const authorize=btn('settingsAuthorizeGithub',status.connected?'Reauthorize GitHub':'Start new GitHub link',status.connected?'تجديد تفويض GitHub':'بدء ربط GitHub جديد',async()=>{
       if(!await window.confirmAction(tr('Connect your GitHub account to this Gateway account? GitHub may ask you to approve repository access. Your existing project files stay unchanged.','هل تريد ربط حساب GitHub بحسابك في Gateway؟ قد يطلب GitHub موافقتك على الوصول للمستودعات. ستبقى ملفات مشاريعك كما هي.')))return;
       window.location.assign('/api/github/authorize');
     });
@@ -427,10 +436,14 @@
       github.append(btn('settingsOpenGithubRepository','Choose authorized repository / branch','اختيار مستودع وفرع مصرح بهما',()=>window.openGithubProject()));
       github.append(btn('settingsDisconnectGithub','Disconnect','إلغاء الربط',async()=>{
         if(!await window.confirmAction(tr('Disconnect this Gateway account from GitHub? Imported workspaces and files will remain.','فصل هذا الحساب عن GitHub؟ ستبقى مساحات العمل المستوردة وملفاتها محفوظة.')))return;
-        await api('/api/github/disconnect',{method:'POST'});await loadConnectionsGithub();
+        await api('/api/github/disconnect',{method:'POST'});
+        // Forget an old success banner after an explicit disconnect.
+        const url=new URL(location.href);url.searchParams.delete('github');
+        window.history.replaceState(window.history.state,'',url.pathname+url.search+url.hash);
+        await loadConnectionsGithub();
       }));
       try{
-        const repos=await api('/api/github/repositories');if(owner!==currentUser?.id)return;
+        const repos=await api('/api/github/repositories');if(owner!==currentUser?.id||render!==githubConnectionRender)return;
         github.append(textElement('p',repos.length
           ?tr('Authorized repositories: ','المستودعات المصرح بها: ')+repos.length+tr('. Choose one explicitly to open a working copy.','. اختر مستودعًا صراحةً لفتح نسخة عمل.')
           :tr('No authorized repositories. Use GitHub installation settings to select repositories.','لا توجد مستودعات مصرح بها. اختر المستودعات في إعدادات تثبيت GitHub.'),'muted-small'));
@@ -440,7 +453,7 @@
           });github.append(install);
         }
       }catch(error){
-        if(owner===currentUser?.id)github.append(textElement('p',error.message,'api-message'));
+        if(owner===currentUser?.id&&render===githubConnectionRender)github.append(textElement('p',error.message,'api-message'));
       }
     }
     github.append(text('p','Only repositories explicitly authorized for this customer may be selected. A GitHub project appears in your workspace after you choose a repository, branch and optional working directories.','يمكن اختيار المستودعات التي فوّضها هذا العميل فقط. يظهر مشروع GitHub في مساحة العمل بعد اختيار المستودع والفرع ومجلدات العمل الاختيارية.'));
