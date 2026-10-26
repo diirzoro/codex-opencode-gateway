@@ -552,6 +552,12 @@ const navigationReady=authReady.then(async()=>{
  window.__navRestored=true;
  if(['admin','owner'].includes(currentUser.role)){await page('adminPage');return;}
  await openWorkspaceAfterLogin();
+ // Return the CUSTOMER to the GitHub connection panel after OAuth instead
+ // of silently opening a different workspace. The server-side status remains
+ // authoritative; the query flag alone never proves that linking succeeded.
+ const githubResult=new URLSearchParams(location.search).get('github');
+ if(['connected','denied','install-required','multiple-installations','configuration','error'].includes(githubResult)&&!['admin','owner'].includes(currentUser?.role))
+   await window.openConnections?.('github');
 }).catch(error=>{document.documentElement.classList.remove('bootstrapping');toast(error.message)});
 // GitHub authorization/repository metadata loads only when its UI is opened.
 window.bootstrapGithubStatus=Promise.resolve(null);
