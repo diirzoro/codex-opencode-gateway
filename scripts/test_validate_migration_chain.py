@@ -108,7 +108,7 @@ class TestOnlyAlembicDeployTests(unittest.TestCase):
             with patch("builtins.print") as notice:
                 with self.assertRaisesRegex(RuntimeError,"TEST Alembic upgrade failed"):
                     release.apply_test_migrations("python",{"DATABASE_URL":"postgresql://secret"})
-        message=str(notice.call_args.args[0])
+        message=" ".join(str(call.args) for call in notice.call_args_list)
         self.assertIn("EXISTING_ACCOUNT_DUPLICATES",message)
         self.assertNotIn("email=2",message)
         self.assertNotIn("secret",message)
