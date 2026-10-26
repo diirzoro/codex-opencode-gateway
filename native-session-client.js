@@ -167,7 +167,25 @@
     if(tail==='messages'&&method==='GET')return {value:display(await history(id),row)};
     if(tail==='todos')return {value:{supported:true,items:await coalesce('todos:'+id,()=>sessionRequest(id,'todo'))}};
     if(tail==='diff')return {value:await sessionRequest(id,'diff')};
-    if(tail==='stop'){await sessionRequest(id,'abort',{});statuses.set(id,'idle');return {value:{status:'idle'}};}
+    if(tail==='stop'){
+      // Stop this owned Native session only. Never restart the shared engine or
+      // mark an uncertain prompt as stopped on the abort HTTP response alone.
+      const generation=epoch,row=await context(id);
+      const before=await native(row.workspace_id,'session/status');
+      if(!before||typeof before!=='object'||Array.isArray(before))throw Error('Native session status is unavailable');
+      if((before[row.runtime_id]?.type||'idle')!=='idle')await sessionRequest(id,'abort',{});
+      const after=await native(row.workspace_id,'session/status');
+      if(!after||typeof after!=='object'||Array.isArray(after))throw Error('Native session status is unavailable');
+      if((after[row.runtime_id]?.type||'idle')!=='idle')
+        throw Error(label('OpenCode is still stopping. Check this session again.','OpenCode ما زال يوقف التنفيذ؛ تحقق من هذه المحادثة مجددًا.'));
+      if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');
+      // Only a confirmed idle session can release the local uncertain receipt.
+      // Native history, project files and the unsent composer draft are retained.
+      uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
+      statuses.set(id,'idle');
+      if(current(id,user))activeSession.execution_status='idle';
+      return {value:{status:'idle'}};
+    }
     if(tail==='questions')return {value:{requests:await requests('question',id)}};
     if(tail==='permissions')return {value:await requests('permission',id)};
     const reply=tail.match(/^(questions|permissions)\/([^/]+)$/);
