@@ -730,7 +730,11 @@ body:has(#workspacePage.active) #app-sidebar{display:none!important}
 #workspacePage .project-source-list{display:grid;gap:4px;min-width:0}
 #workspacePage .project-source-list .sidebar-project-root{margin:4px 0 8px}
 #workspacePage .workspace-project-groups .sidebar-project-root{border:0;border-radius:0;background:transparent;box-shadow:none}
-#workspacePage .project-source-group>summary{display:flex;align-items:center;gap:8px;list-style:none}
+#workspacePage .project-source-group>summary{display:flex;align-items:center;gap:10px;list-style:none;box-sizing:border-box;min-height:52px;width:100%}
+#workspacePage .project-source-group>summary:focus-visible{outline:2px solid var(--primary);outline-offset:-3px}
+#workspacePage .project-source-group>summary::after{flex:none}
+#workspacePage .project-source-group>summary .icon-btn{display:inline-flex;align-items:center;justify-content:center;overflow:hidden}
+#workspacePage .project-source-group>summary .icon-btn svg{flex:none;pointer-events:none}
 #workspacePage .project-source-heading{display:grid;gap:10px;min-width:0;flex:1}
 #workspacePage .project-source-meta{font-size:11px;font-weight:400;color:var(--muted);line-height:1.6}
 #workspacePage .project-source-meta:empty,#workspacePage .project-source-meta:has(#workspaceStorage[hidden]){display:none}

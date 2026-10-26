@@ -937,14 +937,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   previewIdentity.style.cssText='box-sizing:border-box;min-width:0;width:100%;max-width:100%;padding:10px 12px;margin:8px 0;border:1px solid var(--border-color,#d4d9e1);border-radius:10px;display:flex;flex-direction:column;gap:6px;overflow:hidden;overflow-wrap:anywhere';
   previewIdentity.setAttribute('aria-live','polite');
   function updatePreviewIdentity(){
-    const name=activeProject?.repository||activeProject?.name;
-    const workspaceName=activeWorkspace?.name||activeWorkspace?.title||activeWorkspace?.id;
+    const name=activeProject?.name||activeProject?.repository;
     previewIdentity.replaceChildren();
     const heading=document.createElement('strong');
     heading.textContent=name||tr('No project selected','لم يتم تحديد مشروع');
     const details=document.createElement('small');
-    details.textContent=(workspaceName?tr('Workspace: ','مساحة العمل: ')+workspaceName:'')+
-      (activeProject?.branch?' · '+tr('Branch: ','الفرع: ')+activeProject.branch:'');
+    details.textContent=activeProject?.branch?tr('Branch: ','الفرع: ')+activeProject.branch:'';
+    details.hidden=!activeProject?.branch;
     heading.style.cssText='display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     details.style.cssText='display:block;max-width:100%;overflow-wrap:anywhere';
     previewIdentity.append(heading,details,previewProjectSelect);
@@ -1128,7 +1127,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     heading.append(text('span',en,ar),meta);summary.append(heading);group.append(summary,list);projectGroups.append(group);projectBuckets.set(kind,{group,list,meta,summary});
   }
   const linkGithub=btn('linkWorkspaceGithubProject','Open a GitHub project','فتح مشروع GitHub',()=>window.openGithubProject(),'icon-btn');
-  linkGithub.textContent='+';linkGithub.title=tr('Open a GitHub project','فتح مشروع GitHub');linkGithub.setAttribute('aria-label',linkGithub.title);
+  linkGithub.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';linkGithub.title=tr('Open a GitHub project','فتح مشروع GitHub');linkGithub.setAttribute('aria-label',linkGithub.title);
   linkGithub.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});projectBuckets.get('github').summary.append(linkGithub);
   function projectFileFolder(project,workspace){
     const folder=document.createElement('details');folder.className='sidebar-project-root';
@@ -1166,7 +1165,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         previewProjectTargets.set(workspace.id,{project,workspace});
         const option=document.createElement('option');
         option.value=workspace.id;
-        option.textContent=(project.repository||project.name||tr('Project','مشروع'))+' — '+(workspace.name||workspace.title||workspace.id.slice(0,8));
+        option.textContent=project.name||project.repository||tr('Project','مشروع');
         previewProjectSelect.append(option);
       }
       previewProjectSelect.value=activeWorkspace?.id||'';
