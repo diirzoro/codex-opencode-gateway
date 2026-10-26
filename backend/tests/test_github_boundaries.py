@@ -146,3 +146,80 @@ def test_reconnect_rejects_requested_foreign_installation(monkeypatch):
         github.handle_callback(db,'one-time-state',20,None,'synthetic-code')
     assert error.value.status_code==403
     assert not state.consumed and not db.added
+
+
+def test_disconnect_requires_new_customer_link_and_invalidates_old_callback(boundary,monkeypatch):
+    """An installed App is not a Gateway link. No stale OAuth flow may revive it."""
+    import uuid
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+    from backend.app import models
+    from backend.tests.test_native_control_plane import authenticated
+    client,(owner,other),_,engine,config=boundary
+    models.GithubAuthState.__table__.create(engine)
+    earlier='stale-oauth-before-disconnect'
+    with Session(engine) as db:
+        db.add(models.GithubConnection(user_id=owner.id,installation_id=901,
+             account_login='fixture-owner',user_token='encrypted-old-user-token',suspended=False))
+        db.add(models.GithubAuthState(state=earlier,user_id=owner.id,
+             expires_at=datetime.now(timezone.utc)+timedelta(minutes=5)))
+        db.add(models.GithubAuthState(state='other-user-authorization',user_id=other.id,
+             expires_at=datetime.now(timezone.utc)+timedelta(minutes=5)))
+        db.commit()
+    monkeypatch.setattr(github,'configured',lambda db=None:True)
+    vendor=Mock(side_effect=AssertionError('Disconnected customer must not access GitHub'))
+    monkeypatch.setattr(github,'_api',vendor)
+    before=authenticated(client,'/api/github/status',owner,config)
+    assert before.status_code==200 and before.json()['connected'] is True
+    assert 'no-store' in before.headers['cache-control']
+
+    response=authenticated(client,'/api/github/disconnect',owner,config,'POST')
+    assert response.status_code==204,response.text
+    after=authenticated(client,'/api/github/status',owner,config)
+    assert after.status_code==200 and after.json()['connected'] is False
+    assert 'no-store' in after.headers['cache-control']
+    assert authenticated(client,'/api/github/repositories',owner,config).status_code==503
+    assert authenticated(client,'/api/github/branches?repository=fixture-owner/repo',owner,config).status_code==503
+    assert vendor.call_count==0
+    # Disconnect is idempotent, including when the customer returns/reloads.
+    assert authenticated(client,'/api/github/disconnect',owner,config,'POST').status_code==204
+    assert authenticated(client,'/api/github/status',owner,config).json()['connected'] is False
+    assert authenticated(client,f'/api/projects/{owner.project}',owner,config).status_code==200
+
+    with Session(engine) as db:
+        assert db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id==owner.id)) is None
+        assert db.scalar(select(models.GithubAuthState).where(models.GithubAuthState.state==earlier)) is None
+        assert db.scalar(select(models.GithubAuthState).where(models.GithubAuthState.user_id==other.id)) is not None
+        config_value=SimpleNamespace(github_app_id=5470256)
+        monkeypatch.setattr(github.github_app_config,'effective',lambda *a:config_value)
+        monkeypatch.setattr(github,'require_configured',lambda *a:None)
+        with pytest.raises(HTTPException) as error:
+            github.handle_callback(db,earlier,901,'install','old-code')
+        assert error.value.status_code==400
+        assert vendor.call_count==0
+
+
+def test_explicit_fresh_oauth_request_does_not_link_before_callback(boundary,monkeypatch):
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+    from urllib.parse import urlparse,parse_qs
+    from backend.app import models
+    client,(owner,_),_,engine,config=boundary
+    models.GithubAuthState.__table__.create(engine)
+    app=SimpleNamespace(github_web_base='https://github.com',
+                        github_client_id='IvFreshConnection',github_callback_url=config.public_base_url+'/api/github/callback')
+    monkeypatch.setattr(github.github_app_config,'effective',lambda *a:app)
+    monkeypatch.setattr(github,'require_configured',lambda *a:None)
+    from backend.app.routes import github as github_routes
+    monkeypatch.setattr(github_routes,'require_advanced',lambda *a,**kw:None)
+    response=client.get('/api/github/authorize',follow_redirects=False,
+                        headers={'Cookie':config.session_cookie_name+'=fixture-token-'+owner.name,
+                                 'Origin':config.public_base_url})
+    assert response.status_code==302
+    parsed=urlparse(response.headers['location'])
+    assert parsed.netloc=='github.com' and parsed.path=='/login/oauth/authorize'
+    state=parse_qs(parsed.query)['state'][0]
+    with Session(engine) as db:
+        assert db.scalar(select(models.GithubAuthState).where(models.GithubAuthState.state==state,
+                         models.GithubAuthState.user_id==owner.id)) is not None
+        assert db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id==owner.id)) is None
