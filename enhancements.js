@@ -154,8 +154,19 @@
     // Older loaders replaced the entire section, removing this host and its title.
     if(!panel){panel=textElement('div','','admin-section');panel.id='adminGithubPanel';section.append(panel);}
     panel.replaceChildren();
-    const heading=textElement('h2',tr('GitHub App settings','إعدادات تطبيق GitHub'));
-    const note=textElement('p',tr('Manage the platform GitHub App. Each customer authorizes their own GitHub account and selected repositories. Blank secrets preserve saved values.','أدر تطبيق GitHub الخاص بالمنصة. يفوّض كل عميل حسابه ومستودعاته بنفسه. اترك الأسرار فارغة للاحتفاظ بالقيم المحفوظة.'));
+    const heading=textElement('h2',tr('GitHub integration','تكامل GitHub'));
+    const note=textElement('p',tr('OpenCode executes native GitHub tools through MCP. Gateway manages account authorization and repository ownership. GitHub is not used for platform sign-in.','ينفّذ OpenCode أدوات GitHub الأصلية عبر MCP. يدير Gateway تفويض الحسابات وملكية المستودعات. لا يُستخدم GitHub للدخول إلى المنصة.'));
+    const nativeCard=textElement('section','','manage-card');nativeCard.setAttribute('aria-label',tr('Official Native GitHub integration','تكامل GitHub الأصلي الرسمي'));
+    nativeCard.append(textElement('h3',tr('OpenCode · official GitHub MCP','OpenCode · GitHub MCP الرسمي')));
+    const nativeGrid=textElement('div','','field-grid');
+    for(const [caption,value] of [['MCP server URL','https://api.githubcopilot.com/mcp/'],['Transport','remote']]){
+      const label=textElement('label','','field'),input=document.createElement('input');input.readOnly=true;input.value=value;input.setAttribute('aria-label',caption);label.append(textElement('span',caption),input);nativeGrid.append(label);
+    }
+    nativeCard.append(nativeGrid,textElement('p',tr('Official service settings only. Native connection and per-account authorization have not been verified by this page. No shared customer token is configured here.','هذه إعدادات الخدمة الرسمية فقط. لا تثبت هذه الصفحة اتصال Native أو تفويض كل حساب. لا يُضبط هنا رمز مشترك للعملاء.')));
+    const nativeDocs=textElement('a',tr('Official OpenCode installation guide','دليل الربط الرسمي مع OpenCode'),'button ghost');nativeDocs.href='https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-opencode.md';nativeDocs.target='_blank';nativeDocs.rel='noopener noreferrer';nativeCard.append(nativeDocs);
+    nativeCard.append(textElement('p',tr('Remote authentication uses an authorized token or host OAuth App. The official local MCP distribution includes its own OAuth registration, but requires a separate runtime. These credentials cannot be substituted into the Gateway App form.','مصادقة الخدمة البعيدة تحتاج رمزًا مفوّضًا أو تطبيق OAuth للمضيف. تتضمن نسخة MCP المحلية الرسمية تسجيل OAuth خاصًا بها، لكنها تحتاج عملية تشغيل إضافية. لا يمكن وضع بياناتها بدل بيانات تطبيق Gateway أدناه.')));
+    const gatewaySettings=textElement('details');gatewaySettings.append(textElement('summary',tr('Gateway repository authorization · App settings','تفويض مستودعات Gateway · إعدادات التطبيق')));
+    gatewaySettings.append(textElement('p',tr('Existing Gateway repository connection. Values are read from saved server settings only; no personal App is prefilled. Blank secrets preserve saved values.','الربط الحالي لمستودعات Gateway. تُقرأ القيم من إعدادات الخادم المحفوظة فقط؛ لا يُعبّأ تطبيق شخصي افتراضيًا. الحقول السرية الفارغة تحتفظ بالقيم المحفوظة.')));
     const status=textElement('p',tr('Checking configuration…','جارٍ فحص الإعدادات…'));status.setAttribute('role','status');
     const grid=textElement('div','','field-grid');
     const inputs=new Map();
@@ -180,7 +191,8 @@
     const saveStatus=textElement('p');saveStatus.setAttribute('role','status');
     const connections=textElement('div');connections.id='adminGithubConnections';
     form.append(grid,credentialsPanel,save,saveStatus);
-    panel.append(heading,note,status,form,urls,configuration,database,connection,authorize,refresh,connections);
+    gatewaySettings.append(status,form,urls,configuration,database);
+    panel.append(heading,note,nativeCard,gatewaySettings,connection,authorize,refresh,connections);
     form.onsubmit=async event=>{
       event.preventDefault();if(save.disabled||!current())return;
       save.disabled=true;saveStatus.textContent=tr('Saving encrypted settings…','جارٍ حفظ الإعدادات مشفّرة…');
@@ -207,7 +219,7 @@
         const config=await api('/api/admin/github-configuration');if(!current())return;
         for(const [key,input] of inputs)input.value=String(config[key]??'');
         save.disabled=config.editable!==true||config.settings_schema_ready!==true||config.credential_storage_ready!==true;
-        saveStatus.textContent=config.settings_schema_ready!==true?tr('Apply TEST migration 0024 to enable saving.','طبّق ترحيل TEST رقم 0024 لتمكين الحفظ.'):config.credential_storage_ready!==true?tr('Original Gateway encryption key is required; it cannot be replaced here.','يلزم مفتاح التشفير الأصلي لـGateway؛ لا يمكن استبداله هنا.'):tr('Secrets are encrypted on the server. Empty fields keep existing secrets.','تُشفّر الأسرار على الخادم. الحقول الفارغة تحتفظ بالأسرار الحالية.');
+        saveStatus.textContent=config.settings_schema_ready!==true?tr('Apply TEST migration 0024 to enable saving.','طبّق ترحيل TEST رقم 0024 لتمكين الحفظ.'):config.credential_storage_ready!==true?tr('Gateway credential encryption is not configured. Complete server setup before saving secrets; preserve any existing key.','تشفير اعتمادات Gateway غير مُعدّ. أكمل إعداد الخادم قبل حفظ الأسرار، مع الحفاظ على أي مفتاح موجود.'):tr('Secrets are encrypted on the server. Empty fields keep existing secrets.','تُشفّر الأسرار على الخادم. الحقول الفارغة تحتفظ بالأسرار الحالية.');
         status.textContent=config.configured?tr('GitHub App configured.','تطبيق GitHub مهيأ.'):tr('GitHub App is not ready on the server.','تطبيق GitHub غير جاهز على الخادم.');
         configuration.append(textElement('p',[['OAuth Client Secret','client_secret'],['App private key','private_key'],['Webhook Secret','webhook_secret'],['Credential encryption key','encryption_key']].map(([name,key])=>name+': '+(config.secrets?.[key]?tr('Configured','موجود'):tr('Missing','ناقص'))).join(' · ')));
         if(config.missing?.length)configuration.append(textElement('p',tr('Missing server settings: ','إعدادات الخادم الناقصة: ')+config.missing.join(', ')));

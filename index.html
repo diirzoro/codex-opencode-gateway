@@ -581,7 +581,7 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   <section class="client-view" data-client-panel="projects"><div class="page-head"><div><h1 data-i18n="clientProjects">Projects</h1><p class="lead" data-i18n="clientProjectsLead">Your projects and workspaces.</p></div><div class="head-actions"><button class="button" data-go="onboarding"><span data-i18n="ui3">New project</span></button></div></div><div id="clientProjectsList"></div></section>
   <section class="client-view" data-client-panel="sessions"><div class="page-head"><div><h1 data-i18n="clientSessions">Sessions</h1><p class="lead" data-i18n="clientSessionsLead">Workspaces and their OpenCode sessions.</p></div></div><div id="clientSessionsList"></div></section>
   <section class="client-view" data-client-panel="ai"><div class="page-head"><div><h1 data-i18n="clientAi">OpenCode</h1><p class="lead" data-i18n="clientAiLead">Runtime, provider and tool status for your workspaces.</p></div></div><div id="clientAiPanel"></div></section>
-  <section class="client-view" data-client-panel="github"><div class="page-head"><div><h1 data-i18n="adminGithub">GitHub</h1><p class="lead" data-i18n="clientGithubLead">Connection status. The real authorization flow is a later phase.</p></div></div><div id="clientGithubPanel"></div></section>
+  <section class="client-view" data-client-panel="github"><div class="page-head"><div><h1 data-i18n="adminGithub">GitHub</h1><p class="lead" data-i18n="clientGithubLead">Connect your own GitHub account, then choose a repository and branch.</p></div></div><div id="clientGithubPanel"></div></section>
   <section class="client-view" data-client-panel="billing"><div class="page-head"><div><h1 data-i18n="ui61">Plan &amp; Billing</h1><p class="lead" data-i18n="clientBillingLead">Your own subscription only. Other customers' billing is never shown here.</p></div></div><div id="billingMessage" class="api-message"></div><div class="card-grid" id="billingSummary"></div><div class="section-title" data-i18n="clientPlansTitle">Plans &amp; offers</div><div class="pricing-cards" id="billingPlans"></div><div class="admin-actions"><button class="button ghost" id="billingCancel" type="button" data-i18n="clientCancel">Cancel subscription</button><button class="button ghost" id="billingRenew" type="button" data-i18n="clientRenew">Renew subscription</button></div><p id="billingPaymentNote" class="lead"></p><p class="refund-policy" data-i18n="subscriptionNoRefund">Subscription payments are non-refundable.</p></section>
   <section class="client-view" data-client-panel="account">
     <div class="page-head account-page-head"><div><h1 data-i18n="accountPageTitle">My account &amp; profile</h1><p class="lead" data-i18n="accountPageLead">Your details and preferences, clearly organized.</p></div><button type="button" class="button ghost small" id="accountReturnWorkspace"><svg class="ui-icon" aria-hidden="true"><use href="#icon-back"/></svg><span data-i18n="accountReturnWorkspace">Return to workspace</span></button></div>
@@ -818,8 +818,8 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
   #workspacePage .agent-column{position:relative;min-width:0}
   </style>
   <script defer src="app.js?v=20261026-repository-only-github"></script>
-  <script defer src="enhancements.js?v=20261026-repository-only-github"></script>
-  <script type="application/json" id="managementAsset" data-src="management.js?v=20261025-github-panel-loader"></script>
+  <script defer src="enhancements.js?v=20261026-native-github-settings"></script>
+  <script type="application/json" id="managementAsset" data-src="management.js?v=20261026-native-github-settings"></script>
   <script defer src="runtime-client.js?v=20261008-phase2"></script>
   <script defer src="dashboards.js?v=20261025-github-panel-loader"></script>
   <script>
