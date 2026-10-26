@@ -47,7 +47,12 @@ class TestOnlyAlembicDeployTests(unittest.TestCase):
             def joinpath(self,name):
                 if name in {"cwd","environ"}:return Entry()
                 raise AssertionError(name)
-        with patch.object(release,"run",return_value="12345"),patch.object(release,"Path",return_value=Proc()),patch.dict(os.environ,{"DATABASE_URL":"postgresql://user:wrong@localhost/LIVE"}):
+        class ProcRoot:
+            def __truediv__(self,pid):
+                self_pid=int(pid)
+                assert self_pid==12345
+                return Proc()
+        with patch.object(release,"run",return_value="12345"),patch.object(release,"Path",return_value=ProcRoot()),patch.dict(os.environ,{"DATABASE_URL":"postgresql://user:wrong@localhost/LIVE"}):
             result=release.test_service_environment()
         self.assertIn("/opencode_gateway_test",result["DATABASE_URL"])
         self.assertEqual(result["CREDENTIALS_ENCRYPTION_KEY"],"protected-TEST-key")
