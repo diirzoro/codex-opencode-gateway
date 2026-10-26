@@ -41,7 +41,7 @@ class TestOnlyAlembicDeployTests(unittest.TestCase):
             def resolve(self):return release.ROOT/"backend"
             def read_bytes(self):
                 return (b"DATABASE_URL=postgresql+psycopg://fixture:secret@localhost/opencode_gateway_test"
-                        b"\\x00CREDENTIALS_ENCRYPTION_KEY=protected-TEST-key\\x00")
+                        b"\x00CREDENTIALS_ENCRYPTION_KEY=protected-TEST-key\x00")
         class Proc:
             def stat(self):return SimpleNamespace(st_uid=os.geteuid())
             def joinpath(self,name):
