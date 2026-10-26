@@ -166,7 +166,7 @@
     const nativeDocs=textElement('a',tr('Official OpenCode installation guide','دليل الربط الرسمي مع OpenCode'),'button ghost');nativeDocs.href='https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-opencode.md';nativeDocs.target='_blank';nativeDocs.rel='noopener noreferrer';nativeCard.append(nativeDocs);
     nativeCard.append(textElement('p',tr('Remote authentication uses an authorized token or host OAuth App. The official local MCP distribution includes its own OAuth registration, but requires a separate runtime. These credentials cannot be substituted into the Gateway App form.','مصادقة الخدمة البعيدة تحتاج رمزًا مفوّضًا أو تطبيق OAuth للمضيف. تتضمن نسخة MCP المحلية الرسمية تسجيل OAuth خاصًا بها، لكنها تحتاج عملية تشغيل إضافية. لا يمكن وضع بياناتها بدل بيانات تطبيق Gateway أدناه.')));
     const gatewaySettings=textElement('details');gatewaySettings.append(textElement('summary',tr('Gateway repository authorization · App settings','تفويض مستودعات Gateway · إعدادات التطبيق')));
-    gatewaySettings.append(textElement('p',tr('Existing Gateway repository connection. Values are read from saved server settings only; no personal App is prefilled. Blank secrets preserve saved values.','الربط الحالي لمستودعات Gateway. تُقرأ القيم من إعدادات الخادم المحفوظة فقط؛ لا يُعبّأ تطبيق شخصي افتراضيًا. الحقول السرية الفارغة تحتفظ بالقيم المحفوظة.')));
+    gatewaySettings.append(textElement('p',tr('Existing Gateway repository connection. Saved server settings take priority. For first-time TEST setup, the registered platform App identifiers are suggested; each customer still authorizes their own repositories. Blank secrets preserve saved values.','الربط الحالي لمستودعات Gateway. الأولوية لإعدادات الخادم المحفوظة. في إعداد TEST الأولي تُقترح معرّفات تطبيق المنصة المسجّل؛ يفوّض كل عميل مستودعاته بنفسه. الحقول السرية الفارغة تحتفظ بالقيم المحفوظة.')));
     const status=textElement('p',tr('Checking configuration…','جارٍ فحص الإعدادات…'));status.setAttribute('role','status');
     const grid=textElement('div','','field-grid');
     const inputs=new Map();
@@ -188,9 +188,10 @@
     const privateKey=secretField(tr('Private key (.pem file)','المفتاح الخاص (ملف .pem)'),'private_key_file','file');privateKey.accept='.pem';
     const webhookSecret=secretField('Webhook Secret (optional)','webhook_secret');webhookSecret.maxLength=4096;
     const save=textElement('button',tr('Save GitHub App settings','حفظ إعدادات تطبيق GitHub'),'button');save.type='submit';save.disabled=true;
+    const setupNote=textElement('p');setupNote.setAttribute('role','status');
     const saveStatus=textElement('p');saveStatus.setAttribute('role','status');
     const connections=textElement('div');connections.id='adminGithubConnections';
-    form.append(grid,credentialsPanel,save,saveStatus);
+    form.append(grid,setupNote,credentialsPanel,save,saveStatus);
     gatewaySettings.append(status,form,urls,configuration,database);
     panel.append(heading,note,nativeCard,gatewaySettings,connection,authorize,refresh,connections);
     form.onsubmit=async event=>{
@@ -218,6 +219,17 @@
       try{
         const config=await api('/api/admin/github-configuration');if(!current())return;
         for(const [key,input] of inputs)input.value=String(config[key]??'');
+        // Public metadata, not credentials. Never replace a saved or partially
+        // configured App, and never apply TEST suggestions to another server.
+        const firstTestSetup=config.source==='protected_server_environment'&&config.public_base_url?.replace(/\/+$/,'')==='https://test.opencode-gateway.codes'&&
+          !config.configured&&!config.app_id&&!config.app_slug&&!config.client_id&&
+          !config.secrets?.client_secret&&!config.secrets?.private_key&&!config.secrets?.webhook_secret;
+        if(firstTestSetup){
+          for(const [key,value] of Object.entries({app_id:5470256,app_slug:'opencode-gateway-test-diirzoro',client_id:'Iv23liGSq3yRR7okVSQJ'}))inputs.get(key).value=String(value);
+          setupNote.textContent=tr('Registered platform App identifiers suggested · not saved or connected. Add its Client Secret and PEM after setting up Gateway encryption. These are not OpenCode-issued credentials.','اقتُرحت معرّفات تطبيق المنصة المسجّل · لم تُحفظ ولم يتم الربط. أضف Client Secret وملف PEM بعد إعداد تشفير Gateway. هذه ليست بيانات اعتماد صادرة عن OpenCode.');
+        }
+        gatewaySettings.open=!config.configured;
+
         save.disabled=config.editable!==true||config.settings_schema_ready!==true||config.credential_storage_ready!==true;
         saveStatus.textContent=config.settings_schema_ready!==true?tr('Apply TEST migration 0024 to enable saving.','طبّق ترحيل TEST رقم 0024 لتمكين الحفظ.'):config.credential_storage_ready!==true?tr('Gateway credential encryption is not configured. Complete server setup before saving secrets; preserve any existing key.','تشفير اعتمادات Gateway غير مُعدّ. أكمل إعداد الخادم قبل حفظ الأسرار، مع الحفاظ على أي مفتاح موجود.'):tr('Secrets are encrypted on the server. Empty fields keep existing secrets.','تُشفّر الأسرار على الخادم. الحقول الفارغة تحتفظ بالأسرار الحالية.');
         status.textContent=config.configured?tr('GitHub App configured.','تطبيق GitHub مهيأ.'):tr('GitHub App is not ready on the server.','تطبيق GitHub غير جاهز على الخادم.');

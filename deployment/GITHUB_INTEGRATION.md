@@ -1,3 +1,9 @@
+# Latest owner fallback — registered platform App, Native tools retained — 26 October 2026
+
+Owner accepts the registered platform GitHub App when no reusable official OpenCode credentials are available. The admin form now suggests public App ID5470256, slug`opencode-gateway-test-diirzoro`, client ID`Iv23liGSq3yRR7okVSQJ` **only** when the authenticated diagnostics identify an empty protected-server-environment configuration at the exact TEST URL, without existing App identifiers or secrets. Saved/partial/other-server settings are never replaced. This is an unsaved editable suggestion, not an OAuth connection or an OpenCode-issued credential. No secret/private key/encryption key is prefilled. Unconfigured App settings expand automatically for setup. Existing Gateway customer ownership and separate Native MCP responsibilities remain. No deployment or runtime activation.
+
+---
+
 # Current owner direction — official Native integration, not personal App defaults — 26 October 2026
 
 Use official OpenCode-supported GitHub MCP tools. The admin page shows GitHub's official remote MCP URL (`https://api.githubcopilot.com/mcp/`) and `remote` transport as read-only public information. It does not install, activate, authenticate, or verify a server. No owner App ID/client ID/slug or token is prefilled. Existing saved server settings remain visible in a separate expandable Gateway repository-authorization form, with no change to encrypted data or authorization routes. GitHub platform sign-in remains disabled.

@@ -33,16 +33,25 @@ function fixture({statusError=false,configError=false,ready=true,legacy=false}={
  await f.document.querySelector('form').onsubmit({preventDefault(){}});
  assert.equal(saved.app_id,5470256);assert.equal(saved.private_key,null);assert.equal(saved.client_secret,'synthetic-not-real');
  assert.equal(f.document.querySelector('input[name=client_secret]').value,'');assert.ok(!f.document.body.textContent.includes('synthetic-not-real'));f.close();});
- await test('official Native settings are read-only public metadata, without personal App defaults or automatic activation',async()=>{
+ await test('official Native settings are read-only metadata and preserve the configured App without activation',async()=>{
  const f=fixture();await f.run();const url=f.document.querySelector('input[aria-label="MCP server URL"]');
  assert.equal(url.value,'https://api.githubcopilot.com/mcp/');assert.equal(url.readOnly,true);
  assert.equal(f.document.querySelector('input[aria-label="Transport"]').value,'remote');
  assert.ok(f.document.body.textContent.includes('have not been verified'));
- assert.ok(!f.document.body.textContent.includes('5470256'));assert.ok(!source.includes('Iv23liGSq3yRR7okVSQJ'));
+ assert.ok(!f.document.body.textContent.includes('5470256'));assert.equal(f.document.querySelector('input[name=client_secret]').value,'');
  assert.equal(f.calls.some(path=>path.includes('/mcp')),false);f.close();});
  await test('empty server settings stay empty instead of impersonating an official or personal OAuth App',async()=>{
  const f=fixture();const original=f.c.api;f.c.api=async(path)=>path==='/api/admin/github-configuration'?{editable:true,settings_schema_ready:true,credential_storage_ready:false,configured:false,database:{checked:true,ready:true}}:original(path);
  await f.run();for(const name of ['App ID','App Slug','OAuth Client ID'])assert.equal(f.document.querySelector('input[aria-label="'+name+'"]').value,'');
  assert.equal(f.document.querySelector('button[type=submit]').disabled,true);assert.ok(f.document.body.textContent.includes('encryption is not configured'));f.close();});
+ await test('owner-approved platform App is suggested for empty TEST server configuration only, without activating or saving',async()=>{
+ const f=fixture();const original=f.c.api;f.c.api=async(path)=>path==='/api/admin/github-configuration'?{source:'protected_server_environment',public_base_url:'https://test.opencode-gateway.codes/',editable:true,settings_schema_ready:true,credential_storage_ready:false,configured:false,secrets:{},database:{checked:true,ready:true}}:original(path);
+ await f.run();assert.equal(f.document.querySelector('input[aria-label="App ID"]').value,'5470256');assert.equal(f.document.querySelector('input[aria-label="OAuth Client ID"]').value,'Iv23liGSq3yRR7okVSQJ');
+ assert.equal(f.document.querySelector('input[name=client_secret]').value,'');assert.equal(f.document.querySelector('input[name=private_key_file]').value,'');assert.ok(f.document.body.textContent.includes('not saved or connected'));assert.equal(f.document.querySelector('button[type=submit]').disabled,true);assert.equal(f.calls.some(path=>path.includes('/install')),false);f.close();});
+ await test('TEST suggestions do not replace a partial App, saved empty App, existing secret, or other server',async()=>{
+ for(const override of [{app_id:999},{source:'encrypted_database'},{secrets:{client_secret:true}},{public_base_url:'https://example.com'}]){
+ const f=fixture();const original=f.c.api;f.c.api=async(path)=>path==='/api/admin/github-configuration'?{source:'protected_server_environment',public_base_url:'https://test.opencode-gateway.codes',configured:false,secrets:{},...override}:original(path);
+ await f.run();assert.notEqual(f.document.querySelector('input[aria-label="App ID"]').value,'5470256');assert.equal(f.document.querySelector('input[aria-label="OAuth Client ID"]').value,'');f.close();}
+ });
  console.log(count+' admin GitHub DOM checks passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});
