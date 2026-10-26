@@ -138,6 +138,44 @@ def verified_test_database(python,env,*,post=False):
         cwd=ROOT/"backend",env=env,timeout=30)
     print("TEST_DB_MIGRATION_OK" if post else "TEST_DATABASE_CONFIRMED",flush=True)
 
+TEST_SCHEMA_CHECK=r"""
+import os
+from sqlalchemy import create_engine,text
+engine=create_engine(os.environ["DATABASE_URL"],pool_pre_ping=True)
+with engine.connect() as c:
+    if c.execute(text("SELECT current_database()")).scalar_one()!="opencode_gateway_test":
+        raise SystemExit("Not the TEST database")
+    current=c.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+    if len(current)!=1:
+        raise SystemExit("Unexpected TEST Alembic version rows")
+    revision=current[0]
+    if not revision.isascii() or not all(ch.isalnum() or ch=="_" for ch in revision):
+        raise SystemExit("Invalid TEST migration revision identifier")
+    print("TEST_ALEMBIC_CURRENT_REVISION:",revision)
+    row=c.execute(text("""SELECT c.relowner,
+          pg_get_userbyid(c.relowner) AS relowner_name,
+          pg_has_role(current_user,c.relowner,'USAGE') AS is_owner_member
+        FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname=current_schema() AND c.relname='email_verifications'
+        AND c.relkind IN ('r','p')""")).one_or_none()
+    if row is None:
+        print("TEST_0025_TABLE_STATUS: MISSING")
+    else:
+        print("TEST_0025_TABLE_STATUS: PRESENT")
+        print("TEST_0025_TABLE_OWNER_ACCESS:", "YES" if row.is_owner_member else "NO")
+        columns=set(c.execute(text("""SELECT column_name FROM information_schema.columns
+          WHERE table_schema=current_schema() AND table_name='email_verifications'
+          AND column_name IN ('verification_method','code_attempts')""")).scalars())
+        print("TEST_0025_COLUMNS:",",".join(
+            name+("=present" if name in columns else "=missing")
+            for name in ("verification_method","code_attempts")))
+"""
+
+def inspect_test_schema(python,env):
+    # Read-only evidence; never display usernames, database URLs, or SQL rows.
+    output=run(python,"-c",TEST_SCHEMA_CHECK,cwd=ROOT/"backend",env=env,timeout=30)
+    if output:print(output,flush=True)
+
 def backup_test_database(env):
     """Private, validated custom-format PostgreSQL backup before migration."""
     url=env["DATABASE_URL"]
@@ -196,7 +234,7 @@ def apply_test_migrations(python, environment):
         detail=(exc.stderr or b"").decode("utf-8","replace")
         if "Existing normalized account duplicates require owner reconciliation" in detail:
             print("TEST_MIGRATION_FAILED: EXISTING_ACCOUNT_DUPLICATES; preserve users; reconcile TEST data before retry",flush=True)
-        elif "permission denied" in detail.lower():
+        elif "permission denied" in detail.lower() or "must be owner of" in detail.lower():
             print("TEST_MIGRATION_FAILED: DATABASE_PERMISSION_DENIED; check TEST role/schema ownership",flush=True)
         elif "duplicate column" in detail.lower() or "duplicate table" in detail.lower():
             print("TEST_MIGRATION_FAILED: EXISTING_SCHEMA_CONFLICT; inspect Alembic current and schema before retry",flush=True)
@@ -252,6 +290,7 @@ def rollout(target,mode):
         environment=test_service_environment()
         python=test_backend_python()
         verified_test_database(python,environment)
+        inspect_test_schema(python,environment)
         backup_test_database(environment)
     for name,dest,data in changes:replace(dest,data);print("UPDATED",name,flush=True)
     try:
