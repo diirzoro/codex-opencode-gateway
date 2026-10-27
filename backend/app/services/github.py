@@ -197,12 +197,18 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
                 eligible.append(item['id'])
         if len(items)<100:break
     if state.startswith('install_'):
-        # Do not route this account into an installation assigned to another
-        # Gateway customer, even if the browser is logged into its GitHub owner.
-        foreign=db.scalar(select(GithubConnection).where(GithubConnection.installation_id.in_(eligible),GithubConnection.user_id!=record.user_id)) if eligible else None
-        if foreign:raise HTTPException(409,'Installation is already linked to another account')
-        record.consumed=True
-        return {'redirect':_begin_installation(db,user)}
+        # Reuse an existing installation where the GitHub user is authorized.
+        # Sending every first-time link to /installations/new loops through
+        # installation setup and may revoke a valid authorization experience.
+        # A newly created installation is necessary only when none exists.
+        foreign=db.scalar(select(GithubConnection).where(
+            GithubConnection.installation_id.in_(eligible),
+            GithubConnection.user_id!=record.user_id)) if eligible else None
+        if foreign:
+            raise HTTPException(409,'Installation is already linked to another account')
+        if not eligible:
+            record.consumed=True
+            return {'redirect':_begin_installation(db,user)}
     if installation_id is None:
         previous=db.scalar(select(GithubConnection).where(GithubConnection.user_id==record.user_id))
         if previous and previous.installation_id in eligible:
