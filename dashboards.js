@@ -449,7 +449,7 @@
     if(status.connected){
       github.append(btn('settingsOpenGithubRepository','Choose authorized repository / branch','اختيار مستودع وفرع مصرح بهما',()=>window.openGithubProject()));
       github.append(btn('settingsDisconnectGithub','Disconnect','إلغاء الربط',async()=>{
-        if(!await window.confirmAction(tr('Disconnect this Gateway account from GitHub? Imported workspaces and files will remain.','فصل هذا الحساب عن GitHub؟ ستبقى مساحات العمل المستوردة وملفاتها محفوظة.')))return;
+        if(!await window.confirmAction(tr('Disconnect GitHub and remove this account’s imported GitHub working copies, including unpushed changes? Export or push changes first. Internal projects and the original GitHub repositories remain.','فصل GitHub وإزالة نسخ العمل المستوردة لهذا الحساب بما فيها التغييرات غير المرفوعة؟ صدّر أو ارفع تغييراتك أولًا. تبقى المشاريع الداخلية والمستودعات الأصلية على GitHub محفوظة.')))return;
         await api('/api/github/disconnect',{method:'POST'});
         // Forget an old success banner after an explicit disconnect.
         const url=new URL(location.href);url.searchParams.delete('github');

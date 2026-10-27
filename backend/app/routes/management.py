@@ -13,7 +13,7 @@ from ..schemas.account import RegisterRequest
 from ..security.passwords import hash_password, verify_password
 from ..security.sessions import (hash_session_token, new_reactivation_token,
     reactivation_cookie_name, reactivation_eligible)
-from ..services import credentials, recovery, opencode, paypal
+from ..services import credentials, recovery, opencode, paypal, github
 from ..services.billing_methods import method_payload
 from ..services.accounts import user_payload
 from .dependencies import require_user, require_admin, require_billing_user, require_reactivation_user
@@ -322,7 +322,8 @@ def connections(user:User=Depends(require_admin),db:Session=Depends(get_db)):
 def remove_connection(user_id:uuid.UUID,user:User=Depends(require_admin),db:Session=Depends(get_db)):
     row=db.scalar(select(GithubConnection).where(GithubConnection.user_id==user_id))
     if not row: raise HTTPException(404,'Connection not found')
-    db.delete(row); audit(db,user,'github.disconnected',user_id); db.commit()
+    audit(db,user,'github.disconnected',user_id)
+    github.disconnect(db, db.get(User,user_id))
 
 class RoleChange(BaseModel):
     role:str=Field(pattern='^(owner|admin|support|finance|customer)$')

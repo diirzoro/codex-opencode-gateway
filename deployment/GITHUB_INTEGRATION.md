@@ -1,3 +1,9 @@
+# Current disconnect policy — 27 October 2026
+
+Explicit customer/admin disconnect removes the target customer's imported GitHub working copies (`Project.source_type == github`), including unpushed local changes, after committed authorization revocation and an idle/safe-path check. The UI warns customers to push/export first. Internal blank/template projects remain, including those later published to GitHub; other customers, remote repositories, project records, conversation history, platform App configuration and Native storage remain intact. Busy/unavailable/unsafe copies are immediately blocked and await the existing maintenance cleanup; do not claim immediate physical erasure. Fresh **New GitHub connection** replaces local credentials/OAuth states without implicitly requesting file removal. See the newest project handoff for test evidence, Native limitations and exact source SHA. Source only until the owner's manual TEST deployment; workflows are unchanged.
+
+---
+
 # Latest owner fallback — registered platform App, Native tools retained — 26 October 2026
 
 Owner accepts the registered platform GitHub App when no reusable official OpenCode credentials are available. The admin form now suggests public App ID5470256, slug`opencode-gateway-test-diirzoro`, client ID`Iv23liGSq3yRR7okVSQJ` **only** when the authenticated diagnostics identify an empty protected-server-environment configuration at the exact TEST URL, without existing App identifiers or secrets. Saved/partial/other-server settings are never replaced. This is an unsaved editable suggestion, not an OAuth connection or an OpenCode-issued credential. No secret/private key/encryption key is prefilled. Unconfigured App settings expand automatically for setup. Existing Gateway customer ownership and separate Native MCP responsibilities remain. No deployment or runtime activation.

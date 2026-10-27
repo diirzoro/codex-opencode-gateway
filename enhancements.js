@@ -42,7 +42,7 @@ window.startFreshGithubConnection=async function(){
   if (connectButton) connectButton.onclick = function () { void window.startFreshGithubConnection(); };
   var disconnectButton = document.getElementById('disconnectGithubButton');
   if (disconnectButton) disconnectButton.onclick = async function () {
-    try { await api('/api/github/disconnect', { method: 'POST' }); await loadProjects(); toast('GitHub disconnected'); }
+    try { if(!await window.confirmAction(lang==='ar'?'فصل GitHub وإزالة نسخ العمل المستوردة والتغييرات غير المرفوعة؟ صدّر تغييراتك أولًا. تبقى المشاريع الداخلية والمستودعات الأصلية.':'Disconnect GitHub and remove imported working copies, including unpushed changes? Export first. Internal projects and original repositories remain.'))return; await api('/api/github/disconnect', { method: 'POST' }); await loadProjects(); toast('GitHub disconnected'); }
     catch (error) { toast(error.message); }
   };
 
@@ -989,7 +989,7 @@ window.startFreshGithubConnection=async function(){
         panel.replaceChildren();
         panel.append(textElement('h3', tr('GitHub connected', 'GitHub متصل')));
         panel.append(textElement('p', (s.account_login || '') + ' · ' + (s.target_type || 'User')));
-        var disc = textElement('button', tr('Disconnect', 'فصل'), 'button ghost'); disc.onclick = async function () { try { await api('/api/github/disconnect', { method: 'POST' }); toast(tr('Disconnected', 'تم الفصل')); await loadClientGithub(); } catch (e) { toast(e.message); } }; panel.append(disc);
+        var disc = textElement('button', tr('Disconnect', 'فصل'), 'button ghost'); disc.onclick = async function () { try { if(!await window.confirmAction(tr('Disconnect GitHub and remove imported working copies, including unpushed changes? Export first. Internal projects and original repositories remain.','فصل GitHub وإزالة نسخ العمل المستوردة والتغييرات غير المرفوعة؟ صدّر أولًا. تبقى المشاريع الداخلية والمستودعات الأصلية.')))return; await api('/api/github/disconnect', { method: 'POST' }); toast(tr('Disconnected', 'تم الفصل')); await loadClientGithub(); } catch (e) { toast(e.message); } }; panel.append(disc);
       } else {
         var cp = textElement('div', '', 'connect-panel');
         var ic = textElement('div', '', 'cp-icon'); ic.appendChild(navIcon('#icon-github')); cp.append(ic);

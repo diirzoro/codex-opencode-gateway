@@ -24,7 +24,7 @@ def owned(db, model, identifier, user_id):
 
 def root_for(workspace, *, allow_expired=False):
     if not allow_expired and workspace.status in {"cache_expiring", "cache_expired"}:
-        raise HTTPException(410, "Workspace files were cleaned under the inactivity policy. Account data and the original GitHub repository were not deleted.")
+        raise HTTPException(410, "Workspace working files are unavailable under the project storage policy. Account records and the original GitHub repository were not deleted.")
     base = settings.workspace_root.resolve()
     candidate = base / str(workspace.user_id) / str(workspace.id) / "repo"
     current = base

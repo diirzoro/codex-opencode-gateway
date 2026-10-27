@@ -104,7 +104,7 @@ def begin_fresh_link(db, user) -> str:
     # revoke the shared App installation or another customer's credentials.
     cfg = github_app_config.effective(settings, db)
     require_configured(cfg)
-    disconnect(db, user)
+    disconnect(db, user, remove_worktrees=False)
     return begin_install(db, user)
 
 def begin_install(db,user) -> str:
@@ -238,17 +238,26 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
     db.commit()
     return row
 
-def disconnect(db, user):
+def disconnect(db, user, *, remove_worktrees=True):
     # Revoking the Gateway link must also invalidate authorization states minted
     # before disconnect. Otherwise a delayed OAuth callback could silently
     # recreate the supposedly disconnected account link.
+    from . import workspace_cache
+    affected = workspace_cache.expire_github_copies(db, user.id) if remove_worktrees else []
     db.execute(delete(GithubAuthState).where(GithubAuthState.user_id == user.id))
     row = db.scalar(select(GithubConnection).where(GithubConnection.user_id == user.id))
     if row is not None:
         db.delete(row)
     db.commit()
-    # Installed GitHub Apps and imported project files remain intact; fresh
-    # Gateway authorization is mandatory before remote repository operations.
+    # Only after committed revocation/barriers may file erasure be attempted.
+    # A failure or active Native run leaves a blocked copy for existing
+    # maintenance to retry. Never kill/restart the shared OpenCode service.
+    if affected:
+        try:
+            workspace_cache.sweep(workspace_ids=affected)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning('Disconnected GitHub copy cleanup deferred')
 
 def list_repositories(connection: GithubConnection) -> list[dict]:
     token = installation_token(connection)
@@ -312,7 +321,8 @@ def handle_webhook(db, event: str, payload: dict):
     if event in {"installation", "installation_repositories"}:
         action = payload.get("action")
         if action == "deleted":
-            db.delete(row)
+            disconnect(db, db.get(User, row.user_id))
+            return
         elif action in {"suspend", "suspended"}:
             row.suspended = True
         else:
