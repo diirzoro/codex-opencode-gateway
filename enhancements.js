@@ -10,29 +10,20 @@ window.startFreshGithubConnection=async function(options={}){
   if(!owner)return;
   const valid=()=>currentUser?.id===owner&&(!options.isCurrent||options.isCurrent());
   freshGithubPending=true;
-  let popup;
   try{
-    // Open within the click activation, before confirmation or network awaits.
-    // A blocked popup must not revoke a working connection or replace this tab.
-    popup=window.open('about:blank','_blank','popup,width=960,height=800');
-    if(!popup)throw new Error(tr('Allow pop-ups for this site, then choose New GitHub connection again. Your connection has not changed.','اسمح بالنوافذ المنبثقة لهذا الموقع ثم اضغط ربط GitHub جديد. لم يتغير اتصالك.'));
-    popup.opener=null;
-    popup.document.title=tr('New GitHub connection','ربط GitHub جديد');
-    popup.document.body.textContent=tr('Confirm the new connection in the original Gateway window.','أكد الربط الجديد في نافذة Gateway الأصلية.');
-    // Linking is non-destructive; do not leave an about:blank window waiting
-    // for a confirmation dialog in another browser tab.
-    if(!valid()||popup.closed)return;
+    // Same-tab redirect avoids stranded about:blank windows and ambiguity
+    // between the user's Gateway account and a separate OAuth popup.
     const next=await api('/api/github/connect',{method:'POST'});
-    if(!valid()||popup.closed)return;
+    if(!valid())return;
     const target=new URL(next.url);
-    if(target.protocol!=='https:'||target.hostname!=='github.com'||target.pathname!=='/login/oauth/authorize')throw new Error(tr('Invalid GitHub authorization address.','عنوان تفويض GitHub غير صالح.'));
-    for(const id of ['connectionsGithub','clientGithubPanel'])document.getElementById(id)?.replaceChildren(textElement('p',tr('GitHub authorization opened in a new window. Existing connection was not deleted.','فُتح تفويض GitHub في نافذة جديدة. لم يتم حذف الاتصال الحالي.')));
-    options.onCleared?.();
-    popup.location.replace(target.href);
-    popup.focus();
-    popup=null; // The callback returns to Gateway in that new window.
-  }catch(error){toast(error.message);}finally{
-    if(popup&&!popup.closed)popup.close();
+    if(target.protocol!=='https:'||target.hostname!=='github.com'||
+       target.pathname!=='/login/oauth/authorize')
+      throw new Error(tr('Invalid GitHub authorization address.','عنوان تفويض GitHub غير صالح.'));
+    // Returning through /api/github/callback restores the Gateway page.
+    window.location.assign(target.href);
+  }catch(error){
+    toast(error.message);
+  }finally{
     freshGithubPending=false;
   }
 };
