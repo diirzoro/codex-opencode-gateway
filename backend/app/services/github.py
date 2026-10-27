@@ -104,7 +104,8 @@ def begin_fresh_link(db, user) -> str:
     # revoke the shared App installation or another customer's credentials.
     cfg = github_app_config.effective(settings, db)
     require_configured(cfg)
-    disconnect(db, user, remove_worktrees=False)
+    # Starting a new OAuth flow must not revoke the existing connection.
+    # A destructive disconnect is a distinct, explicitly confirmed operation.
     return begin_install(db, user)
 
 def begin_install(db,user) -> str:
