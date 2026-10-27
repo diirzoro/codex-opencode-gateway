@@ -1,7 +1,7 @@
 """Owned filesystem and Git operations; no shell strings or client local paths."""
 from pathlib import Path, PureWindowsPath
 from datetime import datetime, timezone
-import base64, difflib, os, re, subprocess, uuid, time, tempfile, zipfile
+import base64, difflib, os, re, stat, subprocess, uuid, time, tempfile, zipfile
 from fastapi import HTTPException
 from sqlalchemy import select
 from ..config import settings
@@ -44,19 +44,35 @@ GITHUB_WORKTREE_LIMIT_BYTES = 512 * 1024 * 1024
 def quota_bytes(workspace):
     return GITHUB_WORKTREE_LIMIT_BYTES if workspace.project.source_type == "github" else WORKSPACE_QUOTA_BYTES
 
-def usage_bytes(workspace):
+def usage_bytes(workspace, *, stop_at=None):
     if workspace.status in {"cache_expiring", "cache_expired"}:
         return 0
     root = root_for(workspace)
     if not root.is_dir():
         return 0
     total = 0
-    for item in root.rglob("*"):
-        try:
-            if item.is_file() and not item.is_symlink():
-                total += item.stat().st_size
-        except OSError:
-            continue
+    def failed(error):raise error
+    try:
+        if hasattr(os,'fwalk'):
+            # Descriptor-relative stat: never traverse symlink directories or
+            # follow a link substituted for a file during quota inspection.
+            for _,_,files,fd in os.fwalk(root,follow_symlinks=False,onerror=failed):
+                for name in files:
+                    try:info=os.stat(name,dir_fd=fd,follow_symlinks=False)
+                    except FileNotFoundError:continue  # File concurrently removed.
+                    if stat.S_ISREG(info.st_mode):total+=info.st_size
+                    if stop_at is not None and total>=stop_at:return total
+        else:
+            # Compatibility for non-POSIX development; production is Ubuntu.
+            for parent,_,files in os.walk(root,followlinks=False,onerror=failed):
+                for name in files:
+                    try:info=(Path(parent)/name).lstat()
+                    except FileNotFoundError:continue
+                    if stat.S_ISREG(info.st_mode):total+=info.st_size
+                    if stop_at is not None and total>=stop_at:return total
+    except OSError:
+        # Unknown usage must not admit another Native execution as under quota.
+        raise HTTPException(503,'Workspace storage inspection is unavailable; retry before continuing') from None
     return total
 
 def storage_payload(workspace):
@@ -69,8 +85,14 @@ def storage_payload(workspace):
             "used_mb": round(used / (1024 * 1024), 2), "limit_mb": limit // (1024 * 1024), "over_limit": used >= limit}
 
 def require_quota_headroom(workspace):
-    if usage_bytes(workspace) >= quota_bytes(workspace):
+    if usage_bytes(workspace,stop_at=quota_bytes(workspace)) >= quota_bytes(workspace):
         raise HTTPException(413, "Workspace storage limit reached. Export or safely resolve files before continuing.")
+
+PROTECTED_WORKSPACE_NAMES = frozenset({'.git','.ssh','.aws','.config','.opencode','opencode.json','opencode.jsonc','auth.json','credentials.json'})
+
+def protected_component(name):
+    value=name.casefold()
+    return value in PROTECTED_WORKSPACE_NAMES or value.startswith('.env') or value.endswith(('.pem','.key'))
 
 def safe_path(workspace, relative=""):
     if "\x00" in relative or "\\" in relative or PureWindowsPath(relative).drive or Path(relative).is_absolute():
@@ -78,7 +100,7 @@ def safe_path(workspace, relative=""):
     parts = Path(relative).parts
     if os.getenv('OPENCODE_NATIVE_TEST_ENABLED','').lower() in {'1','true','yes'} and any(p in {'.opencode','opencode.json','opencode.jsonc'} for p in parts):
         raise HTTPException(403, "Native executable configuration is managed by the server")
-    if any(p in {"..", ".git", ".ssh", ".env"} for p in parts):
+    if any(p == ".." or protected_component(p) for p in parts):
         raise HTTPException(403, "Path is not accessible")
     root = root_for(workspace)
     candidate = root
@@ -237,9 +259,10 @@ def files(workspace, relative=""):
     path=safe_path(workspace,relative)
     if not path.is_dir(): raise HTTPException(404,"Directory not found")
     result=[]
+    root=root_for(workspace)
     for item in sorted(path.iterdir(),key=lambda p:p.name.lower()):
-        if item.name in {".git",".env",".ssh"} or item.is_symlink() or (hasattr(item,"is_junction") and item.is_junction()): continue
-        result.append({"name":item.name,"path":item.relative_to(root_for(workspace)).as_posix(),"type":"directory" if item.is_dir() else "file"})
+        if protected_component(item.name) or item.is_symlink() or (hasattr(item,"is_junction") and item.is_junction()): continue
+        result.append({"name":item.name,"path":item.relative_to(root).as_posix(),"type":"directory" if item.is_dir() else "file"})
         if len(result)>=1000: break
     return result
 
@@ -315,11 +338,11 @@ def export(workspace):
         if not root.is_dir(): raise HTTPException(409,"Workspace files are unavailable")
         with zipfile.ZipFile(path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
             for directory, folders, files in os.walk(root,followlinks=False):
-                folders[:] = [name for name in folders if name not in {'.git','.ssh'} and not (Path(directory)/name).is_symlink()]
+                folders[:] = [name for name in folders if not protected_component(name) and not (Path(directory)/name).is_symlink()]
                 for name in files:
                     item=Path(directory)/name
                     relative=item.relative_to(root).as_posix()
-                    if item.is_symlink() or any(part.startswith('.env') or part.endswith(('.key','.pem')) for part in item.relative_to(root).parts): continue
+                    if item.is_symlink() or any(protected_component(part) for part in item.relative_to(root).parts): continue
                     archive.write(item,relative)
         return path
     except Exception:

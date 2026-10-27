@@ -3,6 +3,8 @@ import os
 import re
 import uuid
 import json
+import time
+from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import urlencode
 import httpx
@@ -21,6 +23,7 @@ from .dependencies import require_user
 
 router=APIRouter(tags=['native-test'])
 ID=r'[A-Za-z0-9_-]{1,120}'
+_metadata_request=ContextVar('native_metadata_request',default=None)
 
 def enabled():return os.getenv('OPENCODE_NATIVE_TEST_ENABLED','').lower() in {'1','true','yes'}
 
@@ -48,12 +51,20 @@ def context(db,user,workspace_id,session_id=None):
     row=None;live=None
     if session_id is not None:
         row=workspaces.owned(db,WorkspaceSession,session_id,user.id)
-        if row.workspace_id!=workspace.id:raise HTTPException(404,'Conversation is outside this Workspace')
-        session_lifecycle.require_visible(db,row)
-        live=metadata('GET','/session/'+row.opencode_session_id,root)
-        if live.get('id')!=row.opencode_session_id or live.get('directory')!=str(root):
-            raise HTTPException(409,'Native conversation requires an owned directory mapping')
+        live=owned_native_session(db,user,workspace,root,row)
     return workspace,root,row,live
+
+def owned_native_session(db,user,workspace,root,row):
+    # Reuse only the ownership/root checks performed earlier in THIS request.
+    # No cross-request authorization cache: role, policy and mapping stay live.
+    if row.user_id!=user.id or row.workspace_id!=workspace.id or workspace.user_id!=user.id:
+        raise HTTPException(404,'Conversation is outside this Workspace')
+    session_lifecycle.require_visible(db,row)
+    live=metadata('GET','/session/'+row.opencode_session_id,root)
+    if not isinstance(live,dict):raise HTTPException(502,'Invalid native conversation metadata')
+    if live.get('id')!=row.opencode_session_id or live.get('directory')!=str(root):
+        raise HTTPException(409,'Native conversation requires an owned directory mapping')
+    return live
 
 def tool_access(db,user,workspace,*,project=None):
     project=project if project is not None else workspaces.owned(db,Project,workspace.project_id,user.id)
@@ -131,13 +142,25 @@ def metadata(method,path,root,data=None):
     auth=(method in {'PUT','DELETE'} and re.fullmatch(r'/auth/'+ID,path)) or (method=='POST' and re.fullmatch(r'/provider/'+ID+r'/oauth/(authorize|callback)',path)) or (method=='GET' and path=='/provider/auth')
     if not (discovery or auth or (path=='/session' and method in {'GET','POST'}) or method in {'GET','PATCH'} and re.fullmatch(r'/session/'+ID,path) or path in {'/permission','/question','/session/status','/global/health','/experimental/tool/ids','/skill','/path'} and method=='GET'):
         raise HTTPException(403,'Unsupported metadata operation')
+    state=_metadata_request.get()
+    remaining=15 if state is None else state['deadline']-time.monotonic()
+    if remaining<=0:raise HTTPException(504,'Native authorization timed out before forwarding')
+    temporary=state is None
+    client=None
     try:
-        with httpx.Client(base_url='http://127.0.0.1:'+('18097' if discovery else '18098'),trust_env=False,timeout=15) as client:
-            response=client.request(method,path,params={'directory':str(root)},json=data)
-            response.raise_for_status()
-            if not response.headers.get('content-type','').startswith('application/json') or len(response.content)>(16 if path=='/provider' else 4)*1024*1024:raise ValueError()
-            return response.json()
+        if temporary:
+            client=httpx.Client(trust_env=False,timeout=15)
+        else:
+            if state['client'] is None:state['client']=httpx.Client(trust_env=False,timeout=15)
+            client=state['client']
+        response=client.request(method,'http://127.0.0.1:'+('18097' if discovery else '18098')+path,
+                                params={'directory':str(root)},json=data,timeout=min(15,remaining))
+        response.raise_for_status()
+        if not response.headers.get('content-type','').startswith('application/json') or len(response.content)>(16 if path=='/provider' else 4)*1024*1024:raise ValueError()
+        return response.json()
     except (httpx.HTTPError,ValueError):raise HTTPException(502,'Native session metadata is unavailable') from None
+    finally:
+        if temporary and client is not None:client.close()
 
 class Create(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -211,9 +234,35 @@ async def transport(workspace_id:uuid.UUID,resource:str,request:Request,user:Use
         async for chunk in request.stream():
             raw.extend(chunk)
             if len(raw)>2*1024*1024:raise HTTPException(413,'Native request is too large')
-    return await run_in_threadpool(authorize_native,workspace_id,resource,request,user,db,bytes(raw))
+    response=await run_in_threadpool(authorize_native,workspace_id,resource,request,user,db,bytes(raw))
+    if request.method=='POST' and await request.is_disconnected():
+        raise HTTPException(408,'Native request cancelled before forwarding')
+    return response
 
 def authorize_native(workspace_id,resource,request,user,db,raw):
+    # Reuse an HTTP connection only within this authorization, never cache a
+    # permission/provider/session decision across requests. Budget is shorter
+    # than the browser prompt receipt timeout, including checks after metadata.
+    state={'deadline':time.monotonic()+(5 if resource.endswith('/abort') else 20),'client':None}
+    token=_metadata_request.set(state)
+    try:
+        response=_authorize_native(workspace_id,resource,request,user,db,raw)
+        if time.monotonic()>=state['deadline']:
+            raise HTTPException(504,'Native authorization timed out before forwarding')
+        import logging
+        logging.getLogger(__name__).debug('Native authorization allowed')
+        return response
+    except HTTPException as error:
+        import logging
+        logging.getLogger(__name__).info('Native authorization refused status=%d',error.status_code)
+        raise
+    finally:
+        try:
+            if state['client'] is not None:state['client'].close()
+        finally:_metadata_request.reset(token)
+
+
+def _authorize_native(workspace_id,resource,request,user,db,raw):
     if any(k.lower() in {'x-native-uri','x-accel-redirect','x-opencode-directory','x-native-upstream'} for k in request.headers):raise HTTPException(403,'Caller routing headers are not allowed')
     if request.query_params:raise HTTPException(403,'Caller routing parameters are not allowed')
     write=request.method=='POST'
@@ -237,7 +286,7 @@ def authorize_native(workspace_id,resource,request,user,db,raw):
     if match:
         row=db.scalar(select(WorkspaceSession).where(WorkspaceSession.workspace_id==workspace.id,WorkspaceSession.user_id==user.id,WorkspaceSession.opencode_session_id==match.group(1)))
         if row is None:raise HTTPException(404,'Conversation is not owned')
-        _,_,_,session_live=context(db,user,workspace_id,row.id)
+        session_live=owned_native_session(db,user,workspace,root,row)
         if write and match.group(2) not in {'prompt_async','abort'}:raise HTTPException(403,'Unsupported native write')
         if not write and match.group(2) in {'prompt_async','abort'}:raise HTTPException(403,'Unsupported native method')
     elif write:
@@ -249,7 +298,7 @@ def authorize_native(workspace_id,resource,request,user,db,raw):
         item=next((i for i in items if i.get('id')==action.group(2)),None)
         row=None if item is None else db.scalar(select(WorkspaceSession).where(WorkspaceSession.user_id==user.id,WorkspaceSession.workspace_id==workspace.id,WorkspaceSession.opencode_session_id==item.get('sessionID')))
         if row is None:raise HTTPException(404,'Native request is not owned')
-        context(db,user,workspace_id,row.id)
+        owned_native_session(db,user,workspace,root,row)
     if write:
         if raw and request.headers.get('content-type','').split(';')[0]!='application/json':raise HTTPException(415,'Native writes require JSON')
         if not resource.endswith(('/abort','/reject')) and not access_payload(db,user)['allowed']:raise HTTPException(402,'Workspace access has expired')

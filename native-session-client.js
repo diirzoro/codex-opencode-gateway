@@ -189,6 +189,7 @@
     const generation=epoch,user=owner(),seen=statusEvents.get(id)||0,sequence=(statusReads.get(id)||0)+1;
     statusReads.set(id,sequence);
     const live=await coalesce('status:'+row.workspace_id,()=>native(row.workspace_id,'session/status'));
+    if(!live||typeof live!=='object'||Array.isArray(live))throw Error('Invalid native session status');
     if(epoch!==generation||owner()!==user||statusReads.get(id)!==sequence||(statusEvents.get(id)||0)!==seen||!valid())return;
     statuses.set(id,live[row.runtime_id]?.type&&live[row.runtime_id].type!=='idle'?'submitted':'idle');
   }
@@ -279,7 +280,7 @@
   async function send(id,{text,providerID,modelID,agent,variant,files=[]}){
     const row=await context(id);
     if(blocked(id))throw Error(label('Recover this conversation before sending. Your draft is preserved.','استعد هذه المحادثة قبل الإرسال. مسودتك محفوظة.'));
-    const user=owner(),sendEpoch=epoch,sendGeneration=sendGenerations.get(id)||0;select(id,{providerID,modelID,agent,variant});
+    const user=owner(),sendEpoch=epoch,sendGeneration=sendGenerations.get(id)||0,seenStatus=statusEvents.get(id)||0;select(id,{providerID,modelID,agent,variant});
     const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
     const messageID='msg_'+((BigInt(Date.now())*4096n)&0xffffffffffffn).toString(16).padStart(12,'0')+Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');
     const parts=[{type:'text',text},...files.map(f=>({type:'file',mime:f.mime||({'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','pdf':'application/pdf'}[f.path.split('.').at(-1)]||'application/octet-stream'),url:row.file_base+f.path.split('/').map(encodeURIComponent).join('/'),filename:f.path.split('/').at(-1)}))];
@@ -312,8 +313,8 @@
 
     if(owner()!==user||epoch!==sendEpoch||(sendGenerations.get(id)||0)!==sendGeneration)return;
     uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
-    statuses.set(id,'submitted');
-    if(activeSession?.id===id)activeSession.execution_status='submitted';
+    if((statusEvents.get(id)||0)===seenStatus)statuses.set(id,'submitted');
+    if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'submitted';
     // The native acknowledgment is final for submission. Live/reconnect SSE
     // reconciles execution; a second status read cannot undo the acknowledgment.
   }

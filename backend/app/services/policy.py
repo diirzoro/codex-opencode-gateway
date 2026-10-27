@@ -97,8 +97,10 @@ def native_session_permissions(row, root, grants=()):
     for name in ('bash', 'shell', 'terminal', 'execute', 'task', 'skill', 'lsp', 'external_directory'):
         rules.append({'permission': name, 'pattern': '*', 'action': 'deny'})
     for permission in ('read', 'edit', 'write', 'apply_patch', 'glob', 'grep', 'list'):
-        for pattern in ('.git', '.git/*', '*/.git', '*/.git/*', '.opencode', '.opencode/*',
-                        '*/.opencode', '*/.opencode/*', '.env*', '*/.env*',
-                        'opencode.json*', '*/opencode.json*', '.ssh', '.ssh/*', '*/.ssh/*'):
+        from .workspaces import PROTECTED_WORKSPACE_NAMES
+        patterns={'.env*','*/.env*','*.pem','*.key','*/.env*/*','opencode.json*','*/opencode.json*'}
+        for name in PROTECTED_WORKSPACE_NAMES:
+            patterns.update((name,name+'/*','*/'+name,'*/'+name+'/*'))
+        for pattern in sorted(patterns):
             rules.append({'permission': permission, 'pattern': pattern, 'action': 'deny'})
     return rules

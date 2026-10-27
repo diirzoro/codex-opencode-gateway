@@ -164,8 +164,21 @@ async function main(){
  });
  await test('Accepted message SSE wins over a later lost HTTP acknowledgement',async()=>{
   const f=fixture();await f.ready();await f.w.nativeSession.start();const original=f.c.api;
-  f.c.api=async(path,options)=>{if(path.endsWith('/prompt_async')){const id=JSON.parse(options.body).messageID;f.state.events[0].onmessage({data:JSON.stringify({type:'message.updated',properties:{info:{id,sessionID:'ses_a',role:'user'}}})});throw Error('Lost acknowledgement');}return original(path,options)};
+  f.c.api=async(path,options)=>{if(path.endsWith('/prompt_async')){f.state.calls.push({path,options});const id=JSON.parse(options.body).messageID;f.state.events[0].onmessage({data:JSON.stringify({type:'message.updated',properties:{info:{id,sessionID:'ses_a',role:'user'}}})});throw Error('Lost acknowledgement');}return original(path,options)};
   await f.w.nativeSession.send(f.id,{text:'synthetic',providerID:'p',modelID:'m'});assert(!f.w.nativeSession.blocked(f.id));f.close();
+ });
+ await test('A terminal SSE status cannot be overwritten by a late submission acknowledgement',async()=>{
+  for(const [type,expected] of [['session.idle','idle'],['session.error','failed']]){
+   const f=fixture();await f.ready();await f.w.nativeSession.start();const original=f.c.api;
+   f.c.api=async(path,options)=>{if(path.endsWith('/prompt_async')){f.state.calls.push({path,options});const id=JSON.parse(options.body).messageID;f.state.events[0].onmessage({data:JSON.stringify({type:'message.updated',properties:{info:{id,sessionID:'ses_a',role:'user'}}})});f.state.events[0].onmessage({data:JSON.stringify({type,properties:{sessionID:'ses_a'}})});return {};}return original(path,options);};
+   await f.w.nativeSession.send(f.id,{text:'one synthetic send',providerID:'p',modelID:'m'});
+   const status=await f.w.nativeSession.route('/api/sessions/'+f.id,{});f.close();assert.equal(status.value.execution_status,expected);assert.equal(f.state.calls.filter(c=>c.path.endsWith('/prompt_async')).length,1);
+  }
+ });
+ await test('Malformed status cannot release an uncertain message receipt',async()=>{
+  const f=fixture();await f.ready();await assert.rejects(f.w.nativeSession.send(f.id,{text:'saved draft',providerID:'p',modelID:'m'}));const original=f.c.api;
+  f.c.api=async(path,options)=>path.endsWith('/session/status')?[]:original(path,options);
+  await assert.rejects(f.w.nativeSession.recover(f.id,{release:true}));assert(f.w.nativeSession.blocked(f.id));f.close();
  });
  await test('Stop aborts a hanging submission before status checks and cannot be undone by its late catch',async()=>{
   const f=fixture();await f.ready();const original=f.c.api;let aborts=0;
