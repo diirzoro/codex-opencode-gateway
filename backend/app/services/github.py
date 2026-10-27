@@ -104,8 +104,11 @@ def begin_fresh_link(db, user) -> str:
     # revoke the shared App installation or another customer's credentials.
     cfg = github_app_config.effective(settings, db)
     require_configured(cfg)
-    # Starting a new OAuth flow must not revoke the existing connection.
-    # A destructive disconnect is a distinct, explicitly confirmed operation.
+    # New links require an explicit disconnect first. Do not silently erase an
+    # existing customer's authorization, worktrees, or unpushed changes.
+    existing = db.scalar(select(GithubConnection).where(GithubConnection.user_id == user.id))
+    if existing is not None:
+        raise HTTPException(409, 'Disconnect the existing GitHub account before linking another')
     return begin_install(db, user)
 
 def begin_install(db,user) -> str:
