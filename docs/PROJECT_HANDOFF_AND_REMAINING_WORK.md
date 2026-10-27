@@ -16,7 +16,7 @@
 
 40 اختبار Backend فريدة ناجحة:26 حدود GitHub الموجودة، و14 جديدة في test_github_copy_cleanup. نُفذت بملفات وORM/HTTP اصطناعية، وتشمل حذف نسخة المالك، إبقاء محلي منشور ونسخة مستخدم آخر،410 للملفات/Native، بقاء project/session records، busy ثم retry من sweep الدوري، فشل erasure ثم إعادة المحاولة، rollback، symlink محكوم، webhook،403 لإداري مزيف و204 لإداري فعلي في fixture، ورفض تهيئة إعداد Native مجهول. حالات Native idle تستعمل metadata مضبوطًا؛ لا محرك جديد أو اختبار توقف مزوّد حقيقي.11 فحص DOM ناجح (5 customer setup و6 fresh link)، بما فيها نص تحذير الفصل وPOST واستعادة حالة disconnected. أثناء توسيع fixture DOM أُصلح ReferenceError متعلق بمتغير الاختبار قبل النجاح النهائي. تحذير AnyIO قديم واحد. فحوص JS/Python وgit diff --check سليمة. لا PostgreSQL TEST، أو SSH، أو حذف حي، أو قبول حسابين خارجيين، أو إعادة نشر بهذه الدفعة.
 
-لا Workflow/master/LIVE/Preview أو محرك OpenCode/config/ports/IP/.env تغير. لا migration ولا خدمة أو قاعدة جديدة. يلزم نشر Backend (ومنها workspace_cache/workspaces/management) والواجهة معًا بإجراء المالك اليدوي؛ ثم قبول فصل بحسابين ومشروعات اصطناعية بعد تصدير أي تعديلات. سيضاف SHA المصدر الدقيق بعد الرفع.
+لا Workflow/master/LIVE/Preview أو محرك OpenCode/config/ports/IP/.env تغير. لا migration ولا خدمة أو قاعدة جديدة. يلزم نشر Backend (ومنها workspace_cache/workspaces/management) والواجهة معًا بإجراء المالك اليدوي؛ ثم قبول فصل بحسابين ومشروعات اصطناعية بعد تصدير أي تعديلات. التزام تنفيذ التصحيح على GitHub updates: `7b0b25d0fb7d01e33096afc03cd25b14ecc648ae`؛ الشجرة المختبرة: `f68bca82931767b6ee26689d7fb58a2979d267c6`.
 
 ---
 
