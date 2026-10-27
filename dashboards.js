@@ -430,19 +430,11 @@
     // User authorization is distinct from App installation. Never reinstall
     // merely because Gateway disconnected or an expiring user token was lost.
     if(!status.connected)github.append(textElement('p',
-      tr('GitHub is disconnected from your Gateway account. A new explicit link is required before repository access; an installed GitHub App does not mean this account is connected.','GitHub مفصول عن حسابك في Gateway. يلزم بدء ربط جديد صراحةً قبل الوصول للمستودعات؛ بقاء التطبيق مثبتًا على GitHub لا يعني استمرار ربط الحساب.'),
+      tr('GitHub is disconnected from your Gateway account. Choose New GitHub connection to reconnect this same account or choose another; an installed App alone does not reconnect Gateway.','GitHub مفصول عن حسابك في Gateway. اضغط ربط GitHub جديد لإعادة ربط الحساب نفسه أو اختيار حساب آخر؛ تثبيت التطبيق وحده لا يعيد اتصال Gateway.'),
       'muted-small'));
     const authorize=btn('settingsAuthorizeGithub','New GitHub connection','ربط GitHub جديد',async()=>{
       if(authorize.disabled)return;
-      if(!await window.confirmAction(tr('Start a fresh GitHub connection? This removes only your current Gateway link and old authorization requests. Existing projects and files remain. Choose the intended GitHub account and repositories again.','بدء ربط GitHub جديد؟ سيُحذف اتصال حسابك الحالي في Gateway وطلبات التفويض القديمة فقط. ستبقى المشاريع والملفات. اختر حساب GitHub والمستودعات المطلوبة من جديد.')))return;
-      if(owner!==currentUser?.id||render!==githubConnectionRender)return;
-      authorize.disabled=true;
-      try{
-        const next=await api('/api/github/connect',{method:'POST'});
-        if(owner!==currentUser?.id||render!==githubConnectionRender)return;
-        github.replaceChildren(title('GitHub account / authorization','حساب GitHub / التفويض'),textElement('p',tr('Previous link cleared. Opening GitHub account selection…','مُسح الربط السابق. جارٍ فتح اختيار حساب GitHub…'),'api-message'));
-        window.location.assign(next.url);
-      }catch(error){await loadConnectionsGithub();throw error;}
+      await window.startFreshGithubConnection({isCurrent:()=>owner===currentUser?.id&&render===githubConnectionRender});
     });
     authorize.disabled=!status.configured;github.append(authorize);
     github.append(textElement('p',tr('GitHub may show accounts already signed in on github.com. Choose “Use a different account” to switch. Gateway cannot clear GitHub browser cookies. Every new link clears your previous Gateway authorization first.','قد يعرض GitHub الحسابات المسجلة في متصفحك. اختر «Use a different account» لتغيير الحساب؛ لا يستطيع Gateway مسح جلسة github.com. كل ربط جديد يمسح تفويضك السابق داخل Gateway أولًا.'),'muted-small'));

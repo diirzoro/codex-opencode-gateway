@@ -325,3 +325,51 @@ def test_unconfigured_new_link_does_not_erase_existing_connection(monkeypatch):
     with pytest.raises(HTTPException):github.begin_fresh_link(db,SimpleNamespace(id='fixture'))
     db.execute.assert_not_called()
     db.commit.assert_not_called()
+
+
+def test_same_github_account_can_reconnect_after_explicit_disconnect(boundary, monkeypatch):
+    """Disconnect revokes old state, not the right to link the same installation."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+    from urllib.parse import urlparse, parse_qs
+    from backend.app import models
+    from backend.tests.test_native_control_plane import authenticated
+    client, (owner, other), _, engine, config = boundary
+    models.GithubAuthState.__table__.create(engine)
+    cfg = SimpleNamespace(github_web_base='https://github.com', github_app_slug='fixture',
+                          github_app_id=5470256, github_client_id='fixture',
+                          github_callback_url=config.public_base_url+'/api/github/callback')
+    monkeypatch.setattr(github.github_app_config, 'effective', lambda *a: cfg)
+    monkeypatch.setattr(github, 'require_configured', lambda *a: None)
+    monkeypatch.setattr(github, 'require_advanced', lambda *a, **kw: None)
+    from backend.app.routes import github as routes
+    monkeypatch.setattr(routes, 'require_advanced', lambda *a, **kw: None)
+    monkeypatch.setattr(github, 'configured', lambda *a: True)
+    monkeypatch.setattr(github, 'exchange_code', lambda *a, **kw: {'access_token': 'synthetic-new-token'})
+    monkeypatch.setattr(github, '_jwt', lambda *a: 'synthetic-jwt')
+    monkeypatch.setattr(github.credentials, 'encrypt', lambda t: 'encrypted-new-token')
+    def vendor(method, path, **kw):
+        if path == '/user/installations':
+            return {'installations': [{'id': 901, 'app_id': 5470256}]}
+        if path == '/app/installations/901':
+            return {'app_id': 5470256, 'account': {'login': 'same-fixture-owner', 'type': 'User'}}
+        raise AssertionError(path)
+    monkeypatch.setattr(github, '_api', vendor)
+    with Session(engine) as db:
+        for user, installation in [(owner, 901), (other, 902)]:
+            db.add(models.GithubConnection(user_id=user.id, installation_id=installation,
+                                          account_login='same-fixture-owner', user_token='encrypted-old'))
+        db.commit()
+    assert authenticated(client, '/api/github/disconnect', owner, config, 'POST').status_code == 204
+    new = authenticated(client, '/api/github/connect', owner, config, 'POST')
+    assert new.status_code == 200, new.text
+    state = parse_qs(urlparse(new.json()['url']).query)['state'][0]
+    with Session(engine) as db:
+        continuation = github.handle_callback(db, state, None, None, 'synthetic-code')
+        setup = parse_qs(urlparse(continuation['redirect']).query)['state'][0]
+        row = github.handle_callback(db, setup, 901, 'install', 'synthetic-new-code')
+        assert row.installation_id == 901 and row.user_id == owner.id
+        assert row.user_token == 'encrypted-new-token'
+        assert db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id == other.id)).installation_id == 902
+    result = authenticated(client, '/api/github/status', owner, config)
+    assert result.status_code == 200 and result.json()['connected'] is True

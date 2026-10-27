@@ -3,20 +3,38 @@
 // without altering the current layout or markup.
 // One explicit fresh link for admin and legacy dashboard entry points.
 let freshGithubPending=false;
-window.startFreshGithubConnection=async function(){
+window.startFreshGithubConnection=async function(options={}){
   const tr=(en,ar)=>lang==='ar'?ar:en;
   if(freshGithubPending)return;
   const owner=currentUser?.id;
   if(!owner)return;
+  const valid=()=>currentUser?.id===owner&&(!options.isCurrent||options.isCurrent());
   freshGithubPending=true;
+  let popup;
   try{
-    if(!await window.confirmAction(tr('Start a new GitHub connection? Your previous Gateway link and authorization requests will be removed. Projects and files remain. Choose your GitHub account and repositories again.','بدء ربط GitHub جديد؟ سيُحذف اتصالك السابق وطلبات التفويض في Gateway، وتبقى المشاريع والملفات. اختر حساب GitHub والمستودعات من جديد.')))return;
-    if(currentUser?.id!==owner)return;
+    // Open within the click activation, before confirmation or network awaits.
+    // A blocked popup must not revoke a working connection or replace this tab.
+    popup=window.open('about:blank','_blank','popup,width=960,height=800');
+    if(!popup)throw new Error(tr('Allow pop-ups for this site, then choose New GitHub connection again. Your connection has not changed.','اسمح بالنوافذ المنبثقة لهذا الموقع ثم اضغط ربط GitHub جديد. لم يتغير اتصالك.'));
+    popup.opener=null;
+    popup.document.title=tr('New GitHub connection','ربط GitHub جديد');
+    popup.document.body.textContent=tr('Confirm the new connection in the original Gateway window.','أكد الربط الجديد في نافذة Gateway الأصلية.');
+    window.focus();
+    if(!await window.confirmAction(tr('Start a new GitHub connection? Your previous Gateway link and authorization requests will be removed. Projects and files remain. You may choose the same GitHub account again or a different account.','بدء ربط GitHub جديد؟ سيُحذف اتصالك السابق وطلبات التفويض في Gateway، وتبقى المشاريع والملفات. يمكنك اختيار حساب GitHub نفسه مجددًا أو حساب آخر.')))return;
+    if(!valid()||popup.closed)return;
     const next=await api('/api/github/connect',{method:'POST'});
-    if(currentUser?.id!==owner)return;
-    for(const id of ['connectionsGithub','clientGithubPanel'])document.getElementById(id)?.replaceChildren(textElement('p',tr('Previous link cleared. Opening GitHub account selection…','مُسح الربط السابق. جارٍ فتح اختيار حساب GitHub…')));
-    window.location.assign(next.url);
-  }catch(error){toast(error.message);}finally{freshGithubPending=false;}
+    if(!valid()||popup.closed)return;
+    const target=new URL(next.url);
+    if(target.protocol!=='https:'||target.hostname!=='github.com'||target.pathname!=='/login/oauth/authorize')throw new Error(tr('Invalid GitHub authorization address.','عنوان تفويض GitHub غير صالح.'));
+    for(const id of ['connectionsGithub','clientGithubPanel'])document.getElementById(id)?.replaceChildren(textElement('p',tr('Previous link cleared. Continue in the new GitHub window. You can reconnect the same account.','مُسح الربط السابق. أكمل في نافذة GitHub الجديدة. يمكنك ربط الحساب نفسه مجددًا.')));
+    options.onCleared?.();
+    popup.location.replace(target.href);
+    popup.focus();
+    popup=null; // The callback returns to Gateway in that new window.
+  }catch(error){toast(error.message);}finally{
+    if(popup&&!popup.closed)popup.close();
+    freshGithubPending=false;
+  }
 };
 (function () {
   function applyGithubCard(status) {

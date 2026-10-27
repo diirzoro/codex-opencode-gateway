@@ -103,15 +103,7 @@
     const status=await api('/api/github/status');row(box,status.account_login||tr('Not connected','غير متصل'),status.configured?tr('GitHub App configured','تطبيق GitHub مهيأ'):tr('Administrator must configure the GitHub App','يجب على الإدارة إعداد تطبيق GitHub'));
     const linkOwner=currentUser?.id;
     const authorize=button(tr('New GitHub connection','ربط GitHub جديد'),async()=>{
-      if(!await window.confirmAction(tr('Start a fresh GitHub connection? Your current Gateway link and old authorization requests will be removed; projects and files remain. Choose your GitHub account and repositories again.','بدء ربط GitHub جديد؟ سيُحذف اتصالك الحالي وطلبات التفويض القديمة في Gateway، وتبقى المشاريع والملفات. اختر حساب GitHub والمستودعات من جديد.')))return;
-      if(currentUser?.id!==linkOwner)return;
-      authorize.disabled=true;
-      try{
-        const next=await api('/api/github/connect',{method:'POST'});
-        if(currentUser?.id!==linkOwner)return;
-        box.replaceChildren(node('p',tr('Previous link cleared. Opening GitHub account selection…','مُسح الربط السابق. جارٍ فتح اختيار حساب GitHub…')));
-        window.location.assign(next.url);
-      }catch(error){await open('connections');throw error;}
+      await window.startFreshGithubConnection({isCurrent:()=>currentUser?.id===linkOwner,onCleared:()=>box.replaceChildren(node('p',tr('Continue in the new GitHub window. You may reconnect the same account.','أكمل في نافذة GitHub الجديدة. يمكنك ربط الحساب نفسه مجددًا.')))});
     });authorize.disabled=!status.configured;box.append(authorize);
     box.append(node('p',tr('GitHub may remember its own browser login. Use “Use a different account” on GitHub to switch; Gateway cannot clear github.com cookies.','قد يتذكر GitHub تسجيل دخوله في المتصفح. اختر «Use a different account» لتغييره؛ لا يستطيع Gateway مسح جلسة github.com.')));
     if(!status.configured)box.append(node('p',tr('Repository connection will be available after the administrator saves the App credentials and configures secure credential storage. No customer API token is needed in this form.','سيصبح ربط المستودعات متاحًا بعد حفظ الإدارة بيانات التطبيق وإعداد التخزين الآمن للاعتمادات. لا تحتاج إلى إدخال رمز API خاص بك في هذا النموذج.')));
