@@ -230,6 +230,10 @@ def handle_callback(db, state: str, installation_id: int | None, setup_action: s
     account = info.get("account") or {}
     login = account.get("login") or "unknown"
     record.consumed = True
+    # Invalidate all parallel OAuth attempts for this Gateway identity, so a
+    # delayed callback cannot silently overwrite the freshly approved link.
+    db.execute(delete(GithubAuthState).where(GithubAuthState.user_id == record.user_id,
+                                            GithubAuthState.state != state))
     row = db.scalar(select(GithubConnection).where(GithubConnection.user_id == record.user_id))
     if row is None:
         row = GithubConnection(user_id=record.user_id, installation_id=installation_id)
