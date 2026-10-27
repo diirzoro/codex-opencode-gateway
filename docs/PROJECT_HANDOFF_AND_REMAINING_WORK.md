@@ -8,7 +8,7 @@
 
 **TEST الحالي بعد نشر المالك:** الأصول الأربعة enhancements/dashboards/management/native-session-client طابقت eab7662. الدخول الآمن نجح كـadmin؛ زر ربط جديد واحد فعّال أوصل إلى منتقي GitHub الحقيقي مع Use a different account. لم يُكمل Work OAuth أو يعدّل التثبيت أو يفصل عميلًا أو يحذف ملفات حقيقية. إعداد الكتالوج 7 أيام وخيار 14 يومًا ظهرا على TEST دون تغيير أو تنفيذ refresh. لا وصول SSH أو نسخة Backend أو مسار backup/rollback متحقق؛ لا يُدّعى قبول عزل المحرك أو محادثة testuser المرجعية بهذه النسخة الجديدة.
 
-**لم تُنشر هذه الدفعة الجديدة بواسطة Work.** تحتاج حزمة الملفات الأربعة المتطابقة وفحص preimages/backup بإجراء المالك، ثم قبولًا حيًا بحسابين وموارد اصطناعية. تبقى Shell والأوامر وunknown/subagents محظورة. Native global provider slot وalways cache وعزل OS وحصة القرص أثناء التنفيذ حدود مفتوحة. لا Workflow أو master أو LIVE أو Preview أو DB أو config/ports/IP أو Native process تغير. سيُسجل SHA الدقيق بعد الرفع.
+**لم تُنشر هذه الدفعة الجديدة بواسطة Work.** تحتاج حزمة الملفات الأربعة المتطابقة وفحص preimages/backup بإجراء المالك، ثم قبولًا حيًا بحسابين وموارد اصطناعية. تبقى Shell والأوامر وunknown/subagents محظورة. Native global provider slot وalways cache وعزل OS وحصة القرص أثناء التنفيذ حدود مفتوحة. لا Workflow أو master أو LIVE أو Preview أو DB أو config/ports/IP أو Native process تغير. التزام التنفيذ المنشور على GitHub updates: `ef5f114961adf04cb0a36b94822c688a64089592`؛ الشجرة المختبرة: `d6cbe3b02ec0eb32ddb16f5452a8f8cc90abb593`. سياسات الملفات الجديدة تُطبّق عبر مسار PATCH الموجود عند الرسالة التالية في محادثة خاملة؛ التشغيل الجاري قد يتطلب Stop ويُرفض409 بدل الادعاء بإبطال أدواته أثناء التنفيذ.
 
 ---
 
