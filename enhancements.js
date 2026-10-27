@@ -19,8 +19,8 @@ window.startFreshGithubConnection=async function(options={}){
     popup.opener=null;
     popup.document.title=tr('New GitHub connection','ربط GitHub جديد');
     popup.document.body.textContent=tr('Confirm the new connection in the original Gateway window.','أكد الربط الجديد في نافذة Gateway الأصلية.');
-    window.focus();
-    if(!await window.confirmAction(tr('Continue to GitHub authorization? Your existing connection will remain active until you explicitly disconnect it. To switch GitHub accounts, disconnect the old account first.','الانتقال إلى تفويض GitHub؟ سيظل اتصالك الحالي محفوظًا حتى تفصله صراحةً. لتغيير حساب GitHub افصل الحساب السابق أولاً.')))return;
+    // Linking is non-destructive; do not leave an about:blank window waiting
+    // for a confirmation dialog in another browser tab.
     if(!valid()||popup.closed)return;
     const next=await api('/api/github/connect',{method:'POST'});
     if(!valid()||popup.closed)return;
