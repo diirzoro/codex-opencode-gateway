@@ -432,18 +432,20 @@
     if(!status.connected)github.append(textElement('p',
       tr('GitHub is disconnected from your Gateway account. A new explicit link is required before repository access; an installed GitHub App does not mean this account is connected.','GitHub مفصول عن حسابك في Gateway. يلزم بدء ربط جديد صراحةً قبل الوصول للمستودعات؛ بقاء التطبيق مثبتًا على GitHub لا يعني استمرار ربط الحساب.'),
       'muted-small'));
-    const authorize=btn('settingsAuthorizeGithub',status.connected?'Reauthorize GitHub':'Start new GitHub link',status.connected?'تجديد تفويض GitHub':'بدء ربط GitHub جديد',async()=>{
-      if(!await window.confirmAction(tr('Connect your GitHub account to this Gateway account? GitHub may ask you to approve repository access. Your existing project files stay unchanged.','هل تريد ربط حساب GitHub بحسابك في Gateway؟ قد يطلب GitHub موافقتك على الوصول للمستودعات. ستبقى ملفات مشاريعك كما هي.')))return;
-      window.location.assign('/api/github/authorize');
+    const authorize=btn('settingsAuthorizeGithub','New GitHub connection','ربط GitHub جديد',async()=>{
+      if(authorize.disabled)return;
+      if(!await window.confirmAction(tr('Start a fresh GitHub connection? This removes only your current Gateway link and old authorization requests. Existing projects and files remain. Choose the intended GitHub account and repositories again.','بدء ربط GitHub جديد؟ سيُحذف اتصال حسابك الحالي في Gateway وطلبات التفويض القديمة فقط. ستبقى المشاريع والملفات. اختر حساب GitHub والمستودعات المطلوبة من جديد.')))return;
+      if(owner!==currentUser?.id||render!==githubConnectionRender)return;
+      authorize.disabled=true;
+      try{
+        const next=await api('/api/github/connect',{method:'POST'});
+        if(owner!==currentUser?.id||render!==githubConnectionRender)return;
+        github.replaceChildren(title('GitHub account / authorization','حساب GitHub / التفويض'),textElement('p',tr('Previous link cleared. Opening GitHub account selection…','مُسح الربط السابق. جارٍ فتح اختيار حساب GitHub…'),'api-message'));
+        window.location.assign(next.url);
+      }catch(error){await loadConnectionsGithub();throw error;}
     });
     authorize.disabled=!status.configured;github.append(authorize);
-    if(!status.connected||result==='install-required'){
-      const install=btn('settingsInstallGithub','Install App / choose repositories','تثبيت التطبيق / اختيار المستودعات',async()=>{
-        if(!await window.confirmAction(tr('Open GitHub to install the App or change the repositories you permit?','فتح GitHub لتثبيت التطبيق أو تغيير المستودعات التي تسمح له بالوصول إليها؟')))return;
-        window.location.assign('/api/github/install');
-      });
-      install.disabled=!status.configured;github.append(install);
-    }
+    github.append(textElement('p',tr('GitHub may show accounts already signed in on github.com. Choose “Use a different account” to switch. Gateway cannot clear GitHub browser cookies. Every new link clears your previous Gateway authorization first.','قد يعرض GitHub الحسابات المسجلة في متصفحك. اختر «Use a different account» لتغيير الحساب؛ لا يستطيع Gateway مسح جلسة github.com. كل ربط جديد يمسح تفويضك السابق داخل Gateway أولًا.'),'muted-small'));
     if(status.connected){
       github.append(btn('settingsOpenGithubRepository','Choose authorized repository / branch','اختيار مستودع وفرع مصرح بهما',()=>window.openGithubProject()));
       github.append(btn('settingsDisconnectGithub','Disconnect','إلغاء الربط',async()=>{
@@ -459,11 +461,6 @@
         github.append(textElement('p',repos.length
           ?tr('Authorized repositories: ','المستودعات المصرح بها: ')+repos.length+tr('. Choose one explicitly to open a working copy.','. اختر مستودعًا صراحةً لفتح نسخة عمل.')
           :tr('No authorized repositories. Use GitHub installation settings to select repositories.','لا توجد مستودعات مصرح بها. اختر المستودعات في إعدادات تثبيت GitHub.'),'muted-small'));
-        if(!repos.length){
-          const install=btn('settingsChooseGithubRepositories','Choose repositories in GitHub','اختيار المستودعات في GitHub',async()=>{
-            if(await window.confirmAction(tr('Open GitHub installation settings to choose accessible repositories?','فتح إعدادات تثبيت GitHub لاختيار المستودعات المسموح بها؟')))window.location.assign('/api/github/install');
-          });github.append(install);
-        }
       }catch(error){
         if(owner===currentUser?.id&&render===githubConnectionRender)github.append(textElement('p',error.message,'api-message'));
       }

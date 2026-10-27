@@ -23,6 +23,12 @@ def status(user: User = Depends(require_user), db: Session = Depends(get_db)):
     return JSONResponse(github.connection_status(db, user),
                         headers={"Cache-Control": "private, no-store"})
 
+@router.post("/connect")
+def connect(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_advanced(db, user)
+    return JSONResponse({"url": github.begin_fresh_link(db, user)},
+                        headers={"Cache-Control": "private, no-store"})
+
 @router.get("/install")
 def install(user: User = Depends(require_user), db: Session = Depends(get_db)):
     require_advanced(db, user)  # The timer starts only after successful authorization.

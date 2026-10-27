@@ -98,6 +98,15 @@ def _begin_installation(db, user) -> str:
     db.commit()
     return install_url(state,cfg)
 
+def begin_fresh_link(db, user) -> str:
+    # Explicit POST only: forget this customer's local connection and all old
+    # callbacks before minting a fresh account-selection/install flow. Never
+    # revoke the shared App installation or another customer's credentials.
+    cfg = github_app_config.effective(settings, db)
+    require_configured(cfg)
+    disconnect(db, user)
+    return begin_install(db, user)
+
 def begin_install(db,user) -> str:
     # Never expose installation settings through the browser's old GitHub login
     # before this Gateway account completes an explicit account-selection flow.

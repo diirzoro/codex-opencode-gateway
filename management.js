@@ -101,16 +101,19 @@
   async function connections(body,platform=false){const box=section(body,tr('GitHub connections','اتصالات GitHub'));if(platform){const connections=await api('/api/admin/connections');if(!connections.length)box.append(node('p',tr('No customer GitHub connections yet. App settings are shown above.','لا توجد اتصالات GitHub للعملاء بعد. إعدادات التطبيق معروضة أعلاه.')));for(const c of connections)row(box,c.login,c.user_id,[button(tr('Disconnect','إلغاء الربط'),async()=>{if(!await window.confirmAction('Disconnect this account?'))return;await api('/api/admin/connections/'+c.user_id,{method:'DELETE'});await open('connections',true)})]);return}
     box.append(node('p',tr('Connect your own GitHub account and choose its repositories. This authorizes repository access only; your Gateway sign-in stays unchanged.','اربط حساب GitHub الخاص بك واختر مستودعاته. هذا تفويض للمستودعات فقط؛ يبقى تسجيل دخولك إلى Gateway كما هو.')));
     const status=await api('/api/github/status');row(box,status.account_login||tr('Not connected','غير متصل'),status.configured?tr('GitHub App configured','تطبيق GitHub مهيأ'):tr('Administrator must configure the GitHub App','يجب على الإدارة إعداد تطبيق GitHub'));
-    const authorize=button(tr(status.connected?'Reauthorize GitHub':'Start new GitHub link',status.connected?'تجديد تفويض GitHub':'بدء ربط GitHub جديد'),async()=>{
-      if(!await window.confirmAction(tr('Link your GitHub account to Gateway? GitHub may require your approval. Existing workspaces remain untouched.','ربط حساب GitHub بحساب Gateway؟ قد يطلب GitHub موافقتك. ستبقى مساحات العمل الحالية محفوظة.')))return;
-      window.location.assign('/api/github/authorize');
+    const linkOwner=currentUser?.id;
+    const authorize=button(tr('New GitHub connection','ربط GitHub جديد'),async()=>{
+      if(!await window.confirmAction(tr('Start a fresh GitHub connection? Your current Gateway link and old authorization requests will be removed; projects and files remain. Choose your GitHub account and repositories again.','بدء ربط GitHub جديد؟ سيُحذف اتصالك الحالي وطلبات التفويض القديمة في Gateway، وتبقى المشاريع والملفات. اختر حساب GitHub والمستودعات من جديد.')))return;
+      if(currentUser?.id!==linkOwner)return;
+      authorize.disabled=true;
+      try{
+        const next=await api('/api/github/connect',{method:'POST'});
+        if(currentUser?.id!==linkOwner)return;
+        box.replaceChildren(node('p',tr('Previous link cleared. Opening GitHub account selection…','مُسح الربط السابق. جارٍ فتح اختيار حساب GitHub…')));
+        window.location.assign(next.url);
+      }catch(error){await open('connections');throw error;}
     });authorize.disabled=!status.configured;box.append(authorize);
-    if(!status.connected){
-      const install=button(tr('Install App / choose repositories','تثبيت التطبيق / اختيار المستودعات'),async()=>{
-        if(await window.confirmAction(tr('Open GitHub to install the App or select permitted repositories?','فتح GitHub لتثبيت التطبيق أو اختيار المستودعات المسموح بها؟')))window.location.assign('/api/github/install');
-      });
-      install.disabled=!status.configured;box.append(install);
-    }
+    box.append(node('p',tr('GitHub may remember its own browser login. Use “Use a different account” on GitHub to switch; Gateway cannot clear github.com cookies.','قد يتذكر GitHub تسجيل دخوله في المتصفح. اختر «Use a different account» لتغييره؛ لا يستطيع Gateway مسح جلسة github.com.')));
     if(!status.configured)box.append(node('p',tr('Repository connection will be available after the administrator saves the App credentials and configures secure credential storage. No customer API token is needed in this form.','سيصبح ربط المستودعات متاحًا بعد حفظ الإدارة بيانات التطبيق وإعداد التخزين الآمن للاعتمادات. لا تحتاج إلى إدخال رمز API خاص بك في هذا النموذج.')));
     for(const [en,ar] of [['Repositories','المستودعات'],['Branches','الفروع']]){const s=section(body,tr(en,ar));if(!status.connected)s.append(node('p',tr('Connect and authorize GitHub to access your repositories and branches.','اربط GitHub وفوّضه للوصول إلى مستودعاتك وفروعها.')));}
     if(status.connected){box.append(button(tr('Refresh repositories','تحديث المستودعات'),()=>open('connections')));box.append(button(tr('Disconnect GitHub','إلغاء ربط GitHub'),async()=>{await api('/api/github/disconnect',{method:'POST'});await open('connections')}));

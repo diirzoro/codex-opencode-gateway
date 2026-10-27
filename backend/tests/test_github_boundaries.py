@@ -272,3 +272,56 @@ def test_setup_return_without_oauth_code_only_starts_fresh_authorization(monkeyp
     assert state.consumed and result['redirect'].startswith('https://github.com/login/oauth/authorize')
     assert not db.added
     exchange.assert_not_called()
+
+
+@pytest.mark.parametrize('role', ['customer', 'admin'])
+def test_new_link_post_forgets_only_current_user_connection_and_all_prior_states(boundary, monkeypatch, role):
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+    from urllib.parse import urlparse, parse_qs
+    from backend.app import models
+    from backend.app.routes import github as routes
+    from backend.tests.test_native_control_plane import authenticated
+    client,(owner,other),_,engine,config=boundary
+    models.GithubAuthState.__table__.create(engine)
+    cfg=SimpleNamespace(github_web_base='https://github.com',github_client_id='fixture',github_callback_url=config.public_base_url+'/api/github/callback')
+    monkeypatch.setattr(github.github_app_config,'effective',lambda *a:cfg)
+    monkeypatch.setattr(github,'require_configured',lambda *a:None)
+    monkeypatch.setattr(routes,'require_advanced',lambda *a,**kw:None)
+    monkeypatch.setattr(github,'configured',lambda *a:True)
+    with Session(engine) as db:
+        db.get(models.User,owner.id).role=role
+        for user,installation in [(owner,701),(other,702)]:
+            db.add(models.GithubConnection(user_id=user.id,installation_id=installation,account_login='synthetic-'+user.name,user_token='encrypted-fixture',suspended=False))
+            db.add(models.GithubAuthState(user_id=user.id,state='old-'+user.name,expires_at=datetime.now(timezone.utc)+timedelta(minutes=5)))
+        db.commit()
+    assert client.post('/api/github/connect').status_code==401
+    first=authenticated(client,'/api/github/connect',owner,config,'POST')
+    assert first.status_code==200,first.text
+    assert 'no-store' in first.headers['cache-control']
+    args=parse_qs(urlparse(first.json()['url']).query)
+    assert args['prompt']==['select_account'] and args['state'][0].startswith('install_')
+    assert authenticated(client,'/api/github/status',owner,config).json()['connected'] is False
+    assert authenticated(client,'/api/github/repositories',owner,config).status_code==503
+    with Session(engine) as db:
+        assert db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id==owner.id)) is None
+        assert db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id==other.id)).installation_id==702
+        assert db.scalar(select(models.GithubAuthState).where(models.GithubAuthState.state=='old-'+owner.name)) is None
+        assert db.scalar(select(models.GithubAuthState).where(models.GithubAuthState.state=='old-'+other.name)) is not None
+        assert db.get(models.Project,owner.project) is not None
+    second=authenticated(client,'/api/github/connect',owner,config,'POST')
+    state2=parse_qs(urlparse(second.json()['url']).query)['state'][0]
+    assert state2!=args['state'][0]
+    with Session(engine) as db:
+        assert db.scalar(select(models.GithubAuthState).where(models.GithubAuthState.state==args['state'][0])) is None
+        assert db.scalar(select(models.GithubAuthState).where(models.GithubAuthState.state==state2)) is not None
+    assert (owner.root/'marker.txt').read_text()=='synthetic-marker-'+owner.name
+
+
+def test_unconfigured_new_link_does_not_erase_existing_connection(monkeypatch):
+    db=Mock()
+    monkeypatch.setattr(github.github_app_config,'effective',lambda *a:SimpleNamespace())
+    monkeypatch.setattr(github,'require_configured',Mock(side_effect=HTTPException(503,'Missing configuration')))
+    with pytest.raises(HTTPException):github.begin_fresh_link(db,SimpleNamespace(id='fixture'))
+    db.execute.assert_not_called()
+    db.commit.assert_not_called()

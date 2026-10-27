@@ -1,6 +1,23 @@
 // Local Gateway enhancements. Loaded after app.js; it upgrades existing views with
 // real backend data (client dashboard, GitHub connection, provider credentials, push)
 // without altering the current layout or markup.
+// One explicit fresh link for admin and legacy dashboard entry points.
+let freshGithubPending=false;
+window.startFreshGithubConnection=async function(){
+  const tr=(en,ar)=>lang==='ar'?ar:en;
+  if(freshGithubPending)return;
+  const owner=currentUser?.id;
+  if(!owner)return;
+  freshGithubPending=true;
+  try{
+    if(!await window.confirmAction(tr('Start a new GitHub connection? Your previous Gateway link and authorization requests will be removed. Projects and files remain. Choose your GitHub account and repositories again.','بدء ربط GitHub جديد؟ سيُحذف اتصالك السابق وطلبات التفويض في Gateway، وتبقى المشاريع والملفات. اختر حساب GitHub والمستودعات من جديد.')))return;
+    if(currentUser?.id!==owner)return;
+    const next=await api('/api/github/connect',{method:'POST'});
+    if(currentUser?.id!==owner)return;
+    for(const id of ['connectionsGithub','clientGithubPanel'])document.getElementById(id)?.replaceChildren(textElement('p',tr('Previous link cleared. Opening GitHub account selection…','مُسح الربط السابق. جارٍ فتح اختيار حساب GitHub…')));
+    window.location.assign(next.url);
+  }catch(error){toast(error.message);}finally{freshGithubPending=false;}
+};
 (function () {
   function applyGithubCard(status) {
     var state = document.getElementById('githubCardState');
@@ -22,7 +39,7 @@
   }
 
   var connectButton = document.getElementById('connectGithubButton');
-  if (connectButton) connectButton.onclick = function () { window.location = '/api/github/install'; };
+  if (connectButton) connectButton.onclick = function () { void window.startFreshGithubConnection(); };
   var disconnectButton = document.getElementById('disconnectGithubButton');
   if (disconnectButton) disconnectButton.onclick = async function () {
     try { await api('/api/github/disconnect', { method: 'POST' }); await loadProjects(); toast('GitHub disconnected'); }
@@ -179,7 +196,7 @@
       label.append(textElement('span',caption),input);(input.readOnly?urlGrid:grid).append(label);inputs.set(key,input);
     }
     const configuration=textElement('div'),connection=textElement('p'),database=textElement('p');database.setAttribute('role','status');
-    const authorize=textElement('button',tr('Authorize my GitHub account','تفويض حساب GitHub الخاص بي'),'button ghost');authorize.type='button';authorize.disabled=true;authorize.onclick=()=>window.location.assign('/api/github/install');
+    const authorize=textElement('button',tr('New GitHub connection','ربط GitHub جديد'),'button ghost');authorize.type='button';authorize.disabled=true;authorize.onclick=()=>window.startFreshGithubConnection();
     const refresh=textElement('button',tr('Refresh','تحديث'),'button ghost');refresh.type='button';refresh.onclick=loadAdminGithubAdmin;
     const credentialsPanel=textElement('details');credentialsPanel.append(textElement('summary',tr('Update App credentials','تحديث بيانات اعتماد التطبيق')));
     const secretGrid=textElement('div','','field-grid');credentialsPanel.append(secretGrid);
@@ -901,7 +918,7 @@
     }
     var qa = document.getElementById('clientQuickActions');
     if (!qa) { qa = textElement('div', '', 'quick-actions'); qa.id = 'clientQuickActions';
-      [['#icon-plus', tr('New project', 'مشروع جديد'), function () { page('onboarding'); }], ['#icon-folder', tr('Open workspace', 'فتح مساحة عمل'), function () { setClientView('projects'); }], ['#icon-github', tr('Connect GitHub', 'ربط GitHub'), function () { window.location = '/api/github/install'; }], ['#icon-opencode', tr('Configure AI provider', 'تهيئة مزوّد الذكاء'), function () { setClientView('ai'); }]].forEach(function (q) { var btn = textElement('button', '', 'button ghost'); btn.appendChild(navIcon(q[0])); btn.appendChild(textElement('span', q[1])); btn.onclick = q[2]; qa.append(btn); });
+      [['#icon-plus', tr('New project', 'مشروع جديد'), function () { page('onboarding'); }], ['#icon-folder', tr('Open workspace', 'فتح مساحة عمل'), function () { setClientView('projects'); }], ['#icon-github', tr('New GitHub connection', 'ربط GitHub جديد'), function () { void window.startFreshGithubConnection(); }], ['#icon-opencode', tr('Configure AI provider', 'تهيئة مزوّد الذكاء'), function () { setClientView('ai'); }]].forEach(function (q) { var btn = textElement('button', '', 'button ghost'); btn.appendChild(navIcon(q[0])); btn.appendChild(textElement('span', q[1])); btn.onclick = q[2]; qa.append(btn); });
       var summaryEl = document.getElementById('clientSummary'); if (summaryEl && summaryEl.parentNode) summaryEl.parentNode.insertBefore(qa, summaryEl);
     }
     renderClientProjectsUI(data); renderClientSessionsUI(data);
@@ -976,10 +993,10 @@
       } else {
         var cp = textElement('div', '', 'connect-panel');
         var ic = textElement('div', '', 'cp-icon'); ic.appendChild(navIcon('#icon-github')); cp.append(ic);
-        cp.append(textElement('h3', tr('Connect GitHub', 'ربط GitHub')));
+        cp.append(textElement('h3', tr('New GitHub connection', 'ربط GitHub جديد')));
         cp.append(textElement('p', tr('Link your GitHub account to clone repositories and push changes. Tokens stay on the server and are never stored in your browser.', 'اربط حسابك على GitHub لاستنساخ المستودعات وإرسال التغييرات. تبقى الرموز على الخادم ولا تُخزَّن في متصفحك.')));
-        var btn = textElement('button', tr('Connect GitHub', 'ربط GitHub'), 'button');
-        btn.onclick = function () { window.location = '/api/github/install'; };
+        var btn = textElement('button', tr('New GitHub connection', 'ربط GitHub جديد'), 'button');
+        btn.onclick = function () { void window.startFreshGithubConnection(); };
         if (!s.configured) { btn.disabled = true; btn.title = tr('GitHub App is not configured', 'تطبيق GitHub غير مكوّن'); }
         cp.append(btn); panel.replaceChildren(cp);
       }
