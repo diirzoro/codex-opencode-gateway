@@ -20,13 +20,13 @@ window.startFreshGithubConnection=async function(options={}){
     popup.document.title=tr('New GitHub connection','ربط GitHub جديد');
     popup.document.body.textContent=tr('Confirm the new connection in the original Gateway window.','أكد الربط الجديد في نافذة Gateway الأصلية.');
     window.focus();
-    if(!await window.confirmAction(tr('Start a new GitHub connection? Your previous Gateway link and authorization requests will be removed. Projects and files remain. You may choose the same GitHub account again or a different account.','بدء ربط GitHub جديد؟ سيُحذف اتصالك السابق وطلبات التفويض في Gateway، وتبقى المشاريع والملفات. يمكنك اختيار حساب GitHub نفسه مجددًا أو حساب آخر.')))return;
+    if(!await window.confirmAction(tr('Continue to GitHub authorization? Your existing connection will remain active until you explicitly disconnect it. To switch GitHub accounts, disconnect the old account first.','الانتقال إلى تفويض GitHub؟ سيظل اتصالك الحالي محفوظًا حتى تفصله صراحةً. لتغيير حساب GitHub افصل الحساب السابق أولاً.')))return;
     if(!valid()||popup.closed)return;
     const next=await api('/api/github/connect',{method:'POST'});
     if(!valid()||popup.closed)return;
     const target=new URL(next.url);
     if(target.protocol!=='https:'||target.hostname!=='github.com'||target.pathname!=='/login/oauth/authorize')throw new Error(tr('Invalid GitHub authorization address.','عنوان تفويض GitHub غير صالح.'));
-    for(const id of ['connectionsGithub','clientGithubPanel'])document.getElementById(id)?.replaceChildren(textElement('p',tr('Previous link cleared. Continue in the new GitHub window. You can reconnect the same account.','مُسح الربط السابق. أكمل في نافذة GitHub الجديدة. يمكنك ربط الحساب نفسه مجددًا.')));
+    for(const id of ['connectionsGithub','clientGithubPanel'])document.getElementById(id)?.replaceChildren(textElement('p',tr('GitHub authorization opened in a new window. Existing connection was not deleted.','فُتح تفويض GitHub في نافذة جديدة. لم يتم حذف الاتصال الحالي.')));
     options.onCleared?.();
     popup.location.replace(target.href);
     popup.focus();
