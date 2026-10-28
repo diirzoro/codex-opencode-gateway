@@ -311,16 +311,17 @@ def pending_installation(db,user,auth_session_id,connection_id):
     return install_url(state,cfg)
 
 
-def revoke_token(token,cfg):
-    """Revoke only this token, never a grant (which revokes all users' tokens)."""
+def revoke_token(token,cfg,*,grant=False):
+    """Grant revocation covers this GitHub user's tokens for this App only."""
     if not token: return 'not-needed'
     try:
         with httpx.Client(base_url=settings.github_api_base,timeout=5,trust_env=False,follow_redirects=False,
                           auth=(cfg.github_client_id,cfg.github_client_secret)) as client:
-            path='/applications/'+quote(cfg.github_client_id,safe='')+'/token'
-            response=client.request('DELETE',path,json={'access_token':token})
+            path='/applications/'+quote(cfg.github_client_id,safe='')
+            response=client.request('DELETE',path+('/grant' if grant else '/token'),json={'access_token':token})
+            if grant and response.status_code!=204:return 'unconfirmed'
             if response.status_code not in (204,404): return 'unconfirmed'
-            check=client.post(path,json={'access_token':token})
+            check=client.post(path+'/token',json={'access_token':token})
             return 'verified' if check.status_code==404 else 'unconfirmed'
     except (httpx.HTTPError,ValueError): return 'unconfirmed'
 
@@ -348,7 +349,7 @@ def remove_owned_installation(row,token,cfg):
     except Exception: return 'unconfirmed'
 
 
-def disconnect(db,user,*,remove_installation=False,commit=True):
+def disconnect(db,user,*,remove_installation=False,commit=True,revoke_grant=False):
     lock_owner(db,user)
     cfg=github_app_config.effective(settings,db)
     row=db.scalar(select(GithubConnection).where(GithubConnection.user_id==user.id).with_for_update())
@@ -366,12 +367,34 @@ def disconnect(db,user,*,remove_installation=False,commit=True):
     installation='not-requested'
     if remove_installation and row:
         installation=remove_owned_installation(row,tokens[0],cfg) if tokens else 'unconfirmed'
+    grant_result='not-requested'
+    # Never revoke a whole grant for an unconfirmed/pending identity: that
+    # GitHub account may belong to a different Gateway user. Automatic state
+    # cleanup, webhook and administrative cleanup retain token-only semantics.
+    if revoke_grant and row and row.user_token:
+        try:
+            token=credentials.decrypt(row.user_token)
+            identity=_api('GET','/user',token=token,timeout=4)
+            identity_id=identity.get('id')
+            conflict=db.scalar(select(GithubConnection.id).where(
+                GithubConnection.user_id!=user.id,GithubConnection.github_user_id==identity_id))
+            if not identity_id or row.github_user_id!=identity_id or conflict:
+                grant_result='owner-review-required'
+            else:
+                grant_result=revoke_token(token,cfg,grant=True)
+                # A failed external call must not keep a reusable local link.
+                if grant_result=='verified':
+                    tokens=[t for t in tokens if t!=token]
+                    results.append('verified')
+        except Exception:
+            grant_result='unconfirmed'
     for token in set(tokens): results.append(revoke_token(token,cfg))
+    if grant_result not in {'not-requested','verified'}:results.append('unconfirmed')
     db.execute(delete(GithubAuthState).where(GithubAuthState.user_id==user.id))
     if row: db.delete(row)
     if commit: db.commit()
     # Connection cleanup must NEVER expire/delete workspaces or native history.
-    return {'connected':False,'local_credentials_removed':True,'installation_removal':installation,
+    return {'connected':False,'local_credentials_removed':True,'installation_removal':installation,'grant_revocation':grant_result,
             'revocation':'unconfirmed' if 'unconfirmed' in results else ('verified' if results else 'not-needed')}
 
 def list_repositories(connection: GithubConnection) -> list[dict]:

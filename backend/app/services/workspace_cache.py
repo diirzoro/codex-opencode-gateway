@@ -149,6 +149,26 @@ def expire_github_copies(db, user_id):
     return ids
 
 
+def github_copy_is_saved(row):
+    """Conservative TTL guard: never expire drafts, ignored files or local commits.
+
+    A matching fetched remote ref establishes that this unchanged copy came
+    from GitHub. Missing/unreadable Git metadata is not proof of safe deletion.
+    No provider API calls, token restoration or extra cleanup service.
+    """
+    from . import workspaces
+    if row.project.source_type!='github':return True
+    try:
+        state=workspaces.status(row)
+        if not state['clean'] or not state['head']:return False
+        if workspaces.git(row,'ls-files','--others','--ignored','--exclude-standard','-z').stdout:return False
+        branch=row.project.remote_branch
+        if not workspaces.valid_branch(branch):return False
+        remote=workspaces.git(row,'rev-parse','--verify','refs/remotes/origin/'+branch,check=False)
+        return remote.returncode==0 and remote.stdout.strip()==state['head']
+    except (HTTPException,OSError):return False
+
+
 def sweep(*, now=None, workspace_ids=None):
     from . import opencode, workspaces
     if _policy_started is None and workspace_ids is None:
@@ -188,6 +208,8 @@ def sweep(*, now=None, workspace_ids=None):
                     continue
                 if not runtime_idle(row):
                     continue
+                if row.project.source_type=='github' and row.status!='cache_expiring' and not github_copy_is_saved(row):
+                    continue  # 73 hours is not permission to discard unsaved work.
                 path = workspaces.root_for(row, allow_expired=True)
                 if row.status != "cache_expiring":
                     modified = last_file_activity(path)

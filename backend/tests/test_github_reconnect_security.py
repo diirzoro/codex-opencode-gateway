@@ -30,7 +30,7 @@ def flow(boundary,monkeypatch):
     monkeypatch.setattr(github,'_jwt',lambda *a:'synthetic-app-jwt')
     monkeypatch.setattr(github,'exchange_code',lambda code,**kw:{'access_token':'token-'+code})
     revoked=[];vendor=[]
-    monkeypatch.setattr(github,'revoke_token',lambda token,cfg:revoked.append(token) or 'verified')
+    monkeypatch.setattr(github,'revoke_token',lambda token,cfg,**kwargs:revoked.append(token) or 'verified')
     def api(method,path,token=None,jwt_token=None,**kw):
         vendor.append((method,path,token))
         idx=102 if token=='token-B' else 101
@@ -75,10 +75,11 @@ def test_callback_never_connects_before_identity_confirmation(flow):
 
 def test_disconnect_reconnect_same_identity_uses_new_connection_and_keeps_files(flow,monkeypatch):
     f=flow;f.callback(f.start());old=f.confirm().json()['connection_id']
-    monkeypatch.setattr(github,'remove_owned_installation',lambda *a:'verified')
+    monkeypatch.setattr(github,'remove_owned_installation',lambda *a:pytest.fail('Grant disconnect must not uninstall a shared App'))
     response=f.request('/api/github/disconnect',method='POST')
     assert response.status_code==200 and response.json()['revocation']=='verified'
-    assert response.json()['installation_removal']=='verified'
+    assert response.json()['installation_removal']=='not-requested'
+    assert response.json()['grant_revocation']=='verified'
     assert f.revoked==['token-A']
     assert (f.owners[0].root/'marker.txt').read_text()=='synthetic-marker-a'
     with Session(f.engine) as db:

@@ -446,8 +446,7 @@
     if(status.connected){
       github.append(btn('settingsOpenGithubRepository','Choose authorized repository / branch','اختيار مستودع وفرع مصرح بهما',()=>window.openGithubProject()));
       github.append(btn('settingsDisconnectGithub','Disconnect','إلغاء الربط',async()=>{
-        if(!await window.confirmAction(tr('Disconnect GitHub, revoke its token and remove your verified personal App installation? Project files and unpushed changes remain.','فصل GitHub وإبطال رمزه وإزالة تثبيت التطبيق الشخصي المتحقق؟ تبقى ملفات المشاريع والتعديلات غير المرفوعة.')))return;
-        const disconnected=await api('/api/github/disconnect',{method:'POST'});if(disconnected?.revocation==='unconfirmed'||['unconfirmed','owner-review-required'].includes(disconnected?.installation_removal))toast(tr('Gateway disconnected. GitHub revocation or installation removal needs owner review.','فُصل Gateway. إبطال GitHub أو إزالة التثبيت يحتاج مراجعة المالك.'));
+        if(!await window.disconnectGithubWithReview())return;
         // Forget an old success banner after an explicit disconnect.
         const url=new URL(location.href);url.searchParams.delete('github');
         window.history.replaceState(window.history.state,'',url.pathname+url.search+url.hash);

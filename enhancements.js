@@ -37,6 +37,79 @@ window.addEventListener('gateway-github-changed',event=>{
     const box=document.getElementById(id);if(box)box.replaceChildren(textElement('p',lang==='ar'?'تغير اتصال GitHub. افتح الاتصالات للتحقق.':'GitHub connection changed. Reopen Connections to verify.'));
   }
 });
+// One explicit review for customer, admin and legacy Disconnect entry points.
+window.disconnectGithubWithReview=async function(){
+  if(window.githubDisconnectReviewOpen)return false;
+  const owner=currentUser?.id,tr=(en,ar)=>lang==='ar'?ar:en;
+  if(!owner)return false;
+  window.githubDisconnectReviewOpen=true;
+  let dialog;
+  try{
+    const plan=await api('/api/github/disconnect/workspaces');
+    if(currentUser?.id!==owner)return false;
+    dialog=document.createElement('dialog');dialog.className='manage-card';
+    dialog.style.cssText='width:min(680px,92vw);max-height:85vh;overflow:auto;box-sizing:border-box';
+    dialog.setAttribute('aria-labelledby','githubDisconnectTitle');
+    const title=textElement('h3',tr('Disconnect GitHub','فصل GitHub'));title.id='githubDisconnectTitle';
+    dialog.append(title,textElement('p',tr('Revoke this GitHub account’s authorization for this app. Select imported copies to save and delete, or preserve them for 73 hours. Unsaved work stays protected. Internal projects and conversations remain.','إلغاء تفويض حساب GitHub لهذا التطبيق. اختر نسخ المشاريع لحفظها وحذفها، أو احتفظ بها 73 ساعة. تبقى التعديلات غير المحفوظة محمية، والمشاريع الداخلية والمحادثات محفوظة.')));
+    const selected=[],table=document.createElement('table'),head=document.createElement('thead'),hr=document.createElement('tr');
+    for(const label of [tr('Select','اختيار'),tr('Project / destination','المشروع / وجهة الحفظ'),tr('Review','المراجعة')])hr.append(textElement('th',label));head.append(hr);table.append(head);
+    const tbody=document.createElement('tbody');table.append(tbody);
+    for(const copy of plan.workspaces){
+      const row=document.createElement('tr'),choice=document.createElement('input');choice.type='checkbox';choice.checked=!copy.blocked;choice.disabled=!!copy.blocked;choice.setAttribute('aria-label',copy.name);
+      const cell=document.createElement('td');cell.append(choice);row.append(cell);
+      const name=textElement('td',copy.name+' · '+copy.repository+' → '+copy.branch),review=document.createElement('td');name.style.overflowWrap='anywhere';
+      if(copy.blocked)review.textContent=copy.blocked;
+      else{
+        const details=document.createElement('details');details.append(textElement('summary',copy.changes.length+tr(' changed files',' ملفات متغيرة')+' · '+(copy.ahead??'?')+tr(' unpushed commits',' commits غير مرفوعة')));
+        const list=document.createElement('ul');list.style.cssText='max-height:160px;overflow:auto;overflow-wrap:anywhere';
+        for(const item of copy.changes)list.append(textElement('li',item.status+' '+item.path));details.append(list);review.append(details);
+      }
+      row.append(name,review);tbody.append(row);selected.push({copy,choice});
+    }
+    const wrap=document.createElement('div');wrap.style.overflowX='auto';wrap.append(table);if(plan.workspaces.length)dialog.append(wrap);
+    const feedback=textElement('p');feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');
+    const save=textElement('button',tr('Save to GitHub, delete selected copies and disconnect','حفظ إلى GitHub وحذف النسخ المختارة ثم الفصل'),'button');
+    const keep=textElement('button',tr('Disconnect and keep files for 73 hours','فصل والاحتفاظ بالملفات 73 ساعة'),'button ghost');
+    const cancel=textElement('button',tr('Cancel','إلغاء'),'button ghost');for(const b of [save,keep,cancel])b.type='button';
+    save.disabled=!selected.some(x=>!x.copy.blocked);
+    dialog.append(feedback,save,keep,cancel);document.body.append(dialog);dialog.showModal();
+    return await new Promise(resolve=>{
+      let busy=false,deleted=0;
+      const finish=value=>{dialog.close();resolve(value);};
+      cancel.onclick=()=>{if(!busy)finish(false);};
+      dialog.oncancel=event=>{event.preventDefault();if(!busy)finish(false);};
+      const execute=async remove=>{
+        if(busy||currentUser?.id!==owner)return;
+        const copies=selected.filter(x=>x.choice.checked&&!x.copy.blocked).map(x=>x.copy);
+        if(remove&&!copies.length){feedback.textContent=tr('Select at least one working copy.','اختر نسخة مشروع واحدة على الأقل.');return;}
+        busy=true;save.disabled=keep.disabled=cancel.disabled=true;
+        try{
+          const message=remove?tr('Commit and push the reviewed changes to the listed branches, verify them, then permanently delete these LOCAL copies: ','حفظ التعديلات ومزامنتها إلى الفروع المعروضة والتحقق منها، ثم حذف هذه النسخ المحلية نهائيًا: ')+copies.map(x=>x.name).join(', '):tr('Revoke the GitHub grant for this account and app? Files remain; GitHub’s browser login is unaffected.','إلغاء تفويض حساب GitHub لهذا التطبيق؟ تبقى الملفات، ولا يتغير تسجيل دخول GitHub في المتصفح.');
+          if(!await window.confirmAction(message))return;
+          for(const copy of remove?copies:[]){
+            if(currentUser?.id!==owner)throw Error(tr('Account changed; operation stopped.','تغير الحساب؛ توقفت العملية.'));
+            feedback.textContent=tr('Saving and verifying: ','حفظ والتحقق: ')+copy.name;
+            const path='/api/github/disconnect/workspaces/'+encodeURIComponent(copy.id);
+            const saved=await api(path,{method:'POST',body:JSON.stringify({connection_id:plan.connection_id,snapshot:copy.snapshot,action:'save'})});
+            if(!saved.verified||!saved.snapshot)throw Error(tr('Remote save was not verified. Files preserved.','لم يُثبت الحفظ البعيد؛ الملفات محفوظة.'));
+            if(currentUser?.id!==owner)throw Error(tr('Account changed; files preserved.','تغير الحساب؛ الملفات محفوظة.'));
+            const result=await api(path,{method:'POST',body:JSON.stringify({connection_id:plan.connection_id,snapshot:saved.snapshot,action:'delete'})});
+            if(!result.deleted)throw Error(tr('Local cleanup was not confirmed.','لم يُؤكد حذف النسخة المحلية.'));deleted++;
+          }
+          if(currentUser?.id!==owner)throw Error(tr('Account changed; operation stopped.','تغير الحساب؛ توقفت العملية.'));
+          const result=await api('/api/github/disconnect',{method:'POST',body:JSON.stringify({connection_id:plan.connection_id})});
+          toast(result.grant_revocation==='verified'?tr('Disconnected. GitHub grant revoked.','تم الفصل وإلغاء تفويض GitHub.'):tr('Disconnected locally. GitHub grant revocation needs review.','تم الفصل محليًا؛ إلغاء تفويض GitHub يحتاج مراجعة.'));
+          finish(true);
+        }catch(error){feedback.textContent=error.message+(deleted?tr(' Verified local copies already removed: ',' عدد النسخ المحفوظة التي حُذفت بالفعل: ')+deleted:'');}
+        finally{busy=false;save.disabled=!selected.some(x=>!x.copy.blocked);keep.disabled=cancel.disabled=false;}
+      };
+      save.onclick=()=>execute(true);keep.onclick=()=>execute(false);
+    });
+  }catch(error){toast(error.message);return false;}
+  finally{if(dialog)dialog.remove();window.githubDisconnectReviewOpen=false;}
+};
+
 // Explicit server-verified identity confirmation shared by customer/admin views.
 window.renderGithubConfirmation=function(root,status,refresh){
   if(!status.pending)return;
@@ -61,7 +134,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     }catch(error){if(currentUser?.id===owner){feedback.textContent=error.message;update();}}
   };
   const cancel=textElement('button',tr('Cancel / choose another account','إلغاء / اختيار حساب آخر'),'button ghost');cancel.type='button';
-  cancel.onclick=async()=>{if(currentUser?.id!==owner)return;cancel.disabled=true;try{await api('/api/github/disconnect',{method:'POST'});if(currentUser?.id===owner)await refresh();}catch(error){feedback.textContent=error.message;cancel.disabled=false;}};
+  cancel.onclick=async()=>{if(currentUser?.id!==owner)return;cancel.disabled=true;try{await api('/api/github/disconnect',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id===owner)await refresh();}catch(error){feedback.textContent=error.message;cancel.disabled=false;}};
   if(item.installations.length)box.append(select,label,confirm);
   else{
     box.append(textElement('p',tr('This account has no authorized installation of this app. Install it on your own repositories first.','لا يوجد تثبيت مصرح لهذا التطبيق على هذا الحساب. ثبّته على مستودعاتك أولًا.')));
@@ -97,7 +170,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
   if (connectButton) connectButton.onclick = function () { void window.startFreshGithubConnection(); };
   var disconnectButton = document.getElementById('disconnectGithubButton');
   if (disconnectButton) disconnectButton.onclick = async function () {
-    try { if(!await window.confirmAction(lang==='ar'?'فصل GitHub وإبطال رمزه وإزالة التثبيت الشخصي المتحقق؟ تبقى ملفات المشاريع والتعديلات غير المرفوعة.':'Disconnect GitHub, revoke its token and remove your verified personal App installation? All project files and unpushed changes remain.'))return; await api('/api/github/disconnect', { method: 'POST' }); await loadProjects(); toast('GitHub disconnected'); }
+    try { if(!await window.disconnectGithubWithReview())return; await loadProjects(); toast('GitHub disconnected'); }
     catch (error) { toast(error.message); }
   };
 

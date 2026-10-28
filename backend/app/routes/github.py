@@ -3,13 +3,18 @@ import html
 import logging
 import secrets
 import uuid
+import hashlib
+import json
+import shutil
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field, ConfigDict
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
-from ..models import User
+from ..models import User, Project, Workspace, AccountAudit
 from ..services import github
 from ..services.entitlements import require_advanced
 from .dependencies import require_user
@@ -126,8 +131,136 @@ def pending_install(body: PendingBody,request: Request,user: User=Depends(requir
                         headers={'Cache-Control':'private, no-store'})
 
 @router.post('/disconnect')
-def disconnect(user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return JSONResponse(github.disconnect(db,user,remove_installation=True),headers={'Cache-Control':'private, no-store'})
+def disconnect(request: Request,body: PendingBody | None=Body(default=None),user: User=Depends(require_user),db: Session=Depends(get_db)):
+    # Explicit account disconnect removes authorization, not a potentially
+    # shared App installation. Uninstall remains a separate ownership action.
+    github.lock_owner(db,user)
+    connection=db.scalar(select(github.GithubConnection).where(github.GithubConnection.user_id==user.id))
+    if body:
+        if connection and connection.id!=body.connection_id:
+            raise HTTPException(409,'Connection changed; review again')
+        if not connection and not db.scalar(select(github.GithubAuthState.state).where(
+            github.GithubAuthState.user_id==user.id,
+            github.GithubAuthState.auth_session_id==request.state.auth_session.id,
+            github.GithubAuthState.connection_id==body.connection_id)):
+            raise HTTPException(409,'Connection changed; review again')
+    if connection:
+        for row in db.scalars(select(Workspace).join(Project).where(
+            Workspace.user_id==user.id,Project.user_id==user.id,Project.source_type=='github',
+            Project.github_installation_id==connection.installation_id,
+            Workspace.status.notin_(['cache_expiring','cache_expired']))):
+            row.last_activity_at=datetime.now(timezone.utc)
+    return JSONResponse(github.disconnect(db,user,revoke_grant=True),headers={'Cache-Control':'private, no-store'})
+
+
+def _disconnect_copy(db,user,workspace_id):
+    from ..services import workspaces
+    row=workspaces.owned(db,Workspace,workspace_id,user.id)
+    connection=github.connection_for(db,user)
+    if (row.project.user_id!=user.id or row.project.source_type!='github'
+        or row.project.github_installation_id!=connection.installation_id):
+        raise HTTPException(404,'No imported working copy belongs to this connection')
+    return row,connection
+
+
+def _copy_snapshot(row):
+    """Review fingerprint only; no content, credentials or physical paths."""
+    from ..services import workspaces
+    state=workspaces.status(row)
+    digest=hashlib.sha256(json.dumps(state,sort_keys=True).encode())
+    # Include actual changed-file bytes: a draft may change without a new HEAD
+    # or a different porcelain status. Never read protected files or symlinks.
+    for change in state['changes']:
+        for name in (change['path'],change.get('original_path')):
+            if not name:continue
+            path=workspaces.safe_path(row,name)
+            if path.is_file():
+                with path.open('rb') as stream:
+                    while chunk:=stream.read(65536):digest.update(chunk)
+    ignored=workspaces.git(row,'ls-files','--others','--ignored','--exclude-standard','-z').stdout
+    return state,digest.hexdigest(),bool(ignored)
+
+
+@router.get('/disconnect/workspaces')
+def disconnect_workspaces(user: User=Depends(require_user),db: Session=Depends(get_db)):
+    connection=github.connection_for(db,user)
+    rows=list(db.scalars(select(Workspace).join(Project).where(
+        Workspace.user_id==user.id,Project.user_id==user.id,Project.source_type=='github',
+        Project.github_installation_id==connection.installation_id,
+        Workspace.status.notin_(['cache_expiring','cache_expired'])).order_by(Workspace.id).limit(101)))
+    if len(rows)>100:raise HTTPException(409,'Review working copies in smaller groups before disconnecting')
+    copies=[]
+    for row in rows:
+        try:
+            state,snapshot,ignored=_copy_snapshot(row)
+            copies.append({'id':str(row.id),'name':row.project.name,'repository':row.project.repository,
+                'branch':row.project.remote_branch,'head':state['head'],'snapshot':snapshot,
+                'changes':state['changes'],'ahead':state.get('ahead'),
+                'blocked': 'Ignored local files must be exported or reviewed before deletion' if ignored else None})
+        except HTTPException:
+            copies.append({'id':str(row.id),'name':row.project.name,'repository':row.project.repository,
+                'branch':row.project.remote_branch,'snapshot':None,'changes':[],
+                'blocked':'Working copy needs review; disconnect can preserve it'})
+    return JSONResponse({'connection_id':str(connection.id),'workspaces':copies,'retention_hours':73},
+                        headers={'Cache-Control':'private, no-store'})
+
+
+class CopyDecision(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    connection_id: uuid.UUID
+    snapshot: str = Field(pattern=r'^[0-9a-f]{64}$')
+    action: str = Field(pattern=r'^(save|delete)$')
+
+
+@router.post('/disconnect/workspaces/{workspace_id}')
+def disconnect_copy(workspace_id: uuid.UUID,body: CopyDecision,
+                    user: User=Depends(require_user),db: Session=Depends(get_db)):
+    from ..services import workspaces,opencode,workspace_cache
+    from . import workspaces as git_routes
+    row,connection=_disconnect_copy(db,user,workspace_id)
+    if connection.id!=body.connection_id:raise HTTPException(409,'Connection changed; review again')
+    with opencode.workspace_lock(row):
+        github.lock_owner(db,user)
+        row,connection=_disconnect_copy(db,user,workspace_id)
+        if connection.id!=body.connection_id:raise HTTPException(409,'Connection changed; review again')
+        git_routes._require_git_idle(db,row)
+        if not workspace_cache.runtime_idle(row):raise HTTPException(409,'Stop Native execution before saving or deleting files')
+        state,snapshot,ignored=_copy_snapshot(row)
+        if snapshot!=body.snapshot:raise HTTPException(409,'Working files changed; review again. Nothing deleted')
+        if ignored:raise HTTPException(409,'Ignored local files are not saved to GitHub; export or review them first')
+        if body.action=='save':
+            # Reuse the existing authenticated Git implementation and its
+            # non-force push plus remote verification. Never embed tokens in URLs.
+            if not state['clean']:git_routes.commit(workspace_id,git_routes.CommitRequest(message='Save workspace before GitHub disconnect'),user,db)
+            pushed=git_routes.push(workspace_id,user,db)
+            current,new_snapshot,_=_copy_snapshot(row)
+            if not current['clean'] or current['head']!=pushed['head']:
+                raise HTTPException(409,'Files changed during save; nothing deleted')
+            return {'saved':True,'verified':True,'head':current['head'],'snapshot':new_snapshot}
+        # Even a forged direct delete request needs a fresh server-side remote
+        # match, clean files, current connection, ownership and idle execution.
+        git_routes._github_remote(db,user,row.project)
+        if not state['clean'] or not state['head'] or not github.verify_remote_commit(
+            connection,row.project.repository,row.project.remote_branch,state['head']):
+            raise HTTPException(409,'Save and verify all changes on GitHub before deleting this copy')
+        checked,latest,ignored=_copy_snapshot(row)
+        if latest!=snapshot or not checked['clean'] or ignored or not workspace_cache.runtime_idle(row):
+            raise HTTPException(409,'Workspace changed during verification; files preserved')
+        root=workspaces.root_for(row)
+        row.status='cache_expiring'
+        db.add(AccountAudit(subject_id=user.id,action='github.copy_delete_verified:'+str(row.id)))
+        db.commit()  # File access barrier survives a failed filesystem operation.
+        try:
+            shutil.rmtree(root)
+        except OSError:
+            raise HTTPException(503,'Verified copy cleanup failed; metadata and remote remain intact') from None
+        row.status='cache_expired'
+        db.flush()
+        remaining=db.scalar(select(Workspace.id).where(Workspace.project_id==row.project_id,
+            Workspace.user_id==user.id,Workspace.status.notin_(['cache_expiring','cache_expired'])).limit(1))
+        if remaining is None:row.project.archived_at=datetime.now(timezone.utc)
+        db.commit()
+        return {'deleted':True,'head':state['head'],'remote_preserved':True,'history_preserved':True}
 
 @router.get("/repositories")
 def repositories(user: User = Depends(require_user), db: Session = Depends(get_db)):
