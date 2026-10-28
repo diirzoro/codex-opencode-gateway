@@ -617,7 +617,7 @@ def update_email_service(service_id:str, data:EmailServiceToggle,
     from ..services import email_service_policies
     if service_id not in email_service_policies.SUPPORTED:
         raise HTTPException(409,"This email service is not implemented")
-    if service_id not in {'registration_verification','password_reset'}:
+    if service_id not in {'registration_verification','password_reset','github_connection_verification'}:
         from ..services import email_notifications
         if not email_notifications.ready(db):raise HTTPException(503,'Apply email notification migration 0027 before changing this service')
     try:
@@ -656,6 +656,9 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
     required=email_verification.required_for_registration(db)
     from ..services import email_service_policies
     recovery_enabled=email_service_policies.enabled(db,"password_reset",True)
+    github_verification_enabled=email_service_policies.enabled(db,'github_connection_verification',True)
+    from sqlalchemy import inspect
+    github_verification_ready=inspect(db.connection()).has_table('github_identity_registry')
     from ..services import email_notifications
     notification_schema=email_notifications.ready(db)
     accounts=dict((saved or {}).get('provider_accounts') or {})
@@ -671,6 +674,8 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
          {"id":"registration_verification","enabled":required,"available":True,"editable":True,
           "reason":"" if mail_ready else "Selected email provider API key is missing"},
          {"id":"password_reset","enabled":recovery_enabled,"available":True,"editable":True,"delivery_ready":mail_ready,"reason":"Uses the configured email sender"},
+         {"id":"github_connection_verification","enabled":github_verification_enabled,"available":github_verification_ready,"editable":True,"delivery_ready":mail_ready,
+          "reason":"Apply migration 0029" if not github_verification_ready else "New GitHub connections require email matching and OTP; disabling blocks new connections"},
          *({"id":i,"available":i in email_service_policies.SUPPORTED and notification_schema,"editable":i in email_service_policies.SUPPORTED and notification_schema,"enabled":email_service_policies.enabled(db,i,False),"reason":"Apply migration 0027" if i in email_service_policies.SUPPORTED and not notification_schema else "Requires an authorized Resend Full access read key" if i=="support_received" else "Manual administrator report" if i in {"system_updates","service_incident","backup_status"} else "Gateway event notification" if i in email_service_policies.SUPPORTED else "Source event integration is not available"} for i in
            ("welcome_email","subscription_expiry","low_balance","account_suspension",
             "payment_receipt","renewal_reminder","system_updates","login_security",

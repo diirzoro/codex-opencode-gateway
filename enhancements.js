@@ -114,6 +114,18 @@ window.disconnectGithubWithReview=async function(){
 window.renderGithubConfirmation=function(root,status,refresh){
   if(!status.pending)return;
   const item=status.pending,owner=currentUser?.id,tr=(en,ar)=>lang==='ar'?ar:en;
+  const errorText=error=>{
+    if(lang!=='ar')return error.message;
+    if(error.message.startsWith('This GitHub account is already connected'))return 'حساب GitHub هذا مرتبط حاليًا بحساب آخر في OpenCode Gateway، ولا يمكن ربطه بحسابين في الوقت نفسه.\n\nيرجى تسجيل الدخول إلى حساب Gateway المرتبط بهذا GitHub وإجراء Disconnect أولًا، أو اختيار حساب GitHub آخر.\n\nتسجيل الخروج وحده لا يفصل ربط GitHub.';
+    if(error.message.startsWith('GitHub email could not be verified'))return 'تعذر التحقق من البريد. راجع البريد الأساسي لحساب GitHub الذي اخترته.';
+    if(error.message.startsWith('GitHub email verification is unavailable'))return 'التحقق من بريد GitHub غير متاح. يلزم فحص صلاحية قراءة البريد وخدمة الإرسال.';
+    if(error.message==='Incorrect GitHub verification code')return 'رمز التحقق من GitHub غير صحيح.';
+    if(error.message.startsWith('GitHub code is expired'))return 'رمز GitHub منتهي أو غير متاح. اطلب رمزًا جديدًا.';
+    if(error.message.startsWith('GitHub connection verification is disabled'))return 'خدمة التحقق من ربط GitHub معطلة من الإدارة؛ لا يمكن إنشاء ربط جديد.';
+    if(error.message.startsWith('Wait before requesting'))return 'انتظر قبل محاولة التحقق من بريد GitHub مرة أخرى.';
+    if(error.message.startsWith('Verify the code sent'))return 'تحقق من رمز بريد GitHub قبل تأكيد الربط.';
+    return error.message;
+  };
   const box=textElement('section','','manage-card github-confirmation');
   box.setAttribute('aria-label',tr('Confirm GitHub identity','تأكيد هوية GitHub'));
   box.append(textElement('h3',tr('Confirm the GitHub account','تأكيد حساب GitHub')),
@@ -132,39 +144,42 @@ window.renderGithubConfirmation=function(root,status,refresh){
     confirm.disabled=true;
     try{await api('/api/github/confirm',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,github_user_id:item.github_user_id,installation_id:Number(select.value)})});
       if(currentUser?.id===owner){toast(tr('GitHub connection confirmed.','تم تأكيد ربط GitHub.'));await refresh();}
-    }catch(error){if(currentUser?.id===owner){feedback.textContent=error.message;update();}}
+    }catch(error){if(currentUser?.id===owner){feedback.textContent=errorText(error);update();}}
   };
   const cancel=textElement('button',tr('Cancel / choose another account','إلغاء / اختيار حساب آخر'),'button ghost');cancel.type='button';
-  cancel.onclick=async()=>{if(currentUser?.id!==owner)return;cancel.disabled=true;try{await api('/api/github/disconnect',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id===owner)await refresh();}catch(error){feedback.textContent=error.message;cancel.disabled=false;}};
+  cancel.onclick=async()=>{if(currentUser?.id!==owner)return;cancel.disabled=true;try{await api('/api/github/disconnect',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id===owner)await refresh();}catch(error){feedback.textContent=errorText(error);cancel.disabled=false;}};
   if(item.installations.length){
     const proof=textElement('section','','github-email-proof');
-    proof.append(textElement('p',tr('Confirm ownership with a code sent to the verified primary email on this GitHub account. This is separate from your Gateway email.','أثبت الملكية برمز إلى البريد الأساسي المتحقق لحساب GitHub نفسه، وليس بريد Gateway.')));
-    const send=textElement('button',tr('Send GitHub email code','إرسال رمز بريد GitHub'),'button ghost');send.type='button';
+    proof.append(textElement('h4',tr('Verify GitHub account ownership','التحقق من ملكية حساب GitHub')),
+      textElement('p',tr('Enter the primary email associated with the GitHub account you selected, which may differ from your Gateway email. We will match it with GitHub and send a verification code before connecting.','أدخل البريد الإلكتروني الأساسي لحساب GitHub الذي اخترته، وقد يختلف عن بريد تسجيلك في Gateway. سنتحقق من مطابقته ثم نرسل رمز تحقق قبل إكمال الربط.')));
+    const emailLabel=textElement('label',tr('GitHub primary email','البريد الإلكتروني الأساسي المرتبط بحساب GitHub'));
+    const email=document.createElement('input');email.type='email';email.autocomplete='off';email.required=true;email.maxLength=254;email.setAttribute('aria-label',tr('GitHub primary email','البريد الإلكتروني الأساسي المرتبط بحساب GitHub'));emailLabel.append(email);
+    const send=textElement('button',tr('Verify email and send code','التحقق من البريد وإرسال الرمز'),'button ghost');send.type='button';
     const code=document.createElement('input');code.type='text';code.inputMode='numeric';code.autocomplete='one-time-code';code.maxLength=6;code.pattern='[0-9]{6}';code.setAttribute('aria-label',tr('GitHub email verification code','رمز التحقق من بريد GitHub'));code.hidden=emailVerified;
     const verify=textElement('button',tr('Verify code','تحقق من الرمز'),'button');verify.type='button';verify.hidden=emailVerified;
-    const note=textElement('p',emailVerified?tr('GitHub email verified.','تم التحقق من بريد GitHub.'):item.email_verification?.masked_email||'');note.setAttribute('role','status');
+    const note=textElement('p',emailVerified?tr('GitHub email verified.','تم التحقق من بريد GitHub.'):'');note.setAttribute('role','status');
     send.onclick=async()=>{
-      if(send.disabled||currentUser?.id!==owner)return;send.disabled=true;emailVerified=false;update();
-      try{const result=await api('/api/github/pending/email/send',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id!==owner)return;
-        emailVerified=false;update();code.value='';code.hidden=verify.hidden=false;note.textContent=tr('Code sent to ','أُرسل الرمز إلى ')+result.masked_email;code.focus();
-      }catch(error){note.textContent=error.message;}finally{send.disabled=false;}
+      if(send.disabled||currentUser?.id!==owner)return;if(!email.reportValidity())return;send.disabled=true;emailVerified=false;update();
+      try{const result=await api('/api/github/pending/email/send',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,email:email.value.trim()})});if(currentUser?.id!==owner)return;
+        emailVerified=false;update();code.value='';code.hidden=verify.hidden=false;note.textContent=tr('Email matched. Verification code sent.','تمت مطابقة البريد وإرسال رمز التحقق.');code.focus();
+      }catch(error){note.textContent=errorText(error);}finally{send.disabled=false;}
     };
     verify.onclick=async()=>{
       if(verify.disabled||currentUser?.id!==owner)return;
       if(!/^[0-9]{6}$/.test(code.value)){note.textContent=tr('Enter the six-digit code.','أدخل الرمز المكوّن من ستة أرقام.');return;}
       verify.disabled=true;
       try{const result=await api('/api/github/pending/email/verify',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,code:code.value})});if(currentUser?.id!==owner)return;
-        emailVerified=result.verified===true;update();if(emailVerified){code.value='';code.hidden=verify.hidden=true;send.textContent=tr('Send a fresh code','إرسال رمز جديد');note.textContent=tr('GitHub email verified. Confirm the account below.','تم التحقق من بريد GitHub. أكّد الحساب أدناه.');}
-      }catch(error){note.textContent=error.message;}finally{verify.disabled=false;}
+        emailVerified=result.verified===true;update();if(emailVerified){email.value='';code.value='';code.hidden=verify.hidden=true;send.textContent=tr('Send a fresh code','إرسال رمز جديد');note.textContent=tr('GitHub email verified. Confirm the account below.','تم التحقق من بريد GitHub. أكّد الحساب أدناه.');}
+      }catch(error){note.textContent=errorText(error);}finally{verify.disabled=false;}
     };
-    proof.append(send,code,verify,note);box.append(select,proof,label,confirm);
+    proof.append(emailLabel,send,code,verify,note);box.append(select,proof,label,confirm);
   }
   else{
     box.append(textElement('p',tr('This account has no authorized installation of this app. Install it on your own repositories first.','لا يوجد تثبيت مصرح لهذا التطبيق على هذا الحساب. ثبّته على مستودعاتك أولًا.')));
     const install=textElement('button',tr('Install on my GitHub account','تثبيت على حسابي في GitHub'),'button');install.type='button';
     install.onclick=async()=>{if(currentUser?.id!==owner||install.disabled)return;install.disabled=true;
       try{const next=await api('/api/github/pending/install',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id!==owner)return;const url=new URL(next.url);if(url.protocol!=='https:'||url.hostname!=='github.com'||!url.pathname.startsWith('/apps/'))throw Error('Invalid GitHub installation URL');window.location.assign(url.href);}
-      catch(error){feedback.textContent=error.message;}finally{install.disabled=false;}
+      catch(error){feedback.textContent=errorText(error);}finally{install.disabled=false;}
     };box.append(install);
   }
   box.append(cancel,feedback);root.append(box);

@@ -16,18 +16,20 @@ PRODUCTION_SEND = github._send_ownership_code
 
 
 def raw_confirm(f,owner):
-    item=f.pending(owner)
+    item=f.pending(owner) or {'connection_id':str(uuid.uuid4()),'github_user_id':101,'installations':[{'id':901}]}
     return f.request('/api/github/confirm',owner,'POST',{'connection_id':item['connection_id'],
         'github_user_id':item['github_user_id'],'installation_id':item['installations'][0]['id']})
 
 
-def send(f,owner):return f.request('/api/github/pending/email/send',owner,'POST',{'connection_id':f.pending(owner)['connection_id']})
+def send(f,owner,email=None):
+    item=f.pending(owner) or {'connection_id':str(uuid.uuid4()),'github_user_id':101}
+    return f.request('/api/github/pending/email/send',owner,'POST',{'connection_id':item['connection_id'],'email':email or 'github'+str(item['github_user_id'])+'@example.com'})
 def verify(f,owner,code):return f.request('/api/github/pending/email/verify',owner,'POST',{'connection_id':f.pending(owner)['connection_id'],'code':code})
 
 
 def age_rate(f):
     with Session(f.engine) as db:
-        for row in db.scalars(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.sent:%'))):row.created_at=datetime.now(timezone.utc)-timedelta(seconds=61)
+        for row in db.scalars(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.%'))):row.created_at=datetime.now(timezone.utc)-timedelta(seconds=61)
         db.commit()
 
 
@@ -125,25 +127,25 @@ def test_email_proof_expires_and_email_change_requires_new_code(flow,monkeypatch
 def test_foreign_and_old_session_cannot_request_or_verify_ownership_code(flow):
     f=flow;a,b=f.owners;f.callback(f.start(a),a);item=f.pending(a)
     for path in ('send','verify'):
-        response=f.request('/api/github/pending/email/'+path,b,'POST',{'connection_id':item['connection_id'],**({'code':'123456'} if path=='verify' else {})})
+        response=f.request('/api/github/pending/email/'+path,b,'POST',{'connection_id':item['connection_id'],**({'code':'123456'} if path=='verify' else {'email':'github101@example.com'})})
         assert response.status_code in (403,409)
     assert not f.sent
     with Session(f.engine) as db:
         session=db.scalar(select(models.AuthSession).where(models.AuthSession.user_id==a.id));session.id=uuid.uuid4();db.commit()
-    assert f.request('/api/github/pending/email/send',a,'POST',{'connection_id':item['connection_id']}).status_code==403
+    assert f.request('/api/github/pending/email/send',a,'POST',{'connection_id':item['connection_id'],'email':'github101@example.com'}).status_code==403
 
 
 def test_maintenance_removes_only_expired_pending_secrets_and_old_rate_counters(flow,monkeypatch):
     f=flow;f.callback(f.start());send(f,f.owners[0])
     with Session(f.engine) as db:
         state=db.scalar(select(models.GithubAuthState));state.expires_at=datetime.now(timezone.utc)-timedelta(minutes=1)
-        audit=db.scalar(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.sent:%')));audit.created_at=datetime.now(timezone.utc)-timedelta(hours=25)
+        audit=db.scalar(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.%')));audit.created_at=datetime.now(timezone.utc)-timedelta(hours=25)
         db.add(models.AccountAudit(subject_id=f.owners[0].id,action='synthetic.keep'));db.commit()
     monkeypatch.setattr(database,'SessionLocal',sessionmaker(bind=f.engine))
     github.expire_pending_authorizations()
     with Session(f.engine) as db:
         assert not list(db.scalars(select(models.GithubAuthState)))
-        assert not list(db.scalars(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.sent:%'))))
+        assert not list(db.scalars(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.%'))))
         assert db.scalar(select(models.AccountAudit).where(models.AccountAudit.action=='synthetic.keep'))
         assert db.get(models.User,f.owners[0].id) and db.get(models.Project,f.owners[0].project)
 
@@ -155,7 +157,7 @@ def test_pending_and_rate_records_never_store_plain_email_or_code(flow,monkeypat
         record=db.scalar(select(models.GithubAuthState));payload=json.loads(github.credentials.decrypt(record.pending_payload))
         proof=payload['email_proof'];assert proof['digest']!='123456'
         assert 'github101@example.com' not in json.dumps(proof) and '123456' not in json.dumps(proof)
-        audit=db.scalar(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.sent:%')))
+        audit=db.scalar(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.%')))
         assert '123456' not in audit.action and '@' not in audit.action
     status=f.request('/api/github/status').text
     assert 'github101@example.com' not in status and '123456' not in status and 'token-A' not in status

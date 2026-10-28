@@ -18,6 +18,7 @@ from backend.tests.test_native_control_plane import boundary,authenticated
 def flow(boundary,monkeypatch):
     client,owners,_,engine,config=boundary
     models.GithubAuthState.__table__.create(engine)
+    models.GithubIdentityRegistry.__table__.create(engine)
     cfg=NS(github_web_base='https://github.com',github_client_id='fixture',github_client_secret='synthetic-secret',
            github_app_id=42,github_app_slug='fixture',github_callback_url=config.public_base_url+'/api/github/callback')
     monkeypatch.setattr(github.github_app_config,'effective',lambda *a:cfg)
@@ -61,10 +62,10 @@ def flow(boundary,monkeypatch):
         # the real send/verify endpoints; dedicated proof tests do not use this
         # convenience and separately assert cooldown, takeover and wrong codes.
         with Session(engine) as db:
-            for audit in db.scalars(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.sent:%'))):
+            for audit in db.scalars(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.%'))):
                 audit.created_at=datetime.now(timezone.utc)-timedelta(seconds=61)
             db.commit()
-        mailed=request('/api/github/pending/email/send',owner,'POST',{'connection_id':item['connection_id']})
+        mailed=request('/api/github/pending/email/send',owner,'POST',{'connection_id':item['connection_id'],'email':'github'+str(item['github_user_id'])+'@example.com'})
         if mailed.status_code!=200:return mailed
         verified=request('/api/github/pending/email/verify',owner,'POST',{'connection_id':item['connection_id'],'code':sent[-1]['code']})
         assert verified.status_code==200,verified.text
@@ -115,8 +116,8 @@ def test_same_browser_other_account_cannot_inherit_or_confirm(flow):
     assert f.request('/api/github/repositories',b).status_code==503
     assert f.confirm(a).status_code==200
     # A remembered Github A identity in B's OAuth is only pending, never linked.
-    f.callback(f.start(b),b,'A');assert not f.request('/api/github/status',b).json()['connected']
-    assert f.confirm(b).status_code==409
+    rejected=f.callback(f.start(b),b,'A');assert rejected.headers['location'].endswith('account-conflict')
+    assert f.pending(b) is None and not f.request('/api/github/status',b).json()['connected']
     assert f.request('/api/github/repositories',b).status_code==503
     # B deliberately chooses its different GitHub identity in a fresh transaction.
     f.callback(f.start(b),b,'B');assert f.confirm(b).status_code==200
@@ -284,7 +285,7 @@ def test_concurrent_identity_claim_rolls_back_before_state_deletion(flow,monkeyp
     from sqlalchemy.exc import IntegrityError
     from sqlalchemy.sql.dml import Delete
     f=flow;f.callback(f.start());item=f.pending()
-    assert f.request('/api/github/pending/email/send',method='POST',body={'connection_id':item['connection_id']}).status_code==200
+    assert f.request('/api/github/pending/email/send',method='POST',body={'connection_id':item['connection_id'],'email':'github101@example.com'}).status_code==200
     assert f.request('/api/github/pending/email/verify',method='POST',body={'connection_id':item['connection_id'],'code':f.sent[-1]['code']}).status_code==200
     original=Session.execute
     def execute(self,statement,*args,**kw):

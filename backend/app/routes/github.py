@@ -7,7 +7,7 @@ import hashlib
 import json
 import shutil
 from datetime import datetime, timezone
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
 from sqlalchemy import select
@@ -121,13 +121,17 @@ class PendingBody(BaseModel):
     connection_id: uuid.UUID
 
 
+class GithubEmailRequest(PendingBody):
+    email: EmailStr
+
+
 class GithubEmailCode(PendingBody):
     code: str = Field(pattern=r'^\d{6}$')
 
 
 @router.post('/pending/email/send')
-def send_email_code(body: PendingBody,request: Request,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return JSONResponse(github.send_connection_code(db,user,request.state.auth_session.id,body.connection_id),
+def send_email_code(body: GithubEmailRequest,request: Request,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    return JSONResponse(github.send_connection_code(db,user,request.state.auth_session.id,body.connection_id,str(body.email)),
                         headers={'Cache-Control':'private, no-store'})
 
 

@@ -12,13 +12,45 @@ from fastapi import HTTPException
 from sqlalchemy import delete, select, or_, func, text
 from sqlalchemy.exc import IntegrityError
 from ..config import settings
-from ..models import GithubAuthState, GithubConnection, User, AccountAudit
+from ..models import GithubAuthState, GithubConnection, GithubIdentityRegistry, User, AccountAudit
 from . import credentials, github_app_config
 from .entitlements import require_advanced
 
 STATE_TTL_MINUTES = 15
 EMAIL_PROOF_TTL = timedelta(minutes=10)
-EMAIL_SEND_ACTION = 'github.mail.sent:'
+EMAIL_SEND_ACTION = 'github.mail.request:'
+AUTH_AUDIT_PREFIX = 'github.auth.'
+AUTH_AUDIT_RETENTION = timedelta(days=90)
+IDENTITY_IN_USE = ('This GitHub account is already connected to another OpenCode Gateway account and cannot be connected to two Gateway accounts simultaneously.\n\n'
+    'Please sign in to the Gateway account where this GitHub identity is currently connected and disconnect it first, or select a different GitHub account.\n\n'
+    'Logging out does not disconnect GitHub.')
+
+
+def _audit_authorization(db,user,identity_id,event):
+    # A private, bounded history in the existing audit table. No email, tokens,
+    # codes, session/connection UUIDs or reusable authorization are recorded.
+    if type(identity_id) is int and identity_id>0:
+        db.add(AccountAudit(subject_id=user.id,action=AUTH_AUDIT_PREFIX+event+':'+str(identity_id)))
+
+
+def _require_identity_registry(db):
+    from sqlalchemy import inspect
+    if not inspect(db.connection()).has_table(GithubIdentityRegistry.__tablename__):
+        raise HTTPException(503,'GitHub identity verification requires TEST migration 0029')
+
+
+def _require_email_verification_service(db):
+    from . import email_service_policies
+    if not email_service_policies.enabled(db,'github_connection_verification',True):
+        raise HTTPException(503,'GitHub connection verification is disabled by the administrator; new connections are blocked')
+
+
+def _primary_email_hmac(identity_id,email):
+    key=credentials.settings.credentials_encryption_key
+    if not key:raise HTTPException(503,'GitHub identity verification requires Gateway credential encryption')
+    value='github-primary-email:'+str(identity_id)+':'+email.strip().casefold()
+    return hmac.new(key.encode(),value.encode(),hashlib.sha256).hexdigest()
+
 
 def schema_status(db) -> dict:
     """Read-only structure check. Never return rows, DSNs, tokens or DB errors."""
@@ -28,6 +60,7 @@ def schema_status(db) -> dict:
     required = {
         GithubConnection.__tablename__: set(GithubConnection.__table__.columns.keys()),
         GithubAuthState.__tablename__: set(GithubAuthState.__table__.columns.keys()),
+        GithubIdentityRegistry.__tablename__: set(GithubIdentityRegistry.__table__.columns.keys()),
         "projects": {"github_repository_id", "github_installation_id", "remote_url", "remote_branch"},
     }
     try:
@@ -42,7 +75,7 @@ def schema_status(db) -> dict:
                 missing.extend(table + "." + name for name in sorted(columns - actual))
         revisions = list(MigrationContext.configure(connection).get_current_heads())
         return {"checked": True, "ready": not missing, "missing": missing,
-                "revisions": revisions, "required_migrations": ["0003_github_provider", "0005_account_management", "0028_github_connection_identity"]}
+                "revisions": revisions, "required_migrations": ["0003_github_provider", "0005_account_management", "0028_github_connection_identity", "0029_github_identity_registry"]}
     except SQLAlchemyError:
         return {"checked": False, "ready": False, "missing": [], "revisions": [],
                 "reason": "Database schema inspection unavailable"}
@@ -104,6 +137,8 @@ def lock_owner(db, user):
 def begin_fresh_link(db, user, auth_session_id):
     cfg = github_app_config.effective(settings, db)
     require_configured(cfg)
+    _require_identity_registry(db)
+    _require_email_verification_service(db)
     if not auth_session_id:
         raise HTTPException(401, 'Authenticated Gateway session required')
     lock_owner(db,user)
@@ -143,10 +178,10 @@ def pending_connection(db, user, auth_session_id):
         payload = json.loads(credentials.decrypt(record.pending_payload))
         if 'identity' in payload:
             proof=payload.get('email_proof') or {}
-            valid=bool(proof.get('verified') and _aware(datetime.fromisoformat(proof['expires_at']))>datetime.now(timezone.utc))
+            valid=bool(proof.get('email_matched') and proof.get('verified') and _aware(datetime.fromisoformat(proof['expires_at']))>datetime.now(timezone.utc))
             return {'connection_id':str(record.connection_id), 'github_user_id':payload['identity']['id'],
                     'github_login':payload['identity']['login'], 'installations':payload['installations'],
-                    'email_verification':{'required':True,'verified':valid,'masked_email':proof.get('masked_email'),
+                    'email_verification':{'required':True,'verified':valid,
                         'sent':proof.get('sent',False),'expires_at':proof.get('expires_at')}}
     return None
 
@@ -243,6 +278,7 @@ def handle_callback(db, state, installation_id, setup_action, code=None, *, user
         if installation_id is not None:
             eligible=[item for item in eligible if item['id']==installation_id]
             if not eligible: raise HTTPException(403,'Installation is not authorized for this GitHub user')
+        _assert_identity_available(db,user,identity['id'],eligible)
         # Never save an active connection from a callback. No repository access
         # until a same-origin authenticated POST confirms this exact identity.
         payload={'identity':{'id':identity['id'],'login':identity['login']},
@@ -251,8 +287,12 @@ def handle_callback(db, state, installation_id, setup_action, code=None, *, user
         record.pending_payload=credentials.encrypt(json.dumps(payload))
         db.commit()
         return {'pending':True}
-    except HTTPException:
-        if 'token' in locals(): revoke_token(token['access_token'],cfg)
+    except HTTPException as exc:
+        # Do not revoke a token or Grant belonging to the active owner, even if
+        # GitHub returned an authorization associated with an existing session.
+        conflict=(exc.status_code==409 and exc.detail==IDENTITY_IN_USE) or (exc.status_code==503 and str(exc.detail).startswith('Existing GitHub connection ownership'))
+        if conflict:_audit_authorization(db,user,identity['id'],'refused')
+        if 'token' in locals() and not conflict:revoke_token(token['access_token'],cfg)
         db.commit()
         raise
 
@@ -270,10 +310,28 @@ def _pending(db,user,auth_session_id,connection_id):
 
 
 def _assert_identity_available(db,user,identity_id,installations):
+    # Migration0028 preserved legacy rows with a NULL immutable ID. Resolve
+    # only that missing ownership metadata from each row's own stored token;
+    # otherwise another installation could bypass the old row's ownership.
+    legacy=list(db.scalars(select(GithubConnection).where(
+        GithubConnection.github_user_id.is_(None)).with_for_update()))
+    if legacy:
+        claimed=set(db.scalars(select(GithubConnection.github_user_id).where(GithubConnection.github_user_id.is_not(None))))
+        resolved=[]
+        for row in legacy:
+            try:
+                owner=_api('GET','/user',token=credentials.decrypt(row.user_token),timeout=4) if row.user_token else {}
+                actual=owner.get('id')
+                if type(actual) is not int or actual<=0 or actual in claimed:raise ValueError('Legacy identity conflict')
+            except Exception:
+                raise HTTPException(503,'Existing GitHub connection ownership requires verified recovery before new connections') from None
+            claimed.add(actual);resolved.append((row,actual,owner.get('login')))
+        for row,actual,login in resolved:row.github_user_id=actual;row.github_user_login=login
+        db.flush()
     foreign=db.scalar(select(GithubConnection.id).where(GithubConnection.user_id!=user.id,
         or_(GithubConnection.github_user_id==identity_id,
             GithubConnection.installation_id.in_([i['id'] for i in installations if i.get('type')=='User' and i.get('account_id')==identity_id]))))
-    if foreign:raise HTTPException(409,'This GitHub identity is still linked to another Gateway account')
+    if foreign:raise HTTPException(409,IDENTITY_IN_USE)
 
 
 def _verified_primary_email(token,identity_id):
@@ -316,7 +374,8 @@ def _send_ownership_code(email,code,db):
     send(cfg,message,error_status=503,timeout=12)
 
 
-def send_connection_code(db,user,auth_session_id,connection_id):
+def send_connection_code(db,user,auth_session_id,connection_id,submitted_email):
+    _require_email_verification_service(db)
     record,payload=_pending(db,user,auth_session_id,connection_id)
     _assert_identity_available(db,user,payload['identity']['id'],payload['installations'])
     now=datetime.now(timezone.utc)
@@ -329,8 +388,8 @@ def send_connection_code(db,user,auth_session_id,connection_id):
         db.execute(text('SELECT pg_advisory_xact_lock(:namespace, :identity)'),
                    {'namespace':194731,'identity':int(key[:8],16)&0x7fffffff})
     action=EMAIL_SEND_ACTION+key
-    recent=select(AccountAudit).where(AccountAudit.action.like(EMAIL_SEND_ACTION+'%'),
-        or_(AccountAudit.subject_id==user.id,AccountAudit.action==action))
+    recent=select(AccountAudit).where(AccountAudit.action.like('github.mail.%'),
+        or_(AccountAudit.subject_id==user.id,AccountAudit.action.in_([action,'github.mail.sent:'+key])))
     count=db.scalar(select(func.count()).select_from(recent.where(AccountAudit.created_at>now-timedelta(hours=1)).subquery()))
     last=db.scalar(recent.order_by(AccountAudit.created_at.desc()).limit(1))
     if count>=5 or last and _aware(last.created_at)>now-timedelta(seconds=60):
@@ -338,36 +397,47 @@ def send_connection_code(db,user,auth_session_id,connection_id):
     old=payload.get('email_proof') or {}
     if old.get('attempts',0)>=5:
         raise HTTPException(429,'Code attempts exhausted; start a fresh connection')
-    email=_verified_primary_email(payload['token'],payload['identity']['id'])
-    nonce=secrets.token_urlsafe(16);code=f'{secrets.randbelow(1000000):06d}'
-    expires=min(_aware(record.expires_at),now+EMAIL_PROOF_TTL)
-    proof={'nonce':nonce,'digest':_email_code_hash(connection_id,nonce,code),
-        'email_hash':hashlib.sha256(email.casefold().encode()).hexdigest(),
-        'masked_email':email[:1]+'***@'+email.rsplit('@',1)[1],
-        'expires_at':expires.isoformat(),'attempts':old.get('attempts',0),'verified':False,'sent':False}
-    payload['email_proof']=proof
+    # Every email-match attempt consumes the same persisted rate limit, not
+    # just successful sends. A wrong address cannot be guessed without bounds.
+    payload.pop('email_proof',None)
     record.pending_payload=credentials.encrypt(json.dumps(payload))
     db.add(AccountAudit(subject_id=user.id,action=action))
-    try:_send_ownership_code(email,code,db)
-    except HTTPException:
-        proof.pop('digest',None)
+    try:
+        email=_verified_primary_email(payload['token'],payload['identity']['id'])
+        if not hmac.compare_digest(email.casefold().encode(),submitted_email.strip().casefold().encode()):
+            raise HTTPException(400,'GitHub email could not be verified. Check the primary email on the selected GitHub account.')
+        nonce=secrets.token_urlsafe(16);code=f'{secrets.randbelow(1000000):06d}'
+        expires=min(_aware(record.expires_at),now+EMAIL_PROOF_TTL)
+        proof={'nonce':nonce,'digest':_email_code_hash(connection_id,nonce,code),
+            'email_hmac':_primary_email_hmac(payload['identity']['id'],email),
+            'expires_at':expires.isoformat(),'attempts':old.get('attempts',0),
+            'email_matched':True,'verified':False,'sent':False}
+        payload['email_proof']=proof
+        _send_ownership_code(email,code,db)
+    except HTTPException as exc:
+        if 'proof' in locals():proof.pop('digest',None)
         record.pending_payload=credentials.encrypt(json.dumps(payload));db.commit()
-        raise HTTPException(503,'GitHub verification email could not be sent; connection remains pending') from None
+        if exc.status_code==400:raise
+        # Do not return provider email details or distinguish guessed addresses.
+        raise HTTPException(503,'GitHub email verification is unavailable. Check App email permission and mail delivery.') from None
     proof['sent']=True
     record.pending_payload=credentials.encrypt(json.dumps(payload));db.commit()
-    return {'sent':True,'masked_email':proof['masked_email'],'expires_at':proof['expires_at']}
+    return {'sent':True,'expires_at':proof['expires_at']}
 
 
 def verify_connection_code(db,user,auth_session_id,connection_id,code):
+    _require_email_verification_service(db)
     record,payload=_pending(db,user,auth_session_id,connection_id)
     _assert_identity_available(db,user,payload['identity']['id'],payload['installations'])
     proof=payload.get('email_proof') or {}
-    if (not proof.get('sent') or proof.get('verified') or not proof.get('digest') or proof.get('attempts',0)>=5
+    if (not proof.get('email_matched') or not proof.get('sent') or proof.get('verified') or not proof.get('digest') or proof.get('attempts',0)>=5
         or _aware(datetime.fromisoformat(proof['expires_at']))<=datetime.now(timezone.utc)):
         raise HTTPException(400,'GitHub code is expired or unavailable; request a fresh code')
     proof['attempts']=proof.get('attempts',0)+1
     valid=hmac.compare_digest(proof['digest'],_email_code_hash(connection_id,proof['nonce'],code))
-    if valid:proof['verified']=True;proof.pop('digest',None)
+    if valid:
+        proof['verified']=True;proof.pop('digest',None)
+        _audit_authorization(db,user,payload['identity']['id'],'email_verified')
     record.pending_payload=credentials.encrypt(json.dumps(payload));db.commit()
     if not valid:raise HTTPException(400,'Incorrect GitHub verification code')
     return {'verified':True}
@@ -381,13 +451,25 @@ def expire_pending_authorizations():
         states=list(db.scalars(select(GithubAuthState.state).where(GithubAuthState.expires_at<=now)
             .order_by(GithubAuthState.expires_at).limit(100).with_for_update(skip_locked=True)))
         if states:db.execute(delete(GithubAuthState).where(GithubAuthState.state.in_(states)))
-        audits=list(db.scalars(select(AccountAudit.id).where(AccountAudit.action.like(EMAIL_SEND_ACTION+'%'),
+        audits=list(db.scalars(select(AccountAudit.id).where(AccountAudit.action.like('github.mail.%'),
             AccountAudit.created_at<now-timedelta(hours=24)).order_by(AccountAudit.created_at,AccountAudit.id).limit(100)))
         if audits:db.execute(delete(AccountAudit).where(AccountAudit.id.in_(audits)))
+        history=list(db.scalars(select(AccountAudit.id).where(AccountAudit.action.like(AUTH_AUDIT_PREFIX+'%'),
+            AccountAudit.created_at<now-AUTH_AUDIT_RETENTION).order_by(AccountAudit.created_at,AccountAudit.id).limit(100)))
+        if history:db.execute(delete(AccountAudit).where(AccountAudit.id.in_(history)))
+        from sqlalchemy import inspect
+        if inspect(db.connection()).has_table(GithubIdentityRegistry.__tablename__):
+            active=select(GithubConnection.id).where(GithubConnection.github_user_id==GithubIdentityRegistry.github_user_id).exists()
+            old=list(db.scalars(select(GithubIdentityRegistry.github_user_id).where(
+                GithubIdentityRegistry.retain_until<now,~active)
+                .order_by(GithubIdentityRegistry.retain_until).limit(100).with_for_update(skip_locked=True)))
+            if old:db.execute(delete(GithubIdentityRegistry).where(GithubIdentityRegistry.github_user_id.in_(old)))
         db.commit()
 
 
 def confirm_connection(db,user,auth_session_id,connection_id,github_user_id,installation_id):
+    _require_identity_registry(db)
+    _require_email_verification_service(db)
     record,payload=_pending(db,user,auth_session_id,connection_id)
     require_advanced(db,user)
     if payload['identity']['id'] != github_user_id:
@@ -401,12 +483,13 @@ def confirm_connection(db,user,auth_session_id,connection_id,github_user_id,inst
     foreign=db.scalar(select(GithubConnection).where(GithubConnection.user_id!=user.id,
         or_(GithubConnection.installation_id==installation_id, GithubConnection.github_user_id==github_user_id,
             GithubConnection.installation_id.in_([i['id'] for i in eligible if i.get('type')=='User' and i.get('account_id')==github_user_id]))))
-    if foreign: raise HTTPException(409,'This GitHub identity or installation is linked to another Gateway account')
+    if foreign: raise HTTPException(409,IDENTITY_IN_USE)
     proof=payload.get('email_proof') or {}
-    if not proof.get('verified') or _aware(datetime.fromisoformat(proof['expires_at']))<=datetime.now(timezone.utc):
+    if not proof.get('email_matched') or not proof.get('verified') or _aware(datetime.fromisoformat(proof['expires_at']))<=datetime.now(timezone.utc):
         raise HTTPException(403,'Verify the code sent to this GitHub account email before confirming')
     email=_verified_primary_email(payload['token'],github_user_id)
-    if hashlib.sha256(email.casefold().encode()).hexdigest()!=proof.get('email_hash'):
+    email_hmac=_primary_email_hmac(github_user_id,email)
+    if not hmac.compare_digest(email_hmac,proof.get('email_hmac','')):
         raise HTTPException(409,'GitHub primary email changed; request a fresh verification code')
     info=_api('GET',f'/app/installations/{installation_id}',jwt_token=_jwt(cfg))
     if info.get('app_id')!=cfg.github_app_id: raise HTTPException(403,'Installation belongs to a different GitHub App')
@@ -417,7 +500,21 @@ def confirm_connection(db,user,auth_session_id,connection_id,github_user_id,inst
         app_id=cfg.github_app_id,suspended=False,user_token=credentials.encrypt(payload['token']),
         token_expires_at=datetime.fromisoformat(payload['expires_at']) if payload['expires_at'] else None)
     try:
+        # Existing registry rows serialize reconnect/email updates. On a first
+        # claim the PK plus the active-connection unique constraint reject races.
+        identity=db.scalar(select(GithubIdentityRegistry).where(
+            GithubIdentityRegistry.github_user_id==github_user_id).with_for_update())
+        now=datetime.now(timezone.utc)
+        if identity:
+            if not hmac.compare_digest(identity.primary_email_hmac,email_hmac):
+                _audit_authorization(db,user,github_user_id,'email_changed')
+            identity.primary_email_hmac=email_hmac;identity.last_verified_at=now;identity.verification_status='verified'
+            identity.retain_until=now+AUTH_AUDIT_RETENTION
+        else:
+            db.add(GithubIdentityRegistry(github_user_id=github_user_id,primary_email_hmac=email_hmac,
+                first_verified_at=now,last_verified_at=now,retain_until=now+AUTH_AUDIT_RETENTION,verification_status='verified'))
         db.add(row)
+        _audit_authorization(db,user,github_user_id,'connected')
         db.execute(delete(GithubAuthState).where(GithubAuthState.user_id==user.id))
         require_advanced(db,user,start=True)
         db.commit()
@@ -521,7 +618,14 @@ def disconnect(db,user,*,remove_installation=False,commit=True,revoke_grant=Fals
     for token in set(tokens): results.append(revoke_token(token,cfg))
     if grant_result not in {'not-requested','verified'}:results.append('unconfirmed')
     db.execute(delete(GithubAuthState).where(GithubAuthState.user_id==user.id))
-    if row: db.delete(row)
+    if row:
+        from sqlalchemy import inspect
+        if inspect(db.connection()).has_table(GithubIdentityRegistry.__tablename__) and row.github_user_id:
+            identity=db.scalar(select(GithubIdentityRegistry).where(
+                GithubIdentityRegistry.github_user_id==row.github_user_id).with_for_update())
+            if identity:identity.retain_until=datetime.now(timezone.utc)+AUTH_AUDIT_RETENTION
+        _audit_authorization(db,user,row.github_user_id,'disconnected')
+        db.delete(row)
     if commit: db.commit()
     # Connection cleanup must NEVER expire/delete workspaces or native history.
     return {'connected':False,'local_credentials_removed':True,'installation_removal':installation,'grant_revocation':grant_result,

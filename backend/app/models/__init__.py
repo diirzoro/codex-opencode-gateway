@@ -18,6 +18,8 @@ __all__ = [
 
 from .management import BillingMethod, AccountAudit, PasswordReset
 __all__ += ["BillingMethod", "AccountAudit", "PasswordReset"]
+from .github_identity import GithubIdentityRegistry
+__all__ += ["GithubIdentityRegistry"]
 
 from .preview import PreviewRuntimeLease, PreviewWorkerCapacity
 __all__ += ["PreviewRuntimeLease", "PreviewWorkerCapacity"]

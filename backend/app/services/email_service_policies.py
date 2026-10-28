@@ -2,7 +2,7 @@
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError, OperationalError
 
-SUPPORTED = frozenset({"registration_verification", "password_reset", "welcome_email", "account_suspension", "payment_receipt", "login_security", "password_changed", "email_changed", "payment_failed", "unusual_activity", "subscription_expiry", "renewal_reminder", "trial_expiring", "system_updates", "service_incident", "backup_status", "support_received"})
+SUPPORTED = frozenset({"registration_verification", "password_reset", "github_connection_verification", "welcome_email", "account_suspension", "payment_receipt", "login_security", "password_changed", "email_changed", "payment_failed", "unusual_activity", "subscription_expiry", "renewal_reminder", "trial_expiring", "system_updates", "service_incident", "backup_status", "support_received"})
 
 def enabled(db, service_id: str, fallback: bool = True) -> bool:
     if service_id not in SUPPORTED:

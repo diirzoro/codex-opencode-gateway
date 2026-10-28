@@ -35,7 +35,7 @@ def test_missing_schema_returns_precise_non_secret_diagnostics():
     with Session(engine) as db:
         result=github.schema_status(db)
         assert result['checked'] and not result['ready']
-        assert set(result['missing'])=={'github_connections','github_auth_states','projects'}
+        assert set(result['missing'])=={'github_connections','github_auth_states','github_identity_registry','projects'}
     engine.dispose()
 
 def test_admin_http_diagnostics_enforce_role_and_detect_missing_table(boundary):
@@ -48,7 +48,7 @@ def test_admin_http_diagnostics_enforce_role_and_detect_missing_table(boundary):
     response=authenticated(client,'/api/admin/github-configuration',owner,config)
     assert response.status_code==200,response.text
     result=response.json()
-    assert result['database']['missing']==['github_auth_states']
+    assert result['database']['missing']==['github_auth_states','github_identity_registry']
     assert result['source']=='protected_server_environment' and result['editable'] is True
     assert all(isinstance(value,bool) for value in result['secrets'].values())
     assert 'user_token' not in result and 'private_key' not in result
