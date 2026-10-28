@@ -95,11 +95,21 @@
     if(e.type==='message.part.delta'){const m=messages.find(m=>m.info.id===p.messageID),part=m?.parts.find(v=>v.id===p.partID);if(!part||!['text','reasoning'].includes(part.type)||p.field!=='text'||typeof p.delta!=='string')return false;part.text=(part.text||'')+p.delta;return true;}
     return false;
   }
+  const attachmentDeliveries=new Set();
+  function noteAttachmentDelivery(id,pending){
+    const row=rows.get(id),user=owner(),messageID=pending?.messageID;
+    const ids=(pending?.files||[]).map(file=>file.path?.match(/^__gateway_chat_attachments\/([0-9a-f-]{36})\/[^/]+$/)?.[1]).filter(Boolean);
+    if(!row||!messageID||!ids.length)return;
+    const key=user+':'+messageID;if(attachmentDeliveries.has(key))return;attachmentDeliveries.add(key);if(attachmentDeliveries.size>500)attachmentDeliveries.delete(attachmentDeliveries.values().next().value);
+    // Lifecycle hint only, outside the submission outcome. Failed cleanup
+    // bookkeeping must never turn an accepted Native prompt into a retry.
+    api('/api/workspaces/'+row.workspace_id+'/attachments/delivery',{method:'POST',body:JSON.stringify({session_id:id,message_id:messageID,upload_ids:ids}),signal:AbortSignal.timeout(10000)}).catch(()=>attachmentDeliveries.delete(key));
+  }
   function reconcile(id,messages){
     const last=messages.findLast(m=>m.info.role==='user'&&m.info.model)?.info;
     if(last&&!selection(id))select(id,{providerID:last.model.providerID,modelID:last.model.modelID,agent:last.agent,variant:last.model.variant});
     let pending=uncertain.get(id);try{pending??=JSON.parse(sessionStorage.getItem(storageKey('uncertain',id))||'null');}catch{}
-    if(pending){if(messages.some(m=>m.info.id===(pending.messageID||pending))){if(typeof pending==='object')pending.accepted=true;uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}else uncertain.set(id,pending);}
+    if(pending){if(messages.some(m=>m.info.id===(pending.messageID||pending))){if(typeof pending==='object'){pending.accepted=true;noteAttachmentDelivery(id,pending);}uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}else uncertain.set(id,pending);}
   }
   async function history(id,force=false){
     if(pendingReads.has('history:'+id))return pendingReads.get('history:'+id);
@@ -312,6 +322,7 @@
     }finally{if(submissionsInFlight.get(id)===submissionController)submissionsInFlight.delete(id);}
 
     if(owner()!==user||epoch!==sendEpoch||(sendGenerations.get(id)||0)!==sendGeneration)return;
+    noteAttachmentDelivery(id,pending);
     uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
     if((statusEvents.get(id)||0)===seenStatus)statuses.set(id,'submitted');
     if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'submitted';

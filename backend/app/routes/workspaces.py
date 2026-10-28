@@ -629,6 +629,65 @@ def new_session(workspace_id: uuid.UUID,data: NewSession,user: User=Depends(requ
     db.commit(); db.refresh(session)
     return session_lifecycle.payload(session,"active")
 
+class TemporaryAttachment(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    session_id: uuid.UUID
+    name: str=Field(min_length=1,max_length=200)
+    size: int=Field(gt=0,le=20*1024*1024)
+    mime: str=Field(default='application/octet-stream',max_length=120)
+
+@router.post('/workspaces/{workspace_id}/attachments',status_code=201)
+def create_attachment(workspace_id:uuid.UUID,data:TemporaryAttachment,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from ..services import chat_attachments
+    native_sessions.admit(user)
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    session=manager.owned(db,WorkspaceSession,data.session_id,user.id)
+    if session.workspace_id!=row.id: raise HTTPException(404,'Conversation is outside this Workspace')
+    native_sessions.context(db,user,row.id,session.id)
+    from ..services import workspace_cache
+    row=workspace_cache.touch(db,row.id,user.id)
+    result=chat_attachments.create(db,row,data.session_id,data.name,data.size,data.mime)
+    db.commit()
+    return result
+
+class AttachmentDelivery(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    session_id: uuid.UUID
+    message_id: str=Field(min_length=5,max_length=120,pattern=r'^msg_[A-Za-z0-9_-]+$')
+    upload_ids: list[uuid.UUID]=Field(min_length=1,max_length=10)
+
+@router.post('/workspaces/{workspace_id}/attachments/delivery')
+def attachment_delivery(workspace_id:uuid.UUID,data:AttachmentDelivery,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from ..services import chat_attachments
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    session=manager.owned(db,WorkspaceSession,data.session_id,user.id)
+    if session.workspace_id!=row.id: raise HTTPException(404,'Conversation is outside this Workspace')
+    return chat_attachments.acknowledge(row,session.id,data.message_id,data.upload_ids)
+
+@router.put('/workspaces/{workspace_id}/attachments/{attachment_id}')
+async def upload_attachment(workspace_id:uuid.UUID,attachment_id:uuid.UUID,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from ..services import chat_attachments
+    native_sessions.admit(user)
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    from ..services import workspace_cache
+    row=workspace_cache.touch(db,row.id,user.id)
+    db.commit()
+    return await chat_attachments.upload(row,attachment_id,request)
+
+@router.delete('/workspaces/{workspace_id}/attachments/{attachment_id}')
+def cancel_attachment(workspace_id:uuid.UUID,attachment_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from ..services import chat_attachments
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    return chat_attachments.cancel(row,attachment_id)
+
+@router.get('/workspaces/{workspace_id}/attachments/{attachment_id}')
+def attachment_status(workspace_id:uuid.UUID,attachment_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from ..services import chat_attachments
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    with chat_attachments.locked(row,attachment_id) as (value,_):
+        if not value: raise HTTPException(410,'Temporary attachment is unavailable')
+        return JSONResponse(chat_attachments.public(value),headers={'Cache-Control':'private, no-store'})
+
 @router.post("/workspaces/{workspace_id}/files/upload",status_code=201)
 def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),path: str=Form(default=""),user: User=Depends(require_user),db: Session=Depends(get_db)):
     import re
@@ -637,6 +696,7 @@ def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),pat
     if not name or name in {".",".."} or "\x00" in name or len(name)>200: raise HTTPException(422,"A valid file name is required")
     if name==".env" or name.endswith((".pem",".key")) or name.startswith("."): raise HTTPException(403,"This file type is not allowed in the workspace")
     folder=(path or "").strip().strip("/")
+    if '__gateway_chat_attachments' in folder.split('/'): raise HTTPException(403,'Temporary attachments use the owned conversation upload flow')
     if folder and not re.fullmatch(r"[A-Za-z0-9._/-]{1,500}",folder): raise HTTPException(422,"Invalid folder path")
     storage=manager.storage_payload(row)
     content=file.file.read(storage['limit_bytes']+1)

@@ -148,7 +148,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
   };
   const cancel=textElement('button',tr('Cancel / choose another account','إلغاء / اختيار حساب آخر'),'button ghost');cancel.type='button';
   cancel.onclick=async()=>{if(currentUser?.id!==owner)return;cancel.disabled=true;try{await api('/api/github/disconnect',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id===owner)await refresh();}catch(error){feedback.textContent=errorText(error);cancel.disabled=false;}};
-  if(item.installations.length){
+  {
     const proof=textElement('section','','github-email-proof');
     proof.append(textElement('h4',tr('Verify GitHub account ownership','التحقق من ملكية حساب GitHub')),
       textElement('p',tr('Enter the primary email associated with the GitHub account you selected, which may differ from your Gateway email. We will match it with GitHub and send a verification code before connecting.','أدخل البريد الإلكتروني الأساسي لحساب GitHub الذي اخترته، وقد يختلف عن بريد تسجيلك في Gateway. سنتحقق من مطابقته ثم نرسل رمز تحقق قبل إكمال الربط.')));
@@ -172,9 +172,10 @@ window.renderGithubConfirmation=function(root,status,refresh){
         emailVerified=result.verified===true;update();if(emailVerified){email.value='';code.value='';code.hidden=verify.hidden=true;send.textContent=tr('Send a fresh code','إرسال رمز جديد');note.textContent=tr('GitHub email verified. Confirm the account below.','تم التحقق من بريد GitHub. أكّد الحساب أدناه.');}
       }catch(error){note.textContent=errorText(error);}finally{verify.disabled=false;}
     };
-    proof.append(emailLabel,send,code,verify,note);box.append(select,proof,label,confirm);
+    proof.append(emailLabel,send,code,verify,note);box.append(proof);
+    if(item.installations.length)box.append(select,label,confirm);
   }
-  else{
+  if(!item.installations.length){
     box.append(textElement('p',tr('This account has no authorized installation of this app. Install it on your own repositories first.','لا يوجد تثبيت مصرح لهذا التطبيق على هذا الحساب. ثبّته على مستودعاتك أولًا.')));
     const install=textElement('button',tr('Install on my GitHub account','تثبيت على حسابي في GitHub'),'button');install.type='button';
     install.onclick=async()=>{if(currentUser?.id!==owner||install.disabled)return;install.disabled=true;
@@ -431,6 +432,10 @@ window.renderGithubConfirmation=function(root,status,refresh){
       try{const value=await api('/api/github/status');if(!current())return;
         connection.textContent=value.connected?tr('My connected account: ','حسابي المتصل: ')+(value.github_login||value.account_login||'GitHub'):tr('My account is not connected.','حسابي غير مرتبط.');
         identityConfirmation.replaceChildren();window.renderGithubConfirmation(identityConfirmation,value,loadAdminGithubAdmin);
+        const outcome=new URLSearchParams(location.search).get('github');
+        if(!value.pending&&['configuration','ownership-review','error'].includes(outcome)){
+          const notice=textElement('p',outcome==='ownership-review'?tr('An older GitHub connection needs verified ownership recovery. No new account was connected.','يلزم استرداد موثّق لملكية اتصال GitHub قديم. لم يُربط أي حساب جديد.'):tr('GitHub callback could not complete. Check Gateway diagnostics and the sanitized callback log category.','تعذر استكمال العودة من GitHub. راجع تشخيص Gateway وتصنيف الخطأ الآمن في السجل.'),'api-message show');notice.setAttribute('role','alert');identityConfirmation.append(notice);
+        }
         // Enabled only after both configuration and database diagnostics succeed.
         authorize.dataset.available=String(!!value.configured&&!value.connected);
       }catch(error){if(current())connection.textContent=tr('Account status unavailable: ','تعذر فحص اتصال الحساب: ')+error.message;}

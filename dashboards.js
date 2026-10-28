@@ -416,6 +416,7 @@
       'install-required':['First choose at least one repository in the GitHub App installation, then reconnect.','اختر مستودعًا واحدًا على الأقل في تثبيت تطبيق GitHub ثم أعد الربط.'],
       'multiple-installations':['More than one installation is available; select the intended installation first.','توجد تثبيتات متعددة؛ حدد التثبيت الصحيح أولًا.'],
       configuration:['GitHub App credentials or encryption are unavailable on Gateway.','بيانات تطبيق GitHub أو مفتاح التشفير غير متاحة على Gateway.'],
+      'ownership-review':['An older GitHub connection could not be verified. Ask the administrator to review its connection diagnostics; no account was linked.','تعذر التحقق من ملكية اتصال GitHub قديم. يلزم أن يراجع المدير تشخيص الاتصالات؛ لم يُربط أي حساب.'],
       confirm:['Choose and confirm the GitHub identity below before connecting.','اختر وأكد هوية GitHub أدناه قبل الربط.'],
       'session-mismatch':['This GitHub transaction belongs to a different or expired Gateway session. Start a new connection.','معاملة GitHub تخص جلسة Gateway أخرى أو منتهية. ابدأ ربطًا جديدًا.'],
       'transaction-expired':['This transaction has expired or was already used. Start again.','انتهت المعاملة أو استُخدمت سابقًا. ابدأ من جديد.'],
@@ -428,7 +429,7 @@
       const message=result==='connected'&&!status.connected
         ?tr('This GitHub connection is no longer active. Start a new link to continue.','هذا الربط مع GitHub لم يعد نشطًا. ابدأ ربطًا جديدًا للمتابعة.')
         :tr(...messages[result]);
-      github.append(textElement('p',message,'api-message'));
+      const notice=textElement('p',message,'api-message show');notice.setAttribute('role','status');github.append(notice);
     }
     github.append(textElement('p',status.connected?(status.github_login||status.account_login||'GitHub'):tr('Not connected','غير متصل')));
     if(!status.configured)github.append(textElement('p',tr('The administrator must configure GitHub App credentials before customer authorization.','يجب أن تكمل الإدارة بيانات تطبيق GitHub قبل تفويض العملاء.'),'api-message'));
@@ -668,33 +669,62 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Attach a file to this workspace','أرفق ملفًا في مساحة العمل');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);controls.insertBefore(newTask,agent);
   const attachmentList=textElement('div','','composer-attachments');attachmentList.id='composerAttachments';attachmentList.setAttribute('aria-live','polite');q('promptInput').before(attachmentList);
   let attachments=[];let attachmentRevision=0;
-  const clearAttachments=()=>{attachmentRevision++;for(const item of attachments)if(item.preview)URL.revokeObjectURL(item.preview);attachments=[];attachmentList.replaceChildren();};
+  const releasePreview=item=>{if(item.preview){URL.revokeObjectURL(item.preview);item.preview=null;}};
+  async function cancelUpload(item){
+    if(item.cancelling)return;item.cancelling=true;item.cancelled=true;item.controller?.abort();
+    try{
+      if(item.id&&item.owner===currentUser?.id){
+        const result=await api('/api/workspaces/'+item.workspaceId+'/attachments/'+item.id,{method:'DELETE',signal:AbortSignal.timeout(10000)});
+        if(!result.removed)throw Error(tr('Removal was not confirmed.','لم يُؤكد حذف المرفق.'));
+      }
+      item.state=item.id?'cancelled':'cancelling';item.error=item.id?tr('Upload cancelled; temporary attachment removed','تم إلغاء الرفع وحذف المرفق المؤقت'):tr('Upload cancelled; waiting to confirm temporary cleanup','أُلغي الرفع؛ ننتظر تأكيد تنظيف الملف المؤقت');releasePreview(item);
+    }catch(error){item.error=tr('Transfer stopped; cleanup unconfirmed: ','توقف النقل؛ لم يُؤكد الحذف: ')+error.message;}
+    finally{item.cancelling=false;renderAttachments();saveNativeDraft();}
+  }
+  const clearAttachments=()=>{attachmentRevision++;for(const item of attachments){item.controller?.abort();releasePreview(item);}attachments=[];attachmentList.replaceChildren();};
   const renderAttachments=()=>{
     attachmentList.replaceChildren();for(const item of attachments){const card=textElement('div','','composer-attachment');
       if(item.preview){const image=document.createElement('img');image.src=item.preview;image.alt='';card.append(image);}
-      const label=textElement('span',item.name);label.dir='auto';label.append(textElement('small',item.error|| (item.path?item.type+' · '+Math.ceil(item.size/1024)+' KB':tr('Uploading…','جارٍ الرفع…'))));
-      const remove=textElement('button','×');remove.type='button';remove.disabled=sending||Boolean(pendingSubmission);remove.setAttribute('aria-label',tr('Remove attachment; keep workspace file','إزالة المرفق مع إبقاء ملف مساحة العمل'));remove.onclick=()=>{if(sending||pendingSubmission)return;attachments=attachments.filter(a=>a!==item);if(item.preview)URL.revokeObjectURL(item.preview);renderAttachments();};card.append(label,remove);attachmentList.append(card);
+      const label=textElement('span',item.name);label.dir='auto';label.append(textElement('small',item.error|| (item.path?item.type+' · '+Math.ceil(item.size/1024)+' KB':tr('Uploading…','جارٍ رفع الملف…'))));
+      const remove=textElement('button',item.state==='uploading'?tr('Cancel upload','إلغاء الرفع'):'×');remove.type='button';remove.disabled=item.cancelling||sending||Boolean(pendingSubmission);
+      remove.setAttribute('aria-label',item.temporary?tr('Cancel temporary attachment','إلغاء المرفق المؤقت'):tr('Remove attachment; keep workspace file','إزالة المرفق مع إبقاء ملف مساحة العمل'));
+      remove.onclick=async()=>{if(sending||pendingSubmission)return;
+        if(item.temporary&&!item.cancelled){await cancelUpload(item);return;}
+        attachments=attachments.filter(a=>a!==item);releasePreview(item);renderAttachments();saveNativeDraft();
+      };card.append(label,remove);attachmentList.append(card);
     }
   };
-  window.restoreComposerAttachments=files=>{if(sending||pendingSubmission)return;clearAttachments();attachments=(files||[]).slice(0,10).map(file=>({name:file.name,path:file.path,size:file.size,type:file.mime||tr('File','ملف')}));renderAttachments();};
-  const sentAttachments=payload=>{const paths=new Set((payload?.attachments||[]).map(a=>a.path));for(const item of attachments.filter(a=>paths.has(a.path)))if(item.preview)URL.revokeObjectURL(item.preview);attachments=attachments.filter(a=>!paths.has(a.path));renderAttachments();};
+  window.restoreComposerAttachments=files=>{if(sending||pendingSubmission)return;clearAttachments();attachments=(files||[]).slice(0,10).map(file=>({name:file.name,path:file.path,size:file.size,type:file.mime||file.type||tr('File','ملف'),temporary:file.temporary,id:file.id,owner:currentUser?.id,workspaceId:activeWorkspace?.id,state:'ready'}));renderAttachments();};
+  const sentAttachments=payload=>{const paths=new Set((payload?.attachments||[]).map(a=>a.path));for(const item of attachments.filter(a=>paths.has(a.path)))releasePreview(item);attachments=attachments.filter(a=>!paths.has(a.path));renderAttachments();};
   async function openAttachPicker(){
     if(!activeWorkspace||window.workspaceSubmissionBlocked?.())return;
+    if(window.nativeSession?.active()&&!activeSession)await createSession();
     const picker=document.createElement('input');picker.type='file';picker.multiple=true;picker.hidden=true;
     picker.oncancel=()=>picker.remove();picker.onchange=async()=>{
-      const files=[...(picker.files||[])],workspaceId=activeWorkspace.id,owner=currentUser?.id,revision=attachmentRevision;picker.remove();
+      const files=[...(picker.files||[])],workspaceId=activeWorkspace.id,sessionId=activeSession?.id,owner=currentUser?.id,revision=attachmentRevision;picker.remove();
       if(files.length+attachments.length>10){toast(tr('Attach up to 10 files per message.','أرفق حتى 10 ملفات لكل رسالة.'));return;}
       for(const file of files){
         if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)break;
-        // The existing upload endpoint writes by name; reject duplicate draft names.
-        if(attachments.some(a=>a.name===file.name)){toast(tr('This filename is already attached.','اسم الملف مرفق بالفعل.'));continue;}
-        const item={name:file.name,size:file.size,type:file.type||tr('File','ملف'),preview:['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)?URL.createObjectURL(file):null};attachments.push(item);renderAttachments();
-        try{const fd=new FormData();fd.append('file',file);const data=await api('/api/workspaces/'+workspaceId+'/files/upload',{method:'POST',body:fd});
-          if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)continue;item.path=data.path;item.size=data.size;
-        }catch(error){if(revision===attachmentRevision)item.error=error.message;}
-        if(revision===attachmentRevision)renderAttachments();
+        const temporary=Boolean(window.nativeSession?.active());
+        const item={name:file.name,size:file.size,type:file.type||'application/octet-stream',temporary,owner,workspaceId,state:'uploading',preview:['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)?URL.createObjectURL(file):null};attachments.push(item);renderAttachments();
+        const valid=()=>revision===attachmentRevision&&workspaceId===activeWorkspace?.id&&sessionId===activeSession?.id&&owner===currentUser?.id&&!item.cancelled;
+        let timer;
+        try{
+          let data;
+          if(temporary){
+            // The slot is authenticated before any bytes are transferred. A
+            // cancellation racing slot creation deletes that exact slot later.
+            const slot=await api('/api/workspaces/'+workspaceId+'/attachments',{method:'POST',body:JSON.stringify({session_id:sessionId,name:file.name,size:file.size,mime:item.type}),signal:AbortSignal.timeout(15000)});
+            item.id=slot.id;
+            if(!valid()){if(currentUser?.id===owner){const removed=await api('/api/workspaces/'+workspaceId+'/attachments/'+item.id,{method:'DELETE',signal:AbortSignal.timeout(10000)});if(removed.removed){item.state='cancelled';item.error=tr('Upload cancelled; temporary attachment removed','تم إلغاء الرفع وحذف المرفق المؤقت');}}continue;}
+            item.controller=new AbortController();timer=setTimeout(()=>item.controller.abort(),120000);
+            data=await api('/api/workspaces/'+workspaceId+'/attachments/'+item.id,{method:'PUT',body:file,headers:{'Content-Type':'application/octet-stream'},signal:item.controller.signal});
+          }else{const fd=new FormData();fd.append('file',file);data=await api('/api/workspaces/'+workspaceId+'/files/upload',{method:'POST',body:fd,signal:AbortSignal.timeout(120000)});}
+          if(!valid())continue;item.path=data.path;item.size=data.size;item.state='ready';
+        }catch(error){if(valid()){item.state='failed';item.error=tr('Upload failed: ','فشل رفع الملف: ')+error.message;}}
+        finally{clearTimeout(timer);delete item.controller;if(revision===attachmentRevision){renderAttachments();saveNativeDraft();}}
       }
-      if(revision===attachmentRevision){loadStorage().catch(()=>{});loadFiles().catch(()=>{});refreshGit().catch(()=>{});}
+      if(revision===attachmentRevision)loadStorage().catch(()=>{});
     };document.body.append(picker);picker.click();
   }
   q('openTools').onclick=()=>window.openConnections('providers');q('openTools').title=tr('Open OpenCode provider and workspace setup','\u0641\u062a\u062d \u0625\u0639\u062f\u0627\u062f \u0645\u0632\u0648\u062f OpenCode \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644');q('chatGithub').onclick=()=>openConnections('github');
@@ -737,13 +767,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const cancelAttachment=btn('cancelPendingAttachment','Cancel pending attachment','إلغاء طلب المرفق',async()=>{
     const id=activeSession?.id,owner=currentUser?.id;
     if(!id||!window.nativeSession?.pendingAttachment(id))return;
-    const confirmed=await window.confirmAction(tr('Cancel the current attachment task in this conversation? OpenCode will stop this session only. The uploaded file and chat history remain saved.','هل تريد إلغاء مهمة قراءة المرفق في هذه المحادثة؟ سيتوقف تنفيذ هذه الجلسة فقط، وسيبقى الملف وسجل المحادثة محفوظين.'));
+    const confirmed=await window.confirmAction(tr('Cancel the current attachment task in this conversation? OpenCode will stop this session only. Temporary files will be removed once Native is idle; chat history remains saved.','هل تريد إلغاء مهمة قراءة المرفق في هذه المحادثة؟ سيتوقف تنفيذ هذه الجلسة فقط، ستُنظّف الملفات المؤقتة بعد توقف Native، ويبقى سجل المحادثة محفوظًا.'));
     if(!confirmed)return;
     cancelAttachment.disabled=true;
     try{
       await window.nativeSession.cancelPendingAttachment(id);
       if(activeSession?.id!==id||currentUser?.id!==owner)return;
-      submissionStatus.textContent=tr('Attachment task cancelled. File retained.','أُلغيت مهمة المرفق وبقي الملف محفوظًا.');
+      submissionStatus.textContent=tr('Native processing stopped. Temporary cleanup waits for confirmed idle.','توقفت معالجة Native. ينتظر تنظيف المرفق المؤقت تأكيد التوقف.');
       await refreshMessages();await refreshSessionStatus();
     }finally{cancelAttachment.disabled=false;updateSend();}
   });
@@ -1619,8 +1649,18 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   let composerDraftRevision=0;
   let nativeDraftContext='';
   const nativeDraftKey=()=>currentUser&&activeWorkspace?'og-native-draft:'+currentUser.id+':'+activeWorkspace.id+':'+(activeSession?.id||'new'):'';
-  function saveNativeDraft(){if(!window.nativeSession?.active()||!nativeDraftContext)return;try{localStorage.setItem(nativeDraftContext,JSON.stringify({text:q('promptInput').value,attachments:attachments.filter(a=>a.path&&!a.error)}));}catch{}}
-  function restoreNativeDraft(){if(!window.nativeSession?.active())return;const key=nativeDraftKey();if(key===nativeDraftContext)return;nativeDraftContext=key;let value=null;try{value=JSON.parse(localStorage.getItem(key)||'null');}catch{}q('promptInput').value=value?.text||'';attachments=Array.isArray(value?.attachments)?value.attachments:[];composerDraftRevision++;window.resizeWorkspaceComposer?.();renderAttachments();}
+  function saveNativeDraft(){if(!window.nativeSession?.active()||!nativeDraftContext)return;try{localStorage.setItem(nativeDraftContext,JSON.stringify({text:q('promptInput').value,attachments:attachments.filter(a=>a.path&&!a.error&&!a.cancelled).map(({name,path,size,type,temporary,id})=>({name,path,size,type,temporary,id}))}));}catch{}}
+  function restoreNativeDraft(){if(!window.nativeSession?.active())return;const key=nativeDraftKey();if(key===nativeDraftContext)return;nativeDraftContext=key;let value=null;try{value=JSON.parse(localStorage.getItem(key)||'null');}catch{}q('promptInput').value=value?.text||'';clearAttachments();attachments=Array.isArray(value?.attachments)?value.attachments.map(item=>({...item,owner:currentUser?.id,workspaceId:activeWorkspace?.id,state:'ready'})):[];composerDraftRevision++;window.resizeWorkspaceComposer?.();renderAttachments();
+    const revision=attachmentRevision,owner=currentUser?.id;
+    for(const item of attachments.filter(a=>a.temporary&&a.id)){
+      item.error=tr('Checking temporary attachment…','جارٍ التحقق من المرفق المؤقت…');
+      api('/api/workspaces/'+item.workspaceId+'/attachments/'+item.id,{signal:AbortSignal.timeout(10000)}).then(result=>{
+        if(revision!==attachmentRevision||currentUser?.id!==owner)return;
+        item.state=result.state;item.error=result.state==='ready'?null:result.state==='removed'||result.state==='cancelled'?tr('Temporary attachment removed','تم حذف المرفق المؤقت'):tr('Attachment is unavailable for a new prompt. Recover or remove it.','المرفق غير متاح لطلب جديد. استعد المحادثة أو أزله.');
+        renderAttachments();
+      }).catch(()=>{if(revision===attachmentRevision&&currentUser?.id===owner){item.error=tr('Temporary attachment unavailable; remove it or upload again.','المرفق المؤقت غير متاح؛ أزله أو ارفعه مجددًا.');renderAttachments();}});
+    }
+  }
   q('promptInput').addEventListener('input',()=>{composerDraftRevision++;saveNativeDraft();});
   window.addEventListener('beforeunload',saveNativeDraft);
   window.addEventListener('authentication-cleared',()=>{nativeDraftContext='';});
@@ -1735,7 +1775,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   window.workspaceSubmissionBlocked=()=>sending||queuing||Boolean(pendingSubmission)||['submitted','waiting_approval'].includes(activeSession?.execution_status);
   q('promptForm').onsubmit=async event=>{
-    event.preventDefault();if(sending||queuing||pendingSubmission||!activeWorkspace)return;if(attachments.some(a=>!a.path||a.error)){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
+    event.preventDefault();if(sending||queuing||pendingSubmission||!activeWorkspace)return;if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
     const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
@@ -1749,13 +1789,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
       try{await refreshEntitlement();if(!workAccess)return;if(!activeSession)await createSession({checked:true});
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
-        const sessionId=activeSession.id,nativeFiles=attachments.map(a=>({path:a.path,mime:a.type}));
+        const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type}));
         await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});sentAttachments({attachments:nativeFiles});draft.confirm();
         submissionStatus.textContent=tr('Accepted by native OpenCode','قبله OpenCode الأصلي');await refreshSessionStatus();await refreshMessages();
       }catch(error){toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
     }
     if(activeSession&&(['submitted','waiting_approval'].includes(activeSession.execution_status)||queueCount)){
-      await queueFollowup({request_id:crypto.randomUUID(),text:prompt,provider_id:provider,model_id:model,attachments:attachments.map(item=>({path:item.path})),response_language:lang,...(selectedAgent?{agent_id:selectedAgent}:{})},owner,activeSession.id);return;
+      await queueFollowup({request_id:crypto.randomUUID(),text:prompt,provider_id:provider,model_id:model,attachments:attachments.filter(a=>!a.cancelled).map(item=>({path:item.path})),response_language:lang,...(selectedAgent?{agent_id:selectedAgent}:{})},owner,activeSession.id);return;
     }
     // Synchronous lock precedes entitlement, creation, runtime and network waits.
     const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);
@@ -1765,7 +1805,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       if(!activeSession)await createSession({checked:true});
       if(!activeSession||cancelRequested||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
       const requestId=crypto.randomUUID(),sessionId=activeSession.id;if(sendingPreview)sendingPreview.sessionId=sessionId;
-      const payload={request_id:requestId,text:prompt,provider_id:provider,model_id:model,attachments:attachments.map(a=>({path:a.path})),response_language:lang,...(selectedAgent?{agent_id:selectedAgent}:{})};
+      const payload={request_id:requestId,text:prompt,provider_id:provider,model_id:model,attachments:attachments.filter(a=>!a.cancelled).map(a=>({path:a.path})),response_language:lang,...(selectedAgent?{agent_id:selectedAgent}:{})};
       const pending={request_id:requestId,sessionId,workspaceId,owner,payload,draft};pendingSubmission=pending;
       try{sessionStorage.setItem('og-submit:'+owner+':'+sessionId,JSON.stringify({request_id:requestId}));}catch(error){}
       const result=await api('/api/sessions/'+sessionId+'/messages',{method:'POST',body:JSON.stringify(payload)});

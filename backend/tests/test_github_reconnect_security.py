@@ -348,3 +348,14 @@ def test_callback_bridge_does_not_bypass_cross_site_protection(browser_flow, ori
         assert not db.get(models.GithubAuthState, state).consumed
     assert not f.vendor
     assert f.pending() is None
+
+
+def test_unresolved_legacy_ownership_has_safe_distinct_callback_result(flow,monkeypatch):
+    f=flow
+    def refuse(*args,**kwargs):raise HTTPException(503,'Existing GitHub connection ownership requires verified recovery before new connections')
+    monkeypatch.setattr(github,'_assert_identity_available',refuse)
+    response=f.callback(f.start())
+    assert response.status_code==303
+    assert response.headers['location'].endswith('github=ownership-review')
+    assert f.pending() is None
+    assert not f.request('/api/github/status').json()['connected']

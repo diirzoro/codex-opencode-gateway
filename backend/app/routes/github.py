@@ -106,7 +106,9 @@ async def complete_callback(request: Request,user: User=Depends(require_user),db
         if result.get('redirect'):return RedirectResponse(result['redirect'],303)
         return RedirectResponse(destination+'confirm',303)
     except HTTPException as exc:
-        outcome='transaction-expired' if exc.status_code==400 else 'account-conflict' if exc.status_code==409 else 'session-mismatch' if exc.status_code==403 else 'configuration' if exc.status_code==503 else 'error'
+        outcome=('ownership-review' if exc.status_code==503 and str(exc.detail).startswith('Existing GitHub connection ownership') else
+            'transaction-expired' if exc.status_code==400 else 'account-conflict' if exc.status_code==409 else 'session-mismatch' if exc.status_code==403 else 'configuration' if exc.status_code==503 else 'error')
+        logging.getLogger(__name__).warning('GitHub callback refused category=%s status=%d',outcome,exc.status_code)
         return RedirectResponse(destination+outcome,303)
 
 

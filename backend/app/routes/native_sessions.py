@@ -372,5 +372,12 @@ def _authorize_native(workspace_id,resource,request,user,db,raw):
                     except ValueError:raise HTTPException(403,'Attachment is outside this Workspace') from None
                     if not workspaces.safe_path(workspace,relative).is_file():raise HTTPException(403,'Attachment is unavailable')
             workspaces.require_quota_headroom(workspace)
+            # Lease only after every authorization check. Nginx still forwards
+            # the original prompt; Gateway neither executes nor stores it.
+            from ..services import chat_attachments
+            for part in body['parts']:
+                if part.get('type')=='file':
+                    relative=Path(unquote(urlsplit(part['url']).path)).relative_to(root).as_posix()
+                    chat_attachments.lease(workspace,row,relative,body.get('messageID'))
     query=urlencode({'directory':str(root)})
     return Response(headers={'X-Accel-Redirect':'@native_discovery_test' if discovery else '@native_session_test','X-Native-URI':'/'+resource+'?'+query,'Cache-Control':'no-store'})

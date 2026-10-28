@@ -260,8 +260,10 @@ def files(workspace, relative=""):
     if not path.is_dir(): raise HTTPException(404,"Directory not found")
     result=[]
     root=root_for(workspace)
+    from .chat_attachments import managed
+    temporary=managed(workspace)
     for item in sorted(path.iterdir(),key=lambda p:p.name.lower()):
-        if protected_component(item.name) or item.is_symlink() or (hasattr(item,"is_junction") and item.is_junction()): continue
+        if (temporary and item.name=='__gateway_chat_attachments') or protected_component(item.name) or item.is_symlink() or (hasattr(item,"is_junction") and item.is_junction()): continue
         result.append({"name":item.name,"path":item.relative_to(root).as_posix(),"type":"directory" if item.is_dir() else "file"})
         if len(result)>=1000: break
     return result
@@ -275,12 +277,15 @@ def content(workspace, relative):
 
 def status(workspace):
     raw=git(workspace,"status","--porcelain=v1","-z","--untracked-files=all").stdout
+    from .chat_attachments import managed
+    temporary=managed(workspace)
     entries=[]; fields=iter(raw.split("\x00"))
     for field in fields:
         if not field: continue
         code, path=field[:2],field[3:]
         entry={"status":code,"path":path}
         if "R" in code or "C" in code: entry["original_path"]=next(fields,"")
+        if temporary and (path=='__gateway_chat_attachments' or path.startswith('__gateway_chat_attachments/')): continue
         entries.append(entry)
     head=git(workspace,"rev-parse","--verify","HEAD",check=False)
     branch=git(workspace,"symbolic-ref","--short","HEAD",check=False)
@@ -309,7 +314,11 @@ def diff(workspace, relative=None):
 
 def commit(workspace,user,message):
     if not status(workspace)["changes"]: raise HTTPException(409,"No changes to commit")
-    git(workspace,"add","--all")
+    from .chat_attachments import managed
+    temporary=managed(workspace)
+    git(workspace,"add","--all",*(["--",".",":(exclude)__gateway_chat_attachments/**"] if temporary else []))
+    if temporary and git(workspace,"diff","--cached","--name-only","--","__gateway_chat_attachments").stdout.strip():
+        raise HTTPException(409,"Temporary attachments must not be committed")
     git(workspace,"-c",f"user.name={user.username}","-c",f"user.email={user.email}","commit","-m",message)
     return status(workspace)
 
@@ -336,9 +345,11 @@ def export(workspace):
     try:
         root = root_for(workspace)
         if not root.is_dir(): raise HTTPException(409,"Workspace files are unavailable")
+        from .chat_attachments import managed
+        temporary=managed(workspace)
         with zipfile.ZipFile(path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
             for directory, folders, files in os.walk(root,followlinks=False):
-                folders[:] = [name for name in folders if not protected_component(name) and not (Path(directory)/name).is_symlink()]
+                folders[:] = [name for name in folders if not (temporary and name=='__gateway_chat_attachments') and not protected_component(name) and not (Path(directory)/name).is_symlink()]
                 for name in files:
                     item=Path(directory)/name
                     relative=item.relative_to(root).as_posix()

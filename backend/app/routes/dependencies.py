@@ -66,6 +66,7 @@ def require_workspace_entitlement(request:Request,user:User=Depends(require_user
         return
     # Recovery/visibility operations must remain possible after access expires.
     if (request.method=='DELETE' and re.fullmatch(r'/api/workspaces/[^/]+/providers/[^/]+',path)
+        or request.method=='DELETE' and re.fullmatch(r'/api/workspaces/[^/]+/attachments/[^/]+',path)
         or path.endswith('/export')
         or re.fullmatch(r'/api/sessions/[^/]+/(?:stop|close|archive|restore)(?:$)',path)
         or request.method=='DELETE' and path.startswith('/api/sessions/')
