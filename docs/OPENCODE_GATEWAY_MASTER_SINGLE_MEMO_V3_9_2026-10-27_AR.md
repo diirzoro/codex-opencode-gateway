@@ -395,3 +395,86 @@ SELECT11→7؛ metadata fixture بقيت session1+toolIDs1، وفحص provider �
 ### 15.6 تسليم المصدر
 
 نُشر إصلاح النافذة وإثبات إعادة ربط الحساب نفسه على `updates` في commit `5379117812dd166663bd4c25e271c38facade80c`، بالشجرة المختبرة `f2a9463298f56066087156084865ebc14b11fada`. قورن كل Git blob والشجرة الكاملة بالنسخة المحلية، وحُدّث ref بشرط الرأس السابق دون force. هذا نشر مصدر إلى GitHub وليس نشر TEST. ملفات التوثيق/AGENTS/مؤشر handoff والأرشيف تحديث مستقل لهذا المرجع. لا يُدّعى CI أخضر أو deployment أو قبول OAuth نهائي من نجاح كتابة commit.
+
+---
+
+## 16. توجيه28أكتوبر2026 — GitHub Disconnect/Reconnect فقط
+
+**هذا التوجيه الأحدث ينسخ سياسة حذف نسخ العمل عند فصل GitHub في السجل السابق.** الفصل لا يزيل ملفات المشاريع أو تعديلات غير مرفوعة أو Project/Workspace records أو تاريخ Native. النطاق الحالي GitHub identity/OAuth/callback/disconnect فقط؛ لا إصلاح للمحادثات أو Native أو Preview أو الباقات. تبقى بقية المذكرة محفوظة بأدلتها التاريخية، ولا تعاد مهامها ضمن هذه الدفعة.
+
+### 16.1 مقارنة الرأس الفعلي وحسم التغييرات المتزامنة
+
+بدأ الفحص من `1858459c439b9c8d396b76f246ec3d295f7214b0`. أثناء الرفع ظهر رأس متزامن `50adab67694eb58b340269c875eaa0662f7a5e97` مع7commits في `github.py` و`enhancements.js`. توقف الدفع قبل الكتابة؛ قُرئت الفروق وجرى rebase ودمج يدوي دلالي دون force أو فقد تلك الإصلاحات:
+
+- لا يمسح Connect اتصالًا قائمًا: يلزم Disconnect صريح أولًا، وإلا409؛ إلغاء الربط لا يحدث لمجرد طلب اختيار مستودع آخر.
+- لا يُفرض تثبيت جديد إذا أعاد GitHub تثبيتًا صالحًا. أما الفصل الصريح فيحاول إزالة التثبيت الشخصي المثبت أنه مملوك، حسب الضوابط أدناه.
+- تُبطل محاولات OAuth الموازية بعد تأكيد الربط؛ الطلب المتأخر لا يستبدل الاتصال الجديد.
+- حُفظ أحدث تنقل OAuth في **التبويب نفسه** كما في50adab6، دون إعادة إدخال popup فارغ أو تبديل سلوكه مرة أخرى. هذا يتقدم على وصف popup في§15 باعتباره حالة إصدار سابق. المطلوب في التوجيه الحالي اختيار حساب وتأكيده، لا الادعاء بأن التبويب/النافذة الجديدة يمحوان cookies.
+
+### 16.2 أسباب وفجوات مؤكدة في المصدر
+
+1. مسار الفصل القديم كان يستدعي `expire_github_copies` ثم `sweep`؛ فُصل ذلك تمامًا عن GitHub disconnect وفق قرار المالك الأحدث. صيانة retention المستقلة لم تُعدّل ولم تُشغّل هنا.
+2. الـCallback القديم تحقق من state ومستخدمه المخزن، دون مطابقة جلسة Gateway الحالية؛ كان يستطيع إنشاء اتصال مباشرة بعد code exchange دون تأكيد هوية محلي. لم يقرأ `/user` لإثبات معرف GitHub الشخصي مستقلًا عن مالك installation، الذي قد يكون مؤسسة.
+3. cookies Gateway من نوع SameSite=Strict لا تُرسل في أول navigation آتٍ من GitHub. إضافة require_user إلى GET callback وحده ليست حلًا؛ ستفشل المصادقة حتى مع جلسة صحيحة. أُضيفت صفحة عودة محلية قصيرة ثم POST من الأصل نفسه لمطابقة جلسة Gateway قبل معالجة الرمز، دون إضعاف cookie.
+4. كان هناك تسجيلان لـ`/api/github/status`؛ نسخة workspaces المسجلة أولًا حجبت مسار GitHub المخصص. أُزيل **هذا endpoint المكرر فقط** من workspaces، وأضيف regression لوجود مسار واحد؛ لا تعديل لأدوات الملفات أو Native.
+5. كان enhanced bootstrap يمحو علامة GitHub منURL قبل اكتمال استعادة صفحة العميل؛ أزيل هذا السباق. بعد العودة يفتح العميل Connections والإداري صفحة GitHub، ويُقرأ status الأصلي؛ query flag ليس دليل ربط.
+6. حلقة فرض تثبيت تطبيق موجود عولجت أيضًا في98b91ce المتزامن؛ حُفظت النتيجة ولم تُنسب من جديد إلى هذه الدفعة. لا يوجد trace نهائي من callback على VPS يثبت أن كل فشل سابق سببه هذه الحلقة أو إعداد Setup URL بعينه؛ إعداد GitHub App الخارجي لم يُعدّل أو يُفترض أنه صحيح.
+
+### 16.3 التنفيذ الحالي
+
+- **Unique connection identity:** يُعاد استخدام UUID الموجود أصلًا في `GithubConnection.id` بوصفه `connection_id`، وتُولد UUIDv4 جديدة للمعاملة الجديدة ثم تُحفظ فقط عند تأكيد ناجح. لا registry أو service أخرى. `gateway_user_id` ثابت؛ `github_user_id` هو `/user.id` الحقيقي من GitHub ولا يُخترع أو يُغير.
+- `oauth_state` عشوائي256bit، مؤقت15دقيقة، single use، مرتبط بصاحب Gateway و`AuthSession.id` وبـconnection UUID. Connect جديد يمحو معاملات هذا المستخدم السابقة تحت قفل صف المالك، ويصدر معاملة جديدة في transaction واحدة. Disconnect/Confirm يحصلان على قفل المالك نفسه؛ الفحص والتعديل متسلسلان على PostgreSQL. قبول التزامن الفعلي على PostgreSQL ما زال مطلوبًا؛ SQLite tests ليست إثبات row locks.
+- GET callback لا يحفظ اتصالًا، ولا يستخدم state كبديل عن جلسة Gateway. يعرض form محليًا إلى POST `/api/github/callback/complete`، مع CSP وno-store وإزالة query منhistory وno-referrer. POST يتحقق من جلسة Gateway الحالية وstate/user/session/expiry/consumption، ثم code exchange و`GET /user` و`GET /user/installations` من GitHub. لا تضع codes أو tokens في query إعادة التوجيه إلى الواجهة.
+- تعود النتيجة **pending**، بمفتاح مشفر مؤقت في `GithubAuthState.pending_payload`؛ لا وصول للمستودعات ولا اتصال نشط. تعرض الواجهة اسم GitHub الحقيقي وinstallation المصرح به، وCheckbox تأكيد صريح وزر Confirm. لا OAuth access/refresh token في JSON أو localStorage. Pending status لا يظهر إلا للجلسة المالكة نفسها.
+- POST `/api/github/confirm` يعيد التحقق من الجلسة والهوية وعضوية installation وAppID وصلاحيات Gateway الحالية، ثم يحفظ الاتصال. قيود فريدة على GitHub userID وinstallation تمنع إسنادهما لحساب Gateway آخر. يوجد رفض409 سباق uniqueness مع rollback؛ حذف pending states وإضافة الاتصال في معاملة واحدة. ربط الحساب نفسه بعد فصل صريح مسموح، بمعرّف connection جديد.
+- إذا لم يوجد installation، يستخدم زر تثبيت صريح التدفق الرسمي، ويحفظ expected GitHub identity في المعاملة نفسها. `installation_id` القادم من query ليس إثبات ملكية؛ يلزم OAuth والتحقق من actor نفسه بعد العودة. اختلاف الهوية يرفض الربط؛ لا تحايل على جلسة GitHub أو سحب عام لمستودعات App.
+- `/install` و`/authorize` القديمان يعيدان المستخدم إلى بدء ربط صريح، ولا يحذفان اعتمادًا أو ينشئان اتصالًا من GET.
+- الفصل يحذف connection ورمزه وجميع OAuth/pending records لذلك المستخدم. يُستدعى GitHub `DELETE /applications/{client_id}/token` ببيانات تطبيق المنصة على الخادم فقط، ثم check-token POST للتثبت من404. **لا يستخدم DELETE grant** لأنه يبطل جميع tokens لذلك GitHub user وقد يمس اتصالًا آخر. refresh token لم يكن مخزنًا أصلًا في Gateway؛ لا يُنشأ له تخزين جديد.
+- طلب الفصل الصريح يحاول أيضًا إزالة **التثبيت الشخصي المملوك فقط**: `/user.id` يساوي `installation.account.id`، النوعUser، وAppID صحيح، ومعرف الاتصال الحقيقي مطابق إن وُجد. بعدها DELETE `/app/installations/{id}` وGET للتحقق من404. لا تُزال مؤسسة أو installation لمستخدم collaborator أو ملكية غير مثبتة بسلطة App JWT؛ تعود `owner-review-required` وتلزم مراجعة مالك GitHub. فصل إداري لاتصال عميل أو webhook لا يمنح تلقائيًا صلاحية uninstall خارجي. لم تُنفذ أي uninstall حقيقية في هذه الجلسة.
+- عند فشل GitHub أو فك اعتماد قديم، تُزال السلطة المحلية ويُعاد `revocation=unconfirmed` أو حالة إزالة التثبيت الصادقة؛ لا يقال إن الإبطال الخارجي تحقق. المهل محدودة، ولا background queue أو daemon جديد. لا ضمان إلغاء طلب GitHub كان قد قُبل بالفعل قبل الفصل.
+- الحالة في التبويبات تُبطل بإشعار متعلق بمعرف Gateway user فقط، دون tokens؛ العرض القديم لا يخول API. لا كاش repo server-side مستقل موجود يلزم حذف صفوفه؛ القوائم تُجلب من GitHub بتوكن صاحب الاتصال، وتبقى الاستجابات الخاصة no-store.
+- Uvicorn access log يزيل code/state من query مسار callback. حالة access log في Nginx الفعلي **غير مفحوصة عبر SSH** ولا يُدّعى أنه صار منقحًا بمجرد هذا filter؛ لا تغيير config ضمن هذه الدفعة.
+
+**معرف GitHub account لا يتبدل بإعادة الربط.** إذا أُزيل تثبيت شخصي فعليًا ثم أُعيد تثبيته، يصدر GitHub installation ID جديدًا وفق خدمته؛ لا نصنع ذلك ID بأنفسنا ولا نعد به قبل التحقق الخارجي. Cookies GitHub ومنح الحساب الخارجية ليست قاعدةGateway. حتى مع ظهور حساب محفوظ، لا يكتمل ربط Gateway الآن إلا باختيار الحساب وتأكيد هويته صراحة. هذا لا يثبت أن شخصًا على جهاز مشترك هو المالك الأصلي إن استعمل جلسة GitHub المفتوحة واختارها عمدًا؛ لا نختلق reauthentication غير مدعوم.
+
+### 16.4 الملفات وحزمة النشر القابلة للمراجعة
+
+ملفات التطبيق/الترحيل10 فقط:
+
+- `app.js`, `dashboards.js`, `enhancements.js`, `management.js`, `index.html`.
+- `backend/app/services/github.py`, `backend/app/routes/github.py`, `backend/app/routes/workspaces.py` (إزالة GitHub status المكرر فقط)، `backend/app/models/workspace.py`.
+- `backend/alembic/versions/0028_github_connection_identity.py`.
+
+`0028` additive: Github userID/login وunique nullable index، وربط OAuth بـAuthSession وconnectionUUID وencrypted pending payload. **لا حذف أو تبديل معرفات الاتصال القديمة أو حسابات أو مشاريع أو مفاتيح تشفير.** الاتصالات القديمة تحفظ كما هي؛ state قديم غير مرتبط بجلسة يرفضه التدفق الجديد. لا downgrade مدمر تلقائي.
+
+الاختبارات الدائمة7ملفات: `backend/tests/test_github_reconnect_security.py`, `test_github_boundaries.py`, `test_github_copy_cleanup.py`, `test_admin_github_diagnostics.py`، و`tests/browser/test-github-confirmation.cjs`, `test-github-fresh-link.cjs`, `test-github-customer-setup.cjs`. تغيرت assertions التي كانت تطلب الحذف/الربط التلقائي صراحةً لأن قرار المالك نسخ السلوك القديم؛ لم تُسقط حراس الملكية لإخفاء فشل.
+
+حزمة المراجعة `releases/github-reconnect-20261028.json` تحصر الملفات العشرة، وبصمات before من50adab6 وafter للشيفرة المختبرة، وشرط غياب ملف الترحيل الجديد قبل الإضافة. هذه **manifest وليست deployer أو إثبات ملفات الخادم**. تحقّق من preimages الحقيقية؛ توقف عند أي تعديل غير معروف بدل overwrite. لا `.env` أو secrets أو databases dumps داخل الحزمة.
+
+إجراء النشر المطلوب: backup خاص حقيقي لملفات preimage وخطة استعادة موثقة، ونسخة TEST DB مع تحقق هويتها وصلاحيات مالكها قبل migration. يجب التثبت أن الرأس الحالي0027؛ إذا كانت26/27 أو ترحيلات أخرى ناقصة فتوقف، ولا تطبق تغييرات البريد أو الباقات ضمن مهمة GitHub فقط. طبّق الحزمة المتوافقة في نافذة صيانة Gateway TEST، ونفذ migration0028 عبر البوابة الموثقة، ثم أعد Gateway TEST فقط بعد فحص تبعيات الخدمة. لا Native restart، ولا Nginx/ports/IP/env/workflow edits. تراجع التطبيق يستعيد preimages فقط مع إبقاء الأعمدة الجديدة والبيانات؛ لا يشغل downgrade. أداة full release الحالية لا توفر بنفسها backup/preimage protection كافية لهذا الطلب، فلا يطبق deploy شامل مجهول اعتمادًا على اسم الأداة.
+
+### 16.5 الاختبارات والدليل الفعلي
+
+**محليًا:62 Backend PASS،16 DOM PASS (7fresh link +5customer management +4identity confirmation)**، وتحذير AnyIO deprecation قائم. سلسلة28migration ذات رأس0028 ناجحة، Python/JS syntax وdiff checks ناجحة. اختُبر PostgreSQL DDL الناتج من0028 وأنه additive، لا تشغيل ترحيل على TEST. Backend tests تستعمل HTTP/ORM وSQLite واستجابات GitHub اصطناعية؛ ليست credentials أو شبكة GitHub حقيقية.
+
+| القبول | نتيجة الاختبار المحلي | نتيجة TEST الفعلية بهذه الدفعة |
+|---|---|---|
+| فصل connection/tokens/states دون الملفات أو سجل الجلسات | PASS؛ source github/blank/template وsymlink وunpushed marker | BLOCKED؛ لم يُطلب فصل اتصال حقيقي على النسخة القديمة |
+| revoke token ثم check404 وuninstall شخصي ثم verify404 | PASS مع GitHub mock؛ org/collaborator ممنوع | BLOCKED؛ لا revocation/uninstall خارجية منفذة |
+| UUID/state جديدان وعدم استعمال state قديم | PASS | BLOCKED حتى نشر0028 |
+| AdminA/GitHubA، CustomerB/GitHubB، CustomerC بلا اتصال | PASS HTTP/ORM بثلاث هويات Gateway واثنتين GitHub اصطناعيتين | BLOCKED؛ لم تتوفر ثلاث حسابات مخولة وحساب GitHubB مستقل |
+| remembered GitHubA عند GatewayB لا يربط تلقائيًا | PASS؛ pending فقط، و409 عند identity/installation مملوكين لغيره | صفحة اختيار GitHub ظهرت سابقًا؛ لم يُضغط Continue لمنح مواردA إلىB |
+| current Gateway user/session، expired/used/parallel/cancel/tamper | PASS؛ same-user new-login مرفوض أيضًا | BLOCKED؛ cookie bridge والمتصفحات المشتركة/الجديدة تحتاج دورة حية |
+| account/repository isolation وعدم حذف بيانات الغير | PASS؛ توكن كل هوية وقائمة repo منفصلة | BLOCKED لربط الحسابين الخارجي النهائي |
+| callback متبوع بتأكيد يعرض GitHub username الصحيح | PASS HTTP/ORM وDOM | BLOCKED؛ لا PASS حي من نجاح source tests |
+
+آخر فحص28أكتوبر: أصول TEST العامة200 تطابق50adab6؛ **لا تطابق دفعة التأكيد الجديدة**. enhancements SHA256 `8e5ff8632bf658a19d79c3ad5e5a5e9be08f3043d1e83a57ddb6c0a220cc6651`؛ app.js `ec6673d9637794760dc5c3a72b0e309bec54893d4c21ebeb0a76dd400aceba9b`؛ dashboards `97034c9906d298344ad14fe1a31880ed9174deb7ac6be7af6c776275eedc8468`؛ management `b6e4b059c18fc324b567223c4590663ac77a1a04f588928b6080a97868ab397e`. تطابق الأصول لا يثبت backend SHA أو migrations أوPID.
+
+**العائق التشغيلي المحدد:** لا SSH key/host connection مهيأ في بيئةWork، ولا أداة متصلة لتشغيل workflow_dispatch. مجلد SSH المتاح بلا مفتاح أو إعداد اتصال؛ لم تتم محاولة تخمين كلمة مرور أو قراءة أسرار خادم. لذلك لم ينفذ Work backup أو migration أو restart أو deploy؛ لا rollback path علىVPS يمكن الإبلاغ عنه. يلزم وصول خادم مهيأ أو تنفيذ المالك للحزمة المراجعة، ثم قبول حقيقي بالحسابات المخولة. لا ترسل كلمات المرور أو tokens في الدردشة.
+
+الأمر الأول للاختبارات:
+`python -m pytest -q backend/tests/test_github_reconnect_security.py backend/tests/test_github_boundaries.py backend/tests/test_github_copy_cleanup.py backend/tests/test_admin_github_diagnostics.py backend/tests/test_admin_github_settings.py backend/tests/test_native_control_plane.py::test_github_connection_status_cannot_be_selected_with_other_user_id`
+
+يتبعها ملفات DOM الثلاثة أعلاه في Node ببيئةjsdom و`python scripts/validate_migration_chain.py`. حالة قبول الأمان الخارجية **غير مكتملة**؛ لا تسجل PASS شاملًا ولا إطلاقًا عامًا. لا Native conversations/file tools/Preview/subscriptions أو shared services أوmaster/LIVE/workflows تغيرت. بعد النشر فقط: Aconnect→Adisconnect→Bfresh OAuth→Bidentity confirm→B repo isolation→Areconnect→Cdenied، مع cancel/expired/duplicate/wrong-user/parallel/shared/fresh browser، وتوثيق HTTP statuses بلا codes/tokens/cookies.
+
+**تسليم المصدر:** commit `c658ee017656c48030145329ebbf12a85af4e663` على `updates`، parent `50adab67694eb58b340269c875eaa0662f7a5e97`، والشجرة المختبرة `924b786ab5ca77af75a2788f5fec3e6e7bc5dce1`. قورنت جميع blobs والشجرة، ودُفع CAS دون force. أُبقيت معرفات منشأ المشروع التاريخية وملفاته؛ ليست اعتمادًا ولا تمنح API وصولًا دون اتصال المالك الصحيح. مصدرGitHub ليس نشرTEST.
