@@ -478,3 +478,77 @@ SELECT11→7؛ metadata fixture بقيت session1+toolIDs1، وفحص provider �
 يتبعها ملفات DOM الثلاثة أعلاه في Node ببيئةjsdom و`python scripts/validate_migration_chain.py`. حالة قبول الأمان الخارجية **غير مكتملة**؛ لا تسجل PASS شاملًا ولا إطلاقًا عامًا. لا Native conversations/file tools/Preview/subscriptions أو shared services أوmaster/LIVE/workflows تغيرت. بعد النشر فقط: Aconnect→Adisconnect→Bfresh OAuth→Bidentity confirm→B repo isolation→Areconnect→Cdenied، مع cancel/expired/duplicate/wrong-user/parallel/shared/fresh browser، وتوثيق HTTP statuses بلا codes/tokens/cookies.
 
 **تسليم المصدر:** commit `c658ee017656c48030145329ebbf12a85af4e663` على `updates`، parent `50adab67694eb58b340269c875eaa0662f7a5e97`، والشجرة المختبرة `924b786ab5ca77af75a2788f5fec3e6e7bc5dce1`. قورنت جميع blobs والشجرة، ودُفع CAS دون force. أُبقيت معرفات منشأ المشروع التاريخية وملفاته؛ ليست اعتمادًا ولا تمنح API وصولًا دون اتصال المالك الصحيح. مصدرGitHub ليس نشرTEST.
+
+
+---
+
+## 17. سجل PostgreSQL/Alembic TEST الموثق — 25–28 أكتوبر 2026 (إضافة 28 أكتوبر)
+
+**النطاق:** قاعدة `opencode_gateway_test` وخدمة Gateway TEST فقط. هذا سجل تشغيل للأخطاء التي تكررت، وليس إذنًا بتغيير LIVE، أو إعادة تشغيل OpenCode Native، أو حذف بيانات مستخدم أو ملفات GitHub. احتفظ بأقسام هذه المذكرة السابقة دون استبدال.
+
+### 17.1 ما ثبت سابقًا وما لا يجوز تخمينه
+
+- حسب سجل فحوص TEST بتاريخ 22 أكتوبر: مالك قاعدة `opencode_gateway_test` هو `opencode_gateway`؛ أنشئ دور التطبيق المستقل `opencode_gateway_test_app`، ومنحت له صلاحيات استخدام/جداول/تسلسلات عامة. **GRANT العادي لا يمنح ملكية الجداول أو صلاحية تنفيذ ALTER TABLE.**
+- في جلسات 25–26 أكتوبر تكرر `InsufficientPrivilege: must be owner of table email_verifications` في Migration `0025`، وعولجت ملكية جداول من ضمنها `email_verifications` و`users` لصالح دور TEST المخوّل، `opencode_gateway_test_app`. كما عولج أثناء التسلسل تعارض بيانات الهاتف ومحدودية طول `alembic_version.version_num` (جرى توسيعه إلى `VARCHAR(128)`). **هذه وقائع تاريخية وليست أوامر لإعادة تنفيذها الآن.**
+- في يوم 28 أكتوبر، أكد سجل Alembic بداية الترحيل من `0027_email_notification_receipts` إلى `0028_github_connection_identity`. **لم يعد `0025` أو `0026` هو التعطل الحالي**؛ لا تعاود ترحيلات قديمة أو `alembic stamp` أو تعديل نسخ يدوي.
+
+### 17.2 الخطأ الفعلي في GitHub Actions — 28 أكتوبر
+
+- تشغيل Actions `40650390668`، SHA `7506fb5721d08723954fa03a99ae06b6ad12e31c`، نمط `deploy-test`: نجحت فحوص الشيفرة وSSH والوصول إلى TEST. سجل الناشر `FILES_TOTAL 109 CHANGES 10`، ثم فشل الاستدعاء:
+  `sudo -n /usr/local/sbin/opencode-gateway-test-migrate upgrade` برمز 1.
+- ظهر `GIT_ROLLBACK_APPLIED 50adab67694eb58b340269c875eaa0662f7a5e97`. التراجع عن ملفات التطبيق لا يثبت تراجع قاعدة البيانات، ولا يثبت نجاح نشر نسخة GitHub الجديدة؛ سجل الأدلة منفصلًا.
+- سجل Actions لم يُظهر stderr الداخلي لـMigration Gate؛ **السبب الحقيقي استُخرج لاحقًا من Terminal**، وليس من التخمين حول SSH أو Workflow.
+
+### 17.3 إصلاح Terminal المنفذ اليوم ومخرجاته
+
+1. من المسار `/home/tahir/opencode-gateway-test/backend` نُفّذ:
+   ```bash
+   sudo /usr/local/sbin/opencode-gateway-test-migrate upgrade
+   ```
+   ظهرت `TEST_DATABASE_CONFIRMED` ثم `InsufficientPrivilege: must be owner of table github_connections` عند أول `ALTER TABLE` في `0028`.
+2. محاولة لصق أوامر `ALTER TABLE ... OWNER TO ...;` مباشرة في Bash أعطت `ALTER: command not found` و`OWNER: command not found`، **ولا تعد تعديلًا للقاعدة**. SQL يجب أن يُنفّذ داخل `psql` أو هنا-دوك.
+3. نُفّذ على TEST فقط، وظهرت `DO` ثم `ALTER TABLE` مرتين:
+   ```bash
+   sudo -u postgres psql -d opencode_gateway_test -v ON_ERROR_STOP=1 <<'SQL'
+   DO $$
+   BEGIN
+       IF current_database() <> 'opencode_gateway_test' THEN
+           RAISE EXCEPTION 'Wrong database';
+       END IF;
+   END
+   $$;
+   ALTER TABLE public.github_connections OWNER TO opencode_gateway_test_app;
+   ALTER TABLE public.github_auth_states OWNER TO opencode_gateway_test_app;
+   SQL
+   ```
+   **هذا تعديل ملكية الجدولين فقط، وليس قاعدة LIVE أو مستخدمي Gateway.**
+4. إعادة تشغيل Gate تقدمت إلى `op.create_foreign_key('fk_github_state_auth_session',...)` ثم فشلت بـ `permission denied for table auth_sessions`. وأظهر الاستعلام `SELECT version_num FROM public.alembic_version` النتيجة `0027_email_notification_receipts`؛ الترحيل غير مكتمل والمعاملة تراجعت.
+5. جرى توجيه منح صلاحية `REFERENCES` اللازمة للـForeign Key، دون نقل ملكية `auth_sessions`:
+   ```bash
+   sudo -u postgres psql -d opencode_gateway_test -v ON_ERROR_STOP=1 <<'SQL'
+   DO $$
+   BEGIN
+       IF current_database() <> 'opencode_gateway_test' THEN
+           RAISE EXCEPTION 'Wrong database';
+       END IF;
+   END
+   $$;
+   GRANT REFERENCES ON TABLE public.auth_sessions TO opencode_gateway_test_app;
+   SQL
+   ```
+   ثم `sudo /usr/local/sbin/opencode-gateway-test-migrate upgrade`.
+   **إفادة المالك في المحادثة: «تم النجاح»** بشأن هذه المرحلة. لا توجد هنا مخرجات `alembic_version` النهائية المصورة؛ عند الحاجة يكفي التحقق قراءةً فقط:
+   ```bash
+   sudo -u postgres psql -d opencode_gateway_test -c "SELECT version_num FROM public.alembic_version;"
+   ```
+   والمتوقع بعد النجاح: `0028_github_connection_identity`.
+6. عقب ذلك أفاد المالك: «تم أيضا الرفع» لـ`deploy-test`. **هذا تأكيد مالك على النشر، وليس رقم تشغيل ناجح موثق في هذا السجل**؛ تحقق من run SHA الجديد وأصول TEST الفعلية عند اختبار GitHub OAuth. لا تخلط نجاح قاعدة البيانات بنجاح ربط حساب GitHub الحقيقي.
+
+### 17.4 تفسير السبب والسياسة للترحيلات المقبلة
+
+- المشكلة المتكررة: دور التطبيق المخصص لـTEST يستطيع الوصول إلى الجداول، لكنه قد لا يملك الجداول التاريخية التي يحتاج `ALTER TABLE` إليها. ولإنشاء Foreign Key إلى `auth_sessions` احتاج `REFERENCES` تحديدًا؛ لا داعي إلى نقل ملكية ذلك الجدول.
+- لا تنقل **جميع** جداول public بلا مراجعة، ولا تمنح `SUPERUSER` لدور التطبيق، ولا تغيّر قاعدة LIVE أو كلمة مرور الدور المشترك. احفظ ملكيات وامتيازات بقية الجداول.
+- بعد إكمال إصلاح GitHub OAuth الحالي، ينبغي مراجعة `/usr/local/sbin/opencode-gateway-test-migrate` وصلاحيات دور التنفيذ وسياسة إنشاء الجداول المستقبلية حتى يطبق `deploy-test` الترحيلات الجديدة آليًا وبأقل امتيازات، دون إعادة تصحيحات يدوية عند كل إصدار. **هذا عمل لاحق منفصل، لا يعوق قبول إصلاح GitHub الحالي.**
+- لا تُشغّل الترحيل يدويًا مرتين إذا كان `alembic_version` بالفعل عند الرأس؛ استخدم نفس Gate المعتمدة بدل أوامر Alembic مع متغيرات قاعدة مجهولة. عند خطأ جديد، استخرج النص الحقيقي من Terminal ولا تغيّر الأدوار بالتخمين.
+
+**حالة إغلاق السجل:** إصلاح ملكية `github_connections` و`github_auth_states` مؤكد بالمخرجات؛ `REFERENCES` ونجاح `0028` ونشر آخر تحديث **مؤكدة بإفادة المالك فقط** لحين استرجاع سجلات التحقق. لا دليل جديد هنا على نجاح OAuth/Disconnect/Reconnect متعدد الحسابات.
