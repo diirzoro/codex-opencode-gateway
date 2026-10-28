@@ -180,3 +180,24 @@ def test_changes_during_remote_verification_block_delete(review,monkeypatch):
     assert f.action(copy,'delete').status_code==409
     assert (a.root/'late-draft.txt').exists()
     assert f.request('/api/github/status').json()['connected']
+
+
+@pytest.mark.parametrize('kind',['stash','other-branch'])
+def test_unsaved_git_refs_block_explicit_and_retention_cleanup(review,kind):
+    f=review;a=f.owners[0]
+    with Session(f.engine) as db:
+        row=db.get(models.Workspace,a.workspace)
+        head=workspaces.status(row)['head']
+        workspaces.git(row,'update-ref','refs/remotes/origin/main',head)
+        if kind=='stash':
+            (a.root/'draft.txt').write_text('synthetic stashed work')
+            workspaces.git(row,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','stash','push','-u','-m','Preserve synthetic draft')
+        else:
+            workspaces.git(row,'branch','unsaved-work')
+            (a.root/'second.txt').write_text('synthetic next commit')
+            workspaces.git(row,'add','--all')
+            workspaces.git(row,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','Synthetic next commit')
+        assert not workspace_cache.github_copy_is_saved(row)
+    copy=f.preview()['workspaces'][0];assert copy['blocked']
+    assert f.action(copy,'delete').status_code==409
+    assert (a.root/'.git').exists()

@@ -162,6 +162,8 @@ def github_copy_is_saved(row):
         state=workspaces.status(row)
         if not state['clean'] or not state['head']:return False
         if workspaces.git(row,'ls-files','--others','--ignored','--exclude-standard','-z').stdout:return False
+        refs=workspaces.git(row,'for-each-ref','--format=%(objectname)','refs/heads','refs/stash').stdout.splitlines()
+        if any(sha!=state['head'] for sha in refs):return False
         branch=row.project.remote_branch
         if not workspaces.valid_branch(branch):return False
         remote=workspaces.git(row,'rev-parse','--verify','refs/remotes/origin/'+branch,check=False)

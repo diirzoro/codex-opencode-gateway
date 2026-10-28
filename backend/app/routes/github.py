@@ -174,11 +174,14 @@ def _copy_snapshot(row):
         for name in (change['path'],change.get('original_path')):
             if not name:continue
             path=workspaces.safe_path(row,name)
+            if path.is_dir():raise HTTPException(409,'Nested repositories or submodules need manual save review')
             if path.is_file():
                 with path.open('rb') as stream:
                     while chunk:=stream.read(65536):digest.update(chunk)
     ignored=workspaces.git(row,'ls-files','--others','--ignored','--exclude-standard','-z').stdout
-    return state,digest.hexdigest(),bool(ignored)
+    refs=workspaces.git(row,'for-each-ref','--format=%(objectname)','refs/heads','refs/stash').stdout.splitlines()
+    digest.update(json.dumps(refs).encode())
+    return state,digest.hexdigest(),bool(ignored) or any(sha!=state['head'] for sha in refs)
 
 
 @router.get('/disconnect/workspaces')
@@ -196,7 +199,7 @@ def disconnect_workspaces(user: User=Depends(require_user),db: Session=Depends(g
             copies.append({'id':str(row.id),'name':row.project.name,'repository':row.project.repository,
                 'branch':row.project.remote_branch,'head':state['head'],'snapshot':snapshot,
                 'changes':state['changes'],'ahead':state.get('ahead'),
-                'blocked': 'Ignored local files must be exported or reviewed before deletion' if ignored else None})
+                'blocked': 'Ignored files, local branches or stashes need review before deletion' if ignored else None})
         except HTTPException:
             copies.append({'id':str(row.id),'name':row.project.name,'repository':row.project.repository,
                 'branch':row.project.remote_branch,'snapshot':None,'changes':[],
@@ -227,7 +230,7 @@ def disconnect_copy(workspace_id: uuid.UUID,body: CopyDecision,
         if not workspace_cache.runtime_idle(row):raise HTTPException(409,'Stop Native execution before saving or deleting files')
         state,snapshot,ignored=_copy_snapshot(row)
         if snapshot!=body.snapshot:raise HTTPException(409,'Working files changed; review again. Nothing deleted')
-        if ignored:raise HTTPException(409,'Ignored local files are not saved to GitHub; export or review them first')
+        if ignored:raise HTTPException(409,'Ignored files, local branches or stashes are not saved; export or review them first')
         if body.action=='save':
             # Reuse the existing authenticated Git implementation and its
             # non-force push plus remote verification. Never embed tokens in URLs.
