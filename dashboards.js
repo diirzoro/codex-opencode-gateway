@@ -416,16 +416,21 @@
       'install-required':['First choose at least one repository in the GitHub App installation, then reconnect.','اختر مستودعًا واحدًا على الأقل في تثبيت تطبيق GitHub ثم أعد الربط.'],
       'multiple-installations':['More than one installation is available; select the intended installation first.','توجد تثبيتات متعددة؛ حدد التثبيت الصحيح أولًا.'],
       configuration:['GitHub App credentials or encryption are unavailable on Gateway.','بيانات تطبيق GitHub أو مفتاح التشفير غير متاحة على Gateway.'],
+      confirm:['Choose and confirm the GitHub identity below before connecting.','اختر وأكد هوية GitHub أدناه قبل الربط.'],
+      'session-mismatch':['This GitHub transaction belongs to a different or expired Gateway session. Start a new connection.','معاملة GitHub تخص جلسة Gateway أخرى أو منتهية. ابدأ ربطًا جديدًا.'],
+      'transaction-expired':['This transaction has expired or was already used. Start again.','انتهت المعاملة أو استُخدمت سابقًا. ابدأ من جديد.'],
+      'account-conflict':['This GitHub identity is already linked to another Gateway account.','هوية GitHub هذه مرتبطة بحساب Gateway آخر.'],
       error:['GitHub authorization could not be confirmed; no new repository was imported.','تعذر تأكيد تفويض GitHub؛ لم يُستورد أي مستودع جديد.']
     };
     const status=await api('/api/github/status');if(owner!==currentUser?.id||render!==githubConnectionRender)return;
+    window.renderGithubConfirmation(github,status,loadConnectionsGithub);
     if(messages[result]){
       const message=result==='connected'&&!status.connected
         ?tr('This GitHub connection is no longer active. Start a new link to continue.','هذا الربط مع GitHub لم يعد نشطًا. ابدأ ربطًا جديدًا للمتابعة.')
         :tr(...messages[result]);
       github.append(textElement('p',message,'api-message'));
     }
-    github.append(textElement('p',status.connected?(status.account_login||'GitHub'):tr('Not connected','غير متصل')));
+    github.append(textElement('p',status.connected?(status.github_login||status.account_login||'GitHub'):tr('Not connected','غير متصل')));
     if(!status.configured)github.append(textElement('p',tr('The administrator must configure GitHub App credentials before customer authorization.','يجب أن تكمل الإدارة بيانات تطبيق GitHub قبل تفويض العملاء.'),'api-message'));
     // User authorization is distinct from App installation. Never reinstall
     // merely because Gateway disconnected or an expiring user token was lost.
@@ -441,8 +446,8 @@
     if(status.connected){
       github.append(btn('settingsOpenGithubRepository','Choose authorized repository / branch','اختيار مستودع وفرع مصرح بهما',()=>window.openGithubProject()));
       github.append(btn('settingsDisconnectGithub','Disconnect','إلغاء الربط',async()=>{
-        if(!await window.confirmAction(tr('Disconnect GitHub and remove this account’s imported GitHub working copies, including unpushed changes? Export or push changes first. Internal projects and the original GitHub repositories remain.','فصل GitHub وإزالة نسخ العمل المستوردة لهذا الحساب بما فيها التغييرات غير المرفوعة؟ صدّر أو ارفع تغييراتك أولًا. تبقى المشاريع الداخلية والمستودعات الأصلية على GitHub محفوظة.')))return;
-        await api('/api/github/disconnect',{method:'POST'});
+        if(!await window.confirmAction(tr('Disconnect GitHub, revoke its token and remove your verified personal App installation? Project files and unpushed changes remain.','فصل GitHub وإبطال رمزه وإزالة تثبيت التطبيق الشخصي المتحقق؟ تبقى ملفات المشاريع والتعديلات غير المرفوعة.')))return;
+        const disconnected=await api('/api/github/disconnect',{method:'POST'});if(disconnected?.revocation==='unconfirmed'||['unconfirmed','owner-review-required'].includes(disconnected?.installation_removal))toast(tr('Gateway disconnected. GitHub revocation or installation removal needs owner review.','فُصل Gateway. إبطال GitHub أو إزالة التثبيت يحتاج مراجعة المالك.'));
         // Forget an old success banner after an explicit disconnect.
         const url=new URL(location.href);url.searchParams.delete('github');
         window.history.replaceState(window.history.state,'',url.pathname+url.search+url.hash);

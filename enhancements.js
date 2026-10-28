@@ -27,6 +27,52 @@ window.startFreshGithubConnection=async function(options={}){
     freshGithubPending=false;
   }
 };
+// Discard displayed connection metadata in this and other tabs after mutation.
+window.addEventListener('storage',event=>{
+  if(event.key==='og-github-revision:'+currentUser?.id)window.dispatchEvent(new CustomEvent('gateway-github-changed',{detail:{owner:currentUser?.id}}));
+});
+window.addEventListener('gateway-github-changed',event=>{
+  if(event.detail?.owner!==currentUser?.id)return;
+  for(const id of ['connectionsGithub','clientGithubPanel']){
+    const box=document.getElementById(id);if(box)box.replaceChildren(textElement('p',lang==='ar'?'تغير اتصال GitHub. افتح الاتصالات للتحقق.':'GitHub connection changed. Reopen Connections to verify.'));
+  }
+});
+// Explicit server-verified identity confirmation shared by customer/admin views.
+window.renderGithubConfirmation=function(root,status,refresh){
+  if(!status.pending)return;
+  const item=status.pending,owner=currentUser?.id,tr=(en,ar)=>lang==='ar'?ar:en;
+  const box=textElement('section','','manage-card github-confirmation');
+  box.setAttribute('aria-label',tr('Confirm GitHub identity','تأكيد هوية GitHub'));
+  box.append(textElement('h3',tr('Confirm the GitHub account','تأكيد حساب GitHub')),
+    textElement('p',tr('You are linking @','أنت تربط @')+item.github_login+tr(' to this Gateway account. Continue only if this is your intended account.',' بحسابك الحالي في Gateway. أكمل فقط إذا كان هذا الحساب الذي تقصده.')));
+  const select=document.createElement('select');select.setAttribute('aria-label',tr('Authorized installation','التثبيت المصرح به'));
+  select.add(new Option(tr('Select your installation','اختر التثبيت الخاص بك'),''));
+  for(const installation of item.installations)select.add(new Option(installation.login+' · '+installation.id,String(installation.id)));
+  const accepted=document.createElement('input');accepted.type='checkbox';
+  const label=textElement('label');label.append(accepted,document.createTextNode(tr('I confirm @','أؤكد اختيار @')+item.github_login));
+  const feedback=textElement('p');feedback.setAttribute('role','status');
+  const confirm=textElement('button',tr('Confirm connection','تأكيد الربط'),'button');confirm.type='button';confirm.disabled=true;
+  const update=()=>{confirm.disabled=!accepted.checked||!select.value;};select.onchange=update;accepted.onchange=update;
+  confirm.onclick=async()=>{
+    if(confirm.disabled||currentUser?.id!==owner)return;
+    confirm.disabled=true;
+    try{await api('/api/github/confirm',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,github_user_id:item.github_user_id,installation_id:Number(select.value)})});
+      if(currentUser?.id===owner){toast(tr('GitHub connection confirmed.','تم تأكيد ربط GitHub.'));await refresh();}
+    }catch(error){if(currentUser?.id===owner){feedback.textContent=error.message;update();}}
+  };
+  const cancel=textElement('button',tr('Cancel / choose another account','إلغاء / اختيار حساب آخر'),'button ghost');cancel.type='button';
+  cancel.onclick=async()=>{if(currentUser?.id!==owner)return;cancel.disabled=true;try{await api('/api/github/disconnect',{method:'POST'});if(currentUser?.id===owner)await refresh();}catch(error){feedback.textContent=error.message;cancel.disabled=false;}};
+  if(item.installations.length)box.append(select,label,confirm);
+  else{
+    box.append(textElement('p',tr('This account has no authorized installation of this app. Install it on your own repositories first.','لا يوجد تثبيت مصرح لهذا التطبيق على هذا الحساب. ثبّته على مستودعاتك أولًا.')));
+    const install=textElement('button',tr('Install on my GitHub account','تثبيت على حسابي في GitHub'),'button');install.type='button';
+    install.onclick=async()=>{if(currentUser?.id!==owner||install.disabled)return;install.disabled=true;
+      try{const next=await api('/api/github/pending/install',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id!==owner)return;const url=new URL(next.url);if(url.protocol!=='https:'||url.hostname!=='github.com'||!url.pathname.startsWith('/apps/'))throw Error('Invalid GitHub installation URL');window.location.assign(url.href);}
+      catch(error){feedback.textContent=error.message;}finally{install.disabled=false;}
+    };box.append(install);
+  }
+  box.append(cancel,feedback);root.append(box);
+};
 (function () {
   function applyGithubCard(status) {
     var state = document.getElementById('githubCardState');
@@ -51,7 +97,7 @@ window.startFreshGithubConnection=async function(options={}){
   if (connectButton) connectButton.onclick = function () { void window.startFreshGithubConnection(); };
   var disconnectButton = document.getElementById('disconnectGithubButton');
   if (disconnectButton) disconnectButton.onclick = async function () {
-    try { if(!await window.confirmAction(lang==='ar'?'فصل GitHub وإزالة نسخ العمل المستوردة والتغييرات غير المرفوعة؟ صدّر تغييراتك أولًا. تبقى المشاريع الداخلية والمستودعات الأصلية.':'Disconnect GitHub and remove imported working copies, including unpushed changes? Export first. Internal projects and original repositories remain.'))return; await api('/api/github/disconnect', { method: 'POST' }); await loadProjects(); toast('GitHub disconnected'); }
+    try { if(!await window.confirmAction(lang==='ar'?'فصل GitHub وإبطال رمزه وإزالة التثبيت الشخصي المتحقق؟ تبقى ملفات المشاريع والتعديلات غير المرفوعة.':'Disconnect GitHub, revoke its token and remove your verified personal App installation? All project files and unpushed changes remain.'))return; await api('/api/github/disconnect', { method: 'POST' }); await loadProjects(); toast('GitHub disconnected'); }
     catch (error) { toast(error.message); }
   };
 
@@ -219,7 +265,7 @@ window.startFreshGithubConnection=async function(options={}){
     const connections=textElement('div');connections.id='adminGithubConnections';
     form.append(grid,setupNote,credentialsPanel,save,saveStatus);
     gatewaySettings.append(status,form,urls,configuration,database);
-    panel.append(heading,note,nativeCard,gatewaySettings,connection,authorize,refresh,connections);
+    const identityConfirmation=textElement('div');panel.append(heading,note,nativeCard,gatewaySettings,connection,identityConfirmation,authorize,refresh,connections);
     form.onsubmit=async event=>{
       event.preventDefault();if(save.disabled||!current())return;
       save.disabled=true;saveStatus.textContent=tr('Saving encrypted settings…','جارٍ حفظ الإعدادات مشفّرة…');
@@ -272,7 +318,8 @@ window.startFreshGithubConnection=async function(options={}){
     };
     const showConnection=async()=>{
       try{const value=await api('/api/github/status');if(!current())return;
-        connection.textContent=value.connected?tr('My connected account: ','حسابي المتصل: ')+(value.account_login||'GitHub'):tr('My account is not connected.','حسابي غير مرتبط.');
+        connection.textContent=value.connected?tr('My connected account: ','حسابي المتصل: ')+(value.github_login||value.account_login||'GitHub'):tr('My account is not connected.','حسابي غير مرتبط.');
+        identityConfirmation.replaceChildren();window.renderGithubConfirmation(identityConfirmation,value,loadAdminGithubAdmin);
         // Enabled only after both configuration and database diagnostics succeed.
         authorize.dataset.available=String(!!value.configured&&!value.connected);
       }catch(error){if(current())connection.textContent=tr('Account status unavailable: ','تعذر فحص اتصال الحساب: ')+error.message;}
@@ -362,6 +409,8 @@ window.startFreshGithubConnection=async function(options={}){
     var loader = ADMIN_LOADERS[name];
     if (loader) return loader();
   }
+
+  window.openGithubConnectionPanel=()=>['admin','owner'].includes(currentUser?.role)?setAdminView('github'):window.openConnections?.('github');
 
   document.querySelectorAll('[data-admin-view]').forEach(function (button) {
     button.onclick = function () { setAdminView(button.dataset.adminView).catch(function (e) { toast(e.message); }); };
@@ -852,8 +901,8 @@ window.startFreshGithubConnection=async function(options={}){
     if(window.passwordRecoveryActive)return;
     var flag = new URLSearchParams(location.search).get('github');
     if (flag) {
-      history.replaceState(null, '', location.pathname);
-      if (flag === 'connected' && currentUser) { toast('GitHub connected'); await page('accountPage'); return; }
+      // Keep the callback outcome until the main bootstrap has opened its panel.
+      if (flag === 'connected' && currentUser) toast('Check the GitHub identity and connection status.');
       if (flag === 'error') { toast('GitHub connection was not completed'); }
     }
     if (currentUser) {
@@ -994,11 +1043,12 @@ window.startFreshGithubConnection=async function(options={}){
   loadClientGithub = async function () {
     var panel = document.getElementById('clientGithubPanel'); if (!panel) return;
     try { var s = await api('/api/github/status');
+      if(s.pending){panel.replaceChildren();window.renderGithubConfirmation(panel,s,loadClientGithub);return;}
       if (s.connected) {
         panel.replaceChildren();
         panel.append(textElement('h3', tr('GitHub connected', 'GitHub متصل')));
         panel.append(textElement('p', (s.account_login || '') + ' · ' + (s.target_type || 'User')));
-        var disc = textElement('button', tr('Disconnect', 'فصل'), 'button ghost'); disc.onclick = async function () { try { if(!await window.confirmAction(tr('Disconnect GitHub and remove imported working copies, including unpushed changes? Export first. Internal projects and original repositories remain.','فصل GitHub وإزالة نسخ العمل المستوردة والتغييرات غير المرفوعة؟ صدّر أولًا. تبقى المشاريع الداخلية والمستودعات الأصلية.')))return; await api('/api/github/disconnect', { method: 'POST' }); toast(tr('Disconnected', 'تم الفصل')); await loadClientGithub(); } catch (e) { toast(e.message); } }; panel.append(disc);
+        var disc = textElement('button', tr('Disconnect', 'فصل'), 'button ghost'); disc.onclick = async function () { try { if(!await window.confirmAction(tr('Disconnect GitHub, revoke its token and remove your verified personal App installation? All project files and unpushed changes remain.','فصل GitHub وإبطال رمزه وإزالة تثبيت التطبيق الشخصي المتحقق؟ تبقى ملفات المشاريع والتعديلات غير المرفوعة.')))return; await api('/api/github/disconnect', { method: 'POST' }); toast(tr('Disconnected', 'تم الفصل')); await loadClientGithub(); } catch (e) { toast(e.message); } }; panel.append(disc);
       } else {
         var cp = textElement('div', '', 'connect-panel');
         var ic = textElement('div', '', 'cp-icon'); ic.appendChild(navIcon('#icon-github')); cp.append(ic);

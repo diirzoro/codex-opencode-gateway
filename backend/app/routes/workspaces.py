@@ -354,13 +354,6 @@ def runtime_status(user: User=Depends(require_user)):
     except HTTPException: health={"healthy":False,"version":None}
     return {**health,"runtime_mode":settings.runtime_mode,"public_multi_user_ready":False}
 
-@router.get("/github/status")
-def github_status(user: User=Depends(require_user),db: Session=Depends(get_db)):
-    # Match the dedicated GitHub route: disconnection must not be masked by
-    # a cached response regardless of router registration order.
-    return JSONResponse(github.connection_status(db,user),
-                        headers={"Cache-Control":"private, no-store"})
-
 @router.get("/templates")
 def templates(user: User=Depends(require_user)):
     return [{"id":key,"name":key} for key in manager.TEMPLATES]

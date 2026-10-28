@@ -4,12 +4,13 @@ Nothing here uses a Personal Access Token, simulates a connection, or exposes a 
 the browser. Installation tokens are short-lived and used only server-side.
 """
 from __future__ import annotations
-import hashlib, hmac, json, secrets
+import hashlib, hmac, json, secrets, uuid
 from datetime import datetime, timedelta, timezone
 import httpx
 from urllib.parse import quote, urlencode
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, or_
+from sqlalchemy.exc import IntegrityError
 from ..config import settings
 from ..models import GithubAuthState, GithubConnection, User
 from . import credentials, github_app_config
@@ -39,7 +40,7 @@ def schema_status(db) -> dict:
                 missing.extend(table + "." + name for name in sorted(columns - actual))
         revisions = list(MigrationContext.configure(connection).get_current_heads())
         return {"checked": True, "ready": not missing, "missing": missing,
-                "revisions": revisions, "required_migrations": ["0003_github_provider", "0005_account_management"]}
+                "revisions": revisions, "required_migrations": ["0003_github_provider", "0005_account_management", "0028_github_connection_identity"]}
     except SQLAlchemyError:
         return {"checked": False, "ready": False, "missing": [], "revisions": [],
                 "reason": "Database schema inspection unavailable"}
@@ -89,56 +90,74 @@ def _api(method: str, path: str, token: str | None = None, jwt_token: str | None
         raise HTTPException(502, "GitHub API returned an error")
     return response.json() if response.content else None
 
-def _begin_installation(db, user) -> str:
-    cfg=github_app_config.effective(settings,db)
-    require_configured(cfg)
-    state = 'setup_'+secrets.token_urlsafe(32)
-    now = datetime.now(timezone.utc)
-    db.add(GithubAuthState(state=state, user_id=user.id, expires_at=now + timedelta(minutes=STATE_TTL_MINUTES)))
-    db.commit()
-    return install_url(state,cfg)
+def lock_owner(db, user):
+    # All connection mutations acquire the same owner row first. A delayed
+    # callback cannot commit after a completed disconnect/new transaction.
+    current = db.scalar(select(User).where(User.id == user.id).with_for_update().execution_options(populate_existing=True))
+    if current is None or current.status != 'active':
+        raise HTTPException(403, 'Active Gateway account required')
+    return current
 
-def begin_fresh_link(db, user) -> str:
-    # Explicit POST only: forget this customer's local connection and all old
-    # callbacks before minting a fresh account-selection/install flow. Never
-    # revoke the shared App installation or another customer's credentials.
+
+def begin_fresh_link(db, user, auth_session_id):
     cfg = github_app_config.effective(settings, db)
     require_configured(cfg)
-    # New links require an explicit disconnect first. Do not silently erase an
-    # existing customer's authorization, worktrees, or unpushed changes.
-    existing = db.scalar(select(GithubConnection).where(GithubConnection.user_id == user.id))
+    if not auth_session_id:
+        raise HTTPException(401, 'Authenticated Gateway session required')
+    lock_owner(db,user)
+    existing=db.scalar(select(GithubConnection).where(GithubConnection.user_id==user.id))
     if existing is not None:
-        raise HTTPException(409, 'Disconnect the existing GitHub account before linking another')
-    return begin_install(db, user)
+        raise HTTPException(409,'Disconnect the existing GitHub account before linking another')
+    disconnect(db,user,commit=False)
+    return begin_authorization(db, user, auth_session_id=auth_session_id)
 
-def begin_install(db,user) -> str:
-    # Never expose installation settings through the browser's old GitHub login
-    # before this Gateway account completes an explicit account-selection flow.
-    return begin_authorization(db,user,for_install=True)
 
-def begin_authorization(db, user, *, for_install=False) -> str:
-    """Reauthorize an existing GitHub App without requiring a second installation.
-
-    A one-time state binds the OAuth code to the signed-in Gateway account.
-    The callback separately verifies this user's installation membership.
-    """
-    cfg=github_app_config.effective(settings,db)
+def begin_authorization(db, user, *, auth_session_id, connection_id=None, expected_identity=None):
+    cfg = github_app_config.effective(settings, db)
     require_configured(cfg)
-    state=('install_' if for_install else '')+secrets.token_urlsafe(32)
-    db.add(GithubAuthState(state=state,user_id=user.id,
-                           expires_at=datetime.now(timezone.utc)+timedelta(minutes=STATE_TTL_MINUTES)))
+    state = 'oauth_' + secrets.token_urlsafe(32)
+    record = GithubAuthState(state=state, user_id=user.id, auth_session_id=auth_session_id,
+        connection_id=connection_id or uuid.uuid4(),
+        expires_at=datetime.now(timezone.utc)+timedelta(minutes=STATE_TTL_MINUTES))
+    if expected_identity:
+        record.pending_payload = credentials.encrypt(json.dumps({'expected_identity': expected_identity}))
+    db.add(record)
     db.commit()
-    params=urlencode({'client_id':cfg.github_client_id,'redirect_uri':cfg.github_callback_url,'state':state,'prompt':'select_account'})
+    params = urlencode({'client_id':cfg.github_client_id, 'redirect_uri':cfg.github_callback_url,
+                        'state':state, 'prompt':'select_account'})
     return cfg.github_web_base.rstrip('/')+'/login/oauth/authorize?'+params
 
 
-def connection_status(db, user) -> dict:
+def pending_connection(db, user, auth_session_id):
+    if not auth_session_id:
+        return None
+    records = db.scalars(select(GithubAuthState).where(GithubAuthState.user_id == user.id,
+        GithubAuthState.auth_session_id == auth_session_id, GithubAuthState.consumed.is_(True),
+        GithubAuthState.pending_payload.is_not(None)))
+    for record in records:
+        if _aware(record.expires_at) <= datetime.now(timezone.utc):
+            record.pending_payload = None
+            continue
+        payload = json.loads(credentials.decrypt(record.pending_payload))
+        if 'identity' in payload:
+            return {'connection_id':str(record.connection_id), 'github_user_id':payload['identity']['id'],
+                    'github_login':payload['identity']['login'], 'installations':payload['installations']}
+    return None
+
+
+def connection_status(db, user, auth_session_id=None) -> dict:
     if not configured(db):
-        return {"connected": False, "available": False, "configured": False, "reason": "GitHub App integration is not configured"}
+        return {'connected':False, 'available':False, 'configured':False,
+                'reason':'GitHub App integration is not configured'}
     row = db.scalar(select(GithubConnection).where(GithubConnection.user_id == user.id))
-    if row is None or row.suspended or not row.user_token or (row.token_expires_at and _aware(row.token_expires_at)<=datetime.now(timezone.utc)):
-        return {"connected": False, "available": True, "configured": True, "reason": "GitHub App is installed" if row and row.suspended else "GitHub is not connected"}
-    return {"connected": True, "available": True, "configured": True, "account_login": row.account_login, "account_type": row.account_type, "target_type": row.target_type}
+    result = {'connected':False, 'available':True, 'configured':True}
+    if row and not row.suspended and row.user_token and (not row.token_expires_at or _aware(row.token_expires_at)>datetime.now(timezone.utc)):
+        result.update(connected=True, connection_id=str(row.id), account_login=row.account_login,
+                      github_login=row.github_user_login, github_user_id=row.github_user_id,
+                      account_type=row.account_type, target_type=row.target_type)
+    result['pending'] = pending_connection(db, user, auth_session_id)
+    db.commit()
+    return result
 
 def installation_token(connection: GithubConnection) -> str:
     # Every customer operation uses the customer's authorization, never the App's
@@ -165,113 +184,195 @@ def connection_for(db, user) -> GithubConnection:
         raise HTTPException(503, "GitHub is not connected for this account")
     return row
 
-def handle_callback(db, state: str, installation_id: int | None, setup_action: str | None, code: str | None = None):
+def _state(db, state, user, auth_session_id, *, pending=False):
+    lock_owner(db, user)
+    record = db.scalar(select(GithubAuthState).where(GithubAuthState.state == state).with_for_update())
+    if not record or record.user_id != user.id or not auth_session_id or record.auth_session_id != auth_session_id:
+        raise HTTPException(403, 'GitHub transaction does not belong to this Gateway session')
+    if _aware(record.expires_at) <= datetime.now(timezone.utc):
+        raise HTTPException(400, 'GitHub authorization state expired')
+    if record.consumed != pending:
+        raise HTTPException(400, 'Unknown or already-used GitHub state')
+    return record
+
+
+def installations_for(token, cfg):
+    result=[]
+    for page in range(1,101):
+        items=(_api('GET','/user/installations',token=token,params={'per_page':100,'page':page}) or {}).get('installations',[])
+        for item in items:
+            if item.get('app_id') == cfg.github_app_id and type(item.get('id')) is int:
+                account=item.get('account') or {}
+                result.append({'id':item['id'], 'login':account.get('login','GitHub'), 'type':account.get('type','User'), 'account_id':account.get('id')})
+        if len(items)<100: return result
+    raise HTTPException(502, 'GitHub installation list exceeded safe pagination')
+
+
+def handle_callback(db, state, installation_id, setup_action, code=None, *, user, auth_session_id):
     cfg=github_app_config.effective(settings,db)
     require_configured(cfg)
-    if not state:
-        raise HTTPException(422, "Missing GitHub authorization parameters")
-    now = datetime.now(timezone.utc)
-    record = db.scalar(select(GithubAuthState).where(GithubAuthState.state==state).with_for_update())
-    if record is None or record.consumed:
-        raise HTTPException(400, "Unknown or already-used GitHub state")
-    expires = record.expires_at if record.expires_at.tzinfo else record.expires_at.replace(tzinfo=timezone.utc)
-    if expires <= now:
-        raise HTTPException(400, "GitHub authorization state expired")
-    user=db.get(User,record.user_id)
-    if not user or user.status!='active': raise HTTPException(403,'Active account and GitHub user authorization required')
-    require_advanced(db, user)
-    if not code:
-        if state.startswith('setup_') and setup_action in {'install','update'}:
-            record.consumed=True
-            return {'redirect':begin_authorization(db,user)}
-        raise HTTPException(422,'Missing GitHub authorization parameters')
-    token=exchange_code(code,config=cfg)
-    # GitHub OAuth reauthorization has a code but may not include installation_id.
-    # Resolve only installations of THIS App that the authenticated user can access.
-    # If several are available, never silently attach the wrong organization.
-    eligible=[]
-    for page in range(1,101):
-        items=(_api('GET','/user/installations',token=token['access_token'],params={'per_page':100,'page':page}) or {}).get('installations',[])
-        for item in items:
-            if item.get('app_id')==cfg.github_app_id and isinstance(item.get('id'),int):
-                eligible.append(item['id'])
-        if len(items)<100:break
-    if state.startswith('install_'):
-        # Reuse an existing installation where the GitHub user is authorized.
-        # Sending every first-time link to /installations/new loops through
-        # installation setup and may revoke a valid authorization experience.
-        # A newly created installation is necessary only when none exists.
-        foreign=db.scalar(select(GithubConnection).where(
-            GithubConnection.installation_id.in_(eligible),
-            GithubConnection.user_id!=record.user_id)) if eligible else None
-        if foreign:
-            raise HTTPException(409,'Installation is already linked to another account')
-        if not eligible:
-            record.consumed=True
-            return {'redirect':_begin_installation(db,user)}
-    if installation_id is None:
-        previous=db.scalar(select(GithubConnection).where(GithubConnection.user_id==record.user_id))
-        if previous and previous.installation_id in eligible:
-            installation_id=previous.installation_id
-        elif len(eligible)==1:
-            installation_id=eligible[0]
-        elif not eligible:
-            raise HTTPException(409,'Install the GitHub App on a repository before authorizing')
-        else:
-            raise HTTPException(409,'Multiple GitHub installations available; choose an installation before linking')
-    if installation_id not in eligible:
-        raise HTTPException(403,'Installation is not authorized for this GitHub user')
-    existing=db.scalar(select(GithubConnection).where(GithubConnection.installation_id==installation_id,GithubConnection.user_id!=record.user_id))
-    if existing: raise HTTPException(409,'Installation is already linked to another account')
-    # Verify App identity as well as the authenticated user's installation membership.
-    info = _api("GET", f"/app/installations/{installation_id}", jwt_token=_jwt(cfg))
-    if info.get('app_id')!=cfg.github_app_id:
-        raise HTTPException(403,'Installation belongs to a different GitHub App')
-    account = info.get("account") or {}
-    login = account.get("login") or "unknown"
-    record.consumed = True
-    # Invalidate all parallel OAuth attempts for this Gateway identity, so a
-    # delayed callback cannot silently overwrite the freshly approved link.
-    db.execute(delete(GithubAuthState).where(GithubAuthState.user_id == record.user_id,
-                                            GithubAuthState.state != state))
-    row = db.scalar(select(GithubConnection).where(GithubConnection.user_id == record.user_id))
-    if row is None:
-        row = GithubConnection(user_id=record.user_id, installation_id=installation_id)
-        db.add(row)
-    row.installation_id = installation_id
-    row.account_login = login
-    row.account_type = account.get("type") or "User"
-    row.target_type = info.get("target_type") or "User"
-    row.app_id = cfg.github_app_id
-    row.suspended = False
-    row.user_token=credentials.encrypt(token['access_token'])
-    # GitHub Apps may issue non-expiring user tokens. Do not fabricate an
-    # eight-hour expiry when GitHub did not return expires_in.
-    row.token_expires_at=now+timedelta(seconds=int(token['expires_in'])) if token.get('expires_in') is not None else None
-    require_advanced(db, user, start=True)
-    db.commit()
-    return row
+    if not state: raise HTTPException(422, 'Missing GitHub authorization parameters')
+    record=_state(db,state,user,auth_session_id)
+    require_advanced(db,user)
+    expected=None
+    if record.pending_payload:
+        expected=json.loads(credentials.decrypt(record.pending_payload)).get('expected_identity')
+    # Single use even when the vendor rejects a code. Owner lock prevents races.
+    record.consumed=True
+    record.pending_payload=None
+    try:
+        if not code:
+            if not state.startswith('setup_') or setup_action not in {'install','update'}:
+                raise HTTPException(422,'Missing GitHub authorization code')
+            return {'redirect':begin_authorization(db,user,auth_session_id=auth_session_id,
+                      connection_id=record.connection_id,expected_identity=expected)}
+        token=exchange_code(code,config=cfg)
+        identity=_api('GET','/user',token=token['access_token']) or {}
+        if type(identity.get('id')) is not int or not identity.get('login'):
+            raise HTTPException(502,'GitHub user identity unavailable')
+        if expected and identity['id'] != expected:
+            revoke_token(token['access_token'],cfg)
+            raise HTTPException(409,'GitHub account changed during installation; start a new connection')
+        eligible=installations_for(token['access_token'],cfg)
+        if installation_id is not None:
+            eligible=[item for item in eligible if item['id']==installation_id]
+            if not eligible: raise HTTPException(403,'Installation is not authorized for this GitHub user')
+        # Never save an active connection from a callback. No repository access
+        # until a same-origin authenticated POST confirms this exact identity.
+        payload={'identity':{'id':identity['id'],'login':identity['login']},
+                 'installations':eligible,'token':token['access_token'],
+                 'expires_at':(datetime.now(timezone.utc)+timedelta(seconds=int(token['expires_in']))).isoformat() if token.get('expires_in') is not None else None}
+        record.pending_payload=credentials.encrypt(json.dumps(payload))
+        db.commit()
+        return {'pending':True}
+    except HTTPException:
+        if 'token' in locals(): revoke_token(token['access_token'],cfg)
+        db.commit()
+        raise
 
-def disconnect(db, user, *, remove_worktrees=True):
-    # Revoking the Gateway link must also invalidate authorization states minted
-    # before disconnect. Otherwise a delayed OAuth callback could silently
-    # recreate the supposedly disconnected account link.
-    from . import workspace_cache
-    affected = workspace_cache.expire_github_copies(db, user.id) if remove_worktrees else []
-    db.execute(delete(GithubAuthState).where(GithubAuthState.user_id == user.id))
-    row = db.scalar(select(GithubConnection).where(GithubConnection.user_id == user.id))
-    if row is not None:
-        db.delete(row)
+
+def _pending(db,user,auth_session_id,connection_id):
+    lock_owner(db,user)
+    record=db.scalar(select(GithubAuthState).where(GithubAuthState.user_id==user.id,
+        GithubAuthState.connection_id==connection_id, GithubAuthState.consumed.is_(True),
+        GithubAuthState.pending_payload.is_not(None)).with_for_update())
+    if not record: raise HTTPException(409,'GitHub confirmation is no longer available')
+    _state(db,record.state,user,auth_session_id,pending=True)
+    payload=json.loads(credentials.decrypt(record.pending_payload))
+    if 'identity' not in payload: raise HTTPException(409,'GitHub authorization is incomplete')
+    return record,payload
+
+
+def confirm_connection(db,user,auth_session_id,connection_id,github_user_id,installation_id):
+    record,payload=_pending(db,user,auth_session_id,connection_id)
+    require_advanced(db,user)
+    if payload['identity']['id'] != github_user_id:
+        raise HTTPException(409,'Confirm the GitHub identity shown by the server')
+    if payload['expires_at'] and datetime.fromisoformat(payload['expires_at'])<=datetime.now(timezone.utc):
+        raise HTTPException(409,'GitHub token expired; start a new connection')
+    cfg=github_app_config.effective(settings,db)
+    eligible=installations_for(payload['token'],cfg)
+    if installation_id not in {item['id'] for item in payload['installations']} or installation_id not in {item['id'] for item in eligible}:
+        raise HTTPException(403,'Installation is not authorized for this GitHub user')
+    foreign=db.scalar(select(GithubConnection).where(GithubConnection.user_id!=user.id,
+        or_(GithubConnection.installation_id==installation_id, GithubConnection.github_user_id==github_user_id,
+            GithubConnection.installation_id.in_([i['id'] for i in eligible if i.get('type')=='User' and i.get('account_id')==github_user_id]))))
+    if foreign: raise HTTPException(409,'This GitHub identity or installation is linked to another Gateway account')
+    info=_api('GET',f'/app/installations/{installation_id}',jwt_token=_jwt(cfg))
+    if info.get('app_id')!=cfg.github_app_id: raise HTTPException(403,'Installation belongs to a different GitHub App')
+    row=GithubConnection(id=record.connection_id,user_id=user.id,installation_id=installation_id,
+        github_user_id=github_user_id,github_user_login=payload['identity']['login'],
+        account_login=(info.get('account') or {}).get('login') or payload['identity']['login'],
+        account_type=(info.get('account') or {}).get('type') or 'User',target_type=info.get('target_type') or 'User',
+        app_id=cfg.github_app_id,suspended=False,user_token=credentials.encrypt(payload['token']),
+        token_expires_at=datetime.fromisoformat(payload['expires_at']) if payload['expires_at'] else None)
+    try:
+        db.add(row)
+        db.execute(delete(GithubAuthState).where(GithubAuthState.user_id==user.id))
+        require_advanced(db,user,start=True)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409,'GitHub identity was claimed by another connection; start again')
+    return {'connected':True,'connection_id':str(row.id),'github_login':row.github_user_login,'account_login':row.account_login}
+
+
+def pending_installation(db,user,auth_session_id,connection_id):
+    record,payload=_pending(db,user,auth_session_id,connection_id)
+    cfg=github_app_config.effective(settings,db)
+    state='setup_'+secrets.token_urlsafe(32)
+    # Reuse the transaction identity, never an old token or active connection.
+    revoke_token(payload['token'],cfg)
+    record.pending_payload=None
+    db.add(GithubAuthState(state=state,user_id=user.id,auth_session_id=auth_session_id,
+        connection_id=record.connection_id,expires_at=record.expires_at,
+        pending_payload=credentials.encrypt(json.dumps({'expected_identity':payload['identity']['id']}))))
     db.commit()
-    # Only after committed revocation/barriers may file erasure be attempted.
-    # A failure or active Native run leaves a blocked copy for existing
-    # maintenance to retry. Never kill/restart the shared OpenCode service.
-    if affected:
-        try:
-            workspace_cache.sweep(workspace_ids=affected)
-        except Exception:
-            import logging
-            logging.getLogger(__name__).warning('Disconnected GitHub copy cleanup deferred')
+    return install_url(state,cfg)
+
+
+def revoke_token(token,cfg):
+    """Revoke only this token, never a grant (which revokes all users' tokens)."""
+    if not token: return 'not-needed'
+    try:
+        with httpx.Client(base_url=settings.github_api_base,timeout=5,trust_env=False,follow_redirects=False,
+                          auth=(cfg.github_client_id,cfg.github_client_secret)) as client:
+            path='/applications/'+quote(cfg.github_client_id,safe='')+'/token'
+            response=client.request('DELETE',path,json={'access_token':token})
+            if response.status_code not in (204,404): return 'unconfirmed'
+            check=client.post(path,json={'access_token':token})
+            return 'verified' if check.status_code==404 else 'unconfirmed'
+    except (httpx.HTTPError,ValueError): return 'unconfirmed'
+
+
+def remove_owned_installation(row,token,cfg):
+    # A GitHub App's JWT can uninstall any installation: do not exercise that
+    # authority for a mere collaborator or an unverified organization owner.
+    checking_installation=False
+    try:
+        identity=_api('GET','/user',token=token,timeout=4)
+        checking_installation=True
+        info=_api('GET',f'/app/installations/{row.installation_id}',jwt_token=_jwt(cfg),timeout=4)
+        account=info.get('account') or {}
+        if (info.get('app_id')!=cfg.github_app_id or account.get('type')!='User'
+            or identity.get('id')!=account.get('id')
+            or row.github_user_id is not None and row.github_user_id!=identity.get('id')):
+            return 'owner-review-required'
+        _api('DELETE',f'/app/installations/{row.installation_id}',jwt_token=_jwt(cfg),timeout=4)
+        try: _api('GET',f'/app/installations/{row.installation_id}',jwt_token=_jwt(cfg),timeout=4)
+        except HTTPException as exc:
+            if exc.status_code==404: return 'verified'
+        return 'unconfirmed'
+    except HTTPException as exc:
+        return 'already-absent' if checking_installation and exc.status_code==404 else 'unconfirmed'
+    except Exception: return 'unconfirmed'
+
+
+def disconnect(db,user,*,remove_installation=False,commit=True):
+    lock_owner(db,user)
+    cfg=github_app_config.effective(settings,db)
+    row=db.scalar(select(GithubConnection).where(GithubConnection.user_id==user.id).with_for_update())
+    records=list(db.scalars(select(GithubAuthState).where(GithubAuthState.user_id==user.id).with_for_update()))
+    tokens=[];results=[]
+    if row and row.user_token:
+        try: tokens.append(credentials.decrypt(row.user_token))
+        except Exception: results.append('unconfirmed')
+    for record in records:
+        if record.pending_payload:
+            try:
+                token=json.loads(credentials.decrypt(record.pending_payload)).get('token')
+                if token: tokens.append(token)
+            except Exception: results.append('unconfirmed')
+    installation='not-requested'
+    if remove_installation and row:
+        installation=remove_owned_installation(row,tokens[0],cfg) if tokens else 'unconfirmed'
+    for token in set(tokens): results.append(revoke_token(token,cfg))
+    db.execute(delete(GithubAuthState).where(GithubAuthState.user_id==user.id))
+    if row: db.delete(row)
+    if commit: db.commit()
+    # Connection cleanup must NEVER expire/delete workspaces or native history.
+    return {'connected':False,'local_credentials_removed':True,'installation_removal':installation,
+            'revocation':'unconfirmed' if 'unconfirmed' in results else ('verified' if results else 'not-needed')}
 
 def list_repositories(connection: GithubConnection) -> list[dict]:
     token = installation_token(connection)

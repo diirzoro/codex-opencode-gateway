@@ -63,6 +63,8 @@ class GithubConnection(Base):
     app_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     suspended: Mapped[bool] = mapped_column(Boolean, default=False)
     user_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True, unique=True)
+    github_user_login: Mapped[str | None] = mapped_column(String(120), nullable=True)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -74,6 +76,9 @@ class GithubAuthState(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    auth_session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('auth_sessions.id', ondelete='SET NULL'), nullable=True)
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    pending_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 class ProviderCredential(Base):
     __tablename__ = "provider_credentials"

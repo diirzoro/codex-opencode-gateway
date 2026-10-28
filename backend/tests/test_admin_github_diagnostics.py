@@ -12,7 +12,7 @@ from backend.tests.test_native_control_plane import boundary, authenticated
 from backend.app.routes import admin
 from backend.app.services import github
 
-def test_existing_github_migrations_create_required_structure_without_new_migration():
+def test_legacy_github_schema_reports_required_session_binding_migration():
     engine=create_engine('sqlite://')
     with engine.begin() as connection:
         operations=Operations(MigrationContext.configure(connection))
@@ -24,7 +24,9 @@ def test_existing_github_migrations_create_required_structure_without_new_migrat
             module.op=operations;module.upgrade()
         with Session(bind=connection) as db:
             result=github.schema_status(db)
-            assert result['checked'] and result['ready'],result
+            assert result['checked'] and not result['ready'],result
+            assert '0028_github_connection_identity' in result['required_migrations']
+            assert 'github_auth_states.auth_session_id' in result['missing']
         assert 'user_token' in {c['name'] for c in inspect(connection).get_columns('github_connections')}
     engine.dispose()
 

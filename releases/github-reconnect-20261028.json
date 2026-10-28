@@ -1,0 +1,75 @@
+{
+  "scope": "GitHub disconnect/reconnect only; TEST only; review manifest, not a deployer",
+  "baseline_commit": "50adab67694eb58b340269c875eaa0662f7a5e97",
+  "migration_required": "0028_github_connection_identity",
+  "files": [
+    {
+      "path": "app.js",
+      "before_sha256": "ec6673d9637794760dc5c3a72b0e309bec54893d4c21ebeb0a76dd400aceba9b",
+      "after_sha256": "53fa25f450ac221dc7624b28a7b90429b92a481d836c348e08279e5670104ee8",
+      "must_be_absent_before": false
+    },
+    {
+      "path": "dashboards.js",
+      "before_sha256": "97034c9906d298344ad14fe1a31880ed9174deb7ac6be7af6c776275eedc8468",
+      "after_sha256": "6fd92275c1a5016d5e0f5f919b19c79f195f7125fd0ae1f2d3a93297870d84dd",
+      "must_be_absent_before": false
+    },
+    {
+      "path": "enhancements.js",
+      "before_sha256": "8e5ff8632bf658a19d79c3ad5e5a5e9be08f3043d1e83a57ddb6c0a220cc6651",
+      "after_sha256": "f3208be203f3501628d0c6421e11416d829c1f1da4b72f5a7d4608b7c9b1a58a",
+      "must_be_absent_before": false
+    },
+    {
+      "path": "management.js",
+      "before_sha256": "b6e4b059c18fc324b567223c4590663ac77a1a04f588928b6080a97868ab397e",
+      "after_sha256": "9a8b3b671f84a0e3205529d8583d5df6ce68c0393b6421e11c1c9d2752e83fa0",
+      "must_be_absent_before": false
+    },
+    {
+      "path": "index.html",
+      "before_sha256": "1df01d978d54284e56504430dd9e893b44f9e3e7538063bc606c1a27c71f2ee5",
+      "after_sha256": "31d13c5db57c51de90ef33f33d24be97430c344e4537862a6fa6e68d4e882c88",
+      "must_be_absent_before": false
+    },
+    {
+      "path": "backend/app/models/workspace.py",
+      "before_sha256": "1c8e61e1e5cad523f8e783b896d46d9419d4a3808458fe4e5a494035f3ae138e",
+      "after_sha256": "dae337ab3d31e1a512301c113d0d9df47b10586f1ebee57105328b7c45bbf76e",
+      "must_be_absent_before": false
+    },
+    {
+      "path": "backend/app/routes/github.py",
+      "before_sha256": "b8376d7b33df34c25da65bf4b94d03dff564855301bc0112d70165c1cc4a7250",
+      "after_sha256": "9a55fbc5e1c1b646c979565de9a996447e40d15ef96221b18576b63ffa23f450",
+      "must_be_absent_before": false
+    },
+    {
+      "path": "backend/app/routes/workspaces.py",
+      "before_sha256": "5dadb29cf35218c1e8636ed45394b1de0b11a81edb68d81cad3828b720296f8c",
+      "after_sha256": "157ee27ffa504e697388d43a88b6c8b7945c8aebe482d60cef23ba121d6ecbfe",
+      "must_be_absent_before": false
+    },
+    {
+      "path": "backend/app/services/github.py",
+      "before_sha256": "afbec4e1beafa6d993ce29e318447a928d0681fee40c5292c364c23989150760",
+      "after_sha256": "55e019318a530bd774b99d673c2d053b96af962993334bf2d7cda17cfde2a142",
+      "must_be_absent_before": false
+    },
+    {
+      "path": "backend/alembic/versions/0028_github_connection_identity.py",
+      "before_sha256": null,
+      "after_sha256": "f11a4899f5fb0195e8e8d78666b58a75cbc229fa0822a4508b0d46ab35fd0579",
+      "must_be_absent_before": true
+    }
+  ],
+  "requirements": [
+    "Verify running TEST baseline and all preimages; stop on unknown local edits",
+    "Private preimage backup and verified TEST database backup before schema upgrade",
+    "Apply only these 10 files as one coordinated release during a TEST Gateway maintenance window",
+    "Run existing TEST-only migration gate and restart Gateway TEST only; Native must stay untouched",
+    "On failure restore backed-up application files only; leave additive columns and existing data intact",
+    "No workflow/config/ports/env/native-storage/Preview changes"
+  ]
+}

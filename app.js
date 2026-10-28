@@ -26,6 +26,10 @@ if(new URLSearchParams(location.hash.slice(1)).has('reset-password')){
 }
 const protectedPages=new Set(['clientPage','accountPage','onboarding','workspacePage','billingPage','adminPage']);
 function invalidateProviderMutation(path,method='GET'){
+ if(/^\/api\/github\/(?:connect|confirm|disconnect)$/.test(path)&&method.toUpperCase()==='POST'){
+  try{localStorage.setItem('og-github-revision:'+currentUser?.id,String(Date.now()));}catch{}
+  window.dispatchEvent(new CustomEvent('gateway-github-changed',{detail:{owner:currentUser?.id}}));
+ }
  if(/^\/api\/opencode\/connections\/[^/?]+(?:\/(?:credentials|oauth\/callback))?(?:\?|$)/.test(path)&&!['GET','HEAD'].includes(method.toUpperCase())){
   window.workspaceRuntime?.clear();
   try{localStorage.setItem('og-native-provider-revision:'+currentUser?.id,String(Date.now()));}catch{}
@@ -550,13 +554,13 @@ const navigationReady=authReady.then(async()=>{
  await interfaceReady;if(window.passwordRecoveryActive)return;
  if(!currentUser){await page(location.hash.startsWith('#social=')?'authPage':'landing');return;}
  window.__navRestored=true;
- if(['admin','owner'].includes(currentUser.role)){await page('adminPage');return;}
+ if(['admin','owner'].includes(currentUser.role)){await page('adminPage');if(new URLSearchParams(location.search).has('github'))await window.openGithubConnectionPanel?.();return;}
  await openWorkspaceAfterLogin();
  // Return the CUSTOMER to the GitHub connection panel after OAuth instead
  // of silently opening a different workspace. The server-side status remains
  // authoritative; the query flag alone never proves that linking succeeded.
  const githubResult=new URLSearchParams(location.search).get('github');
- if(['connected','denied','install-required','multiple-installations','configuration','error'].includes(githubResult)&&!['admin','owner'].includes(currentUser?.role))
+ if(['connected','confirm','connect-required','session-mismatch','transaction-expired','account-conflict','denied','install-required','multiple-installations','configuration','error'].includes(githubResult)&&!['admin','owner'].includes(currentUser?.role))
    await window.openConnections?.('github');
 }).catch(error=>{document.documentElement.classList.remove('bootstrapping');toast(error.message)});
 // GitHub authorization/repository metadata loads only when its UI is opened.
