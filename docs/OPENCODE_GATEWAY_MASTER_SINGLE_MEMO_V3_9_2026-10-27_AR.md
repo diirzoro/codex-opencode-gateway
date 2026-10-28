@@ -552,3 +552,29 @@ SELECT11→7؛ metadata fixture بقيت session1+toolIDs1، وفحص provider �
 - لا تُشغّل الترحيل يدويًا مرتين إذا كان `alembic_version` بالفعل عند الرأس؛ استخدم نفس Gate المعتمدة بدل أوامر Alembic مع متغيرات قاعدة مجهولة. عند خطأ جديد، استخرج النص الحقيقي من Terminal ولا تغيّر الأدوار بالتخمين.
 
 **حالة إغلاق السجل:** إصلاح ملكية `github_connections` و`github_auth_states` مؤكد بالمخرجات؛ `REFERENCES` ونجاح `0028` ونشر آخر تحديث **مؤكدة بإفادة المالك فقط** لحين استرجاع سجلات التحقق. لا دليل جديد هنا على نجاح OAuth/Disconnect/Reconnect متعدد الحسابات.
+
+## 18. GitHub Callback — إصلاح Origin وتحقق النشر، 28 أكتوبر 2026
+
+**النطاق GitHub فقط؛ لا Workflow/Native/Preview/LIVE/master أو تغييرات إعدادات/منافذ/قواعد بيانات.** فُحص الرأس `38b0f506853b9d0e0cd05225fc6f819b56b621d1` قبل التعديل، وتبين أن إضافته توثيق تشغيل PostgreSQL فقط. سجل المالك في القسم17 محفوظ كما هو.
+
+### 18.1 دليل TEST والنشر الفعلي
+
+- أُعيد جلب Actions run `40650390668`: المحاولة الثانية نجحت، job `122696656810`، بتاريخ28أكتوبر 07:51–07:52 UTC. سجلها `TEST_MIGRATION_GATE_PASSED` ثم `FULL_TEST_RELEASE_SUCCESS 7506fb5721d08723954fa03a99ae06b6ad12e31c`. فشل المحاولة الأولى وسجل rollback في القسم17 تاريخيان؛ لا يُعاد وصف المحاولة الأخيرة بالفشل.
+- فُتح TEST فعليًا، ونجح تسجيل الدخول الآمن بحساب `testuser · customer`. Connections أعادت GitHub غير متصل مع زر «ربط GitHub جديد» فقط. الزر وصل إلى منتقي الحساب الرسمي وفيه `Continue as diirzoro` و`Use a different account`. اختيار الثاني أظهر نموذج تسجيل دخول GitHub آخر؛ لم يُربط حساب الأدمن بـtestuser ولم تُمنح صلاحيات جديدة.
+- ظهور اسم GitHub محفوظ يأتي من جلسة github.com؛ لا يثبت توريث اتصال Gateway. لم تُستكمل دورة OAuth/callback/confirmation متعددة الحسابات؛ لا قبول شامل لربط المستودعات أو الإبطال الخارجي من نجاح النشر أو ظهورpicker.
+
+### 18.2 العطل الذي أرسله المالك وإصلاحه
+
+لقطة المالك بعد التفويض تعرض `{"detail":"Cross-site request denied"}`. فحص المصدر وجد صفحةGETcallback تحمل `<meta name="referrer" content="no-referrer">` ثم ترسل formPOST إلى `/api/github/callback/complete`. سياسةno-referrer تجعل Origin=null في navigation-mode POST طبقًا لمعيارFetch ووثائقMDN، فيرفضه browser_boundary بصورة صحيحة. هذه آلية متوافقة مع الخطأ المبلغ، وليست قياسًا لترويسات طلب المالك الخاص؛ لم تُجمع codes/cookies/tokens أو سجلات سرية.
+
+الإصلاح الصغير في `backend/app/routes/github.py`: meta/header للصفحة يستخدمان strict-origin بدلno-referrer؛ يبقىhistory.replaceState قبلPOST. بذلك لا يُدرج OAuthquery فيReferer حتى عند غيابJavaScript، وتبقىOrigin الفعلية للطلب المحلي. Middleware العام يضعheader same-origin؛ meta strict-origin الأضيق تطبق على نموذج الصفحة. لم يُعدَّل middleware ولا استثناءCSRF أوSameSite، ولم تُقبلOrigin:null أو مصادر أجنبية. يبقى state مفرد الاستخدام مربوطًا بـGatewayUser+AuthSession، وOAuthpending لا يمنح مستودعات قبل تأكيد الهوية.
+
+المرجع التقني: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Referrer-Policy#effect_on_the_origin_header .
+
+### 18.3 اختبارات وحدود الإثبات
+
+**66 Backend PASS و16 DOM PASS.** أُضيفت4حالات انحدار في `backend/tests/test_github_reconnect_security.py`: صفحةcallback لا تستخدمno-referrer وتزيلquery قبلsubmit؛ POST محلي صحيح يصل303 إلىgithub=confirm دون اتصال نشط؛ Origin:null ومصدرأجنبيcross-site ومصدرأجنبيsame-origin جميعها403 قبل استدعاءGitHub ودون استهلاكstate. تستخدم الحالات الجديدة middleware الإنتاج الفعلي فيFastAPI+HTTPS fixture معORM/SQLite وvendor mocks؛ ليست متصفحًا خارجيًا أوPostgreSQLTEST. أول تشغيل كشف أنfixture الملكية القديم لا يركبmiddleware؛ أُضيفfixture جديد خاص بالحدود الفعلية وأُعيدت الحالات بنجاح، دون تخفيفأيassertion. تحذيرAnyIOdeprecation قائم. فحصgit diff --check ناجح؛ البداية افتقدتpytest فيPythonالعام فاستخدمتبيئةQAمؤقتة.
+
+الملفان في commit الإصلاح `e5d28b80a48756ceb805e47b212e47fadb997812` على `updates` فقط. لا migration جديدة ولا تغييرات Frontend أو Workflow. لم يُنشر هذا الإصلاح على TEST بواسطة Work؛ النشر المثبت أعلاه `7506` يسبقه. التالي: نشر ملف `routes/github.py` المعتمد عبر إجراء TEST اليدوي مع preimage، ثم اختبار callback من GitHub الفعلي وهوية pending والتأكيد، ثم Disconnect/reconnect بحسابين مخولين. لا تُعلن زوال 403 حيًا قبل ذلك.
+
+**حدود المعرفات:** GitHub userID ثابت من GitHub ولا يتغير عند Disconnect. ما يتجدد هو connectionUUID وOAuth state داخل Gateway. installationID لا نختلقه؛ قد تصدر GitHub غيره بعد uninstall/reinstall الحقيقي المثبت. لا معرفات عشوائية في URL تمسح cookies موقع github.com، ولا نافذة عادية جديدة تعزل الجلسة. لا يمس Disconnect ملفات المشاريع أو التعديلات غير المرفوعة؛ سياسة 73 ساعة المستقلة لم تُعدل أو تُختبر في هذه الدفعة.
