@@ -64,6 +64,9 @@ def callback(state: str | None=None, installation_id: int | None=None,
     # Cross-site GitHub navigation omits SameSite=Strict Gateway cookies. A local
     # document submits a same-origin POST, where require_user validates the real
     # current Gateway login. Do not weaken the session cookie to solve redirects.
+    # no-referrer makes navigation-mode form POSTs send Origin: null, which our
+    # CSRF boundary correctly rejects. strict-origin preserves the real origin
+    # without disclosing callback code/state in Referer, including without JS.
     if not state or len(state)>64 or (code and len(code)>1024):
         return RedirectResponse(settings.public_base_url+'/?github=error',303)
     fields={'state':state,'code':code,'installation_id':installation_id,
@@ -71,8 +74,8 @@ def callback(state: str | None=None, installation_id: int | None=None,
     inputs=''.join('<input type="hidden" name="'+k+'" value="'+html.escape(str(v),quote=True)+'">'
                    for k,v in fields.items() if v is not None)
     nonce=secrets.token_urlsafe(20)
-    page='<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>GitHub connection</title></head><body><p>Completing GitHub authorization / استكمال تفويض GitHub</p><form id="complete" method="post" action="/api/github/callback/complete">'+inputs+'<button type="submit">Continue / متابعة</button></form><script nonce="'+nonce+'">history.replaceState(null,\'\',\'/api/github/callback\');document.getElementById(\'complete\').submit();</script></body></html>'
-    return HTMLResponse(page,headers={'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer',
+    page='<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="strict-origin"><title>GitHub connection</title></head><body><p>Completing GitHub authorization / استكمال تفويض GitHub</p><form id="complete" method="post" action="/api/github/callback/complete">'+inputs+'<button type="submit">Continue / متابعة</button></form><script nonce="'+nonce+'">history.replaceState(null,\'\',\'/api/github/callback\');document.getElementById(\'complete\').submit();</script></body></html>'
+    return HTMLResponse(page,headers={'Cache-Control':'private, no-store','Referrer-Policy':'strict-origin',
         'Content-Security-Policy':"default-src 'none'; form-action 'self'; frame-ancestors 'none'; script-src 'nonce-"+nonce+"'",'X-Frame-Options':'DENY'})
 
 

@@ -276,3 +276,55 @@ def test_concurrent_identity_claim_rolls_back_before_state_deletion(flow,monkeyp
     response=f.request('/api/github/confirm',method='POST',body={'connection_id':item['connection_id'],'github_user_id':101,'installation_id':901})
     assert response.status_code==409
     with Session(f.engine) as db:assert not list(db.scalars(select(models.GithubConnection)))
+
+
+@pytest.fixture
+def browser_flow(flow):
+    # Existing flow fixture tests router/ORM ownership. These regressions must
+    # additionally exercise the real production CSRF middleware over HTTPS.
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from backend.app.main import browser_boundary
+    app = FastAPI()
+    app.middleware('http')(browser_boundary)
+    app.include_router(routes.router)
+    app.dependency_overrides.update(flow.client.app.dependency_overrides)
+    with TestClient(app, base_url=flow.config.public_base_url) as client:
+        yield NS(**{**vars(flow), 'client': client})
+
+
+def test_callback_bridge_preserves_origin_without_referring_oauth_query(browser_flow):
+    # HTML form navigation under no-referrer sends Origin:null in browsers.
+    # Keep a real Origin and origin-only Referer; never exempt this route from CSRF.
+    f = browser_flow
+    state = f.start()
+    page = f.client.get('/api/github/callback', params={'state': state, 'code': 'A'})
+    assert '<meta name="referrer" content="strict-origin">' in page.text
+    assert 'no-referrer' not in page.text
+    assert page.text.index('history.replaceState') < page.text.index("document.getElementById('complete').submit()")
+    response = f.client.post('/api/github/callback/complete',
+        data={'state': state, 'code': 'A'}, follow_redirects=False,
+        headers={'Cookie': f.config.session_cookie_name + '=fixture-token-' + f.owners[0].name,
+                 'Origin': f.config.public_base_url, 'Referer': f.config.public_base_url + '/',
+                 'Sec-Fetch-Site': 'same-origin'})
+    assert response.status_code == 303
+    assert response.headers['location'].endswith('github=confirm')
+    assert f.pending()['github_user_id'] == 101
+    assert not f.request('/api/github/status').json()['connected']
+
+
+@pytest.mark.parametrize('origin,site', [('null', 'same-origin'),
+    ('https://untrusted.invalid', 'cross-site'), ('https://untrusted.invalid', 'same-origin')])
+def test_callback_bridge_does_not_bypass_cross_site_protection(browser_flow, origin, site):
+    f = browser_flow
+    state = f.start()
+    response = f.client.post('/api/github/callback/complete',
+        data={'state': state, 'code': 'A'}, follow_redirects=False,
+        headers={'Cookie': f.config.session_cookie_name + '=fixture-token-' + f.owners[0].name,
+                 'Origin': origin, 'Sec-Fetch-Site': site})
+    assert response.status_code == 403
+    assert response.json()['detail'] == 'Cross-site request denied'
+    with Session(f.engine) as db:
+        assert not db.get(models.GithubAuthState, state).consumed
+    assert not f.vendor
+    assert f.pending() is None
