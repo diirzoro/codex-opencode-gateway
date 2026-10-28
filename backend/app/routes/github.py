@@ -120,6 +120,22 @@ class PendingBody(BaseModel):
     model_config=ConfigDict(extra='forbid')
     connection_id: uuid.UUID
 
+
+class GithubEmailCode(PendingBody):
+    code: str = Field(pattern=r'^\d{6}$')
+
+
+@router.post('/pending/email/send')
+def send_email_code(body: PendingBody,request: Request,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    return JSONResponse(github.send_connection_code(db,user,request.state.auth_session.id,body.connection_id),
+                        headers={'Cache-Control':'private, no-store'})
+
+
+@router.post('/pending/email/verify')
+def verify_email_code(body: GithubEmailCode,request: Request,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    return JSONResponse(github.verify_connection_code(db,user,request.state.auth_session.id,body.connection_id,body.code),
+                        headers={'Cache-Control':'private, no-store'})
+
 @router.post('/confirm')
 def confirm(body: ConfirmationBody,request: Request,user: User=Depends(require_user),db: Session=Depends(get_db)):
     return JSONResponse(github.confirm_connection(db,user,request.state.auth_session.id,

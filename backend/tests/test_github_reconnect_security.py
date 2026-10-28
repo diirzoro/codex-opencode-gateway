@@ -1,5 +1,6 @@
 """Real Gateway HTTP/ORM flow, synthetic GitHub responses; never live credentials."""
 import os,uuid,json,logging,io
+from dataclasses import replace
 os.environ.setdefault('DATABASE_URL','postgresql+psycopg://test:test@127.0.0.1/test')
 from datetime import datetime,timedelta,timezone
 from types import SimpleNamespace as NS
@@ -29,12 +30,16 @@ def flow(boundary,monkeypatch):
     monkeypatch.setattr(github.credentials,'decrypt',lambda text:text.removeprefix('encrypted:'))
     monkeypatch.setattr(github,'_jwt',lambda *a:'synthetic-app-jwt')
     monkeypatch.setattr(github,'exchange_code',lambda code,**kw:{'access_token':'token-'+code})
+    monkeypatch.setattr(github.credentials,'settings',replace(github.credentials.settings,credentials_encryption_key='synthetic-github-email-hmac'))
+    sent=[]
+    monkeypatch.setattr(github,'_send_ownership_code',lambda email,code,db:sent.append({'email':email,'code':code}))
     revoked=[];vendor=[]
     monkeypatch.setattr(github,'revoke_token',lambda token,cfg,**kwargs:revoked.append(token) or 'verified')
     def api(method,path,token=None,jwt_token=None,**kw):
         vendor.append((method,path,token))
         idx=102 if token=='token-B' else 101
         if path=='/user':return {'id':idx,'login':'github-'+str(idx)}
+        if path=='/user/emails':return [{'email':'github'+str(idx)+'@example.com','primary':True,'verified':True}]
         if path=='/user/installations':return {'installations':[{'id':idx+800,'app_id':42,'account':{'id':idx,'login':'github-'+str(idx),'type':'User'}}]}
         if path.startswith('/app/installations/'):
             number=int(path.rsplit('/',1)[1]);return {'app_id':42,'account':{'id':number-800,'login':'github-'+str(number-800),'type':'User'}}
@@ -52,6 +57,17 @@ def flow(boundary,monkeypatch):
     def pending(owner=owners[0]):return request('/api/github/status',owner).json()['pending']
     def confirm(owner=owners[0]):
         item=pending(owner);assert item
+        # Existing ownership fixtures use controlled synthetic inboxes. Exercise
+        # the real send/verify endpoints; dedicated proof tests do not use this
+        # convenience and separately assert cooldown, takeover and wrong codes.
+        with Session(engine) as db:
+            for audit in db.scalars(select(models.AccountAudit).where(models.AccountAudit.action.like('github.mail.sent:%'))):
+                audit.created_at=datetime.now(timezone.utc)-timedelta(seconds=61)
+            db.commit()
+        mailed=request('/api/github/pending/email/send',owner,'POST',{'connection_id':item['connection_id']})
+        if mailed.status_code!=200:return mailed
+        verified=request('/api/github/pending/email/verify',owner,'POST',{'connection_id':item['connection_id'],'code':sent[-1]['code']})
+        assert verified.status_code==200,verified.text
         return request('/api/github/confirm',owner,'POST',{'connection_id':item['connection_id'],
              'github_user_id':item['github_user_id'],'installation_id':item['installations'][0]['id']})
     return NS(**locals())
@@ -268,6 +284,8 @@ def test_concurrent_identity_claim_rolls_back_before_state_deletion(flow,monkeyp
     from sqlalchemy.exc import IntegrityError
     from sqlalchemy.sql.dml import Delete
     f=flow;f.callback(f.start());item=f.pending()
+    assert f.request('/api/github/pending/email/send',method='POST',body={'connection_id':item['connection_id']}).status_code==200
+    assert f.request('/api/github/pending/email/verify',method='POST',body={'connection_id':item['connection_id'],'code':f.sent[-1]['code']}).status_code==200
     original=Session.execute
     def execute(self,statement,*args,**kw):
         if isinstance(statement,Delete) and statement.table.name=='github_auth_states':

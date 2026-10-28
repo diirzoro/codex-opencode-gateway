@@ -125,7 +125,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
   const label=textElement('label');label.append(accepted,document.createTextNode(tr('I confirm @','أؤكد اختيار @')+item.github_login));
   const feedback=textElement('p');feedback.setAttribute('role','status');
   const confirm=textElement('button',tr('Confirm connection','تأكيد الربط'),'button');confirm.type='button';confirm.disabled=true;
-  const update=()=>{confirm.disabled=!accepted.checked||!select.value;};select.onchange=update;accepted.onchange=update;
+  let emailVerified=item.email_verification?.verified===true;
+  const update=()=>{confirm.disabled=!accepted.checked||!select.value||!emailVerified;};select.onchange=update;accepted.onchange=update;
   confirm.onclick=async()=>{
     if(confirm.disabled||currentUser?.id!==owner)return;
     confirm.disabled=true;
@@ -135,7 +136,29 @@ window.renderGithubConfirmation=function(root,status,refresh){
   };
   const cancel=textElement('button',tr('Cancel / choose another account','إلغاء / اختيار حساب آخر'),'button ghost');cancel.type='button';
   cancel.onclick=async()=>{if(currentUser?.id!==owner)return;cancel.disabled=true;try{await api('/api/github/disconnect',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id===owner)await refresh();}catch(error){feedback.textContent=error.message;cancel.disabled=false;}};
-  if(item.installations.length)box.append(select,label,confirm);
+  if(item.installations.length){
+    const proof=textElement('section','','github-email-proof');
+    proof.append(textElement('p',tr('Confirm ownership with a code sent to the verified primary email on this GitHub account. This is separate from your Gateway email.','أثبت الملكية برمز إلى البريد الأساسي المتحقق لحساب GitHub نفسه، وليس بريد Gateway.')));
+    const send=textElement('button',tr('Send GitHub email code','إرسال رمز بريد GitHub'),'button ghost');send.type='button';
+    const code=document.createElement('input');code.type='text';code.inputMode='numeric';code.autocomplete='one-time-code';code.maxLength=6;code.pattern='[0-9]{6}';code.setAttribute('aria-label',tr('GitHub email verification code','رمز التحقق من بريد GitHub'));code.hidden=emailVerified;
+    const verify=textElement('button',tr('Verify code','تحقق من الرمز'),'button');verify.type='button';verify.hidden=emailVerified;
+    const note=textElement('p',emailVerified?tr('GitHub email verified.','تم التحقق من بريد GitHub.'):item.email_verification?.masked_email||'');note.setAttribute('role','status');
+    send.onclick=async()=>{
+      if(send.disabled||currentUser?.id!==owner)return;send.disabled=true;emailVerified=false;update();
+      try{const result=await api('/api/github/pending/email/send',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id!==owner)return;
+        emailVerified=false;update();code.value='';code.hidden=verify.hidden=false;note.textContent=tr('Code sent to ','أُرسل الرمز إلى ')+result.masked_email;code.focus();
+      }catch(error){note.textContent=error.message;}finally{send.disabled=false;}
+    };
+    verify.onclick=async()=>{
+      if(verify.disabled||currentUser?.id!==owner)return;
+      if(!/^[0-9]{6}$/.test(code.value)){note.textContent=tr('Enter the six-digit code.','أدخل الرمز المكوّن من ستة أرقام.');return;}
+      verify.disabled=true;
+      try{const result=await api('/api/github/pending/email/verify',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,code:code.value})});if(currentUser?.id!==owner)return;
+        emailVerified=result.verified===true;update();if(emailVerified){code.value='';code.hidden=verify.hidden=true;send.textContent=tr('Send a fresh code','إرسال رمز جديد');note.textContent=tr('GitHub email verified. Confirm the account below.','تم التحقق من بريد GitHub. أكّد الحساب أدناه.');}
+      }catch(error){note.textContent=error.message;}finally{verify.disabled=false;}
+    };
+    proof.append(send,code,verify,note);box.append(select,proof,label,confirm);
+  }
   else{
     box.append(textElement('p',tr('This account has no authorized installation of this app. Install it on your own repositories first.','لا يوجد تثبيت مصرح لهذا التطبيق على هذا الحساب. ثبّته على مستودعاتك أولًا.')));
     const install=textElement('button',tr('Install on my GitHub account','تثبيت على حسابي في GitHub'),'button');install.type='button';
