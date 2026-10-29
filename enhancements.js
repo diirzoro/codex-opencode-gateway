@@ -161,7 +161,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     const countdown=textElement('p','','github-email-countdown');countdown.setAttribute('role','status');countdown.setAttribute('aria-live','off');
     let expiryTimer=null;
     let expiresAt=Date.parse(item.email_verification?.expires_at||'');
-    const stopCountdown=()=>{if(expiryTimer!==null){clearInterval(expiryTimer);expiryTimer=null;}};
+    const stopCountdown=()=>{if(expiryTimer!==null){document.defaultView?.clearInterval(expiryTimer);expiryTimer=null;}};
     const tickCountdown=()=>{
       if(!proof.isConnected||currentUser?.id!==owner){stopCountdown();return;}
       if(emailVerified||!Number.isFinite(expiresAt)){countdown.textContent='';return;}
@@ -175,8 +175,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
       stopCountdown();
       if(!Number.isFinite(expiresAt)||emailVerified)return;
       tickCountdown();
-      expiryTimer=setInterval(tickCountdown,1000);
-      expiryTimer?.unref?.();
+      expiryTimer=document.defaultView?.setInterval(tickCountdown,1000);
     };
     send.onclick=async()=>{
       if(send.disabled||currentUser?.id!==owner)return;if(!email.reportValidity())return;send.disabled=true;emailVerified=false;update();
@@ -196,7 +195,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
       }catch(error){note.textContent=errorText(error);}finally{verify.disabled=false;}
     };
     proof.append(emailLabel,send,code,verify,countdown,note);box.append(proof);
-    if(item.email_verification?.sent&&!emailVerified&&Number.isFinite(expiresAt))startCountdown();
+
     if(item.installations.length)box.append(select,label,confirm);
   }
   if(!item.installations.length){
@@ -208,6 +207,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
     };box.append(install);
   }
   box.append(cancel,feedback);root.append(box);
+  // Mount first: initial pending GitHub OTP can be restored after a refresh.
+  if(item.email_verification?.sent&&!emailVerified&&Number.isFinite(expiresAt))startCountdown();
 };
 (function () {
   function applyGithubCard(status) {
