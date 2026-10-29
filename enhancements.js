@@ -158,21 +158,45 @@ window.renderGithubConfirmation=function(root,status,refresh){
     const code=document.createElement('input');code.type='text';code.inputMode='numeric';code.autocomplete='one-time-code';code.maxLength=6;code.pattern='[0-9]{6}';code.setAttribute('aria-label',tr('GitHub email verification code','رمز التحقق من بريد GitHub'));code.hidden=emailVerified;
     const verify=textElement('button',tr('Verify code','تحقق من الرمز'),'button');verify.type='button';verify.hidden=emailVerified;
     const note=textElement('p',emailVerified?tr('GitHub email verified.','تم التحقق من بريد GitHub.'):'');note.setAttribute('role','status');
+    const countdown=textElement('p','','github-email-countdown');countdown.setAttribute('role','status');countdown.setAttribute('aria-live','off');
+    let expiryTimer=null;
+    let expiresAt=Date.parse(item.email_verification?.expires_at||'');
+    const stopCountdown=()=>{if(expiryTimer!==null){clearInterval(expiryTimer);expiryTimer=null;}};
+    const tickCountdown=()=>{
+      if(!proof.isConnected||currentUser?.id!==owner){stopCountdown();return;}
+      if(emailVerified||!Number.isFinite(expiresAt)){countdown.textContent='';return;}
+      const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));
+      countdown.textContent=seconds
+        ?tr('Verification code expires in '+seconds+'s.','تنتهي صلاحية رمز GitHub بعد '+seconds+' ثانية.')
+        :tr('Code expired. Request a new code.','انتهت صلاحية رمز GitHub؛ اطلب رمزًا جديدًا.');
+      verify.disabled=seconds===0;send.disabled=seconds>0;
+    };
+    const startCountdown=()=>{
+      stopCountdown();
+      if(!Number.isFinite(expiresAt)||emailVerified)return;
+      tickCountdown();
+      expiryTimer=setInterval(tickCountdown,1000);
+      expiryTimer?.unref?.();
+    };
     send.onclick=async()=>{
       if(send.disabled||currentUser?.id!==owner)return;if(!email.reportValidity())return;send.disabled=true;emailVerified=false;update();
       try{const result=await api('/api/github/pending/email/send',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,email:email.value.trim()})});if(currentUser?.id!==owner)return;
-        emailVerified=false;update();code.value='';code.hidden=verify.hidden=false;note.textContent=tr('Email matched. Verification code sent.','تمت مطابقة البريد وإرسال رمز التحقق.');code.focus();
-      }catch(error){note.textContent=errorText(error);}finally{send.disabled=false;}
+        if(result.sent!==true||!Number.isFinite(Date.parse(result.expires_at)))throw Error(tr('Verification expiry was not confirmed. Try again.','لم يتم تأكيد وقت انتهاء الرمز؛ أعد المحاولة.'));
+        expiresAt=Date.parse(result.expires_at);
+        emailVerified=false;update();code.value='';code.hidden=verify.hidden=false;note.textContent=tr('Email matched. Verification code sent.','تمت مطابقة البريد وإرسال رمز التحقق.');startCountdown();code.focus();
+      }catch(error){note.textContent=errorText(error);}finally{send.disabled=Number.isFinite(expiresAt)&&!emailVerified&&Date.now()<expiresAt;}
     };
     verify.onclick=async()=>{
       if(verify.disabled||currentUser?.id!==owner)return;
       if(!/^[0-9]{6}$/.test(code.value)){note.textContent=tr('Enter the six-digit code.','أدخل الرمز المكوّن من ستة أرقام.');return;}
+      if(!emailVerified&&Number.isFinite(expiresAt)&&expiresAt<=Date.now()){note.textContent=tr('Code expired; request a new one.','انتهت صلاحية الرمز؛ اطلب رمزًا جديدًا.');tickCountdown();return;}
       verify.disabled=true;
       try{const result=await api('/api/github/pending/email/verify',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,code:code.value})});if(currentUser?.id!==owner)return;
-        emailVerified=result.verified===true;update();if(emailVerified){email.value='';code.value='';code.hidden=verify.hidden=true;send.textContent=tr('Send a fresh code','إرسال رمز جديد');note.textContent=tr('GitHub email verified. Confirm the account below.','تم التحقق من بريد GitHub. أكّد الحساب أدناه.');}
+        emailVerified=result.verified===true;update();if(emailVerified){stopCountdown();countdown.textContent='';email.value='';code.value='';code.hidden=verify.hidden=true;send.textContent=tr('Send a fresh code','إرسال رمز جديد');note.textContent=tr('GitHub email verified. Confirm the account below.','تم التحقق من بريد GitHub. أكّد الحساب أدناه.');}
       }catch(error){note.textContent=errorText(error);}finally{verify.disabled=false;}
     };
-    proof.append(emailLabel,send,code,verify,note);box.append(proof);
+    proof.append(emailLabel,send,code,verify,countdown,note);box.append(proof);
+    if(item.email_verification?.sent&&!emailVerified&&Number.isFinite(expiresAt))startCountdown();
     if(item.installations.length)box.append(select,label,confirm);
   }
   if(!item.installations.length){
