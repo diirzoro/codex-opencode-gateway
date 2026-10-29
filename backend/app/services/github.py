@@ -374,6 +374,21 @@ def _verified_primary_email(token,identity_id):
     raise HTTPException(409,'Verify a deliverable primary email on GitHub before connecting')
 
 
+def _require_gateway_email_matches_github(user, github_primary_email):
+    """An OAuth GitHub ID is necessary but no longer sufficient to link.
+
+    The authenticated Gateway account email must match the independently
+    GitHub-verified primary mailbox. Do not expose that mailbox on mismatch.
+    """
+    gateway_email=str(getattr(user,'email','') or '').strip().casefold()
+    github_email=str(github_primary_email or '').strip().casefold()
+    if (not gateway_email or not github_email or
+        not hmac.compare_digest(gateway_email.encode('utf-8'),github_email.encode('utf-8'))):
+        raise HTTPException(403,
+            'This Gateway account email is not the verified primary email of the authorized GitHub account. '
+            'Use the matching GitHub account or verify and update your Gateway email before linking.')
+
+
 def _email_code_hash(connection_id,nonce,code):
     # Reuse the existing keyed OTP digest, with a separate domain. Do not put
     # GitHub challenges in registration EmailVerification rows or verify accounts.
@@ -426,6 +441,7 @@ def send_connection_code(db,user,auth_session_id,connection_id,submitted_email):
     db.add(AccountAudit(subject_id=user.id,action=action))
     try:
         email=_verified_primary_email(payload['token'],payload['identity']['id'])
+        _require_gateway_email_matches_github(user,email)
         if not hmac.compare_digest(email.casefold().encode(),submitted_email.strip().casefold().encode()):
             raise HTTPException(400,'GitHub email could not be verified. Check the primary email on the selected GitHub account.')
         nonce=secrets.token_urlsafe(16);code=f'{secrets.randbelow(1000000):06d}'
@@ -439,7 +455,7 @@ def send_connection_code(db,user,auth_session_id,connection_id,submitted_email):
     except HTTPException as exc:
         if 'proof' in locals():proof.pop('digest',None)
         record.pending_payload=credentials.encrypt(json.dumps(payload));db.commit()
-        if exc.status_code==400:raise
+        if exc.status_code in {400,403}:raise
         # Do not return provider email details or distinguish guessed addresses.
         raise HTTPException(503,'GitHub email verification is unavailable. Check App email permission and mail delivery.') from None
     proof['sent']=True
@@ -514,6 +530,7 @@ def confirm_connection(db,user,auth_session_id,connection_id,github_user_id,inst
     if not proof.get('email_matched') or not proof.get('verified') or _aware(datetime.fromisoformat(proof['expires_at']))<=datetime.now(timezone.utc):
         raise HTTPException(403,'Verify the code sent to this GitHub account email before confirming')
     email=_verified_primary_email(payload['token'],github_user_id)
+    _require_gateway_email_matches_github(user,email)
     email_hmac=_primary_email_hmac(github_user_id,email)
     if not hmac.compare_digest(email_hmac,proof.get('email_hmac','')):
         raise HTTPException(409,'GitHub primary email changed; request a fresh verification code')
