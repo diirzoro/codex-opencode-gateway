@@ -443,7 +443,7 @@ def send_connection_code(db,user,auth_session_id,connection_id,submitted_email):
         email=_verified_primary_email(payload['token'],payload['identity']['id'])
         _require_gateway_email_matches_github(user,email)
         if not hmac.compare_digest(email.casefold().encode(),submitted_email.strip().casefold().encode()):
-            raise HTTPException(400,'GitHub email could not be verified. Check the primary email on the selected GitHub account.')
+            raise HTTPException(403,'GitHub email authorization denied: the entered address does not match the verified primary email for the selected GitHub account. No verification email was sent.')
         nonce=secrets.token_urlsafe(16);code=f'{secrets.randbelow(1000000):06d}'
         expires=min(_aware(record.expires_at),now+EMAIL_PROOF_TTL)
         proof={'nonce':nonce,'digest':_email_code_hash(connection_id,nonce,code),
