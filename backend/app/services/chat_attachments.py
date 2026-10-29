@@ -12,6 +12,7 @@ import stat
 import time
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from fastapi import HTTPException
 from sqlalchemy import select
 from ..config import settings
@@ -21,6 +22,37 @@ from . import workspaces
 DIRECTORY = '__gateway_chat_attachments'
 TTL = 24 * 3600
 MAX_BYTES = 20 * 1024 * 1024
+# Admission is metadata-only. OpenCode Native owns content interpretation.
+# Do not resurrect Python's old attachment_reader/extraction engine here.
+TEXT_SUFFIXES = frozenset({
+    '.txt','.md','.markdown','.csv','.tsv','.json','.jsonl','.yaml','.yml',
+    '.xml','.html','.htm','.css','.js','.mjs','.cjs','.ts','.tsx','.jsx',
+    '.py','.sql','.log','.ini','.toml','.rst','.sh','.php','.go','.rs',
+    '.java','.c','.h','.cpp','.svg'
+})
+MEDIA_TYPES = {'.pdf':'application/pdf','.png':'image/png',
+               '.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif',
+               '.webp':'image/webp'}
+SUPPORTED_LABEL = 'PDF, PNG, JPG, GIF, WebP or plain-text/code files; DOCX, ZIP, video and other binary formats are not supported by this Native attachment flow'
+
+
+def native_mime(name, declared):
+    """Validate filename/MIME metadata; file bytes are read by Native, not Python."""
+    suffix=Path(name).suffix.lower()
+    if suffix in TEXT_SUFFIXES:
+        if declared and declared not in {'application/octet-stream','text/plain'} and not declared.startswith('text/') and declared not in {
+            'application/json','application/xml','application/javascript','application/x-javascript',
+            'application/typescript','application/x-typescript','application/x-yaml',
+            'application/yaml','application/sql','image/svg+xml'}:
+            raise HTTPException(415, 'File type does not match its text extension; '+SUPPORTED_LABEL)
+        return 'text/plain'
+    if suffix in MEDIA_TYPES:
+        expected=MEDIA_TYPES[suffix]
+        if declared not in ('',expected,'application/octet-stream') and not (suffix in {'.jpg','.jpeg'} and declared=='image/jpg'):
+            raise HTTPException(415, 'File type does not match its extension; '+SUPPORTED_LABEL)
+        return expected
+    raise HTTPException(415, 'Unsupported attachment type. '+SUPPORTED_LABEL)
+
 FORWARD_GRACE = 60
 _sweep_cursor = ""
 
@@ -97,7 +129,8 @@ def _create(db,workspace,session_id,name,size,mime):
     if session.workspace_id != workspace.id: raise HTTPException(404, 'Conversation is outside this Workspace')
     if not name or len(name)>200 or name in {'.','..','upload.part'} or any(c in name for c in '/\\\x00\r\n') or workspaces.protected_component(name):
         raise HTTPException(422, 'A safe attachment filename is required')
-    if not 0 < size <= MAX_BYTES: raise HTTPException(413, 'Attachment exceeds the 20 MB limit')
+    if not 0 < size <= MAX_BYTES: raise HTTPException(413, 'Attachment exceeds the 20 MiB Native transport limit')
+    mime = native_mime(name, mime)
     # One authoritative quota scan suffices; the size-aware comparison below
     # already rejects both full workspaces and the incoming attachment.
     used_bytes = workspaces.usage_bytes(workspace)
@@ -178,6 +211,47 @@ async def upload(workspace, identifier, request):
             if owns_transfer and value and value['state']=='uploading':
                 _remove(workspace,value);value['state']='failed';_save(path,value)
         raise
+
+
+def pending(workspace):
+    """Expose only owner/workspace-scoped temporary slot metadata, never file data."""
+    with _guard(workspace) as area:
+        result=[]
+        for path in sorted(area.glob('*.json')):
+            if path.is_symlink():continue
+            try:
+                value=json.loads(path.read_text())
+                if value.get('id')!=path.stem or value.get('state') not in {'uploading','ready','processing'}:continue
+                result.append({**public(value),'session_id':value['session_id']})
+            except (ValueError,KeyError,TypeError):continue
+            if len(result)>=200:break
+        return result
+
+
+def clear_pending(workspace):
+    """Explicit account-owner action. Never delete Native-leased/processing files."""
+    removed=[];processing=0;preserved=0
+    with _guard(workspace) as area:
+        for path in sorted(area.glob('*.json')):
+            if path.is_symlink():preserved+=1;continue
+            try:
+                value=json.loads(path.read_text())
+                if not isinstance(value,dict) or value.get('id')!=path.stem:
+                    preserved+=1;continue
+                uuid.UUID(value['id'])
+                if value.get('state')=='processing':
+                    processing+=1;continue
+                if value.get('state') not in {'uploading','ready','cancelled','failed','removed'}:
+                    preserved+=1;continue
+                _remove(workspace,value)
+                if _directory(workspace,value).exists():
+                    preserved+=1;continue  # Unknown entries: never forget manifest.
+                removed.append(value['id'])
+                path.unlink()
+            except (ValueError,KeyError,TypeError,OSError,HTTPException):
+                preserved+=1
+        return {'removed':len(removed),'removed_ids':removed,
+                'skipped_processing':processing,'preserved_for_review':preserved}
 
 
 def cancel(workspace,identifier):
