@@ -63,7 +63,7 @@ def forgot(data:Forgot,db:Session=Depends(get_db)):
     count=db.scalar(select(func.count()).select_from(PasswordReset).where(PasswordReset.user_id==user.id,PasswordReset.created_at>now()-timedelta(hours=1)))
     if count>=3: return message
     token=secrets.token_urlsafe(32)
-    record=PasswordReset(user_id=user.id,token_hash=hash_session_token(token),expires_at=now()+timedelta(minutes=30))
+    record=PasswordReset(user_id=user.id,token_hash=hash_session_token(token),expires_at=now()+timedelta(seconds=60))
     db.add(record); db.commit()
     try: recovery.send_reset(user.email,token,db)
     except HTTPException:
@@ -83,7 +83,7 @@ def recovery_record(db,token,*,lock=False):
         # This also matches archival/password completion's account lock order.
         db.scalar(select(User).where(User.id==record.user_id).with_for_update().execution_options(populate_existing=True))
         record=db.scalar(query.with_for_update().execution_options(populate_existing=True))
-    if not record or record.used or aware(record.expires_at)<=now(): raise HTTPException(400,'Recovery link is invalid or expired')
+    if not record or record.used or aware(record.expires_at)<=now() or (record.created_at is not None and now()-aware(record.created_at)>=timedelta(seconds=60)): raise HTTPException(400,'Recovery link is invalid or expired')
     return record
 
 @router.post('/auth/recovery-status')
