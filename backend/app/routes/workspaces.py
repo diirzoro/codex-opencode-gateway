@@ -641,7 +641,7 @@ class TemporaryAttachment(BaseModel):
     model_config=ConfigDict(extra='forbid')
     session_id: uuid.UUID
     name: str=Field(min_length=1,max_length=200)
-    size: int=Field(gt=0,le=20*1024*1024)
+    size: int=Field(gt=0)
     mime: str=Field(default='application/octet-stream',max_length=120)
 
 @router.post('/workspaces/{workspace_id}/attachments',status_code=201)
