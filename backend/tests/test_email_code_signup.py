@@ -205,6 +205,33 @@ def test_password_reset_email_link_expires_in_one_minute(signup):
     assert 'within 1 minute' in messages[-1].get_content()
 
 
+
+def test_expired_drafts_clean_without_creating_or_deleting_users(signup,monkeypatch):
+    from sqlalchemy.orm import sessionmaker
+    from backend.app import database
+    f,messages=signup
+    data=register(f).json()
+    with Session(f[2]) as db:
+        row=pending(db,data['verification_challenge'])
+        row.expires_at=datetime.now(timezone.utc)-timedelta(seconds=1)
+        db.commit()
+    monkeypatch.setattr(database,'SessionLocal',sessionmaker(bind=f[2]))
+    registration_drafts.sweep()
+    with Session(f[2]) as db:
+        assert pending(db,data['verification_challenge']) is None
+        assert db.scalar(select(models.User).where(models.User.email=='owned-fixture@example.org')) is None
+
+
+def test_verification_disabled_cannot_bypass_proof_on_password_signup(signup,monkeypatch):
+    f,messages=signup
+    monkeypatch.setattr(email_verification,'required_for_registration',lambda db=None:False)
+    result=register(f)
+    assert result.status_code==201,result.text
+    assert result.json()['status']=='pending_verification'
+    with Session(f[2]) as db:
+        assert db.scalar(select(models.User).where(models.User.email=='owned-fixture@example.org')) is None
+
+
 def test_0025_migration_preserves_old_link_rows(signup):
     f,_=signup
     with f[2].begin() as conn:
