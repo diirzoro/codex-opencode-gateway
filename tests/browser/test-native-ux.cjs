@@ -150,6 +150,49 @@ async function main(){
   f.state.history.push({info:{id:messageID,role:'user'},parts:[{type:'text',text:'synthetic'}]});
   const result=await f.w.nativeSession.recover(f.id);assert(!result.blocked);assert.equal(f.state.calls.filter(c=>c.path.endsWith('/prompt_async')).length,1);assert.equal(f.w.localStorage.getItem('draft-fixture'),draft);f.close();
  });
+ await test('Gateway pre-forward 408/502/503/504 rejections preserve drafts without a false receipt lock',async()=>{
+  for(const status of [408,502,503,504]){
+   const f=fixture();await f.ready();const original=f.c.api;
+   f.w.localStorage.setItem('draft-fixture','saved synthetic draft');
+   f.c.api=async(path,options)=>{if(path.endsWith('/prompt_async')){f.state.calls.push({path,options});throw Object.assign(Error('Native authorization metadata is unavailable'),{status,nativeNotForwarded:true});}return original(path,options);};
+   await assert.rejects(f.w.nativeSession.send(f.id,{text:'synthetic',providerID:'p',modelID:'m'}),e=>e.message.includes('before sending')&&e.message.includes(String(status)));
+   assert(!f.w.nativeSession.blocked(f.id));assert.equal(f.state.calls.filter(c=>c.path.endsWith('/message')).length,1);
+   assert.equal(f.state.calls.filter(c=>c.path.endsWith('/prompt_async')).length,1);
+   assert.equal(f.w.localStorage.getItem('draft-fixture'),'saved synthetic draft');f.close();
+  }
+ });
+ await test('An unmarked upstream 502 remains uncertain and cannot automatically resend',async()=>{
+  const f=fixture();await f.ready();const original=f.c.api;
+  f.c.api=async(path,options)=>{if(path.endsWith('/prompt_async')){f.state.calls.push({path,options});throw Object.assign(Error('upstream failed'),{status:502});}return original(path,options);};
+  await assert.rejects(f.w.nativeSession.send(f.id,{text:'saved',providerID:'p',modelID:'m'}),/receipt.*HTTP 502/);
+  assert(f.w.nativeSession.blocked(f.id));await assert.rejects(f.w.nativeSession.send(f.id,{text:'saved',providerID:'p',modelID:'m'}),/Recover/);
+  assert.equal(f.state.calls.filter(c=>c.path.endsWith('/prompt_async')).length,1);f.close();
+ });
+ await test('Receipt reconciliation reads after an older snapshot rather than trusting it',async()=>{
+  const f=fixture();await f.w.nativeSession.ready();const original=f.c.api;let finish,reads=0;
+  f.c.api=async(path,options)=>{if(path.endsWith('/message')&&++reads===1){f.state.calls.push({path,options});return new Promise(resolve=>finish=resolve);}
+   if(path.endsWith('/prompt_async')){f.state.calls.push({path,options});const messageID=JSON.parse(options.body).messageID;f.state.history.push({info:{id:messageID,role:'user'},parts:[{type:'text',text:'synthetic'}]});throw Error('lost acknowledgement');}return original(path,options);};
+  const older=f.load();await sleep(1);const sending=f.w.nativeSession.send(f.id,{text:'synthetic',providerID:'p',modelID:'m'});await sleep(1);
+  finish([]);await older;await sending;
+  assert.equal(reads,2);assert(!f.w.nativeSession.blocked(f.id));assert.equal(f.state.calls.filter(c=>c.path.endsWith('/prompt_async')).length,1);f.close();
+ });
+ await test('Recover drains old in-flight history and then verifies the current Native receipt',async()=>{
+  const f=fixture();await f.w.nativeSession.ready();const messageID='msg_synthetic';
+  f.w.sessionStorage.setItem('og-native-uncertain:owner-a:'+f.id,JSON.stringify({messageID,text:'synthetic'}));
+  const original=f.c.api;let finish,reads=0;
+  f.c.api=async(path,options)=>{if(path.endsWith('/message')&&++reads===1)return new Promise(resolve=>finish=resolve);return original(path,options);};
+  const older=f.load();await sleep(1);const recovery=f.w.nativeSession.recover(f.id);await sleep(1);
+  f.state.history.push({info:{id:messageID,role:'user'},parts:[]});finish([]);await older;
+  const result=await recovery;assert(!result.blocked);assert.equal(reads,2);
+  assert.equal(f.state.calls.filter(c=>c.path.endsWith('/prompt_async')).length,0);f.close();
+ });
+ await test('Account switching while a recovery waits cannot start a read for the old conversation',async()=>{
+  const f=fixture();await f.w.nativeSession.ready();const original=f.c.api;let finish,reads=0;
+  f.c.api=async(path,options)=>{if(path.endsWith('/message')){reads++;return new Promise(resolve=>finish=resolve);}return original(path,options);};
+  const older=f.load().catch(e=>e);await sleep(1);const recovery=f.w.nativeSession.recover(f.id).catch(e=>e);await sleep(1);
+  f.c.currentUser={id:'owner-b'};finish([]);await older;const error=await recovery;
+  assert.match(error.message,/account changed/i);assert.equal(reads,1);f.close();
+ });
  await test('Unconfirmed recovery requires explicit release and successful idle history/status reads, without sending',async()=>{
   const f=fixture();await f.ready();await assert.rejects(f.w.nativeSession.send(f.id,{text:'synthetic',providerID:'p',modelID:'m'}));
   assert((await f.w.nativeSession.recover(f.id)).blocked);assert(f.w.nativeSession.blocked(f.id));
@@ -193,6 +236,19 @@ async function main(){
   await assert.rejects(f.w.nativeSession.send(f.id,{text:'saved',providerID:'p',modelID:'m'}));
   f.c.api=async(path,options)=>{if(path.endsWith('/abort')){aborts++;return true;}if(path.endsWith('/session/status'))return {ses_a:{type:'busy'}};return original(path,options);};
   await assert.rejects(f.w.nativeSession.forceStop(f.id),/did not confirm/);assert.equal(aborts,3);assert(f.w.nativeSession.blocked(f.id));f.close();
+ });
+ await test('Model replacement recognizes Native idle sessions omitted from the status map',async()=>{
+  for(const initiallyBusy of [false,true]){
+   const f=fixture();f.state.history[0].info.model={providerID:'p',modelID:'old'};await f.ready();const original=f.c.api;let reads=0,aborts=0;
+   f.c.api=async(path,options)=>{if(path.endsWith('/session/status'))return initiallyBusy&&++reads===1?{ses_a:{type:'busy'}}:{};if(path.endsWith('/abort')){aborts++;return true;}return original(path,options);};
+   const result=await f.w.nativeSession.replaceRunningModel(f.id,'p','new');assert.equal(result.interrupted,initiallyBusy);assert.equal(aborts,initiallyBusy?1:0);assert.equal(f.state.calls.filter(c=>c.path.endsWith('/prompt_async')).length,0);f.close();
+  }
+ });
+ await test('Malformed replacement status never permits another submission',async()=>{
+  const f=fixture();f.state.history[0].info.model={providerID:'p',modelID:'old'};await f.ready();const original=f.c.api;
+  f.c.api=async(path,options)=>path.endsWith('/session/status')?[]:original(path,options);
+  await assert.rejects(f.w.nativeSession.replaceRunningModel(f.id,'p','new'),/status is unavailable/);
+  assert.equal(f.state.calls.filter(c=>c.path.endsWith('/abort')||c.path.endsWith('/prompt_async')).length,0);f.close();
  });
  await test('Long assistant folding keeps full rich content and toggles without a fetch',async()=>{
   const f=fixture();vm.runInContext(app.slice(app.indexOf('function foldLongAssistantMessage('),app.indexOf('async function refreshMessages(')),f.c);

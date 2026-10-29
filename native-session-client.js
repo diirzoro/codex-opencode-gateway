@@ -120,6 +120,14 @@
       catch(error){if(!previous&&epoch===generation)histories.delete(id);throw error;}finally{state.journal=null;}
     });
   }
+  async function freshHistory(id){
+    // A snapshot already in flight may predate the failed submission. Joining
+    // it is not a receipt check. Drain it, then read once; never resend a prompt.
+    const generation=epoch,user=owner(),pending=pendingReads.get('history:'+id);
+    if(pending){try{await pending;}catch{} }
+    if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');
+    return history(id,true);
+  }
   async function requests(kind,id){if(!id)return [];const row=await context(id),data=await coalesce('requests:'+kind+':'+row.workspace_id,()=>native(row.workspace_id,kind));if(!Array.isArray(data))throw Error('Invalid native request list');return data.filter(x=>x.sessionID===row.runtime_id).map(x=>kind==='question'?{...x,questions:x.questions.map(q=>({...q,custom:q.custom!==false}))}:x);}
   function relativeFile(value,row){
     if(typeof value!=='string'||!value||value.length>1000||/[\x00-\x1f\x7f\\]/.test(value)||!row?.file_base)return null;
@@ -303,9 +311,9 @@
       // Resolve the exact Native message ID against authoritative history
       // before reporting uncertainty. Never send the prompt a second time.
       let confirmed=Boolean(pending.accepted);
-      if(!confirmed&&owner()===user&&epoch===sendEpoch){
+      if(!confirmed&&!error.nativeNotForwarded&&owner()===user&&epoch===sendEpoch){
         try{
-          const messages=await history(id,true);
+          const messages=await freshHistory(id);
           confirmed=Boolean(pending.accepted)||messages.some(message=>message.info?.id===messageID);
         }catch(_historyError){
           // Keep the original transport error and uncertain receipt.
@@ -314,8 +322,11 @@
       if(epoch!==sendEpoch||owner()!==user)throw Error('Authenticated account changed');
       if((sendGenerations.get(id)||0)!==sendGeneration)throw Error(label('Submission interrupted by Stop. Review history before sending again.','قوطع الطلب بالإيقاف. راجع السجل قبل الإرسال مجددًا.'));
       if(!confirmed){
-        if(owner()===user&&(!error.status||error.status===408||error.status>=500))
-          error.message=label('OpenCode receipt could not be confirmed. Your draft is saved; check session status.','تعذر تأكيد استلام OpenCode للطلب. المسودة محفوظة؛ تحقق من حالة الجلسة.');
+        if(error.nativeNotForwarded){
+          uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
+          error.message=label('Gateway rejected the request before sending it to OpenCode. Draft preserved.','رفض Gateway الطلب قبل إرساله إلى OpenCode. المسودة محفوظة.')+' (HTTP '+error.status+') '+error.message;
+        }else if(owner()===user&&(!error.status||error.status===408||error.status>=500))
+          error.message=label('OpenCode receipt could not be confirmed. Your draft is saved; check session status.','تعذر تأكيد استلام OpenCode للطلب. المسودة محفوظة؛ تحقق من حالة الجلسة.')+(error.status?' (HTTP '+error.status+')':'');
         else if(owner()===user){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}
         throw error;
       }
@@ -337,11 +348,13 @@
     if(!previous||previous.providerID===providerID&&previous.modelID===modelID)
       throw Error(label('The running model has not changed; wait for this turn or stop it.','لم يتغير النموذج الجاري؛ انتظر انتهاء هذا الرد أو أوقفه.'));
     const live=await native(row.workspace_id,'session/status');
-    if(live[row.runtime_id]?.type==='idle')return {interrupted:false,previous};
+    if(!live||typeof live!=='object'||Array.isArray(live))throw Error('Native session status is unavailable');
+    if((live[row.runtime_id]?.type||'idle')==='idle')return {interrupted:false,previous};
     await sessionRequest(id,'abort',{});
     // Confirm native completion before allowing the replacement prompt.
     const check=await native(row.workspace_id,'session/status');
-    if(check[row.runtime_id]?.type!=='idle')throw Error(label('OpenCode is still stopping. Retry after it becomes idle.','OpenCode ما زال يوقف التنفيذ؛ أعد المحاولة بعد توقفه.'));
+    if(!check||typeof check!=='object'||Array.isArray(check))throw Error('Native session status is unavailable');
+    if((check[row.runtime_id]?.type||'idle')!=='idle')throw Error(label('OpenCode is still stopping. Retry after it becomes idle.','OpenCode ما زال يوقف التنفيذ؛ أعد المحاولة بعد توقفه.'));
     statuses.set(id,'idle');
     return {interrupted:true,previous};
   }
@@ -387,7 +400,7 @@
   async function recover(id,{release=false}={}){
     const user=owner(),generation=epoch;
     const result=await coalesce('recover:'+id,async()=>{
-      const row=await context(id);await history(id,true);
+      const row=await context(id);await freshHistory(id);
       await synchronizeStatus(row,id,()=>owner()===user&&epoch===generation);
       if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
       return {blocked:blocked(id),status:statuses.get(id)||'idle'};

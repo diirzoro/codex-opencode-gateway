@@ -60,7 +60,8 @@ const api=async(path,options={})=>{
  if(revision!==authenticationRevision)throw new Error('Authenticated session changed');
  if(!response.ok){
   if(response.status===401&&!options.allowAnonymous&&currentUser)clearAuthenticatedState();
-  const error=new Error(Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):(body.detail||(path.startsWith('/native-session/')?'OpenCode HTTP '+response.status:'Request failed')));error.status=response.status;throw error;
+  const error=new Error(Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):(body.detail||(path.startsWith('/native-session/')?'OpenCode HTTP '+response.status:'Request failed')));error.status=response.status;
+  error.nativeNotForwarded=path.startsWith('/native-session/')&&response.headers.get('X-Native-Request-Outcome')==='not-forwarded';throw error;
  }
  invalidateProviderMutation(path,options.method);return body;
 };

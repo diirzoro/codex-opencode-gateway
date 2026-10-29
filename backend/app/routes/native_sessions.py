@@ -228,16 +228,23 @@ def visibility(session_id:uuid.UUID,action:str,request:Request,user:User=Depends
 
 @router.api_route('/native-session/{workspace_id}/{resource:path}',methods=['GET','POST'])
 async def transport(workspace_id:uuid.UUID,resource:str,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
-    admit(user)
-    raw=bytearray()
-    if request.method=='POST':
-        async for chunk in request.stream():
-            raw.extend(chunk)
-            if len(raw)>2*1024*1024:raise HTTPException(413,'Native request is too large')
-    response=await run_in_threadpool(authorize_native,workspace_id,resource,request,user,db,bytes(raw))
-    if request.method=='POST' and await request.is_disconnected():
-        raise HTTPException(408,'Native request cancelled before forwarding')
-    return response
+    try:
+        admit(user)
+        raw=bytearray()
+        if request.method=='POST':
+            async for chunk in request.stream():
+                raw.extend(chunk)
+                if len(raw)>2*1024*1024:raise HTTPException(413,'Native request is too large')
+        response=await run_in_threadpool(authorize_native,workspace_id,resource,request,user,db,bytes(raw))
+        if request.method=='POST' and await request.is_disconnected():
+            raise HTTPException(408,'Native request cancelled before forwarding')
+        return response
+    except HTTPException as error:
+        # No X-Accel response has been returned to Nginx yet. Unlike an
+        # upstream timeout, this rejection proves the prompt was not sent.
+        # Preserve the real status/detail and never mark forwarded responses.
+        error.headers={**(error.headers or {}),'X-Native-Request-Outcome':'not-forwarded'}
+        raise
 
 def authorize_native(workspace_id,resource,request,user,db,raw):
     # Reuse an HTTP connection only within this authorization, never cache a

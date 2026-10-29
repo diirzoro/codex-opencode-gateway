@@ -749,7 +749,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       if(activeSession?.id!==id||currentUser?.id!==owner)return;
       await refreshMessages();await window.refreshWorkspaceQuestions?.();await refreshPermissions();
       submissionStatus.textContent=result.blocked?tr('Receipt still uncertain. Draft preserved; no prompt resent.','الاستلام ما زال غير مؤكد. المسودة محفوظة ولم يُعد إرسال الطلب.'):tr('Conversation recovered. Review history; no prompt was resent.','استُعيدت المحادثة. راجع السجل؛ لم يُعد إرسال أي طلب.');
-    }finally{recoverConversation.disabled=false;updateSend();}
+    }catch(error){if(activeSession?.id===id&&currentUser?.id===owner){submissionStatus.textContent=error.message;toast(error.message);}}
+    finally{recoverConversation.disabled=false;updateSend();}
   });
   // Exceptional receipt-reconciliation action, not a full-width conversation control.
   const forceStopConversation=btn('forceStopNativeConversation','Stop and recover','إيقاف واستعادة',async()=>{
@@ -1791,7 +1792,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
         const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type}));
         await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});sentAttachments({attachments:nativeFiles});draft.confirm();
-        submissionStatus.textContent=tr('Accepted by native OpenCode','قبله OpenCode الأصلي');await refreshSessionStatus();await refreshMessages();
+        submissionStatus.textContent=tr('Accepted by native OpenCode','قبله OpenCode الأصلي');
+        try{await refreshSessionStatus();await refreshMessages();}
+        catch{if(currentUser?.id===owner&&activeWorkspace?.id===workspaceId)submissionStatus.textContent=tr('Accepted by OpenCode. Reconnecting to restore live updates; do not resend.','قبله OpenCode. جارٍ استعادة التحديثات؛ لا تُعد الإرسال.');}
       }catch(error){toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
     }
     if(activeSession&&(['submitted','waiting_approval'].includes(activeSession.execution_status)||queueCount)){

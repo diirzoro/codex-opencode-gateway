@@ -121,6 +121,27 @@ def test_cancelled_browser_cannot_forward_an_authorized_write(monkeypatch):
  monkeypatch.setattr(native,'run_in_threadpool',authorize)
  with pytest.raises(HTTPException) as error:asyncio.run(native.transport(uuid.uuid4(),'session/ses_fixture/abort',request,NS(id='synthetic'),None))
  assert error.value.status_code==408
+ assert error.value.headers['X-Native-Request-Outcome']=='not-forwarded'
+
+
+@pytest.mark.parametrize('status',[403,408,413,502,503,504])
+def test_transport_refusal_is_explicitly_not_forwarded(boundary,monkeypatch,status):
+ client,(owner,_),_,_,config=boundary
+ def refuse(*args):raise HTTPException(status,'Synthetic authorization failure',headers={'Retry-After':'2'})
+ monkeypatch.setattr(native,'authorize_native',refuse)
+ response=authenticated(client,f'/native-session/{owner.workspace}/session/ses_a/prompt_async',owner,config,'POST',{'parts':[{'type':'text','text':'synthetic'}]})
+ assert response.status_code==status
+ assert response.headers['x-native-request-outcome']=='not-forwarded'
+ assert response.headers['retry-after']=='2'
+ assert response.json()['detail']=='Synthetic authorization failure'
+ assert 'x-accel-redirect' not in response.headers
+
+
+def test_successful_native_forward_has_no_rejection_marker(boundary):
+ client,(owner,_),_,_,config=boundary
+ response=authenticated(client,f'/native-session/{owner.workspace}/session/ses_a/message',owner,config)
+ assert response.status_code==200 and response.headers['x-accel-redirect']=='@native_session_test'
+ assert 'x-native-request-outcome' not in response.headers
 
 
 def test_catalog_initialization_and_7_14_schedule_do_not_download(monkeypatch,tmp_path):
