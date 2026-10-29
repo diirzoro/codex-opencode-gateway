@@ -42,6 +42,17 @@ def test_verification_accepts_valid_tokens_and_rejects_expired(offset, expected)
         assert exc.value.status_code == 400
 
 
+def test_legacy_email_link_cannot_exceed_one_minute_even_with_old_expiry():
+    now=datetime.now(timezone.utc)
+    row=SimpleNamespace(user_id="test-user-id",used_at=None,
+                        created_at=now-timedelta(seconds=61),
+                        expires_at=now+timedelta(hours=12))
+    db=Mock();db.scalar.return_value=row
+    with pytest.raises(HTTPException) as exc:
+        email_verification.verify(db,"a"*43)
+    assert exc.value.status_code==400
+
+
 def test_used_token_is_rejected():
     db = Mock()
     db.scalar.return_value = SimpleNamespace(
