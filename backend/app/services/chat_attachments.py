@@ -21,39 +21,10 @@ from . import workspaces
 
 DIRECTORY = '__gateway_chat_attachments'
 TTL = 24 * 3600
-MAX_BYTES = 20 * 1024 * 1024
-# Admission is metadata-only. OpenCode Native owns content interpretation.
-# Do not resurrect Python's old attachment_reader/extraction engine here.
-TEXT_SUFFIXES = frozenset({
-    '.txt','.md','.markdown','.csv','.tsv','.json','.jsonl','.yaml','.yml',
-    '.xml','.html','.htm','.css','.js','.mjs','.cjs','.ts','.tsx','.jsx',
-    '.py','.sql','.log','.ini','.toml','.rst','.sh','.php','.go','.rs',
-    '.java','.c','.h','.cpp','.svg'
-})
-MEDIA_TYPES = {'.pdf':'application/pdf','.png':'image/png',
-               '.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif',
-               '.webp':'image/webp'}
-SUPPORTED_LABEL = 'PDF, PNG, JPG, GIF, WebP or plain-text/code files; DOCX, ZIP, video and other binary formats are not supported by this Native attachment flow'
-
-
-def native_mime(name, declared):
-    """Validate filename/MIME metadata; file bytes are read by Native, not Python."""
-    suffix=Path(name).suffix.lower()
-    if suffix in TEXT_SUFFIXES:
-        if declared and declared not in {'application/octet-stream','text/plain'} and not declared.startswith('text/') and declared not in {
-            'application/json','application/xml','application/javascript','application/x-javascript',
-            'application/typescript','application/x-typescript','application/x-yaml',
-            'application/yaml','application/sql','image/svg+xml'}:
-            raise HTTPException(415, 'File type does not match its text extension; '+SUPPORTED_LABEL)
-        return 'text/plain'
-    if suffix in MEDIA_TYPES:
-        expected=MEDIA_TYPES[suffix]
-        if declared not in ('',expected,'application/octet-stream') and not (suffix in {'.jpg','.jpeg'} and declared=='image/jpg'):
-            raise HTTPException(415, 'File type does not match its extension; '+SUPPORTED_LABEL)
-        return expected
-    raise HTTPException(415, 'Unsupported attachment type. '+SUPPORTED_LABEL)
-
-FORWARD_GRACE = 60
+# OpenCode Native alone decides whether a file's format/model is readable.
+# Gateway only authorizes ownership, safely stores temporary transport bytes,
+# and applies the existing workspace disk quota. Do not invent a MIME allowlist.
+FORWARD_GRACE = 10
 _sweep_cursor = ""
 
 
@@ -129,8 +100,9 @@ def _create(db,workspace,session_id,name,size,mime):
     if session.workspace_id != workspace.id: raise HTTPException(404, 'Conversation is outside this Workspace')
     if not name or len(name)>200 or name in {'.','..','upload.part'} or any(c in name for c in '/\\\x00\r\n') or workspaces.protected_component(name):
         raise HTTPException(422, 'A safe attachment filename is required')
-    if not 0 < size <= MAX_BYTES: raise HTTPException(413, 'Attachment exceeds the 20 MiB Native transport limit')
-    mime = native_mime(name, mime)
+    if size<=0: raise HTTPException(422,'Attachment must not be empty')
+    # Neither file format nor per-file model limits are decided here; Native
+    # and the chosen provider report actual support after secure transport.
     # One authoritative quota scan suffices; the size-aware comparison below
     # already rejects both full workspaces and the incoming attachment.
     used_bytes = workspaces.usage_bytes(workspace)
@@ -183,12 +155,12 @@ async def upload(workspace, identifier, request):
             if value['state'] != 'uploading' or value['started']: raise HTTPException(409, 'Upload cannot be restarted')
             value['started'] = True; _save(path,value);owns_transfer=True
             fd = os.open(_directory(workspace,value)/'upload.part', os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
-        async with asyncio.timeout(120):
+        async with asyncio.timeout(900):
             async for chunk in request.stream():
                 with locked(workspace,identifier) as (value,path):
                     if value['state'] != 'uploading': raise HTTPException(409, 'Upload cancelled')
                     total += len(chunk)
-                    if total > min(MAX_BYTES,value['size']): raise HTTPException(413, 'Attachment size exceeded')
+                    if total > value['size']: raise HTTPException(413, 'Transfer exceeded the reserved upload size')
                     # A chunk write may be partial; preserve all bytes.
                     view=memoryview(chunk)
                     while view:
