@@ -320,10 +320,32 @@ def _assert_identity_available(db,user,identity_id,installations):
         resolved=[]
         for row in legacy:
             try:
-                owner=_api('GET','/user',token=credentials.decrypt(row.user_token),timeout=4) if row.user_token else {}
+                # A revoked/expired legacy user token must not block every new
+                # customer's connection if this App can verify the original
+                # personal installation's immutable GitHub owner ID.
+                owner={}
+                if row.user_token and (not row.token_expires_at or _aware(row.token_expires_at)>datetime.now(timezone.utc)):
+                    try: owner=_api('GET','/user',token=credentials.decrypt(row.user_token),timeout=4) or {}
+                    except HTTPException: pass
                 actual=owner.get('id')
+                if type(actual) is not int or actual<=0:
+                    if row.account_type!='User' or not row.installation_id:
+                        raise ValueError('Unverifiable legacy installation')
+                    cfg=github_app_config.effective(settings,db)
+                    if row.app_id and row.app_id!=cfg.github_app_id:
+                        raise ValueError('Legacy installation App mismatch')
+                    installation=_api('GET',f'/app/installations/{row.installation_id}',jwt_token=_jwt(cfg),timeout=4) or {}
+                    account=installation.get('account') or {}
+                    if (installation.get('app_id')!=cfg.github_app_id or
+                        installation.get('id')!=row.installation_id or
+                        account.get('type')!='User' or installation.get('target_type')!='User'):
+                        raise ValueError('Unverifiable personal installation')
+                    actual=account.get('id')
+                    owner=account
                 if type(actual) is not int or actual<=0 or actual in claimed:raise ValueError('Legacy identity conflict')
             except Exception:
+                # Organizational/unknown ownership stays blocked until a
+                # verified recovery; never guess from a login or legacy email.
                 raise HTTPException(503,'Existing GitHub connection ownership requires verified recovery before new connections') from None
             claimed.add(actual);resolved.append((row,actual,owner.get('login')))
         for row,actual,login in resolved:row.github_user_id=actual;row.github_user_login=login
