@@ -12,6 +12,7 @@ branch_labels=depends_on=None
 def upgrade():
     op.create_table('pending_registrations',
         sa.Column('id',sa.Uuid(),primary_key=True),
+        sa.Column('email_fingerprint',sa.String(64),nullable=False),
         sa.Column('ticket_hash',sa.String(64),nullable=False),
         sa.Column('payload_ciphertext',sa.Text(),nullable=False),
         sa.Column('code_hash',sa.String(64),nullable=False),
@@ -21,6 +22,7 @@ def upgrade():
         sa.Column('attempts',sa.Integer(),nullable=False,server_default='0'),
         sa.Column('sends',sa.Integer(),nullable=False,server_default='1'),
         sa.Column('created_at',sa.DateTime(timezone=True),nullable=False,server_default=sa.func.now()))
+    op.create_index('ix_pending_registrations_email_fingerprint','pending_registrations',['email_fingerprint'])
     op.create_index('ix_pending_registrations_expires_at','pending_registrations',['expires_at'])
 
 def downgrade():
