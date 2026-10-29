@@ -148,6 +148,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
   };
   const cancel=textElement('button',tr('Cancel / choose another account','إلغاء / اختيار حساب آخر'),'button ghost');cancel.type='button';
   cancel.onclick=async()=>{if(currentUser?.id!==owner)return;cancel.disabled=true;try{await api('/api/github/disconnect',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id===owner)await refresh();}catch(error){feedback.textContent=errorText(error);cancel.disabled=false;}};
+  let activateCodeCountdown=()=>{};
   {
     const proof=textElement('section','','github-email-proof');
     proof.append(textElement('h4',tr('Verify GitHub account ownership','التحقق من ملكية حساب GitHub')),
@@ -195,7 +196,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
       }catch(error){note.textContent=errorText(error);}finally{verify.disabled=false;}
     };
     proof.append(emailLabel,send,code,verify,countdown,note);box.append(proof);
-
+    activateCodeCountdown=()=>{if(item.email_verification?.sent&&!emailVerified&&Number.isFinite(expiresAt))startCountdown();};
     if(item.installations.length)box.append(select,label,confirm);
   }
   if(!item.installations.length){
@@ -208,7 +209,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
   }
   box.append(cancel,feedback);root.append(box);
   // Mount first: initial pending GitHub OTP can be restored after a refresh.
-  if(item.email_verification?.sent&&!emailVerified&&Number.isFinite(expiresAt))startCountdown();
+  activateCodeCountdown();
 };
 (function () {
   function applyGithubCard(status) {
