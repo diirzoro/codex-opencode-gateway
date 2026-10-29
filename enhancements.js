@@ -159,7 +159,17 @@ window.renderGithubConfirmation=function(root,status,refresh){
     const send=textElement('button',tr('Verify email and send code','التحقق من البريد وإرسال الرمز'),'button ghost');send.type='button';
     const code=document.createElement('input');code.type='text';code.inputMode='numeric';code.autocomplete='one-time-code';code.maxLength=6;code.pattern='[0-9]{6}';code.setAttribute('aria-label',tr('GitHub email verification code','رمز التحقق من بريد GitHub'));code.hidden=emailVerified;
     const verify=textElement('button',tr('Verify code','تحقق من الرمز'),'button');verify.type='button';verify.hidden=emailVerified;
-    const note=textElement('p',emailVerified?tr('GitHub email verified.','تم التحقق من بريد GitHub.'):'');note.setAttribute('role','status');
+    const note=textElement('p',emailVerified?tr('GitHub email verified.','تم التحقق من بريد GitHub.'):'');note.setAttribute('role','alert');
+    note.setAttribute('aria-live','assertive');note.setAttribute('tabindex','-1');
+    note.classList.add('github-email-verification-feedback');
+    note.style.cssText='display:block;min-height:1.5em;padding:8px 10px;margin:6px 0;border-radius:7px;white-space:pre-wrap;overflow-wrap:anywhere;';
+    const setProofFeedback=(message,isError=false)=>{
+      note.textContent=message;
+      note.style.color=isError?'#a52323':'';
+      note.style.background=isError?'#fff1f1':'';
+      note.style.border=isError?'1px solid #d66':'1px solid transparent';
+      if(isError){note.hidden=false;note.focus();note.scrollIntoView?.({block:'nearest',behavior:'smooth'});}
+    };
     const countdown=textElement('p','','github-email-countdown');countdown.setAttribute('role','status');countdown.setAttribute('aria-live','off');
     let expiryTimer=null;
     let expiresAt=Date.parse(item.email_verification?.expires_at||'');
@@ -185,18 +195,18 @@ window.renderGithubConfirmation=function(root,status,refresh){
         if(result.sent!==true||!Number.isFinite(Date.parse(result.expires_at)))throw Error(tr('Verification expiry was not confirmed. Try again.','لم يتم تأكيد وقت انتهاء الرمز؛ أعد المحاولة.'));
         expiresAt=Date.parse(result.expires_at);
         emailVerified=false;update();code.value='';code.hidden=verify.hidden=false;note.textContent=tr('Email matched. Verification code sent.','تمت مطابقة البريد وإرسال رمز التحقق.');startCountdown();code.focus();
-      }catch(error){note.textContent=errorText(error);}finally{send.disabled=Number.isFinite(expiresAt)&&!emailVerified&&Date.now()<expiresAt;}
+      }catch(error){setProofFeedback(errorText(error),true);}finally{send.disabled=Number.isFinite(expiresAt)&&!emailVerified&&Date.now()<expiresAt;}
     };
     verify.onclick=async()=>{
       if(verify.disabled||currentUser?.id!==owner)return;
-      if(!/^[0-9]{6}$/.test(code.value)){note.textContent=tr('Enter the six-digit code.','أدخل الرمز المكوّن من ستة أرقام.');return;}
+      if(!/^[0-9]{6}$/.test(code.value)){setProofFeedback(tr('Enter the six-digit code.','أدخل الرمز المكوّن من ستة أرقام.'),true);return;}
       if(!emailVerified&&Number.isFinite(expiresAt)&&expiresAt<=Date.now()){note.textContent=tr('Code expired; request a new one.','انتهت صلاحية الرمز؛ اطلب رمزًا جديدًا.');tickCountdown();return;}
       verify.disabled=true;
       try{const result=await api('/api/github/pending/email/verify',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,code:code.value})});if(currentUser?.id!==owner)return;
         emailVerified=result.verified===true;update();if(emailVerified){stopCountdown();countdown.textContent='';email.value='';code.value='';code.hidden=verify.hidden=true;send.textContent=tr('Send a fresh code','إرسال رمز جديد');note.textContent=tr('GitHub email verified. Confirm the account below.','تم التحقق من بريد GitHub. أكّد الحساب أدناه.');}
-      }catch(error){note.textContent=errorText(error);}finally{verify.disabled=false;}
+      }catch(error){setProofFeedback(errorText(error),true);}finally{verify.disabled=false;}
     };
-    proof.append(emailLabel,send,code,verify,countdown,note);box.append(proof);
+    proof.append(note,emailLabel,send,code,verify,countdown);box.append(proof);
     activateCodeCountdown=()=>{if(item.email_verification?.sent&&!emailVerified&&Number.isFinite(expiresAt))startCountdown();};
     if(item.installations.length)box.append(select,label,confirm);
   }
