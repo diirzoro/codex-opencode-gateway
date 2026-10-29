@@ -121,6 +121,25 @@ def test_new_registration_code_and_expired_legacy_code_have_one_minute_limit(sig
         'challenge_id':str(challenge),'code':code(messages)}).status_code==400
 
 
+def test_password_reset_email_link_expires_in_one_minute(signup):
+    f,messages=signup
+    registered=register(f)
+    assert registered.status_code==201,registered.text
+    data=registered.json()
+    assert f[0].post('/api/auth/verify-email-code',json={
+        'challenge_id':data['verification_challenge'],
+        'code':code(messages)}).status_code==200
+    response=f[0].post('/api/auth/forgot-password',json={
+        'email':'owned-fixture@example.org'})
+    assert response.status_code==202,response.text
+    with Session(f[2]) as db:
+        record=db.scalar(select(models.PasswordReset).where(
+            models.PasswordReset.user_id==uuid.UUID(data['id'])))
+        assert record is not None
+        assert 0<(record.expires_at-record.created_at).total_seconds()<=61
+    assert 'within 1 minute' in messages[-1].get_content()
+
+
 def test_hourly_code_limit_and_challenge_binding(signup):
     f,messages=signup;first=register(f).json();first_code=code(messages)
     second=register(f,'qa_second','other-fixture@example.org').json()
