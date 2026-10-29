@@ -59,6 +59,40 @@ def test_after_disconnect_other_gateway_user_needs_independent_github_email_proo
     assert 'github-101/repo' in f.request('/api/github/repositories',b).text
 
 
+def test_same_submitted_github_email_does_not_prove_second_oauth_identity(flow):
+    """Typing a GitHub email is not authorization to a different GitHub ID."""
+    f=flow
+    admin,customer=f.owners
+    f.callback(f.start(admin),admin,'A') # GitHub immutable ID 101
+    f.callback(f.start(customer),customer,'B') # Different GitHub ID 102
+    sent_before=len(f.sent)
+    attempt=send(f,customer,'github101@example.com')
+    assert attempt.status_code==400,attempt.text
+    assert len(f.sent)==sent_before
+    assert raw_confirm(f,customer).status_code==403
+    # If customer instead enters the PRIMARY VERIFIED email of their OWN
+    # OAuth identity, that is a separate link and should require its own OTP.
+    age_rate(f)
+    assert send(f,customer,'github102@example.com').status_code==200
+    assert verify(f,customer,f.sent[-1]['code']).status_code==200
+    connected=raw_confirm(f,customer)
+    assert connected.status_code==200,connected.text
+    assert connected.json()['github_login']=='github-102'
+    assert raw_confirm(f,admin).status_code==403
+
+
+def test_same_github_identity_cannot_be_confirmed_by_second_gateway_owner(flow):
+    f=flow
+    admin,customer=f.owners
+    f.callback(f.start(admin),admin,'A')
+    assert f.confirm(admin).status_code==200
+    duplicate=f.callback(f.start(customer),customer,'A')
+    assert duplicate.headers['location'].endswith('account-conflict')
+    assert send(f,customer,'github101@example.com').status_code==409
+    assert raw_confirm(f,customer).status_code==409
+    assert f.request('/api/github/status',admin).json()['connected'] is True
+
+
 def test_logout_preserves_active_owner_and_other_users_cannot_inherit(flow):
     from backend.app.routes import auth
     from backend.app.security.sessions import hash_session_token
