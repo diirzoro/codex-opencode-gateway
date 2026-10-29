@@ -51,6 +51,7 @@ jobs:
           python -m pytest -q \
             backend/tests/test_email_verification_contracts.py \
             backend/tests/test_email_code_signup.py \
+            backend/tests/test_registration_identity_uniqueness.py \
             backend/tests/test_github_email_ownership.py
 
       - name: Test Native authorization and ownership regression boundaries
