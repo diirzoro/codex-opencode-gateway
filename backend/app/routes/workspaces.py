@@ -682,6 +682,26 @@ async def upload_attachment(workspace_id:uuid.UUID,attachment_id:uuid.UUID,reque
     db.commit()
     return await chat_attachments.upload(row,attachment_id,request)
 
+@router.get('/workspaces/{workspace_id}/attachments/pending')
+def pending_chat_attachments(workspace_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from ..services import chat_attachments
+    native_sessions.admit(user)
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    return {'items':chat_attachments.pending(row)}
+
+
+@router.post('/workspaces/{workspace_id}/attachments/clear-pending')
+def clear_pending_chat_attachments(workspace_id:uuid.UUID,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from ..services import chat_attachments
+    native_sessions.admit(user)
+    if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):
+        raise HTTPException(403,'Cleanup requires the Gateway origin')
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    # Explicit owned cleanup across conversation drafts, not an OpenCode abort
+    # or a Python chat engine. Native-leased files always remain untouched.
+    return chat_attachments.clear_pending(row)
+
+
 @router.delete('/workspaces/{workspace_id}/attachments/{attachment_id}')
 def cancel_attachment(workspace_id:uuid.UUID,attachment_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
     from ..services import chat_attachments
