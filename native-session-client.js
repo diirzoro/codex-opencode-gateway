@@ -296,17 +296,23 @@
     sendGenerations.set(id,(sendGenerations.get(id)||0)+1);
     submissionsInFlight.get(id)?.abort();
     return coalesce('abort:'+id,async()=>{
-      const row=await context(id);let stopped=false;
-      // Always deliver abort first: a lost prompt receipt/status read must not
-      // prevent cancellation. Repeating abort is bounded and session-scoped.
-      for(let attempt=0;attempt<3;attempt++){
+      const row=await context(id);
+      if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
+      // Abort immediately via the EXISTING OpenCode Native session endpoint.
+      // A file-read/history request must never precede or gate cancellation.
+      await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/abort',{}, {timeout:8000});
+      let stopped=false;
+      // Native abort may acknowledge while a running read/model is winding
+      // down. Poll authoritative Native status; don't invent local idle.
+      for(let attempt=0;attempt<10;attempt++){
         if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
-        await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/abort',{}, {timeout:8000});
         const live=await native(row.workspace_id,'session/status',undefined,{timeout:8000});
         if(!live||typeof live!=='object'||Array.isArray(live))throw Error('Native session status is unavailable');
-        if((live[row.runtime_id]?.type||'idle')==='idle'){stopped=true;break;}
+        const state=live[row.runtime_id];
+        if(state===undefined||state?.type==='idle'){stopped=true;break;}
+        if(attempt!==9)await new Promise(resolve=>setTimeout(resolve,850));
       }
-      if(!stopped)throw Error(label('Native did not confirm cancellation. The draft is saved; this session stays blocked.','لم يؤكد Native إيقاف التنفيذ. المسودة محفوظة وتبقى المحادثة محظورة.'));
+      if(!stopped)throw Error(label('Native has not confirmed Stop yet. Keep your draft and retry Stop or Recover; no history was deleted.','لم يؤكد OpenCode التوقف بعد. احتفظ بالمسودة وحاول الإيقاف أو الاستعادة مجددًا؛ لم يُحذف سجل المحادثة.'));
       if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
       uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
       statuses.set(id,'idle');if(current(id,user))activeSession.execution_status='idle';
@@ -387,31 +393,19 @@
     return Boolean(lastUser?.parts?.some(part=>part.type==='file')&&statuses.get(id)==='submitted');
   }
   async function cancelPendingAttachment(id){
-    const user=owner(),generation=epoch,row=await context(id);
-    const messages=await history(id,true);
-    if(owner()!==user||generation!==epoch)throw Error('Authenticated account changed');
-    let pending=uncertain.get(id);
-    if(!pending){try{pending=JSON.parse(sessionStorage.getItem(storageKey('uncertain',id))||'null');}catch{}}
-    const lastUser=[...messages].reverse().find(m=>m.info?.role==='user');
-    const hasNativeFile=Boolean(lastUser?.parts?.some(part=>part.type==='file'));
-    if(!((pending?.files?.length)||hasNativeFile))
+    const user=owner(),generation=epoch;
+    // The UI only exposes this action for a known attachment operation.
+    // Do NOT query Native history before Stop: a blocked file read can make
+    // that request hang and prevent the abort from ever being sent.
+    if(!pendingAttachment(id))
       throw Error(label('No attachment task in this conversation.','لا توجد مهمة مرفق في هذه المحادثة.'));
-    const live=await native(row.workspace_id,'session/status');
-    const state=live[row.runtime_id]?.type||'idle';
-    // Cancellation always uses the original OpenCode session API, never
-    // deletes uploaded workspace files or erases native history.
-    if(state!=='idle'){
-      if(!hasNativeFile&&!(pending?.files?.length))
-        throw Error(label('The running task is not an attachment request.','المهمة الجارية ليست طلب مرفق.'));
-      await sessionRequest(id,'abort',{});
-      const next=await native(row.workspace_id,'session/status');
-      if((next[row.runtime_id]?.type||'idle')!=='idle')
-        throw Error(label('OpenCode is stopping. Check status again.','OpenCode يوقف المهمة؛ تحقق من حالتها مجددًا.'));
-    }
+    const pending=uncertain.get(id);
+    await forceStop(id);
     if(owner()!==user||generation!==epoch)throw Error('Authenticated account changed');
-    uncertain.delete(id);
-    try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
-    statuses.set(id,'idle');
+    // A confirmed idle Native session can no longer read temporary bytes.
+    // Record a cleanup hint for the EXISTING Gateway attachment reaper; the
+    // server still independently verifies Native idle before removing bytes.
+    if(pending?.files?.length)noteAttachmentDelivery(id,pending);
     if(current(id,user)){activeSession.execution_status='idle';await start();}
     return {cancelled:true};
   }
