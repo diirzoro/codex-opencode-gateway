@@ -77,6 +77,19 @@ jobs:
           set -euo pipefail
           npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund jsdom@26.1.0
           node tests/browser/test-github-email-proof.cjs
+          node tests/browser/test-native-ux.cjs
+
+      - name: Preserve canonical memos and issue history
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s PROJECT_ISSUES_AND_IMPROVEMENT_PLAN.md
+          test -s docs/CANONICAL_NATIVE_FIRST_ARCHITECTURE_AR.md
+          test -s docs/CANONICAL_GITHUB_AND_NATIVE_ATTACHMENTS_AR.md
+          test -s docs/CANONICAL_TEST_SERVER_STATUS_AR.md
+          grep -Fq '## Current Native-First TEST issues' PROJECT_ISSUES_AND_IMPROVEMENT_PLAN.md
+          grep -Fq '### New-user registration sequencing' PROJECT_ISSUES_AND_IMPROVEMENT_PLAN.md
+          grep -Fq '### GitHub OTP countdown, shared-email security' PROJECT_ISSUES_AND_IMPROVEMENT_PLAN.md
 
       - name: Check browser JavaScript syntax
         shell: bash
