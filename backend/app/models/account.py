@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Integer, func, event
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Integer, Text, func, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..database import Base
 
@@ -79,6 +79,22 @@ class EmailVerification(Base):
     verification_method: Mapped[str] = mapped_column(String(8), default="link", server_default="link")
     code_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PendingRegistration(Base):
+    """Unverified signup attempt. NOT a user or an account."""
+    __tablename__ = "pending_registrations"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    ticket_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sends: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
 
 
 @event.listens_for(User,'before_insert')
