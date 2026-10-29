@@ -82,6 +82,48 @@ def test_unknown_tools_shell_and_secrets_stay_denied():
   assert last['action']=='deny'
 
 
+def test_native_policy_patch_uses_confirmed_read_not_stale_patch_response(monkeypatch):
+    from pathlib import Path
+    root=Path('/synthetic-owned-workspace')
+    required=[{'permission':'*','pattern':'*','action':'deny'},
+              {'permission':'read','pattern':'*','action':'ask'}]
+    actual={'id':'ses_owned','directory':str(root),'permission':[]}
+    calls=[]
+    def metadata(method,path,directory,data=None):
+        calls.append((method,path))
+        if method=='PATCH':
+            actual.update(data)
+            return {'id':'ses_owned','directory':str(root),'permission':[]}  # stale ACK
+        return dict(actual)
+    monkeypatch.setattr(native,'metadata',metadata)
+    confirmed=native.confirm_native_session_restrictions('ses_owned',root,required)
+    assert confirmed['permission']==required
+    assert [kind for kind,_ in calls]==['PATCH','GET']
+
+
+@pytest.mark.parametrize('kind',['ignored','foreign','missing'])
+def test_native_policy_rejection_is_fail_closed_even_after_http200_ack(monkeypatch,kind):
+    from pathlib import Path
+    root=Path('/synthetic-owned-workspace')
+    required=[{'permission':'bash','pattern':'*','action':'deny'}]
+    actual={'id':'ses_owned','directory':str(root),'permission':[]}
+    calls=[]
+    def metadata(method,path,directory,data=None):
+        calls.append((method,path))
+        if method=='PATCH':
+            if kind=='foreign':actual['directory']='/other-customer'
+            if kind=='missing':actual['id']='ses_other'
+            # This successful PATCH response is NOT proof of actual persistence.
+            return {'id':'ses_owned','directory':str(root),'permission':required}
+        return dict(actual)
+    monkeypatch.setattr(native,'metadata',metadata)
+    with pytest.raises(HTTPException) as error:
+        native.confirm_native_session_restrictions('ses_owned',root,required)
+    assert error.value.status_code==503
+    assert 'not forwarded' in error.value.detail
+    assert [kind for kind,_ in calls]==['PATCH','GET']
+
+
 def test_metadata_connection_is_reused_only_within_one_authorization(monkeypatch):
  real=httpx.Client;created=[];requests=[]
  def handler(request):
