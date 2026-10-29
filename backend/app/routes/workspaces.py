@@ -350,6 +350,14 @@ def account_oauth_callback(provider_id: str,data: OAuthCallback,
 
 @router.get("/opencode/status")
 def runtime_status(user: User=Depends(require_user)):
+    if native_sessions.enabled():
+        native_sessions.admit(user)
+        try:
+            health=native_sessions.metadata('GET','/global/health',native_provider_accounts.root(user))
+            if not isinstance(health,dict):raise HTTPException(502,'Invalid native health response')
+        except HTTPException:
+            health={'healthy':False,'version':None}
+        return {**health,'runtime_mode':'native-test','public_multi_user_ready':False}
     try: health=opencode.shared_health()
     except HTTPException: health={"healthy":False,"version":None}
     return {**health,"runtime_mode":settings.runtime_mode,"public_multi_user_ready":False}
@@ -703,7 +711,11 @@ def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),pat
     if len(content)>storage['remaining_bytes']: raise HTTPException(413,"Workspace storage limit reached. Remove files before uploading.")
     target=manager.safe_path(row,(folder+"/" if folder else "")+name)
     target.parent.mkdir(parents=True,exist_ok=True)
-    target.write_bytes(content)
+    # Never replace an existing project file via a general upload endpoint.
+    # Conversation attachments use their own owned, single-use temporary slots.
+    try:
+        with target.open('xb') as output: output.write(content)
+    except FileExistsError:raise HTTPException(409,'File already exists; choose a new name or use Native editing') from None
     return {"path":(folder+"/" if folder else "")+name,"size":len(content),"storage":manager.storage_payload(row)}
 
 @router.get("/workspaces/{workspace_id}/storage")
@@ -808,6 +820,14 @@ def _native_provider_lookup(db,user,workspace_id,*,name=None,query=None):
 
 @router.get("/workspaces/{workspace_id}/agents")
 def available_agents(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
+    if native_sessions.enabled():
+        _,root,_,_=native_sessions.context(db,user,workspace_id)
+        rows=native_sessions.metadata('GET','/agent',root)
+        if not isinstance(rows,list):raise HTTPException(502,'Invalid Native agent list')
+        return [{'id':entry['name'],'name':entry['name'],'mode':entry.get('mode')}
+                for entry in rows if isinstance(entry,dict) and isinstance(entry.get('name'),str)
+                and 0<len(entry['name'])<=120 and not entry.get('hidden')
+                and entry.get('mode') in {'primary','all'}]
     row=manager.owned(db,Workspace,workspace_id,user.id)
     return agent_choices(opencode.for_workspace(row,db=db))
 
