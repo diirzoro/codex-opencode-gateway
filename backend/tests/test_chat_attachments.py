@@ -51,6 +51,20 @@ def test_native_transport_accepts_six_megabyte_file_without_python_reading(fixtu
     assert uploads.cancel(f.row,item['id'])['removed']
 
 
+def test_clear_pending_while_bytes_are_transferring_is_clean_cancel(fixture):
+    f=fixture;item=slot(f,'race.txt',100)
+    async def stream():
+        yield b'x'*50
+        result=uploads.clear_pending(f.row)
+        assert item['id'] in result['removed_ids']
+        yield b'x'*50
+    with pytest.raises(HTTPException,match='Upload cancelled') as exc:
+        asyncio.run(uploads.upload(f.row,item['id'],NS(stream=stream)))
+    assert exc.value.status_code==409
+    assert not (f.owners[0].root/item['path']).exists()
+    assert (f.owners[0].root/'marker.txt').is_file()
+
+
 def test_owner_can_remove_stranded_uploads_across_conversations_without_native_abort(fixture):
     f=fixture
     first=slot(f,'first.txt',100)
