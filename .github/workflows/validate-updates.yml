@@ -71,6 +71,13 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Verify GitHub email OTP countdown in shared admin/customer browser UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund jsdom@26.1.0
+          node tests/browser/test-github-email-proof.cjs
+
       - name: Check browser JavaScript syntax
         shell: bash
         run: |
