@@ -100,7 +100,9 @@ def _create(db,workspace,session_id,name,size,mime):
     if not 0 < size <= MAX_BYTES: raise HTTPException(413, 'Attachment exceeds the 20 MB limit')
     # One authoritative quota scan suffices; the size-aware comparison below
     # already rejects both full workspaces and the incoming attachment.
-    if workspaces.usage_bytes(workspace) + size > workspaces.quota_bytes(workspace):
+    used_bytes = workspaces.usage_bytes(workspace)
+    quota_limit = workspaces.quota_bytes(workspace)
+    if used_bytes + size > quota_limit:
         raise HTTPException(413, 'Workspace storage limit reached')
     # Bounded number of live uploads prevents reserving unlimited disk slots.
     area = _area(workspace)
@@ -113,7 +115,7 @@ def _create(db,workspace,session_id,name,size,mime):
         if existing.get('state') not in {'removed','cancelled','failed'}: count+=1
         if existing.get('state')=='uploading': reserved_bytes+=existing['size']
         if count >= 20: raise HTTPException(429, 'Too many pending attachments; cancel or wait for cleanup')
-    if workspaces.usage_bytes(workspace)+reserved_bytes+size>workspaces.quota_bytes(workspace):
+    if used_bytes + reserved_bytes + size > quota_limit:
         raise HTTPException(413,'Workspace storage is reserved by pending uploads')
     reserved=workspaces.safe_path(workspace,DIRECTORY)
     if reserved.exists() and not (area/'managed').is_file():
