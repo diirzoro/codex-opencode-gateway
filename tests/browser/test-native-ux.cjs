@@ -230,12 +230,35 @@ async function main(){
   assert(f.w.nativeSession.blocked(f.id));const result=await f.w.nativeSession.forceStop(f.id);const failure=await sent;
   assert.equal(aborts,1);assert.equal(result.status,'idle');assert.equal(f.c.activeSession.execution_status,'idle');assert(!f.w.nativeSession.blocked(f.id));assert.match(failure.message,/Stop/);f.close();
  });
- await test('A still-busy Native session gets at most three aborts and keeps the uncertain draft block',async()=>{
-  const f=fixture();await f.ready();const original=f.c.api;let aborts=0;
-  f.c.api=async(path,options)=>{if(path.endsWith('/prompt_async'))throw Error('lost receipt');return original(path,options);};
-  await assert.rejects(f.w.nativeSession.send(f.id,{text:'saved',providerID:'p',modelID:'m'}));
-  f.c.api=async(path,options)=>{if(path.endsWith('/abort')){aborts++;return true;}if(path.endsWith('/session/status'))return {ses_a:{type:'busy'}};return original(path,options);};
-  await assert.rejects(f.w.nativeSession.forceStop(f.id),/did not confirm/);assert.equal(aborts,3);assert(f.w.nativeSession.blocked(f.id));f.close();
+ await test('A still-busy Native session receives one abort and retains uncertainty',async()=>{
+   const f=fixture();await f.ready();const original=f.c.api;let aborts=0,reads=0;
+   f.c.api=async(path,options)=>{if(path.endsWith('/prompt_async'))throw Error('lost receipt');return original(path,options);};
+   await assert.rejects(f.w.nativeSession.send(f.id,{text:'saved',providerID:'p',modelID:'m'}));
+   f.c.api=async(path,options)=>{if(path.endsWith('/abort')){aborts++;return true;}if(path.endsWith('/session/status')){reads++;return {ses_a:{type:'busy'}};}return original(path,options);};
+   await assert.rejects(f.w.nativeSession.forceStop(f.id),/not confirmed/);
+   assert.equal(aborts,1);assert.equal(reads,10);assert(f.w.nativeSession.blocked(f.id));f.close();
+ });
+ await test('Cancelling a Native attachment aborts first even if message history is blocked',async()=>{
+   const f=fixture();await f.ready();const old=f.c.api;let aborts=0,historyCalls=0;
+   let sendStarted;const started=new Promise(resolve=>sendStarted=resolve);
+   f.c.api=async(path,options={})=>{
+     if(path.endsWith('/prompt_async')){sendStarted();return new Promise((resolve,reject)=>{
+       options.signal.addEventListener('abort',()=>reject(Error('aborted Native HTTP submission')),{once:true});
+     });}
+     if(path.endsWith('/message')){historyCalls++;return new Promise(()=>{});}
+     if(path.endsWith('/abort')){aborts++;return true;}
+     if(path.endsWith('/session/status'))return {};
+     return old(path,options);
+   };
+   const file={path:'__gateway_chat_attachments/11111111-1111-4111-8111-111111111111/sample.pdf',mime:'application/pdf'};
+   const submission=f.w.nativeSession.send(f.id,{text:'read attachment',providerID:'p',modelID:'m',files:[file]}).catch(e=>e);
+   await started;
+   const result=await f.w.nativeSession.cancelPendingAttachment(f.id);
+   const interrupted=await submission;
+   assert.equal(result.cancelled,true);assert.equal(aborts,1);
+   assert.equal(historyCalls,0,'History must not gate Native abort');
+   assert.equal(f.w.nativeSession.blocked(f.id),false);assert.match(interrupted.message,/Stop/);
+   f.close();
  });
  await test('Model replacement recognizes Native idle sessions omitted from the status map',async()=>{
   for(const initiallyBusy of [false,true]){
