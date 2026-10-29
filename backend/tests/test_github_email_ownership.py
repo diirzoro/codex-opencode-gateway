@@ -33,31 +33,25 @@ def age_rate(f):
         db.commit()
 
 
-def test_after_disconnect_other_gateway_user_needs_independent_github_email_proof(flow,monkeypatch):
+def test_after_disconnect_other_gateway_user_cannot_claim_same_github_without_matching_gateway_email(flow,monkeypatch):
     f=flow;a,b=f.owners
     monkeypatch.setattr(github.secrets,'randbelow',lambda n:123456)
-    f.callback(f.start(a),a);old=f.confirm(a).json()['connection_id']
+    f.callback(f.start(a),a)
+    old=f.confirm(a)
+    assert old.status_code==200,old.text
     assert f.request('/api/github/disconnect',a,'POST').json()['grant_revocation']=='verified'
     age_rate(f)
-    f.callback(f.start(b),b,'A')  # A's remembered browser identity in B's fresh OAuth.
+    f.callback(f.start(b),b,'A')
     assert raw_confirm(f,b).status_code==403
     assert f.request('/api/github/repositories',b).status_code==503
-    assert verify(f,b,'123456').status_code==400  # Previous transaction's code.
-    monkeypatch.setattr(github.secrets,'randbelow',lambda n:654321)
-    mailed=send(f,b);assert mailed.status_code==200,mailed.text
-    assert f.sent[-1]['email']=='github101@example.com'  # NOT Gateway B's address.
-    assert 'github101@example.com' not in mailed.text and '654321' not in mailed.text
-    assert verify(f,b,'123456').status_code==400
+    old_sends=len(f.sent)
+    response=send(f,b,'github101@example.com')
+    assert response.status_code==403,response.text
+    assert 'This Gateway account email is not' in response.json()['detail']
+    assert len(f.sent)==old_sends
     assert raw_confirm(f,b).status_code==403
-    # The explicitly approved transfer policy: independent inbox control + fresh
-    # OAuth + confirmation. No permanent reservation or revoked token reuse.
-    assert verify(f,b,'654321').status_code==200
-    assert verify(f,b,'654321').status_code==400  # Single use.
-    connected=raw_confirm(f,b);assert connected.status_code==200,connected.text
-    assert connected.json()['connection_id']!=old
     assert f.request('/api/github/repositories',a).status_code==503
-    assert 'github-101/repo' in f.request('/api/github/repositories',b).text
-
+    assert (a.root/'marker.txt').exists() and (b.root/'marker.txt').exists()
 
 def test_same_submitted_github_email_does_not_prove_second_oauth_identity(flow):
     """Typing a GitHub email is not authorization to a different GitHub ID."""
@@ -67,7 +61,7 @@ def test_same_submitted_github_email_does_not_prove_second_oauth_identity(flow):
     f.callback(f.start(customer),customer,'B') # Different GitHub ID 102
     sent_before=len(f.sent)
     attempt=send(f,customer,'github101@example.com')
-    assert attempt.status_code==400,attempt.text
+    assert attempt.status_code==403,attempt.text
     assert len(f.sent)==sent_before
     assert raw_confirm(f,customer).status_code==403
     # If customer instead enters the PRIMARY VERIFIED email of their OWN
@@ -149,7 +143,7 @@ def test_email_proof_expires_and_email_change_requires_new_code(flow,monkeypatch
     assert verify(f,a,f.sent[-1]['code']).status_code==200
     original=github._api
     monkeypatch.setattr(github,'_api',lambda method,path,**kw:[{'email':'changed@example.com','primary':True,'verified':True}] if path=='/user/emails' else original(method,path,**kw))
-    assert raw_confirm(f,a).status_code==409
+    assert raw_confirm(f,a).status_code==403
     with Session(f.engine) as db:
         row=db.scalar(select(models.GithubAuthState).where(models.GithubAuthState.pending_payload.is_not(None)))
         payload=json.loads(github.credentials.decrypt(row.pending_payload));payload['email_proof']['expires_at']=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()
