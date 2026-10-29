@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from alembic.operations import Operations
 from alembic.migration import MigrationContext
 import pytest
-from backend.tests.test_email_code_signup import signup
+from backend.tests.test_email_code_signup import signup,code
 from backend.tests.test_admin_mailbox_delivery import mail_acceptance, acceptance, boundary
 from backend.app import models
 from backend.app.security.identities import account_keys
@@ -18,17 +18,21 @@ def register(f,username,email,phone):
 
 
 def test_email_username_and_phone_are_unique_even_with_case_or_format_variants(signup):
-    f,_=signup
+    f,messages=signup
     first=register(f,'unique_user','first-fixture@example.org','+967777123456');assert first.status_code==201,first.text
+    assert first.json()['status']=='pending_verification'
+    confirmed=f[0].post('/api/auth/registration/confirm',json={
+        'challenge_id':first.json()['verification_challenge'],'code':code(messages)})
+    assert confirmed.status_code==200,confirmed.text
     for username,email,phone in [('other_user','FIRST-FIXTURE@example.org','+967777123457'),('UNIQUE_USER','second-fixture@example.org','+967777123458'),('third_user','third-fixture@example.org','00967 777-123-456'),('fourth_user','fourth-fixture@example.org','٧٧٧١٢٣٤٥٦')]:
         response=register(f,username,email,phone);assert response.status_code==409,response.text
     with Session(f[2]) as db:
-        user=db.get(models.User,__import__('uuid').UUID(first.json()['id']))
+        user=db.get(models.User,__import__('uuid').UUID(confirmed.json()['id']))
         assert user.phone=='+967777123456'
         assert user.phone_identity=='+967777123456'
         db.add(models.User(username='UNIQUE_USER',email='other-db-fixture@example.org',phone='+967777123499',password_hash='synthetic',postal_code='+967',trial_started_at=user.trial_started_at,trial_ends_at=user.trial_ends_at))
         with pytest.raises(IntegrityError):db.commit()
-        db.rollback();assert db.scalar(select(models.User).where(models.User.id==user.id)).status=='pending_email'
+        db.rollback();assert db.scalar(select(models.User).where(models.User.id==user.id )).status=='active'
 
 
 def migration():
