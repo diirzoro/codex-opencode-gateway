@@ -95,7 +95,7 @@ def register(data: RegisterRequest, request: Request, response: Response, db: Se
     if verified_social or not verification_required:
         set_session(response, db, user)
     payload=user_payload(user)
-    if challenge:payload.update(verification_challenge=str(challenge),verification_expires_in=600)
+    if challenge:payload.update(verification_challenge=str(challenge),verification_expires_in=60)
     return payload
 
 @router.get("/verify-email")
@@ -138,8 +138,8 @@ def resend_code_for_user(db,user):
     if not email_verification.smtp_ready(db):raise HTTPException(503,'Email verification delivery is unavailable')
     now=datetime.now(timezone.utc)
     recent=db.scalar(select(EmailVerification).where(EmailVerification.user_id==user.id).order_by(EmailVerification.created_at.desc()).limit(1))
-    if recent and recent.created_at and (now-(recent.created_at if recent.created_at.tzinfo else recent.created_at.replace(tzinfo=timezone.utc))).total_seconds()<120:
-        raise HTTPException(429,'Wait two minutes before requesting another verification code')
+    if recent and recent.created_at and (now-(recent.created_at if recent.created_at.tzinfo else recent.created_at.replace(tzinfo=timezone.utc))).total_seconds()<60:
+        raise HTTPException(429,'Wait one minute before requesting another verification code')
     count=db.scalar(select(func.count()).select_from(EmailVerification).where(EmailVerification.user_id==user.id,EmailVerification.created_at>now-timedelta(hours=1)))
     if count>=5:raise HTTPException(429,'Verification code request limit reached; try again later')
     for record in db.scalars(select(EmailVerification).where(EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None))):record.used_at=now
