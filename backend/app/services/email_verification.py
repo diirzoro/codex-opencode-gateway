@@ -14,7 +14,7 @@ from sqlalchemy import select
 from ..models import EmailVerification
 from ..config import settings
 
-TOKEN_TTL = timedelta(hours=24)
+TOKEN_TTL = timedelta(seconds=60)
 
 
 def required_for_registration(db=None) -> bool:
@@ -64,7 +64,7 @@ def send_link(email: str, raw: str, db=None):
     message["From"] = config["smtp_from"]
     message["To"] = email
     url = settings.public_base_url + "/api/auth/verify-email?token=" + quote(raw, safe="")
-    message.set_content("Verify your email address using this link (valid for 24 hours):\n" + url)
+    message.set_content("Verify your email address using this link (valid for 1 minute):\n" + url)
     from .email_delivery import send
     send(config,message,error_status=503,timeout=12)
 
@@ -84,12 +84,12 @@ def verify(db, raw):
         EmailVerification.token_hash == digest).with_for_update())
     now = datetime.now(timezone.utc)
     expires = token.expires_at.replace(tzinfo=timezone.utc) if token and token.expires_at and token.expires_at.tzinfo is None else (token.expires_at if token else None)
-    if token is None or token.used_at is not None or expires is None or expires <= now:
+    if token is None or token.used_at is not None or expires is None or expires <= now or (token.created_at is not None and (now - (token.created_at if token.created_at.tzinfo else token.created_at.replace(tzinfo=timezone.utc))) >= TOKEN_TTL):
         raise HTTPException(400, "Verification link is expired or has already been used")
     return token, now
 
 
-CODE_TTL = timedelta(minutes=10)
+CODE_TTL = timedelta(seconds=60)
 MAX_CODE_ATTEMPTS = 5
 
 
@@ -124,7 +124,7 @@ def send_code(email,code,db):
     config=smtp_settings(db)
     message=EmailMessage();message['From']=config['smtp_from'];message['To']=email
     message['Subject']='OpenCode Gateway · Email verification code'
-    message.set_content('رمز تفعيل حسابك / Your verification code:\n\n'+code+'\n\nصالح لمدة 10 دقائق. لا تشارك الرمز. / Valid for 10 minutes. Do not share this code.')
+    message.set_content('رمز تفعيل حسابك / Your verification code:\n\n'+code+'\n\nصالح لمدة دقيقة واحدة. لا تشارك الرمز. / Valid for 1 minute. Do not share this code.')
     send(config,message,error_status=503,timeout=12)
 
 
@@ -134,7 +134,7 @@ def verify_code(db,challenge,code):
     record=db.scalar(select(EmailVerification).where(EmailVerification.id==challenge).with_for_update().execution_options(populate_existing=True))
     now=datetime.now(timezone.utc)
     expires=record.expires_at.replace(tzinfo=timezone.utc) if record and record.expires_at.tzinfo is None else (record.expires_at if record else None)
-    if not record or record.verification_method!='code' or record.used_at is not None or not expires or expires<=now or record.code_attempts>=MAX_CODE_ATTEMPTS:
+    if not record or record.verification_method!='code' or record.used_at is not None or not expires or expires<=now or record.code_attempts>=MAX_CODE_ATTEMPTS or (record.created_at is not None and (now - (record.created_at if record.created_at.tzinfo else record.created_at.replace(tzinfo=timezone.utc))) >= CODE_TTL):
         raise HTTPException(400,'Verification code is invalid, expired, or no longer available')
     if not hmac.compare_digest(record.token_hash,code_digest(challenge,code)):
         record.code_attempts+=1
