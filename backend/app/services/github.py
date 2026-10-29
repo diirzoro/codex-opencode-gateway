@@ -17,7 +17,7 @@ from . import credentials, github_app_config
 from .entitlements import require_advanced
 
 STATE_TTL_MINUTES = 15
-EMAIL_PROOF_TTL = timedelta(minutes=10)
+EMAIL_PROOF_TTL = timedelta(seconds=60)
 EMAIL_SEND_ACTION = 'github.mail.request:'
 AUTH_AUDIT_PREFIX = 'github.auth.'
 AUTH_AUDIT_RETENTION = timedelta(days=90)
@@ -391,8 +391,8 @@ def _send_ownership_code(email,code,db):
     message['To']=email
     message['Subject']='OpenCode Gateway · Confirm GitHub repository connection'
     message.set_content('رمز تأكيد ربط مستودعات GitHub / GitHub connection code:\n\n'+code+
-        '\n\nصالح لمدة 10 دقائق. لا تشاركه. إذا لم تطلب الربط فتجاهل الرسالة.'
-        '\nValid for 10 minutes. Do not share it. Ignore this email if you did not request this connection.')
+        '\n\nصالح لمدة دقيقة واحدة. لا تشاركه. إذا لم تطلب الربط فتجاهل الرسالة.'
+        '\nValid for 1 minute. Do not share it. Ignore this email if you did not request this connection.')
     send(cfg,message,error_status=503,timeout=12)
 
 
@@ -432,7 +432,7 @@ def send_connection_code(db,user,auth_session_id,connection_id,submitted_email):
         expires=min(_aware(record.expires_at),now+EMAIL_PROOF_TTL)
         proof={'nonce':nonce,'digest':_email_code_hash(connection_id,nonce,code),
             'email_hmac':_primary_email_hmac(payload['identity']['id'],email),
-            'expires_at':expires.isoformat(),'attempts':old.get('attempts',0),
+            'expires_at':expires.isoformat(),'issued_at':now.isoformat(),'attempts':old.get('attempts',0),
             'email_matched':True,'verified':False,'sent':False}
         payload['email_proof']=proof
         _send_ownership_code(email,code,db)
@@ -453,12 +453,16 @@ def verify_connection_code(db,user,auth_session_id,connection_id,code):
     _assert_identity_available(db,user,payload['identity']['id'],payload['installations'])
     proof=payload.get('email_proof') or {}
     if (not proof.get('email_matched') or not proof.get('sent') or proof.get('verified') or not proof.get('digest') or proof.get('attempts',0)>=5
-        or _aware(datetime.fromisoformat(proof['expires_at']))<=datetime.now(timezone.utc)):
+        or _aware(datetime.fromisoformat(proof['expires_at']))<=datetime.now(timezone.utc)
+        or not proof.get('issued_at') or datetime.now(timezone.utc)-_aware(datetime.fromisoformat(proof['issued_at']))>=EMAIL_PROOF_TTL):
         raise HTTPException(400,'GitHub code is expired or unavailable; request a fresh code')
     proof['attempts']=proof.get('attempts',0)+1
     valid=hmac.compare_digest(proof['digest'],_email_code_hash(connection_id,proof['nonce'],code))
     if valid:
         proof['verified']=True;proof.pop('digest',None)
+        # The emailed OTP expires after 60 seconds; successful verification
+        # remains valid for the existing OAuth transaction, not a second OTP.
+        proof['expires_at']=record.expires_at.isoformat()
         _audit_authorization(db,user,payload['identity']['id'],'email_verified')
     record.pending_payload=credentials.encrypt(json.dumps(payload));db.commit()
     if not valid:raise HTTPException(400,'Incorrect GitHub verification code')
