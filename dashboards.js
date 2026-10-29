@@ -709,8 +709,6 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   };
   window.restoreComposerAttachments=files=>{if(sending||pendingSubmission)return;clearAttachments();attachments=(files||[]).slice(0,10).map(file=>({name:file.name,path:file.path,size:file.size,type:file.mime||file.type||tr('File','ملف'),temporary:file.temporary,id:file.id,owner:currentUser?.id,workspaceId:activeWorkspace?.id,state:'ready'}));renderAttachments();};
   const sentAttachments=payload=>{const paths=new Set((payload?.attachments||[]).map(a=>a.path));for(const item of attachments.filter(a=>paths.has(a.path)))releasePreview(item);attachments=attachments.filter(a=>!paths.has(a.path));renderAttachments();};
-  const nativeFileSupported=file=>/\.(?:txt|md|markdown|csv|tsv|json|jsonl|yaml|yml|xml|html|htm|css|js|mjs|cjs|ts|tsx|jsx|py|sql|log|ini|toml|rst|sh|php|go|rs|java|c|h|cpp|svg|pdf|png|jpe?g|gif|webp)$/i.test(file.name);
-  const nativeFileLimit=20*1024*1024;
   async function openAttachPicker(){
     if(!activeWorkspace||window.workspaceSubmissionBlocked?.())return;
     if(window.nativeSession?.active()&&!activeSession)await createSession();
@@ -721,14 +719,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       for(const file of files){
         if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)break;
         const temporary=Boolean(window.nativeSession?.active());
-        if(temporary&&(!file.size||file.size>nativeFileLimit)){
-          toast(tr('Native attachments must be between 1 byte and 20 MiB. File not uploaded.','مرفقات Native يجب أن تكون أكبر من صفر ولا تتجاوز 20 ميجابايت؛ لم يُرفع الملف.'));
-          continue;
-        }
-        if(temporary&&!nativeFileSupported(file)){
-          toast(tr('Unsupported Native attachment. Use PDF, PNG/JPG/GIF/WebP, or plain-text/code files. DOCX/ZIP/video require conversion first.','نوع المرفق غير مدعوم في Native. استخدم PDF أو الصور PNG/JPG/GIF/WebP أو ملفًا نصيًا/برمجيًا. حوّل DOCX وZIP والفيديو قبل إرفاقها.'));
-          continue;
-        }
+        // File capability and size acceptance are decided by the installed OpenCode Native and selected model.
         const item={name:file.name,size:file.size,type:file.type||'application/octet-stream',temporary,owner,workspaceId,state:'uploading',preview:['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)?URL.createObjectURL(file):null};attachments.push(item);renderAttachments();
         const valid=()=>revision===attachmentRevision&&workspaceId===activeWorkspace?.id&&sessionId===activeSession?.id&&owner===currentUser?.id&&!item.cancelled;
         let timer;
@@ -740,7 +731,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
             const slot=await api('/api/workspaces/'+workspaceId+'/attachments',{method:'POST',body:JSON.stringify({session_id:sessionId,name:file.name,size:file.size,mime:item.type}),signal:AbortSignal.timeout(15000)});
             item.id=slot.id;
             if(!valid()){if(currentUser?.id===owner){const removed=await api('/api/workspaces/'+workspaceId+'/attachments/'+item.id,{method:'DELETE',signal:AbortSignal.timeout(10000)});if(removed.removed){item.state='cancelled';item.error=tr('Upload cancelled; temporary attachment removed','تم إلغاء الرفع وحذف المرفق المؤقت');}}continue;}
-            item.controller=new AbortController();timer=setTimeout(()=>item.controller.abort(),120000);
+            item.controller=new AbortController();timer=setTimeout(()=>item.controller.abort(),900000);
             data=await api('/api/workspaces/'+workspaceId+'/attachments/'+item.id,{method:'PUT',body:file,headers:{'Content-Type':'application/octet-stream'},signal:item.controller.signal});
           }else{const fd=new FormData();fd.append('file',file);data=await api('/api/workspaces/'+workspaceId+'/files/upload',{method:'POST',body:fd,signal:AbortSignal.timeout(120000)});}
           if(!valid())continue;item.path=data.path;item.size=data.size;item.type=data.mime||item.type;item.state='ready';
