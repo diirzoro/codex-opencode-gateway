@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, inspect, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -231,8 +231,8 @@ def sweep():
     """Existing Gateway maintenance loop only; no customer account deletion."""
     from ..database import SessionLocal
     with SessionLocal() as db:
-        if not db.bind.dialect.has_table(db.connection(), 'pending_registrations'):
+        if not inspect(db.connection()).has_table('pending_registrations'):
             return
-        db.execute(__import__('sqlalchemy').delete(PendingRegistration).where(
+        db.execute(delete(PendingRegistration).where(
             PendingRegistration.expires_at<datetime.now(timezone.utc)))
         db.commit()
