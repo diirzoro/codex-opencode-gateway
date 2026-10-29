@@ -17,5 +17,5 @@ def send_reset(email, token, db=None):
     if not ready(smtp_config) or not sender or url.scheme!='https' or not url.netloc or url.username or url.password or url.query or url.fragment:
         raise HTTPException(503,'Password recovery email is not configured')
     message=EmailMessage(); message['From']=sender; message['To']=email; message['Subject']='Reset your OpenCode Gateway password'
-    message.set_content(f'Reset your password within 30 minutes:\n{base}/#reset-password={token}\nIf you did not request this, ignore this email.')
+    message.set_content(f'Reset your password within 1 minute:\n{base}/#reset-password={token}\nIf you did not request this, ignore this email.')
     send(smtp_config,message,error_status=503)
