@@ -56,6 +56,9 @@ jobs:
       - name: Test Native authorization and ownership regression boundaries
         run: python -m pytest -q backend/tests/test_native_security_performance.py backend/tests/test_native_control_plane.py
 
+      - name: Test Native temporary upload cancellation, large files, types and owner cleanup
+        run: python -m pytest -q backend/tests/test_chat_attachments.py
+
       - name: Validate restored TEST deployment and Alembic chain
         run: |
           set -euo pipefail
