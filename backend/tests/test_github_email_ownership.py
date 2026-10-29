@@ -124,6 +124,24 @@ def test_email_proof_expires_and_email_change_requires_new_code(flow,monkeypatch
     assert raw_confirm(f,a).status_code==403
 
 
+def test_github_emailed_code_expires_after_one_minute_even_with_old_expiry(flow):
+    f=flow;a=f.owners[0]
+    f.callback(f.start(a))
+    assert send(f,a).status_code==200
+    with Session(f.engine) as db:
+        row=db.scalar(select(models.GithubAuthState).where(
+            models.GithubAuthState.pending_payload.is_not(None)))
+        payload=json.loads(github.credentials.decrypt(row.pending_payload))
+        proof=payload['email_proof']
+        issued=datetime.now(timezone.utc)-timedelta(seconds=61)
+        proof['issued_at']=issued.isoformat()
+        proof['expires_at']=(datetime.now(timezone.utc)+timedelta(minutes=9)).isoformat()
+        row.pending_payload=github.credentials.encrypt(json.dumps(payload))
+        db.commit()
+    assert verify(f,a,f.sent[-1]['code']).status_code==400
+    assert raw_confirm(f,a).status_code==403
+
+
 def test_foreign_and_old_session_cannot_request_or_verify_ownership_code(flow):
     f=flow;a,b=f.owners;f.callback(f.start(a),a);item=f.pending(a)
     for path in ('send','verify'):
