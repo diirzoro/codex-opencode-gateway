@@ -46,6 +46,16 @@ jobs:
       - name: Test GitHub customer authorization and repository policy
         run: python -m pytest -q backend/tests/test_github_boundaries.py
 
+      - name: Test one-minute account, recovery and GitHub verification boundaries
+        run: |
+          python -m pytest -q \
+            backend/tests/test_email_verification_contracts.py \
+            backend/tests/test_email_code_signup.py \
+            backend/tests/test_github_email_ownership.py
+
+      - name: Test Native authorization and ownership regression boundaries
+        run: python -m pytest -q backend/tests/test_native_security_performance.py backend/tests/test_native_control_plane.py
+
       - name: Validate restored TEST deployment and Alembic chain
         run: |
           set -euo pipefail
