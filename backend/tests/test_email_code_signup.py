@@ -2,6 +2,7 @@
 import importlib.util
 import re
 import uuid
+from dataclasses import replace
 from datetime import datetime,timedelta,timezone
 from sqlalchemy import select,text
 from sqlalchemy.orm import Session
@@ -21,7 +22,9 @@ def signup(mail_acceptance,monkeypatch):
     models.PendingRegistration.__table__.create(f[2],checkfirst=True)
     messages=[]
     monkeypatch.setattr(email_delivery,'send',lambda cfg,message,**kwargs:messages.append(message))
-    monkeypatch.setattr(auth,'settings',f[3])
+    # Synthetic TestClient runs on http://testserver, unlike actual HTTPS TEST.
+    # Keep secure cookies enabled in production; only the fixture uses HTTP.
+    monkeypatch.setattr(auth,'settings',replace(f[3],cookie_secure=False))
     return f,messages
 
 
