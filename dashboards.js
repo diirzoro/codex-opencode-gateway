@@ -681,14 +681,27 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }catch(error){item.error=tr('Transfer stopped; cleanup unconfirmed: ','توقف النقل؛ لم يُؤكد الحذف: ')+error.message;}
     finally{item.cancelling=false;renderAttachments();saveNativeDraft();}
   }
-  const clearAttachments=()=>{attachmentRevision++;for(const item of attachments){item.controller?.abort();releasePreview(item);}attachments=[];attachmentList.replaceChildren();};
+  const clearAttachments=()=>{
+    attachmentRevision++;
+    for(const item of attachments){
+      item.controller?.abort();
+      // Moving to another conversation must not leave an active partial upload
+      // behind. Do not remove a ready draft or a Native-leased attachment.
+      if(item.temporary&&item.id&&item.state==='uploading'&&item.owner===currentUser?.id)
+        api('/api/workspaces/'+item.workspaceId+'/attachments/'+item.id,{
+          method:'DELETE',signal:AbortSignal.timeout(10000)}).catch(()=>{});
+      releasePreview(item);
+    }
+    attachments=[];attachmentList.replaceChildren();
+  };
   const renderAttachments=()=>{
     attachmentList.replaceChildren();for(const item of attachments){const card=textElement('div','','composer-attachment');
       if(item.preview){const image=document.createElement('img');image.src=item.preview;image.alt='';card.append(image);}
       const label=textElement('span',item.name);label.dir='auto';label.append(textElement('small',item.error|| (item.path?item.type+' · '+Math.ceil(item.size/1024)+' KB':tr('Uploading…','جارٍ رفع الملف…'))));
-      const remove=textElement('button',item.state==='uploading'?tr('Cancel upload','إلغاء الرفع'):'×');remove.type='button';remove.disabled=item.cancelling||sending||Boolean(pendingSubmission);
+      const remove=textElement('button',item.state==='uploading'?tr('Cancel upload','إلغاء الرفع'):'×');remove.type='button';
+      remove.disabled=item.cancelling||(item.state!=='uploading'&&(sending||Boolean(pendingSubmission)));
       remove.setAttribute('aria-label',item.temporary?tr('Cancel temporary attachment','إلغاء المرفق المؤقت'):tr('Remove attachment; keep workspace file','إزالة المرفق مع إبقاء ملف مساحة العمل'));
-      remove.onclick=async()=>{if(sending||pendingSubmission)return;
+      remove.onclick=async()=>{if(item.state!=='uploading'&&(sending||pendingSubmission))return;
         if(item.temporary&&!item.cancelled){await cancelUpload(item);return;}
         attachments=attachments.filter(a=>a!==item);releasePreview(item);renderAttachments();saveNativeDraft();
       };card.append(label,remove);attachmentList.append(card);
@@ -696,6 +709,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   };
   window.restoreComposerAttachments=files=>{if(sending||pendingSubmission)return;clearAttachments();attachments=(files||[]).slice(0,10).map(file=>({name:file.name,path:file.path,size:file.size,type:file.mime||file.type||tr('File','ملف'),temporary:file.temporary,id:file.id,owner:currentUser?.id,workspaceId:activeWorkspace?.id,state:'ready'}));renderAttachments();};
   const sentAttachments=payload=>{const paths=new Set((payload?.attachments||[]).map(a=>a.path));for(const item of attachments.filter(a=>paths.has(a.path)))releasePreview(item);attachments=attachments.filter(a=>!paths.has(a.path));renderAttachments();};
+  const nativeFileSupported=file=>/\.(?:txt|md|markdown|csv|tsv|json|jsonl|yaml|yml|xml|html|htm|css|js|mjs|cjs|ts|tsx|jsx|py|sql|log|ini|toml|rst|sh|php|go|rs|java|c|h|cpp|svg|pdf|png|jpe?g|gif|webp)$/i.test(file.name);
+  const nativeFileLimit=20*1024*1024;
   async function openAttachPicker(){
     if(!activeWorkspace||window.workspaceSubmissionBlocked?.())return;
     if(window.nativeSession?.active()&&!activeSession)await createSession();
@@ -706,6 +721,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       for(const file of files){
         if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)break;
         const temporary=Boolean(window.nativeSession?.active());
+        if(temporary&&(!file.size||file.size>nativeFileLimit)){
+          toast(tr('Native attachments must be between 1 byte and 20 MiB. File not uploaded.','مرفقات Native يجب أن تكون أكبر من صفر ولا تتجاوز 20 ميجابايت؛ لم يُرفع الملف.'));
+          continue;
+        }
+        if(temporary&&!nativeFileSupported(file)){
+          toast(tr('Unsupported Native attachment. Use PDF, PNG/JPG/GIF/WebP, or plain-text/code files. DOCX/ZIP/video require conversion first.','نوع المرفق غير مدعوم في Native. استخدم PDF أو الصور PNG/JPG/GIF/WebP أو ملفًا نصيًا/برمجيًا. حوّل DOCX وZIP والفيديو قبل إرفاقها.'));
+          continue;
+        }
         const item={name:file.name,size:file.size,type:file.type||'application/octet-stream',temporary,owner,workspaceId,state:'uploading',preview:['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)?URL.createObjectURL(file):null};attachments.push(item);renderAttachments();
         const valid=()=>revision===attachmentRevision&&workspaceId===activeWorkspace?.id&&sessionId===activeSession?.id&&owner===currentUser?.id&&!item.cancelled;
         let timer;
@@ -720,13 +743,56 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
             item.controller=new AbortController();timer=setTimeout(()=>item.controller.abort(),120000);
             data=await api('/api/workspaces/'+workspaceId+'/attachments/'+item.id,{method:'PUT',body:file,headers:{'Content-Type':'application/octet-stream'},signal:item.controller.signal});
           }else{const fd=new FormData();fd.append('file',file);data=await api('/api/workspaces/'+workspaceId+'/files/upload',{method:'POST',body:fd,signal:AbortSignal.timeout(120000)});}
-          if(!valid())continue;item.path=data.path;item.size=data.size;item.state='ready';
-        }catch(error){if(valid()){item.state='failed';item.error=tr('Upload failed: ','فشل رفع الملف: ')+error.message;}}
+          if(!valid())continue;item.path=data.path;item.size=data.size;item.type=data.mime||item.type;item.state='ready';
+        }catch(error){
+          if(valid()){
+            item.state='failed';
+            item.error=tr('Upload failed: ','فشل رفع الملف: ')+error.message;
+            if(item.temporary&&item.id&&!item.cancelled){
+              try{
+                const removed=await api('/api/workspaces/'+workspaceId+'/attachments/'+item.id,{
+                  method:'DELETE',signal:AbortSignal.timeout(10000)});
+                if(removed.removed)item.cancelled=true;
+              }catch(_cleanupError){
+                item.error+=' '+tr('Temporary cleanup is unconfirmed; use Clear stalled uploads.','لم يُؤكد تنظيف الملف المؤقت؛ استخدم زر تنظيف الرفع العالق.');
+              }
+            }
+          }
+        }
         finally{clearTimeout(timer);delete item.controller;if(revision===attachmentRevision){renderAttachments();saveNativeDraft();}}
       }
       if(revision===attachmentRevision)loadStorage().catch(()=>{});
     };document.body.append(picker);picker.click();
   }
+  const clearStalled=btn('clearStalledChatUploads','Clear stalled uploads','تنظيف المرفقات العالقة',async()=>{
+    if(!activeWorkspace||!window.nativeSession?.active())return;
+    const workspaceId=activeWorkspace.id,owner=currentUser?.id;
+    const found=await api('/api/workspaces/'+workspaceId+'/attachments/pending',{signal:AbortSignal.timeout(15000)});
+    if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
+    const removable=(found.items||[]).filter(item=>item.state==='uploading'||item.state==='ready');
+    const processing=(found.items||[]).filter(item=>item.state==='processing').length;
+    if(!removable.length){
+      toast(processing?tr('Only Native-processing attachments remain. Stop their conversation first; no files were deleted.','تبقت مرفقات يستخدمها OpenCode حاليًا. أوقف المحادثة أولًا؛ لم تُحذف ملفات.'):tr('No stalled or unsent attachments found.','لا توجد مرفقات معلقة أو غير مرسلة.'));
+      return;
+    }
+    const approved=await window.confirmAction(tr(
+      'Delete '+removable.length+' unsubmitted/unfinished temporary uploads across this Workspace? This includes unsent drafts in other conversations. Native-processing attachments, chat history and project files are preserved.',
+      'هل تريد حذف '+removable.length+' من المرفقات المؤقتة غير المرسلة أو غير المكتملة في مساحة العمل هذه، بما فيها مسودات المحادثات الأخرى؟ ستبقى مرفقات OpenCode النشطة وسجل المحادثات وملفات المشاريع محفوظة.'));
+    if(!approved||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
+    const result=await api('/api/workspaces/'+workspaceId+'/attachments/clear-pending',{method:'POST',
+      signal:AbortSignal.timeout(30000)});
+    if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
+    const removed=new Set(result.removed_ids||[]);
+    for(const item of attachments)if(removed.has(item.id))item.controller?.abort();
+    for(const item of attachments.filter(item=>removed.has(item.id)))releasePreview(item);
+    attachments=attachments.filter(item=>!removed.has(item.id));
+    renderAttachments();saveNativeDraft();
+    toast(tr('Removed '+result.removed+' temporary upload(s). '+result.skipped_processing+' Native-processing file(s) preserved.',
+      'حُذف '+result.removed+' من المرفقات المؤقتة. تم الاحتفاظ بـ'+result.skipped_processing+' ملف يستخدمه OpenCode حاليًا.'));
+  });
+  clearStalled.title=tr('Clean only owned temporary uploads, never Native chat history or project files','تنظيف المرفقات المؤقتة المملوكة فقط دون حذف المحادثات أو ملفات المشاريع');
+  clearStalled.hidden=!window.nativeSession?.active();
+  controls.insertBefore(clearStalled,attach.nextSibling);
   q('openTools').onclick=()=>window.openConnections('providers');q('openTools').title=tr('Open OpenCode provider and workspace setup','\u0641\u062a\u062d \u0625\u0639\u062f\u0627\u062f \u0645\u0632\u0648\u062f OpenCode \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644');q('chatGithub').onclick=()=>openConnections('github');
   // Project, conversations and preview have independent panel tabs.
   const sessionsSection=document.createElement('section');sessionsSection.className='workspace-conversations';sessionsSection.hidden=true;
