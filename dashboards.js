@@ -833,6 +833,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       if(activeSession?.id!==id||currentUser?.id!==owner)return;
       submissionStatus.textContent=tr('Native processing stopped. Temporary cleanup waits for confirmed idle.','توقفت معالجة Native. ينتظر تنظيف المرفق المؤقت تأكيد التوقف.');
       await refreshMessages();await refreshSessionStatus();
+    }catch(error){
+      if(activeSession?.id===id&&currentUser?.id===owner){
+        // Never silently swallow a Native abort failure or imply the file
+        // stopped. Keep the recover/stop controls available.
+        submissionStatus.textContent=tr('OpenCode has not confirmed cancellation. The conversation and draft are preserved: ','لم يؤكد OpenCode إلغاء المرفق. بقيت المحادثة والمسودة محفوظتين: ')+error.message;
+        toast(submissionStatus.textContent);
+      }
     }finally{cancelAttachment.disabled=false;updateSend();}
   });
   cancelAttachment.style.cssText='width:auto;min-height:32px;padding:5px 12px;font-size:12px;';
