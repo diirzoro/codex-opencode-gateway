@@ -107,6 +107,21 @@ def session_permissions(db,workspace,root,live,location=None):
             if error.status_code!=403:raise
     return policy.native_session_permissions(policy.load(db),root,grants)
 
+def confirm_native_session_restrictions(session_id,root,expected):
+    """Verify Native's persisted session policy, not a possibly stale PATCH reply.
+
+    This is metadata validation only. Actual prompts/responses go direct through
+    Nginx to the existing shared Native instance. A non-persisting Native
+    implementation must refuse execution; never bypass tenant restrictions.
+    """
+    metadata('PATCH','/session/'+session_id,root,{'permission':expected})
+    confirmed=metadata('GET','/session/'+session_id,root)
+    if (not isinstance(confirmed,dict) or confirmed.get('id')!=session_id
+        or confirmed.get('directory')!=str(root) or confirmed.get('permission')!=expected):
+        raise HTTPException(503,'Native session did not persist required tool restrictions; prompt not forwarded')
+    return confirmed
+
+
 @router.post('/api/native-test/sessions/{session_id}/permissions/{permission_id}/remember')
 def remember_file_permission(session_id:uuid.UUID,permission_id:str,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
     if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
@@ -129,8 +144,7 @@ def remember_file_permission(session_id:uuid.UUID,permission_id:str,request:Requ
     grants=[r for r in grants if r not in additions]+additions
     if len(grants)>100:raise HTTPException(409,'Conversation file permission limit reached; use Allow once')
     permissions=policy.native_session_permissions(policy.load(db),root,grants)
-    updated=metadata('PATCH','/session/'+row.opencode_session_id,root,{'permission':permissions})
-    if not isinstance(updated,dict) or updated.get('permission')!=permissions:raise HTTPException(503,'Native file permissions were not confirmed')
+    confirm_native_session_restrictions(row.opencode_session_id,root,permissions)
     db.commit()
     # The pending tool is still answered through the original Native once flow.
     # 1.19.4 captures policy at run start: the saved rule takes effect NEXT run.
@@ -448,12 +462,7 @@ def _authorize_native(workspace_id,resource,request,user,db,raw):
                 # authoritative safety gate is a subsequent GET of the rules
                 # actually stored by the SAME Native session. Never infer
                 # success from HTTP 200/PATCH acknowledgement alone.
-                metadata('PATCH','/session/'+row.opencode_session_id,root,{'permission':permissions})
-                confirmed=metadata('GET','/session/'+row.opencode_session_id,root)
-                if (not isinstance(confirmed,dict) or confirmed.get('id')!=row.opencode_session_id
-                    or confirmed.get('directory')!=str(root)
-                    or confirmed.get('permission')!=permissions):
-                    raise HTTPException(503,'Native session did not persist required tool restrictions; prompt not forwarded')
+                confirm_native_session_restrictions(row.opencode_session_id,root,permissions)
             tools=metadata('GET','/experimental/tool/ids',root)
             builtins={'invalid','question','bash','shell','terminal','read','glob','grep','list','edit','write','task','webfetch','todowrite','todoread','websearch','codesearch','skill','apply_patch','execute','lsp','plan_enter','plan_exit'}
             if not isinstance(tools,list) or any(not isinstance(t,str) or t not in builtins for t in tools) or len(tools)!=len(set(tools)):raise HTTPException(503,'Custom Native tool execution requires verified restrictions; execution is blocked')
