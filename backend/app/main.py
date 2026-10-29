@@ -38,6 +38,13 @@ async def retention_maintenance():
             except Exception:
                 import logging
                 logging.getLogger(__name__).warning('Native catalog maintenance unavailable; existing catalog and conversations preserved')
+            try:
+                # OpenCode Native DELETE owns actual history deletion; no
+                # parallel session engine or message-store cleanup is created.
+                await asyncio.to_thread(native_sessions.sweep_expired_native_history)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning('Native 24-hour history retention could not complete; data preserved')
 
 async def provider_maintenance():
     from .services import account_provider_sync
