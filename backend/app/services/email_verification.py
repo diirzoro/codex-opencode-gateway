@@ -84,7 +84,7 @@ def verify(db, raw):
         EmailVerification.token_hash == digest).with_for_update())
     now = datetime.now(timezone.utc)
     expires = token.expires_at.replace(tzinfo=timezone.utc) if token and token.expires_at and token.expires_at.tzinfo is None else (token.expires_at if token else None)
-    if token is None or token.used_at is not None or expires is None or expires <= now or (token.created_at is not None and (now - (token.created_at if token.created_at.tzinfo else token.created_at.replace(tzinfo=timezone.utc))) >= TOKEN_TTL):
+    if token is None or token.used_at is not None or expires is None or expires <= now or (getattr(token,'created_at',None) is not None and (now - (token.created_at if token.created_at.tzinfo else token.created_at.replace(tzinfo=timezone.utc))) >= TOKEN_TTL):
         raise HTTPException(400, "Verification link is expired or has already been used")
     return token, now
 
@@ -134,7 +134,7 @@ def verify_code(db,challenge,code):
     record=db.scalar(select(EmailVerification).where(EmailVerification.id==challenge).with_for_update().execution_options(populate_existing=True))
     now=datetime.now(timezone.utc)
     expires=record.expires_at.replace(tzinfo=timezone.utc) if record and record.expires_at.tzinfo is None else (record.expires_at if record else None)
-    if not record or record.verification_method!='code' or record.used_at is not None or not expires or expires<=now or record.code_attempts>=MAX_CODE_ATTEMPTS or (record.created_at is not None and (now - (record.created_at if record.created_at.tzinfo else record.created_at.replace(tzinfo=timezone.utc))) >= CODE_TTL):
+    if not record or record.verification_method!='code' or record.used_at is not None or not expires or expires<=now or record.code_attempts>=MAX_CODE_ATTEMPTS or (getattr(record,'created_at',None) is not None and (now - (record.created_at if record.created_at.tzinfo else record.created_at.replace(tzinfo=timezone.utc))) >= CODE_TTL):
         raise HTTPException(400,'Verification code is invalid, expired, or no longer available')
     if not hmac.compare_digest(record.token_hash,code_digest(challenge,code)):
         record.code_attempts+=1
