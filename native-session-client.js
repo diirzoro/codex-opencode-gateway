@@ -178,8 +178,26 @@
     const method=options.method||'GET';let match=path.match(/^\/api\/workspaces\/([^/]+)\/sessions(?:\?.*)?$/);
     if(match){const result=await api('/api/native-test/workspaces/'+match[1]+'/sessions',options);if(Array.isArray(result))result.forEach(remember);else remember(result);return {value:result};}
     if(/^\/api\/sessions(?:\?.*)?$/.test(path)&&method==='GET'){
-      const workspaces=await api('/api/workspaces'),lists=await Promise.all(workspaces.map(async w=>{try{return await api('/api/native-test/workspaces/'+w.id+'/sessions');}catch(error){if([409,410].includes(error.status))return [];throw error;}}));
-      const value=lists.flat();value.forEach(remember);return {value};
+      const unavailable=[];
+      const workspaces=await api('/api/workspaces'),lists=await Promise.all(workspaces.map(async w=>{
+        try{return await api('/api/native-test/workspaces/'+w.id+'/sessions');}
+        catch(error){
+          if([409,410].includes(error.status)){
+            // Preserve other workspaces, but never silently pretend the
+            // rejected conversation history is an empty workspace.
+            unavailable.push({workspace_id:w.id,status:error.status,reason:error.message});
+            return [];
+          }
+          throw error;
+        }
+      }));
+      const value=lists.flat();value.forEach(remember);
+      if(unavailable.length){
+        const status=document.getElementById('runtimeStatus');
+        if(status)status.textContent=label('Some conversations could not be loaded; workspace access needs review.','تعذر تحميل بعض المحادثات؛ يجب مراجعة إمكانية الوصول إلى مساحات العمل.')+' ('+unavailable.length+')';
+        window.dispatchEvent(new CustomEvent('native-session-list-warning',{detail:{unavailable}}));
+      }
+      return {value};
     }
     match=path.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/(.*?))?(?:\?.*)?$/);if(!match)return null;
     const id=match[1],tail=match[2]||'',row=await context(id),user=owner();
