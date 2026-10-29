@@ -24,6 +24,68 @@ def fixture(boundary,monkeypatch,tmp_path):
 def slot(f,name='synthetic.txt',size=100):
     return uploads.create(f.db,f.row,f.owners[0].session,name,size,'text/plain')
 
+def test_native_attachment_types_fail_before_reservation(fixture):
+    f=fixture
+    for filename,mime in [('CV.docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+                          ('data.zip','application/zip'),('video.mp4','video/mp4'),
+                          ('fake.png','application/pdf')]:
+        with pytest.raises(HTTPException) as error:
+            uploads.create(f.db,f.row,f.owners[0].session,filename,12,mime)
+        assert error.value.status_code==415
+        assert 'supported' in str(error.value.detail).lower() or 'match' in str(error.value.detail).lower()
+    assert uploads.native_mime('notes.txt','application/octet-stream')=='text/plain'
+    assert uploads.native_mime('report.pdf','application/pdf')=='application/pdf'
+
+
+def test_native_transport_accepts_six_megabyte_file_without_python_reading(fixture,monkeypatch):
+    f=fixture;size=6*1024*1024
+    item=uploads.create(f.db,f.row,f.owners[0].session,'large.txt',size,'application/octet-stream')
+    assert item['mime']=='text/plain'
+    # The Gateway transports bytes but never invokes the legacy AI extraction.
+    import sys
+    from backend.app.services import attachment_reader
+    monkeypatch.setattr(attachment_reader,'parts',lambda *a,**kw:(_ for _ in ()).throw(AssertionError('Python file reader was called')))
+    transferred=asyncio.run(uploads.upload(f.row,item['id'],request([b'a'*size])))
+    assert transferred['state']=='ready'
+    assert (f.owners[0].root/transferred['path']).stat().st_size==size
+    assert uploads.cancel(f.row,item['id'])['removed']
+
+
+def test_owner_can_remove_stranded_uploads_across_conversations_without_native_abort(fixture):
+    f=fixture
+    first=slot(f,'first.txt',100)
+    second=transferred(f)
+    busy=transferred(f)
+    uploads.lease(f.row,NS(id=f.owners[0].session),busy['path'],'msg_busy')
+    result=uploads.pending(f.row)
+    assert {row['id'] for row in result}=={first['id'],second['id'],busy['id']}
+    removed=uploads.clear_pending(f.row)
+    assert set(removed['removed_ids'])=={first['id'],second['id']}
+    assert removed['skipped_processing']==1
+    assert not (f.owners[0].root/first['path']).exists()
+    assert not (f.owners[0].root/second['path']).exists()
+    assert (f.owners[0].root/busy['path']).is_file()
+    assert (f.owners[0].root/'marker.txt').is_file()
+    assert uploads.pending(f.row)==[row for row in result if row['id']==busy['id']]
+
+
+def test_owner_only_cleanup_http_route_and_confirmed_scope(fixture):
+    f=fixture;a,b=f.owners
+    abandoned=slot(f,'abandoned.txt',12)
+    base=f'/api/workspaces/{a.workspace}/attachments'
+    assert authenticated(f.client,base+'/pending',b,f.config).status_code==404
+    response=authenticated(f.client,base+'/pending',a,f.config)
+    assert response.status_code==200,response.text
+    assert abandoned['id'] in {item['id'] for item in response.json()['items']}
+    refused=f.client.post(base+'/clear-pending',headers={
+        'Cookie':f.config.session_cookie_name+'=fixture-token-a','Origin':'https://wrong.example'})
+    assert refused.status_code==403
+    removed=authenticated(f.client,base+'/clear-pending',a,f.config,'POST')
+    assert removed.status_code==200,removed.text
+    assert abandoned['id'] in removed.json()['removed_ids']
+    assert authenticated(f.client,base+'/pending',a,f.config).json()['items']==[]
+
+
 def test_slot_creation_scans_workspace_quota_only_once(fixture,monkeypatch):
     f=fixture
     original=uploads.workspaces.usage_bytes
