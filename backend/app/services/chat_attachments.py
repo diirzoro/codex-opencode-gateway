@@ -226,6 +226,33 @@ def clear_pending(workspace):
                 'skipped_processing':processing,'preserved_for_review':preserved}
 
 
+
+def clear_native_deleted_session(workspace, session_id):
+    """Remove only temporary attachments after Native confirms session deletion.
+
+    This never reads AI content, project files, or OpenCode history. It may
+    remove processing slots because the original Native session is gone.
+    """
+    removed=0
+    with _guard(workspace) as area:
+        for manifest in area.glob('*.json'):
+            if manifest.is_symlink():continue
+            try:
+                value=json.loads(manifest.read_text())
+                if value.get('id')!=manifest.stem or value.get('session_id')!=str(session_id):
+                    continue
+                if value.get('state') not in {'ready','uploading','processing','failed','cancelled','removed'}:
+                    continue
+                _remove(workspace,value)
+                if _directory(workspace,value).exists():continue
+                manifest.unlink()
+                removed+=1
+            except (OSError,ValueError,KeyError,TypeError,HTTPException):
+                # Preserve unknown files rather than risk deleting project data.
+                continue
+    return removed
+
+
 def cancel(workspace,identifier):
     with locked(workspace,identifier) as (value,path):
         if not value: raise HTTPException(404, 'Attachment not found')
