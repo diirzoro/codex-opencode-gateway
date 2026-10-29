@@ -444,8 +444,16 @@ def _authorize_native(workspace_id,resource,request,user,db,raw):
             if session_live.get('permission')!=permissions:
                 statuses=metadata('GET','/session/status',root)
                 if statuses.get(row.opencode_session_id,{}).get('type','idle')!='idle':raise HTTPException(409,'Stop this conversation before applying its new tool restrictions')
-                updated=metadata('PATCH','/session/'+row.opencode_session_id,root,{'permission':permissions})
-                if updated.get('permission')!=permissions:raise HTTPException(503,'Native tool restrictions were not confirmed')
+                # Native may return a stale/minimal PATCH acknowledgement. The
+                # authoritative safety gate is a subsequent GET of the rules
+                # actually stored by the SAME Native session. Never infer
+                # success from HTTP 200/PATCH acknowledgement alone.
+                metadata('PATCH','/session/'+row.opencode_session_id,root,{'permission':permissions})
+                confirmed=metadata('GET','/session/'+row.opencode_session_id,root)
+                if (not isinstance(confirmed,dict) or confirmed.get('id')!=row.opencode_session_id
+                    or confirmed.get('directory')!=str(root)
+                    or confirmed.get('permission')!=permissions):
+                    raise HTTPException(503,'Native session did not persist required tool restrictions; prompt not forwarded')
             tools=metadata('GET','/experimental/tool/ids',root)
             builtins={'invalid','question','bash','shell','terminal','read','glob','grep','list','edit','write','task','webfetch','todowrite','todoread','websearch','codesearch','skill','apply_patch','execute','lsp','plan_enter','plan_exit'}
             if not isinstance(tools,list) or any(not isinstance(t,str) or t not in builtins for t in tools) or len(tools)!=len(set(tools)):raise HTTPException(503,'Custom Native tool execution requires verified restrictions; execution is blocked')
