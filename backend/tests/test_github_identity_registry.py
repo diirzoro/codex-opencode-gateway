@@ -157,3 +157,48 @@ def test_legacy_active_identity_is_resolved_before_new_installation_can_bypass_o
     with Session(f.engine) as db:
         assert db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id==a.id)).github_user_id==101
     assert f.request('/api/github/status',a).json()['connected']
+
+
+def test_expired_legacy_personal_installation_recovers_only_verified_app_owner(flow,monkeypatch):
+    f=flow;a,b=f.owners;f.callback(f.start(a),a);assert f.confirm(a).status_code==200
+    with Session(f.engine) as db:
+        row=db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id==a.id))
+        row.github_user_id=None
+        row.token_expires_at=datetime.now(timezone.utc)-timedelta(days=1)
+        db.commit()
+    original=github._api
+    def app_metadata(method,path,**kw):
+        if path.startswith('/app/installations/'):
+            value=original(method,path,**kw)
+            return {**value,'id':int(path.rsplit('/',1)[1]),'target_type':'User'}
+        return original(method,path,**kw)
+    monkeypatch.setattr(github,'_api',app_metadata)
+    callback=f.callback(f.start(b),b,'A')
+    assert callback.headers['location'].endswith('account-conflict')
+    assert f.pending(b) is None
+    with Session(f.engine) as db:
+        row=db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id==a.id))
+        assert row.github_user_id==101
+    assert f.request('/api/github/status',a).json()['connected'] is False  # old token expired
+
+
+def test_expired_legacy_installation_must_be_same_verified_app(flow,monkeypatch):
+    f=flow;a,b=f.owners;f.callback(f.start(a),a);assert f.confirm(a).status_code==200
+    with Session(f.engine) as db:
+        row=db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id==a.id))
+        row.github_user_id=None
+        row.token_expires_at=datetime.now(timezone.utc)-timedelta(days=1)
+        db.commit()
+    original=github._api
+    def foreign_app(method,path,**kw):
+        if path.startswith('/app/installations/'):
+            return {'app_id':999,'id':int(path.rsplit('/',1)[1]),'target_type':'User',
+                    'account':{'id':101,'type':'User','login':'github-101'}}
+        return original(method,path,**kw)
+    monkeypatch.setattr(github,'_api',foreign_app)
+    callback=f.callback(f.start(b),b,'B')
+    assert callback.headers['location'].endswith('ownership-review')
+    assert f.pending(b) is None
+    with Session(f.engine) as db:
+        row=db.scalar(select(models.GithubConnection).where(models.GithubConnection.user_id==a.id))
+        assert row.github_user_id is None
