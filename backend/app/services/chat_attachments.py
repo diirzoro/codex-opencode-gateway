@@ -158,7 +158,7 @@ async def upload(workspace, identifier, request):
         async with asyncio.timeout(900):
             async for chunk in request.stream():
                 with locked(workspace,identifier) as (value,path):
-                    if value['state'] != 'uploading': raise HTTPException(409, 'Upload cancelled')
+                    if not value or value['state'] != 'uploading': raise HTTPException(409, 'Upload cancelled')
                     total += len(chunk)
                     if total > value['size']: raise HTTPException(413, 'Transfer exceeded the reserved upload size')
                     # A chunk write may be partial; preserve all bytes.
@@ -167,7 +167,7 @@ async def upload(workspace, identifier, request):
                         written=os.write(fd,view); view=view[written:]
         os.close(fd);fd=None
         with locked(workspace,identifier) as (value,path):
-            if value['state'] != 'uploading': raise HTTPException(409, 'Upload cancelled')
+            if not value or value['state'] != 'uploading': raise HTTPException(409, 'Upload cancelled')
             if total != value['size']: raise HTTPException(422, 'Incomplete attachment upload')
             if workspaces.usage_bytes(workspace) > workspaces.quota_bytes(workspace):
                 raise HTTPException(413, 'Workspace storage limit reached')
