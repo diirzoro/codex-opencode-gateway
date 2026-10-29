@@ -19,6 +19,13 @@ def flow(boundary,monkeypatch):
     client,owners,_,engine,config=boundary
     models.GithubAuthState.__table__.create(engine)
     models.GithubIdentityRegistry.__table__.create(engine)
+    # Model an already verified Gateway mailbox corresponding to each
+    # independent GitHub OAuth identity. Never bypass email-match checks in
+    # fixtures; cross-account mismatch tests must exercise the real policy.
+    with Session(engine) as db:
+        for idx, owner in enumerate(owners,101):
+            db.get(models.User,owner.id).email='github'+str(idx)+'@example.com'
+        db.commit()
     cfg=NS(github_web_base='https://github.com',github_client_id='fixture',github_client_secret='synthetic-secret',
            github_app_id=42,github_app_slug='fixture',github_callback_url=config.public_base_url+'/api/github/callback')
     monkeypatch.setattr(github.github_app_config,'effective',lambda *a:cfg)
