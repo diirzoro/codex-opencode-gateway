@@ -139,7 +139,7 @@ def remember_file_permission(session_id:uuid.UUID,permission_id:str,request:Requ
 def metadata(method,path,root,data=None):
     # Only ownership/session metadata. No prompts, model responses or events.
     discovery=path in {'/provider','/agent'} and method=='GET'
-    auth=(method in {'PUT','DELETE'} and re.fullmatch(r'/auth/'+ID,path)) or (method=='POST' and re.fullmatch(r'/provider/'+ID+r'/oauth/(authorize|callback)',path)) or (method=='GET' and path=='/provider/auth')
+    auth=(method in {'PUT','DELETE'} and re.fullmatch(r'/auth/'+ID,path)) or (method=='POST' and re.fullmatch(r'/provider/'+ID+r'/oauth/(authorize|callback)',path)) or (method=='GET' and path=='/provider/auth') or (method=='DELETE' and re.fullmatch(r'/session/'+ID,path))
     if not (discovery or auth or (path=='/session' and method in {'GET','POST'}) or method in {'GET','PATCH'} and re.fullmatch(r'/session/'+ID,path) or path in {'/permission','/question','/session/status','/global/health','/experimental/tool/ids','/skill','/path'} and method=='GET'):
         raise HTTPException(403,'Unsupported metadata operation')
     state=_metadata_request.get()
@@ -161,6 +161,88 @@ def metadata(method,path,root,data=None):
     except (httpx.HTTPError,ValueError):raise HTTPException(502,'Native session metadata is unavailable') from None
     finally:
         if temporary and client is not None:client.close()
+
+
+# Retention runs inside the existing Gateway maintenance loop, not an AI/chat
+# engine, task queue, or parallel OpenCode storage. The only conversation
+# deletion is the installed Native DELETE /session/{id} endpoint.
+NATIVE_HISTORY_IDLE_TTL = 24 * 3600
+_native_history_cursor = None
+
+
+def _native_history_timestamp(live):
+    """Fail closed on malformed Native time; milliseconds are Native format."""
+    from datetime import datetime, timezone
+    stamp=live.get('time',{}).get('updated') if isinstance(live.get('time'),dict) else None
+    if type(stamp) not in (int,float) or not 1_000_000_000_000 <= stamp <= 4_000_000_000_000:
+        return None
+    try:return datetime.fromtimestamp(stamp/1000,timezone.utc)
+    except (ValueError,OverflowError,OSError):return None
+
+
+def sweep_expired_native_history(*, now=None):
+    """Delete >24h inactive owned conversations through Native's own API.
+
+    Gateway keeps its security mappings and bookkeeping only. Never delete an
+    active/unknown Native session, a foreign session, or a project file. Existing
+    maintenance calls this conservatively and can retry after Native errors.
+    """
+    if not enabled():return {'deleted':0,'skipped':0}
+    from datetime import datetime,timedelta,timezone
+    from sqlalchemy import delete
+    from ..database import SessionLocal
+    from ..models import ExecutionEvent
+    from ..services import chat_attachments, workspace_cache
+    global _native_history_cursor
+    now = now or datetime.now(timezone.utc)
+    cutoff=now-timedelta(seconds=NATIVE_HISTORY_IDLE_TTL)
+    deleted=0;skipped=0
+    with SessionLocal() as db:
+        query=select(WorkspaceSession.id).where(WorkspaceSession.created_at<=cutoff).order_by(WorkspaceSession.id).limit(25)
+        if _native_history_cursor is not None:
+            query=query.where(WorkspaceSession.id>_native_history_cursor)
+        candidates=list(db.scalars(query))
+        if not candidates:
+            _native_history_cursor=None
+            return {'deleted':0,'skipped':0}
+        _native_history_cursor=candidates[-1]
+        for identifier in candidates:
+            try:
+                row=db.scalar(select(WorkspaceSession).where(WorkspaceSession.id==identifier).with_for_update(skip_locked=True).execution_options(populate_existing=True))
+                if not row or row.status in session_lifecycle.BUSY:
+                    skipped+=1;db.rollback();continue
+                user=db.get(User,row.user_id)
+                if user is None:skipped+=1;db.rollback();continue
+                workspace,root,_,_=context(db,user,row.workspace_id)
+                if workspace.id!=row.workspace_id or not workspace_cache.runtime_idle(workspace):
+                    skipped+=1;db.rollback();continue
+                live=metadata('GET','/session/'+row.opencode_session_id,root)
+                if not isinstance(live,dict) or live.get('id')!=row.opencode_session_id or live.get('directory')!=str(root):
+                    skipped+=1;db.rollback();continue
+                updated=_native_history_timestamp(live)
+                if updated is None or updated>cutoff:
+                    skipped+=1;db.rollback();continue
+                # Gateway receipts/visibility also count as user activity.
+                latest=db.scalar(select(ExecutionEvent.created_at).where(ExecutionEvent.session_id==row.id).order_by(ExecutionEvent.created_at.desc()).limit(1))
+                if latest is not None and (latest if latest.tzinfo else latest.replace(tzinfo=timezone.utc))>cutoff:
+                    skipped+=1;db.rollback();continue
+                # Recheck that Native has not started execution before removal.
+                if not workspace_cache.runtime_idle(workspace):
+                    skipped+=1;db.rollback();continue
+                outcome=metadata('DELETE','/session/'+row.opencode_session_id,root)
+                if outcome is not True:
+                    skipped+=1;db.rollback();continue
+                # Native has removed the session and messages. Only now remove
+                # the temporary uploads belonging to this exact conversation.
+                chat_attachments.clear_native_deleted_session(workspace,row.id)
+                db.execute(delete(ExecutionEvent).where(ExecutionEvent.session_id==row.id))
+                db.delete(row)
+                db.commit()
+                deleted+=1
+            except (HTTPException,OSError,ValueError,TypeError,KeyError,httpx.HTTPError):
+                db.rollback();skipped+=1
+    return {'deleted':deleted,'skipped':skipped}
+
 
 class Create(BaseModel):
     model_config=ConfigDict(extra='forbid')
