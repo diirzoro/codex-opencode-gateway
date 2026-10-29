@@ -179,7 +179,7 @@ function clearEmailCodeState(){
 window.clearEmailCodeState=clearEmailCodeState;
 function showEmailCodeStep(result,email){
  if(!result.verification_challenge||!$('#verifyEmailForm'))throw Error(lang==='ar'?'حدّث صفحة التسجيل والخلفية المتوافقة لتفعيل الرمز.':'Refresh the matching registration page and backend to use verification codes.');
- verificationState={challenge:result.verification_challenge,email:email||result.email||'',expiresAt:result.expiresAt||Date.now()+600000,resendAt:result.resendAt||Date.now()+120000};
+ verificationState={challenge:result.verification_challenge,email:email||result.email||'',expiresAt:result.expiresAt||Date.now()+1000*(result.verification_expires_in??60),resendAt:result.resendAt||Date.now()+60000};
  try{sessionStorage.setItem('og-email-verification',JSON.stringify(verificationState));}catch(error){}
  $$('[data-auth-form]').forEach(form=>form.classList.remove('active'));$('#verifyEmailForm').classList.add('active');
  $('#verifyEmailDestination').textContent=(lang==='ar'?'أرسلنا الرمز إلى ':'Code sent to ')+verificationState.email;
@@ -736,8 +736,8 @@ function registrationPayload(){
 }
 applyPrefs();
 
-Object.assign(copy.en,{registrationUsername:'Username',emailCodeTitle:'Verify your email',emailCodeHint:'Enter the 6-digit code from your email. It expires in 10 minutes.',emailCodeLabel:'Verification code',emailCodeConfirm:'Verify and continue',emailCodeResend:'Resend code',emailCodeLogin:'Back to sign in'});
-Object.assign(copy.ar,{registrationUsername:'اسم المستخدم',emailCodeTitle:'تفعيل البريد الإلكتروني',emailCodeHint:'أدخل رمز التفعيل المكوّن من 6 أرقام. تنتهي صلاحيته خلال 10 دقائق.',emailCodeLabel:'رمز التفعيل',emailCodeConfirm:'تفعيل ومتابعة',emailCodeResend:'إعادة إرسال الرمز',emailCodeLogin:'رجوع للدخول'});
+Object.assign(copy.en,{registrationUsername:'Username',emailCodeTitle:'Verify your email',emailCodeHint:'Enter the 6-digit code from your email. It expires in 1 minute.',emailCodeLabel:'Verification code',emailCodeConfirm:'Verify and continue',emailCodeResend:'Resend code',emailCodeLogin:'Back to sign in'});
+Object.assign(copy.ar,{registrationUsername:'اسم المستخدم',emailCodeTitle:'تفعيل البريد الإلكتروني',emailCodeHint:'أدخل رمز التفعيل المكوّن من 6 أرقام. تنتهي صلاحيته خلال دقيقة واحدة.',emailCodeLabel:'رمز التفعيل',emailCodeConfirm:'تفعيل ومتابعة',emailCodeResend:'إعادة إرسال الرمز',emailCodeLogin:'رجوع للدخول'});
 navigationReady.then(()=>{
  if(new URLSearchParams(location.hash.slice(1)).get('email')==='verified'){
   history.replaceState(null,'',location.pathname+location.search);
