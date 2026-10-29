@@ -98,7 +98,8 @@ def _create(db,workspace,session_id,name,size,mime):
     if not name or len(name)>200 or name in {'.','..','upload.part'} or any(c in name for c in '/\\\x00\r\n') or workspaces.protected_component(name):
         raise HTTPException(422, 'A safe attachment filename is required')
     if not 0 < size <= MAX_BYTES: raise HTTPException(413, 'Attachment exceeds the 20 MB limit')
-    workspaces.require_quota_headroom(workspace)
+    # One authoritative quota scan suffices; the size-aware comparison below
+    # already rejects both full workspaces and the incoming attachment.
     if workspaces.usage_bytes(workspace) + size > workspaces.quota_bytes(workspace):
         raise HTTPException(413, 'Workspace storage limit reached')
     # Bounded number of live uploads prevents reserving unlimited disk slots.
