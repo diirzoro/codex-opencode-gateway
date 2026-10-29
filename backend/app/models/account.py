@@ -85,6 +85,7 @@ class PendingRegistration(Base):
     """Unverified signup attempt. NOT a user or an account."""
     __tablename__ = "pending_registrations"
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    email_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     ticket_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     payload_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
     code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
