@@ -15,6 +15,8 @@ from backend.app.services import chat_attachments as uploads, workspaces, worksp
 def fixture(boundary,monkeypatch,tmp_path):
     client,owners,calls,engine,config=boundary
     monkeypatch.setattr(uploads,'settings',replace(config,runtime_root=tmp_path/'metadata'))
+    from backend.app.routes import workspaces as workspace_routes
+    monkeypatch.setattr(workspace_routes,'settings',config)
     monkeypatch.setattr(workspace_cache,'runtime_idle',lambda row:True)
     with Session(engine) as db:
         row=workspaces.owned(db,Workspace,owners[0].workspace,owners[0].id)
@@ -24,23 +26,21 @@ def fixture(boundary,monkeypatch,tmp_path):
 def slot(f,name='synthetic.txt',size=100):
     return uploads.create(f.db,f.row,f.owners[0].session,name,size,'text/plain')
 
-def test_native_attachment_types_fail_before_reservation(fixture):
+def test_file_acceptance_is_delegated_to_native_and_no_python_type_gate(fixture):
     f=fixture
-    for filename,mime in [('CV.docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
-                          ('data.zip','application/zip'),('video.mp4','video/mp4'),
-                          ('fake.png','application/pdf')]:
-        with pytest.raises(HTTPException) as error:
-            uploads.create(f.db,f.row,f.owners[0].session,filename,12,mime)
-        assert error.value.status_code==415
-        assert 'supported' in str(error.value.detail).lower() or 'match' in str(error.value.detail).lower()
-    assert uploads.native_mime('notes.txt','application/octet-stream')=='text/plain'
-    assert uploads.native_mime('report.pdf','application/pdf')=='application/pdf'
+    for name,mime in [('CV.docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+                      ('report.pdf','application/pdf'),('archive.zip','application/zip'),
+                      ('video.mp4','video/mp4'),('unknown.bin','application/octet-stream')]:
+        item=uploads.create(f.db,f.row,f.owners[0].session,name,12,mime)
+        assert item['state']=='uploading'
+        assert item['mime']==mime
+        assert uploads.cancel(f.row,item['id'])['removed']
 
 
 def test_native_transport_accepts_six_megabyte_file_without_python_reading(fixture,monkeypatch):
     f=fixture;size=6*1024*1024
     item=uploads.create(f.db,f.row,f.owners[0].session,'large.txt',size,'application/octet-stream')
-    assert item['mime']=='text/plain'
+    assert item['mime']=='application/octet-stream'
     # The Gateway transports bytes but never invokes the legacy AI extraction.
     import sys
     from backend.app.services import attachment_reader
