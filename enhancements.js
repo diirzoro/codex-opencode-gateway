@@ -117,6 +117,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
   const errorText=error=>{
     if(lang!=='ar')return error.message;
     if(error.message.startsWith('This GitHub account is already connected'))return 'حساب GitHub هذا مرتبط حاليًا بحساب آخر في OpenCode Gateway، ولا يمكن ربطه بحسابين في الوقت نفسه.\n\nيرجى تسجيل الدخول إلى حساب Gateway المرتبط بهذا GitHub وإجراء Disconnect أولًا، أو اختيار حساب GitHub آخر.\n\nتسجيل الخروج وحده لا يفصل ربط GitHub.';
+    if(error.message.startsWith('This Gateway account email is not'))return 'غير مصرح بربط GitHub: يجب أن يطابق بريدك المسجل والمُوثَّق في المنصة البريد الأساسي الموثَّق في GitHub. استخدم حساب GitHub المطابق أو صحّح بريد المنصة عبر التحقق الرسمي ثم أعد الربط.';
     if(error.message.startsWith('GitHub email could not be verified'))return 'تعذر التحقق من البريد. راجع البريد الأساسي لحساب GitHub الذي اخترته.';
     if(error.message.startsWith('GitHub email verification is unavailable'))return 'التحقق من بريد GitHub غير متاح. يلزم فحص صلاحية قراءة البريد وخدمة الإرسال.';
     if(error.message==='Incorrect GitHub verification code')return 'رمز التحقق من GitHub غير صحيح.';
@@ -152,7 +153,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
   {
     const proof=textElement('section','','github-email-proof');
     proof.append(textElement('h4',tr('Verify GitHub account ownership','التحقق من ملكية حساب GitHub')),
-      textElement('p',tr('Enter the primary email associated with the GitHub account you selected, which may differ from your Gateway email. We will match it with GitHub and send a verification code before connecting.','أدخل البريد الإلكتروني الأساسي لحساب GitHub الذي اخترته، وقد يختلف عن بريد تسجيلك في Gateway. سنتحقق من مطابقته ثم نرسل رمز تحقق قبل إكمال الربط.')));
+      textElement('p',tr('Enter the verified primary email of your GitHub account. It must match the email registered and verified on this Gateway account. Both GitHub OAuth and a 60-second email code are required.','أدخل البريد الأساسي الموثَّق في GitHub، ويجب أن يطابق البريد المسجَّل والمُوثَّق لحسابك في المنصة. يتطلب الربط تفويض GitHub ورمز بريد صالحًا لمدة 60 ثانية.')));
     const emailLabel=textElement('label',tr('GitHub primary email','البريد الإلكتروني الأساسي المرتبط بحساب GitHub'));
     const email=document.createElement('input');email.type='email';email.autocomplete='off';email.required=true;email.maxLength=254;email.setAttribute('aria-label',tr('GitHub primary email','البريد الإلكتروني الأساسي المرتبط بحساب GitHub'));emailLabel.append(email);
     const send=textElement('button',tr('Verify email and send code','التحقق من البريد وإرسال الرمز'),'button ghost');send.type='button';
