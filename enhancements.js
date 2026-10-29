@@ -118,6 +118,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     if(lang!=='ar')return error.message;
     if(error.message.startsWith('This GitHub account is already connected'))return 'حساب GitHub هذا مرتبط حاليًا بحساب آخر في OpenCode Gateway، ولا يمكن ربطه بحسابين في الوقت نفسه.\n\nيرجى تسجيل الدخول إلى حساب Gateway المرتبط بهذا GitHub وإجراء Disconnect أولًا، أو اختيار حساب GitHub آخر.\n\nتسجيل الخروج وحده لا يفصل ربط GitHub.';
     if(error.message.startsWith('This Gateway account email is not'))return 'غير مصرح بربط GitHub: يجب أن يطابق بريدك المسجل والمُوثَّق في المنصة البريد الأساسي الموثَّق في GitHub. استخدم حساب GitHub المطابق أو صحّح بريد المنصة عبر التحقق الرسمي ثم أعد الربط.';
+    if(error.message.startsWith('GitHub email authorization denied'))return 'غير مصرح بربط GitHub بهذا البريد: العنوان المُدخل لا يطابق البريد الأساسي الموثَّق لحساب GitHub المحدد. لم تُرسل أي رسالة تفعيل. تحقق من البريد ثم أعد المحاولة.';
     if(error.message.startsWith('GitHub email could not be verified'))return 'تعذر التحقق من البريد. راجع البريد الأساسي لحساب GitHub الذي اخترته.';
     if(error.message.startsWith('GitHub email verification is unavailable'))return 'التحقق من بريد GitHub غير متاح. يلزم فحص صلاحية قراءة البريد وخدمة الإرسال.';
     if(error.message==='Incorrect GitHub verification code')return 'رمز التحقق من GitHub غير صحيح.';
