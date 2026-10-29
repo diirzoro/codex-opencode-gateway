@@ -24,6 +24,20 @@ def fixture(boundary,monkeypatch,tmp_path):
 def slot(f,name='synthetic.txt',size=100):
     return uploads.create(f.db,f.row,f.owners[0].session,name,size,'text/plain')
 
+def test_slot_creation_scans_workspace_quota_only_once(fixture,monkeypatch):
+    f=fixture
+    original=uploads.workspaces.usage_bytes
+    calls=[]
+    def measured(*args,**kwargs):
+        calls.append((args,kwargs))
+        return original(*args,**kwargs)
+    monkeypatch.setattr(uploads.workspaces,'usage_bytes',measured)
+    item=slot(f,'single-scan.txt',100)
+    assert item['state']=='uploading'
+    assert len(calls)==1
+    assert uploads.cancel(f.row,item['id'])['removed']
+
+
 def request(chunks,error=False):
     async def stream():
         for chunk in chunks: yield chunk
