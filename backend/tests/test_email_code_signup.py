@@ -102,6 +102,25 @@ def test_0025_migration_preserves_old_link_rows(signup):
         assert tuple(row)==('legacy_hash','link',0)
 
 
+def test_new_registration_code_and_expired_legacy_code_have_one_minute_limit(signup):
+    f,messages=signup
+    response=register(f)
+    assert response.status_code==201,response.text
+    data=response.json()
+    assert data['verification_expires_in']==60
+    challenge=uuid.UUID(data['verification_challenge'])
+    with Session(f[2]) as db:
+        row=db.get(models.EmailVerification,challenge)
+        assert 0<(row.expires_at-row.created_at).total_seconds()<=61
+        # Simulate a formerly issued 10-minute OTP: deployment enforces the
+        # new one-minute boundary even when the stored expires_at is longer.
+        row.created_at=datetime.now(timezone.utc)-timedelta(seconds=61)
+        row.expires_at=datetime.now(timezone.utc)+timedelta(minutes=9)
+        db.commit()
+    assert f[0].post('/api/auth/verify-email-code',json={
+        'challenge_id':str(challenge),'code':code(messages)}).status_code==400
+
+
 def test_hourly_code_limit_and_challenge_binding(signup):
     f,messages=signup;first=register(f).json();first_code=code(messages)
     second=register(f,'qa_second','other-fixture@example.org').json()
