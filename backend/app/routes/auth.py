@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, EmailStr
 import secrets, uuid
 from ..services import social_login
 from sqlalchemy import or_, select, func
@@ -17,7 +17,7 @@ from ..security.sessions import (hash_session_token, new_session_token, idle_exp
 from ..services.accounts import user_payload
 from ..services.location_validation import validate_locations
 from ..services.disposable_email import require_permanent_email
-from ..services import email_verification
+from ..services import email_verification, registration_drafts
 from ..services.entitlements import CORE_TRIAL_DAYS
 from .dependencies import require_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -42,61 +42,105 @@ class RegistrationOut(UserOut):
     verification_challenge: str | None = None
     verification_expires_in: int | None = None
 
-@router.post("/register", response_model=RegistrationOut, status_code=201)
+@router.post("/register", status_code=201)
 def register(data: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
-    email = str(data.email).strip().casefold()
-    require_permanent_email(email)
-    username = data.username.strip().lower() if data.username else "user_" + uuid.uuid4().hex[:24]
-    from ..security.identities import normalized_phone
-    phone=normalized_phone(data.phone,data.postal_code)
-    if phone is None:raise HTTPException(422,'Enter a valid international phone number')
-    if db.scalar(select(User).where(or_(func.lower(User.username)==username,func.lower(User.email)==email,User.phone_identity==phone))):
-        raise HTTPException(409,'Username, email or phone number is already registered')
-    validate_locations(db, data.country_id, data.region_id, data.city_id)
-    now = datetime.now(timezone.utc)
-    verified_social = False
-    user = User(username=username, email=email, password_hash=hash_password(data.password), phone=phone, postal_code=data.postal_code.strip(), country_id=data.country_id, region_id=data.region_id, city_id=data.city_id, trial_started_at=now, trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS), last_login_at=None, status="pending_email")
-    pending = request.cookies.get(social_login.SIGNUP_COOKIE)
-    if pending:
-        identity = social_login.unseal(pending, 'signup')
-        if email != identity['email']: raise HTTPException(422, 'Use the verified sign-in email to complete registration')
-        setattr(user, identity['provider'] + '_subject', identity['subject'])
-        verified_social = True
-        user.status = 'active'
-        user.last_login_at = now
-        response.delete_cookie(social_login.SIGNUP_COOKIE, path='/api/auth', secure=settings.cookie_secure, httponly=True, samesite='strict')
-    verification_required = email_verification.required_for_registration(db)
-    if not verified_social and not verification_required:
-        user.status = "active"
-        user.last_login_at = now
-    # Mail delivery remains mandatory when the verification policy is enabled.
-    if not verified_social and verification_required and not email_verification.smtp_ready(db):
-        raise HTTPException(503, "Email verification is unavailable; registration cannot proceed")
-    if not verified_social and verification_required:email_verification.require_code_schema(db)
-    challenge=None
-    db.add(user)
+    # Google social signup already has a trusted verified mailbox. Password
+    # signup is NEVER a User row until the six-digit email proof succeeds.
+    pending=request.cookies.get(social_login.SIGNUP_COOKIE)
+    if not pending:
+        payload,ticket=registration_drafts.start(db,data)
+        response.set_cookie(registration_drafts.COOKIE,ticket,httponly=True,
+            secure=settings.cookie_secure,samesite='strict',path='/api/auth',max_age=3600)
+        return payload
+    identity=social_login.unseal(pending,'signup')
+    email=str(data.email).strip().casefold()
+    if email!=identity['email']:
+        raise HTTPException(422,'Use your verified Google sign-in email to complete registration')
+    details=registration_drafts.normalized(data,db)
+    now=datetime.now(timezone.utc)
+    user=User(**details,status='active',trial_started_at=now,
+              trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS),last_login_at=now)
+    setattr(user,identity['provider']+'_subject',identity['subject'])
+    from ..models import AccountAudit
     try:
-        db.flush()
-        if not verified_social and verification_required:
-            challenge,code=email_verification.create_code(db,user)
-            db.flush()
-            email_verification.send_code(email,code,db)
-        if user.status=='active':
-            from ..models import AccountAudit
-            db.add(AccountAudit(subject_id=user.id,action='account.registered_active'))
+        db.add(user);db.flush()
+        db.add(AccountAudit(subject_id=user.id,action='account.registered_active'))
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(409, "Username, email or phone number is already registered") from None
-    except Exception:
-        db.rollback()
-        raise
+        raise HTTPException(409,'Username, email or phone number is already registered') from None
     db.refresh(user)
-    if verified_social or not verification_required:
-        set_session(response, db, user)
-    payload=user_payload(user)
-    if challenge:payload.update(verification_challenge=str(challenge),verification_expires_in=60)
-    return payload
+    response.delete_cookie(social_login.SIGNUP_COOKIE,path='/api/auth',
+                           secure=settings.cookie_secure,httponly=True,samesite='strict')
+    set_session(response,db,user)
+    return user_payload(user)
+
+
+class StagedChallenge(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    challenge_id:uuid.UUID
+
+
+class StagedCode(StagedChallenge):
+    code:str=Field(pattern=r'^[0-9]{6}$')
+
+
+class StagedRegistrationPatch(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    username:str|None=Field(default=None,min_length=6,max_length=50,pattern=r'^[A-Za-z0-9_.-]+$')
+    email:EmailStr|None=None
+    password:str|None=Field(default=None,min_length=8,max_length=128)
+    phone:str|None=Field(default=None,min_length=6,max_length=30)
+    postal_code:str|None=Field(default=None,min_length=2,max_length=24)
+    country_id:int|None=None
+    region_id:int|None=None
+    city_id:int|None=None
+
+
+def signup_ticket(request:Request):
+    return request.cookies.get(registration_drafts.COOKIE,'') 
+
+
+def check_signup_origin(request:Request):
+    origin=request.headers.get('origin')
+    if origin and origin.rstrip('/')!=settings.public_base_url.rstrip('/'):
+        raise HTTPException(403,'Invalid registration origin')
+
+
+@router.post('/registration/confirm',response_model=UserOut)
+def confirm_registration(data:StagedCode,request:Request,response:Response,db:Session=Depends(get_db)):
+    check_signup_origin(request)
+    user=registration_drafts.finish(db,data.challenge_id,signup_ticket(request),data.code)
+    response.delete_cookie(registration_drafts.COOKIE,path='/api/auth',
+                           secure=settings.cookie_secure,httponly=True,samesite='strict')
+    set_session(response,db,user)
+    return user_payload(user)
+
+
+@router.post('/registration/resend')
+def resend_registration(data:StagedChallenge,request:Request,db:Session=Depends(get_db)):
+    check_signup_origin(request)
+    return registration_drafts.resend(db,data.challenge_id,signup_ticket(request))
+
+
+@router.patch('/registration/update')
+def update_registration(data:StagedRegistrationPatch,challenge_id:uuid.UUID,
+                        request:Request,db:Session=Depends(get_db)):
+    check_signup_origin(request)
+    if not data.model_fields_set:
+        raise HTTPException(422,'No registration details were changed')
+    return registration_drafts.edit(db,challenge_id,signup_ticket(request),data)
+
+
+@router.post('/registration/cancel')
+def cancel_registration(data:StagedChallenge,request:Request,response:Response,
+                        db:Session=Depends(get_db)):
+    check_signup_origin(request)
+    result=registration_drafts.abandon(db,data.challenge_id,signup_ticket(request))
+    response.delete_cookie(registration_drafts.COOKIE,path='/api/auth',
+                           secure=settings.cookie_secure,httponly=True,samesite='strict')
+    return result
+
 
 @router.get("/verify-email")
 def verify_email(token: str, db: Session = Depends(get_db)):
@@ -144,7 +188,7 @@ def resend_code_for_user(db,user):
     if count>=5:raise HTTPException(429,'Verification code request limit reached; try again later')
     for record in db.scalars(select(EmailVerification).where(EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None))):record.used_at=now
     challenge,code=email_verification.create_code(db,user);db.flush();email_verification.send_code(user.email,code,db);db.commit()
-    return {'sent':True,'email':user.email,'verification_challenge':str(challenge),'verification_expires_in':600}
+    return {'sent':True,'email':user.email,'verification_challenge':str(challenge),'verification_expires_in':60}
 
 
 class VerifyEmailCode(BaseModel):
