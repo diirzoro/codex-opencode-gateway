@@ -465,6 +465,22 @@
     github.append(text('p','Only repositories explicitly authorized for this customer may be selected. A GitHub project appears in your workspace after you choose a repository, branch and optional working directories.','يمكن اختيار المستودعات التي فوّضها هذا العميل فقط. يظهر مشروع GitHub في مساحة العمل بعد اختيار المستودع والفرع ومجلدات العمل الاختيارية.'));
   }
 
+  window.addEventListener('gateway-github-changed',async event=>{
+    if(event.detail?.owner!==currentUser?.id)return;
+    const owner=currentUser.id;
+    // Never retain an imported workspace in the open file panel after the
+    // source account has been disconnected. This is UI cleanup, not deletion.
+    if(activeProject&&(activeProject.source_type==='github'||activeProject.github_installation_id)){
+      stopEvents();
+      workspaceSelectionRevision++;
+      activeProject=activeWorkspace=activeSession=null;
+      try{localStorage.removeItem('og-workspace');localStorage.removeItem('og-context:'+owner);}catch(error){}
+      const rows=document.getElementById('workspaceProjectFiles');
+      if(rows)rows.replaceChildren();
+      if(currentUser?.id===owner)await page('workspaceHomePage');
+    }
+    if(currentUser?.id===owner)loadHome().catch(error=>toast(error.message));
+  });
   let workAccess=false,entitlement=null,workspaceInitialized=false;
   let updateSend=()=>{},refreshChoices=async()=>{},syncWorkspacePolling=()=>{},loadWorkspaceDetails=()=>{},renderStorage=()=>{};
   let createWorkspaceSession=async()=>{initializeWorkspace();return createWorkspaceSession();};
