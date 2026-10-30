@@ -254,7 +254,7 @@ def permanently_delete_user(user_id:_uuid.UUID,data:PermanentUserDelete,
     """
     from sqlalchemy import delete, or_, inspect
     from ..database import Base
-        user=db.scalar(select(User).where(User.id==user_id).with_for_update())
+    user=db.scalar(select(User).where(User.id==user_id).with_for_update())
     if user is None:raise HTTPException(404,'User not found')
     if user.id==actor.id or user.role in {'admin','owner'}:
         raise HTTPException(403,'Administrators and the current account cannot be permanently deleted here')
