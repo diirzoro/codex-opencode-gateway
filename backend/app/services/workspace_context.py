@@ -6,7 +6,7 @@ from . import workspaces, session_lifecycle
 
 def restore(db, user, preferred_workspace=None, preferred_session=None):
     rows=list(db.scalars(select(Workspace).join(Project,Project.id==Workspace.project_id).where(
-        Workspace.user_id==user.id,Project.user_id==user.id,Project.archived_at.is_(None)
+        Workspace.user_id==user.id,Project.user_id==user.id,Project.archived_at.is_(None),workspaces.visible_project_predicate(user.id)
     ).order_by(Workspace.last_activity_at.desc(),Workspace.created_at.desc())))
     if preferred_workspace:
         rows.sort(key=lambda row:row.id!=preferred_workspace)
