@@ -17,12 +17,12 @@ concurrency:
 
 jobs:
   validate:
-    if: inputs.confirmation == 'promote'
+    if: github.ref == 'refs/heads/master' && inputs.confirmation == 'promote'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: master
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -48,7 +48,7 @@ jobs:
       - name: Checkout reviewed master
         uses: actions/checkout@v4
         with:
-          ref: master
+          ref: ${{ github.sha }}
       - name: Prepare SSH from existing GitHub secrets
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
