@@ -81,6 +81,7 @@ jobs:
           node tests/browser/test-admin-account-removal.cjs
           node tests/browser/test-admin-users-table.cjs
           node tests/browser/test-admin-user-editor.cjs
+          node tests/browser/test-existing-account-recovery.cjs
 
       - name: Preserve canonical memos and issue history
         shell: bash
