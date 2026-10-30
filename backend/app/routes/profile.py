@@ -12,6 +12,8 @@ from ..services.entitlements import access_payload
 from .auth import validate_locations
 from .dependencies import require_user
 router = APIRouter(prefix="/api/profile", tags=["profile"])
+from . import profile_changes
+router.include_router(profile_changes.router)
 
 class MarketingConsent(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -50,6 +52,8 @@ def get_profile(user: User = Depends(require_user)): return user_payload(user)
 @router.patch("", response_model=UserOut)
 def patch_profile(data: ProfilePatch, user: User = Depends(require_user), db: Session = Depends(get_db)):
     values = data.model_dump(exclude_unset=True)
+    if any(k in values for k in ('phone','postal_code','country_id','region_id','city_id')):
+        raise HTTPException(409,'Use the 60-second email verification workflow to update personal contact details')
     country_id = values.get("country_id", user.country_id); region_id = values.get("region_id", user.region_id); city_id = values.get("city_id", user.city_id)
     if any(k in values for k in ("country_id", "region_id", "city_id")): validate_locations(db, country_id, region_id, city_id)
     if 'phone' in values:
