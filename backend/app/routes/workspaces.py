@@ -379,6 +379,7 @@ def _github_source(db,user,data):
 def create_project(data: CreateProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
     if data.working_paths and data.source_type!="github": raise HTTPException(422,"Selective working directories apply only to GitHub projects")
     github_source=_github_source(db,user,data) if data.source_type=="github" else None
+    if data.source_type!='github':manager.require_account_local_headroom(db,user.id)
     project,workspace=manager.create(db,user,data.project_name,data.source_type,data.template,data.repository,data.branch,github_source)
     if github_source:
         require_advanced(db,user,start=True); db.commit()
@@ -654,6 +655,7 @@ def create_attachment(workspace_id:uuid.UUID,data:TemporaryAttachment,user:User=
     native_sessions.context(db,user,row.id,session.id)
     from ..services import workspace_cache
     row=workspace_cache.touch(db,row.id,user.id)
+    if row.project.source_type!='github':manager.require_account_local_headroom(db,user.id,data.size)
     result=chat_attachments.create(db,row,data.session_id,data.name,data.size,data.mime)
     db.commit()
     return result
@@ -729,6 +731,7 @@ def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),pat
     storage=manager.storage_payload(row)
     content=file.file.read(storage['limit_bytes']+1)
     if len(content)>storage['remaining_bytes']: raise HTTPException(413,"Workspace storage limit reached. Remove files before uploading.")
+    if row.project.source_type!='github':manager.require_account_local_headroom(db,user.id,len(content))
     target=manager.safe_path(row,(folder+"/" if folder else "")+name)
     target.parent.mkdir(parents=True,exist_ok=True)
     # Never replace an existing project file via a general upload endpoint.
