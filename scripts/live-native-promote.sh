@@ -39,6 +39,12 @@ if ! grep -Fq 'server_name opencode-gateway.codes;' "$LIVE_NGINX_CONF" ||
   exit 4
 fi
 echo 'LIVE Nginx production and Native routes verified without sudo'
+# Check unattended restart authorization before modifying LIVE files or .env.
+# GitHub Actions cannot answer an interactive sudo password prompt.
+if ! sudo -n -l /usr/bin/systemctl restart opencode-gateway.service >/dev/null 2>&1; then
+  echo 'GitHub SSH user lacks noninteractive permission to restart only opencode-gateway.service; deployment stopped before modifications' >&2
+  exit 8
+fi
 # Validate LIVE configuration only. Do not create backups, delete files,
 # replace the database, or change production callback/domain values.
 "$APP/.venv/bin/python" - "$APP/.env" <<'PY'
@@ -92,8 +98,8 @@ set -a
 . "$APP/.env"
 set +a
 (cd "$APP/backend" && ../.venv/bin/python -m alembic upgrade head && ../.venv/bin/python -m alembic current)
-sudo -n systemctl restart opencode-gateway.service
-sudo -n systemctl is-active --quiet opencode-gateway.service
+sudo -n /usr/bin/systemctl restart opencode-gateway.service
+sudo -n /usr/bin/systemctl is-active --quiet opencode-gateway.service
 curl -fsS --retry 15 --retry-delay 2 --retry-connrefused http://127.0.0.1:8000/api/health
 echo "LIVE_CODE_AND_SCHEMA_PROMOTED no-backup-created; old files retained"
 # Real Native prompts, file permissions, SSE and cross-user isolation still
