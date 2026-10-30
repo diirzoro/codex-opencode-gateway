@@ -20,7 +20,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: opencode-live-deploy
+  # PR validations must not block live deployment; LIVE deploys remain serialized.
+  group: ${{ github.event_name == 'pull_request' && format('opencode-live-pr-{0}', github.event.pull_request.number) || 'opencode-live-deploy' }}
   cancel-in-progress: false
 
 jobs:
