@@ -1257,8 +1257,42 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const body=textElement('div','','section-body'),tree=textElement('div','','files-tree'),status=textElement('p','','muted-small');
     const open=btn('project-folder-'+project.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace));open.className='project-folder-link';
     const download=btn('download-project-'+project.id,'Download ZIP','تنزيل ZIP',()=>downloadProjectSource(workspace,project));
-    body.append(open,download,tree,status);folder.append(summary,body);let loaded=false,pending=false;
-    const owner=currentUser?.id,context={workspaceId:workspace.id,owner,root:tree,status,detachedProject:true};
+    body.append(open,download);
+    if(project.source_type!=='github'){
+      const remove=btn('delete-local-project-'+project.id,'Delete local project','حذف المشروع المحلي',async()=>{
+        const owner=currentUser?.id;
+        if(!owner||owner!==projectOwner)return;
+        const exact=await window.requestInput(tr(
+          'Delete this LOCAL project permanently? Download ZIP first. Type the exact project name: '+project.name+'. This will NEVER delete the remote GitHub repository; projects with Native conversations cannot be removed until their sessions are deleted.',
+          'حذف المشروع المحلي نهائيًا؟ حمّل ZIP أولًا. اكتب اسم المشروع حرفيًا: '+project.name+'. لن يُحذف مستودع GitHub، ولا يمكن حذف مشروع له محادثات Native قبل حذف جلساته.'
+        ));
+        if(exact!==project.name)return;
+        if(!await window.confirmAction(tr(
+          'Confirm permanent deletion of local project '+project.name+' and its working files. This cannot be undone.',
+          'تأكيد نهائي لحذف المشروع المحلي '+project.name+' وملفاته. لا يمكن التراجع عن ذلك.'
+        )))return;
+        remove.disabled=true;
+        try{
+          const result=await api('/api/projects/'+project.id,{method:'DELETE',
+            body:JSON.stringify({confirm_name:project.name,confirmation:'DELETE LOCAL PROJECT'})});
+          if(currentUser?.id!==owner)return;
+          if(result.deleted!==true)throw Error(tr('Project deletion was not confirmed.','لم يؤكد الخادم حذف المشروع.'));
+          toast(tr('Local project deleted. Your account storage was released.','حُذف المشروع المحلي وتحررت مساحته من حصة الحساب.'));
+          if(activeProject?.id===project.id){
+            stopEvents();activeProject=activeWorkspace=activeSession=null;
+            try{localStorage.removeItem('og-workspace');localStorage.removeItem('og-context:'+owner);}catch(error){}
+            await page('workspaceHomePage');
+          }
+          await loadHome();
+          if(activeWorkspace)await loadProjectGroups();
+        }catch(error){toast(error.message);}
+        finally{remove.disabled=false;}
+      });
+      remove.classList.add('danger');
+      body.append(remove);
+    }
+    body.append(tree,status);folder.append(summary,body);let loaded=false,pending=false;
+    const owner=currentUser?.id,projectOwner=owner,context={workspaceId:workspace.id,owner,root:tree,status,detachedProject:true};
     folder.addEventListener('toggle',async()=>{
       if(!folder.open||loaded||pending||currentUser?.id!==owner)return;
       pending=true;status.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
