@@ -153,7 +153,7 @@ def test_local_project_with_native_history_cannot_be_removed(boundary,monkeypatc
     url=f'/api/projects/{a.project}'
     response=authenticated(client,url,a,config,'DELETE',{'confirm_name':'Synthetic a','confirmation':'DELETE LOCAL PROJECT'})
     assert response.status_code==409
-    assert 'Native conversations' in response.text
+    assert 'OpenCode conversations' in response.text
     assert a.root.joinpath('marker.txt').read_text()=='synthetic-marker-a'
 
 
