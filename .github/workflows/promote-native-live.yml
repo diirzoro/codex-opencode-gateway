@@ -65,7 +65,7 @@ jobs:
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
-          ssh -p "$port" -o BatchMode=yes "$VPS_USER@$VPS_HOST" 'mkdir -p "$HOME/opencode-gateway-release" "$HOME/opencode-backups"'
+          ssh -p "$port" -o BatchMode=yes "$VPS_USER@$VPS_HOST" 'mkdir -p "$HOME/opencode-gateway-release"'
       - name: Upload source; leave LIVE .env and data untouched
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -74,14 +74,14 @@ jobs:
         run: |
           set -euo pipefail
           port="${VPS_SSH_PORT:-22}"
-          rsync -az --delete \
+          rsync -az \
             --exclude='.git/' --exclude='.github/' \
             --exclude='.env' --exclude='.env.*' \
             --exclude='.venv/' --exclude='node_modules/' \
             --exclude='runtime/' --exclude='workspaces/' \
             --exclude='receipts/' --exclude='logs/' \
             -e "ssh -p $port" ./ "$VPS_USER@$VPS_HOST:~/opencode-gateway-release/"
-      - name: Back up LIVE; migrate code/schema; restart Gateway
+      - name: Validate LIVE; promote code and schema without backup or cleanup
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}

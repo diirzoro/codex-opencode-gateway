@@ -6,7 +6,7 @@ umask 077
 [[ "${PROMOTE_NATIVE_LIVE_CONFIRM:-}" == promote ]] || { echo 'Requires PROMOTE_NATIVE_LIVE_CONFIRM=promote' >&2; exit 2; }
 APP="$HOME/opencode-gateway"
 RELEASE="$HOME/opencode-gateway-release"
-BACKUPS="$HOME/opencode-backups"
+# Backups and cleanup are intentionally deferred until LIVE acceptance.
 test -f "$APP/.env" && test -f "$RELEASE/backend/app/main.py" && test -x "$APP/.venv/bin/python" || { echo 'LIVE/release files missing' >&2; exit 3; }
 # Verify published frontend files really match the actual TEST working tree.
 TEST_APP="$HOME/opencode-gateway-test"
@@ -25,36 +25,26 @@ ss -ltn | grep -F '127.0.0.1:18098' >/dev/null
 nginx_config="$(sudo -n nginx -T 2>/dev/null || nginx -T 2>/dev/null || true)"
 [[ "$nginx_config" == *'location @native_session_live'* && "$nginx_config" == *'location @native_discovery_live'* ]] || { echo 'Install LIVE Nginx Native locations first' >&2; exit 4; }
 unset nginx_config
-stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-backup="$BACKUPS/native-live-$stamp"
-mkdir -p "$backup"
-chmod 700 "$backup"
-# Validate/backup original LIVE environment and PostgreSQL before editing.
-"$APP/.venv/bin/python" - "$APP/.env" "$backup" <<'PY'
-import os,sys,subprocess
+# Validate LIVE configuration only. Do not create backups, delete files,
+# replace the database, or change production callback/domain values.
+"$APP/.venv/bin/python" - "$APP/.env" <<'PY'
+import sys
 from pathlib import Path
 from sqlalchemy.engine import make_url
-p=Path(sys.argv[1]);target=Path(sys.argv[2]);values={}
+p=Path(sys.argv[1]); values={}
 for line in p.read_text().splitlines():
     if not line.lstrip().startswith('#') and '=' in line:
         key,v=line.split('=',1);values[key.strip()]=v.strip().strip('"').strip("'")
 url=make_url(values.get('DATABASE_URL',''))
-assert url.get_backend_name()=='postgresql' and url.database=='opencode_gateway'
-assert url.host in {'localhost','127.0.0.1','::1'}
-assert values.get('PUBLIC_BASE_URL')=='https://opencode-gateway.codes'
-assert values.get('APP_PORT')=='8000'
-assert values.get('GITHUB_CALLBACK_URL','').startswith('https://opencode-gateway.codes/')
+assert url.get_backend_name()=='postgresql' and url.database=='opencode_gateway', 'Wrong production DB'
+assert url.host in {'localhost','127.0.0.1','::1'}, 'Nonlocal production DB'
+assert values.get('PUBLIC_BASE_URL')=='https://opencode-gateway.codes', 'Wrong LIVE domain'
+assert values.get('APP_PORT')=='8000', 'Wrong LIVE port'
+assert values.get('GITHUB_CALLBACK_URL')=='https://opencode-gateway.codes/api/github/callback', 'Wrong GitHub callback'
 assert values.get('CREDENTIALS_ENCRYPTION_KEY'), 'LIVE encryption key missing'
-(target/'live.env.before').write_bytes(p.read_bytes())
-(target/'live.env.before').chmod(0o600)
-pg_env=dict(os.environ,PGPASSWORD=url.password or '')
-cmd=['pg_dump','-Fc','-h',url.host or '127.0.0.1','-p',str(url.port or 5432),
-     '-U',url.username,'-d',url.database,'-f',str(target/'database.dump')]
-subprocess.run(cmd,env=pg_env,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,check=True,timeout=180)
-print('LIVE environment and PostgreSQL backup completed')
+print('LIVE environment validated; no backup requested or created')
 PY
-tar -czf "$backup/live-source-before.tgz" --exclude='./.venv' --exclude='./runtime' --exclude='./workspaces' -C "$APP" .
-rsync -a --delete --exclude='.env' --exclude='.env.*' --exclude='.git/' \
+rsync -a --exclude='.env' --exclude='.env.*' --exclude='.git/' \
   --exclude='.venv/' --exclude='runtime/' --exclude='workspaces/' \
   --exclude='logs/' --exclude='receipts/' --exclude='secrets/' \
   "$RELEASE/" "$APP/"
@@ -91,6 +81,6 @@ set +a
 sudo -n systemctl restart opencode-gateway.service
 sudo -n systemctl is-active --quiet opencode-gateway.service
 curl -fsS --retry 15 --retry-delay 2 --retry-connrefused http://127.0.0.1:8000/api/health
-echo "LIVE_CODE_AND_SCHEMA_PROMOTED backup=$backup"
+echo "LIVE_CODE_AND_SCHEMA_PROMOTED no-backup-created; old files retained"
 # Real Native prompts, file permissions, SSE and cross-user isolation still
 # require authenticated browser acceptance; health alone is not enough.
