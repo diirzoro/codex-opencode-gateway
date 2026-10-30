@@ -241,34 +241,35 @@ def test_legacy_unverified_account_recovery_requires_saved_email_and_new_passwor
         email='old-pending@example.org',phone='+967778009911',postal_code='+967',
         status='pending_email',role='customer',password_hash=hash_password('OldPassword8!'),
         trial_started_at=now-timedelta(days=30),trial_ends_at=now)
+    legacy_id=legacy.id;legacy_email=legacy.email
     with Session(f[2]) as db:
         db.add(legacy);db.commit()
     # An unverified legacy account is not usable, even with its original key.
-    response=f[0].post('/api/auth/login',json={'identity':legacy.email,'password':'OldPassword8!'})
+    response=f[0].post('/api/auth/login',json={'identity':legacy_email,'password':'OldPassword8!'})
     assert response.status_code==403
     missing=f[0].post('/api/auth/forgot-password',json={'email':'not-registered@example.org'})
     assert missing.status_code==202 and not messages
-    result=f[0].post('/api/auth/forgot-password',json={'email':legacy.email})
+    result=f[0].post('/api/auth/forgot-password',json={'email':legacy_email})
     assert result.status_code==202,result.text
-    assert len(messages)==1 and messages[0]['To']==legacy.email
+    assert len(messages)==1 and messages[0]['To']==legacy_email
     token=re.search(r'reset-password=([^\s]+)',messages[-1].get_content()).group(1)
     pending=f[0].post('/api/auth/recovery-status',json={'token':token})
     assert pending.status_code==200
     assert pending.json()['account_activation_required'] is True
     with Session(f[2]) as db:
-        stale=db.get(models.User,legacy.id)
+        stale=db.get(models.User,legacy_id)
         assert stale.status=='pending_email'
     activated=f[0].post('/api/auth/reset-password',json={
         'token':token,'password':'BrandNewSafe9!'})
     assert activated.status_code==200,activated.text
     with Session(f[2]) as db:
-        user=db.get(models.User,legacy.id)
+        user=db.get(models.User,legacy_id)
         assert user.status=='active'
         assert verify_password('BrandNewSafe9!',user.password_hash)
         assert not verify_password('OldPassword8!',user.password_hash)
         assert 0 < (user.trial_ends_at-user.trial_started_at).total_seconds() <= (CORE_TRIAL_DAYS*86400+60)
     assert f[0].post('/api/auth/reset-password',json={'token':token,'password':'AgainSafe9!'}).status_code==400
-    assert f[0].post('/api/auth/login',json={'identity':legacy.email,'password':'BrandNewSafe9!'}).status_code==200
+    assert f[0].post('/api/auth/login',json={'identity':legacy_email,'password':'BrandNewSafe9!'}).status_code==200
 
 
 def test_unverified_pending_account_not_exposed_via_unrelated_signup(signup):
@@ -278,11 +279,12 @@ def test_unverified_pending_account_not_exposed_via_unrelated_signup(signup):
         email='legacy-inactive@example.org',phone='+967778009955',postal_code='+967',
         status='pending_email',role='customer',password_hash=hash_password('PrivateOld8!'),
         trial_started_at=now-timedelta(days=30),trial_ends_at=now)
+    legacy_id=legacy.id;legacy_email=legacy.email
     with Session(f[2]) as db:db.add(legacy);db.commit()
     attempt=register(f,username='another_name',email='legacy-inactive@example.org')
     assert attempt.status_code==409
     assert not messages
-    with Session(f[2]) as db:assert db.get(models.User,legacy.id).status=='pending_email'
+    with Session(f[2]) as db:assert db.get(models.User,legacy_id).status=='pending_email'
 
 
 def test_0025_migration_preserves_old_link_rows(signup):
