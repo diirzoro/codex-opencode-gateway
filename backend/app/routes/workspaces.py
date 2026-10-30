@@ -472,7 +472,8 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
                 raise HTTPException(503,'Local worktree could not be removed safely; project record retained') from None
     ids=[w.id for w in rows]
     if ids:
-        db.execute(delete(ProviderCredential).where(ProviderCredential.workspace_id.in_(ids)))
+        if inspect(db.connection()).has_table('provider_credentials'):
+            db.execute(delete(ProviderCredential).where(ProviderCredential.workspace_id.in_(ids)))
         if inspect(db.connection()).has_table('preview_runtime_leases'):
             db.execute(delete(PreviewRuntimeLease).where(PreviewRuntimeLease.workspace_id.in_(ids)))
         db.execute(delete(Workspace).where(Workspace.id.in_(ids),Workspace.user_id==user.id))
