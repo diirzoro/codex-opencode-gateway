@@ -38,6 +38,12 @@ def get_access(user: User = Depends(require_user), db: Session = Depends(get_db)
     # Lightweight; no billing mutation, runtime startup or external GitHub request.
     return {"access": access_payload(db, user)}
 
+@router.get('/storage')
+def account_storage(user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from ..services.workspaces import account_local_storage_payload
+    return account_local_storage_payload(db,user.id)
+
+
 @router.get("", response_model=UserOut)
 def get_profile(user: User = Depends(require_user)): return user_payload(user)
 
