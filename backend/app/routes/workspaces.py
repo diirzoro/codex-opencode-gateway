@@ -743,7 +743,13 @@ def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),pat
 
 @router.get("/workspaces/{workspace_id}/storage")
 def storage(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return manager.storage_payload(manager.owned(db,Workspace,workspace_id,user.id))
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    result=manager.storage_payload(workspace)
+    if workspace.project.source_type!='github':
+        # Cache/working-copy totals stay workspace-specific, but the actual
+        # 50 MB client allowance covers ALL local projects owned by this user.
+        result.update(manager.account_local_storage_payload(db,user.id))
+    return result
 
 @router.get("/workspaces/{workspace_id}/sessions")
 def sessions(workspace_id: uuid.UUID,include_archived: bool=False,user: User=Depends(require_user),db: Session=Depends(get_db)):
