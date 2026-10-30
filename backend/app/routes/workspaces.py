@@ -391,7 +391,7 @@ def create_workspace(data: CreateProject,user: User=Depends(require_user),db: Se
 
 @router.get("/projects")
 def projects(user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return [manager.project_payload(p) for p in db.scalars(select(Project).where(Project.user_id==user.id,Project.archived_at.is_(None)).order_by(Project.created_at.desc()))]
+    return [manager.project_payload(p) for p in db.scalars(select(Project).where(Project.user_id==user.id,Project.archived_at.is_(None),manager.visible_project_predicate(user.id)).order_by(Project.created_at.desc()))]
 
 @router.get("/projects/{project_id}")
 def project(project_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -445,7 +445,7 @@ def restore_workspace_context(workspace_id: uuid.UUID|None=None,session_id: uuid
 
 @router.get("/workspaces")
 def workspaces(user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return [manager.workspace_payload(w) for w in db.scalars(select(Workspace).where(Workspace.user_id==user.id).order_by(Workspace.created_at.desc()))]
+    return [manager.workspace_payload(w) for w in db.scalars(select(Workspace).join(Project,Project.id==Workspace.project_id).where(Workspace.user_id==user.id,Project.user_id==user.id,manager.visible_project_predicate(user.id)).order_by(Workspace.created_at.desc()))]
 
 @router.get("/workspaces/{workspace_id}")
 def workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
