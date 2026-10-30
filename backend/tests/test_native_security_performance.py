@@ -115,6 +115,48 @@ def test_local_storage_endpoint_displays_account_total_not_just_current_workspac
     assert authenticated(client,f'/api/workspaces/{b.workspace}/storage',a,config).status_code==404
 
 
+def test_local_project_deletion_is_owner_only_and_reclaims_quota(boundary,monkeypatch):
+    import uuid
+    from sqlalchemy.orm import Session
+    from backend.app.services import workspace_cache
+    client,(a,b),_,engine,config=boundary
+    monkeypatch.setattr(workspace_cache,'runtime_idle',lambda row:True)
+    project_id,workspace_id=uuid.uuid4(),uuid.uuid4()
+    with Session(engine) as db:
+        row=models.Project(id=project_id,user_id=a.id,name='Delete Me',source_type='template')
+        folder=models.Workspace(id=workspace_id,user_id=a.id,project=row,status='ready')
+        db.add_all([row,folder]);db.commit()
+        path=workspaces.root_for(folder)
+        path.mkdir(parents=True,exist_ok=True)
+        with (path/'large.bin').open('wb') as f:f.truncate(3*1048576)
+        before=workspaces.account_local_storage_payload(db,a.id)
+    url=f'/api/projects/{project_id}'
+    payload={'confirm_name':'Delete Me','confirmation':'DELETE LOCAL PROJECT'}
+    assert authenticated(client,url,b,config,'DELETE',payload).status_code==404
+    assert authenticated(client,url,a,config,'DELETE',{'confirm_name':'incorrect','confirmation':'DELETE LOCAL PROJECT'}).status_code==400
+    bad=authenticated(client,url,a,config,'DELETE',payload)
+    assert bad.status_code==200,bad.text
+    assert bad.json()['remote_repository_deleted'] is False
+    assert not path.exists()
+    with Session(engine) as db:
+        assert db.get(models.Project,project_id) is None
+        assert db.get(models.Workspace,workspace_id) is None
+        assert workspaces.account_local_storage_payload(db,a.id)['used_bytes']<before['used_bytes']
+        assert db.get(models.Project,b.project) is not None
+        assert b.root.joinpath('marker.txt').is_file()
+
+
+def test_local_project_with_native_history_cannot_be_removed(boundary,monkeypatch):
+    from backend.app.services import workspace_cache
+    client,(a,b),_,engine,config=boundary
+    monkeypatch.setattr(workspace_cache,'runtime_idle',lambda row:True)
+    url=f'/api/projects/{a.project}'
+    response=authenticated(client,url,a,config,'DELETE',{'confirm_name':'Synthetic a','confirmation':'DELETE LOCAL PROJECT'})
+    assert response.status_code==409
+    assert 'Native conversations' in response.text
+    assert a.root.joinpath('marker.txt').read_text()=='synthetic-marker-a'
+
+
 def test_storage_scan_failure_cannot_admit_execution(boundary,monkeypatch):
  _,(owner,_),_,engine,_=boundary
  monkeypatch.setattr(workspaces.os,'fwalk',Mock(side_effect=PermissionError('synthetic denied')))
