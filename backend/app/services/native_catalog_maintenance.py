@@ -16,14 +16,26 @@ import time
 from fastapi import HTTPException
 from ..config import settings
 
-UNIT='opencode-native-test.service'
+UNIT=os.getenv('OPENCODE_NATIVE_SERVICE','opencode-native-test.service')
 NOTICE='Native CLI refresh updates its own cache. Immediate in-process catalog reload is not exposed by this API; no restart/dispose is performed.'
 
 
 def test_scope():
-    from ..routes.native_sessions import enabled
-    if not enabled() or settings.public_base_url.rstrip('/')!='https://test.opencode-gateway.codes' or settings.database_url.rsplit('/',1)[-1].split('?',1)[0]!='opencode_gateway_test':
-        raise HTTPException(503,'Native catalog maintenance is available on TEST only')
+    from ..routes.native_sessions import deployment
+    if deployment() not in {'test','live'}:
+        raise HTTPException(503,'Native catalog maintenance requires a verified deployment')
+
+def maintenance_leader():
+    """One Gateway may refresh a shared Native model cache at a time."""
+    from ..routes.native_sessions import deployment
+    flag=os.getenv('OPENCODE_NATIVE_MAINTENANCE_ENABLED')
+    if flag is None:return deployment()=='test'
+    return flag.lower() in {'1','true','yes'}
+
+def require_maintenance_leader():
+    test_scope()
+    if not maintenance_leader():
+        raise HTTPException(503,'Model refresh is delegated to the other Gateway')
 
 
 def state_path():
@@ -114,7 +126,7 @@ def status():
 
 
 def configure(days):
-    test_scope()
+    require_maintenance_leader()
     if days not in {7,14}:raise HTTPException(422,'Choose 7 or 14 days')
     descriptor=acquire()
     try:
@@ -124,7 +136,7 @@ def configure(days):
 
 
 def refresh():
-    test_scope();descriptor=acquire()
+    require_maintenance_leader();descriptor=acquire()
     try:
         value=load();context=service_context();started=time.time()
         value.update(last_attempt_at=started,next_attempt_at=started+value['interval_days']*86400,outcome='running');save(value)
@@ -145,7 +157,9 @@ def refresh():
 
 
 def sweep():
-    test_scope();value=load()
+    test_scope()
+    if not maintenance_leader():return
+    value=load()
     if value['next_attempt_at'] is None:
         # Initial boot schedules maintenance, never a download on first login.
         configure(value['interval_days']);return
