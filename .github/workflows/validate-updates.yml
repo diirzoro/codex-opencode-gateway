@@ -66,6 +66,8 @@ jobs:
           set -euo pipefail
           python -m py_compile scripts/full_test_git_release.py
           python scripts/validate_migration_chain.py
+          bash -n scripts/live-native-promote.sh
+          test -s docs/NATIVE_SESSION_LIVE_NGINX.conf
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
