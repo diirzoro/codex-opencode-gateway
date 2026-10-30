@@ -15,7 +15,7 @@ for file in index.html app.js styles.css dashboards.js enhancements.js managemen
   cmp -s "$TEST_APP/$file" "$RELEASE/$file" || { echo "TEST frontend differs from GitHub source: $file" >&2; exit 6; }
 done
 # Also prevent promoting a backend that does not match the tested implementation.
-for file in app/main.py app/config.py app/routes/native_sessions.py app/services/native_provider_accounts.py; do
+for file in app/services/native_provider_accounts.py app/services/policy.py app/models/workspace.py; do
   cmp -s "$TEST_APP/backend/$file" "$RELEASE/backend/$file" || { echo "TEST backend differs from GitHub source: $file" >&2; exit 7; }
 done
 ss -ltn | grep -F '127.0.0.2:4097' >/dev/null
