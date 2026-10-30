@@ -160,8 +160,10 @@ def main():
             source_email = read_one(src, EMAIL_TABLE)
             source_github = read_one(src, GITHUB_TABLE)
             policies = src.execute(text("SELECT service_id, enabled FROM email_service_policies")).all()
-        if not source_email and not source_github:
-            fail("TEST_PLATFORM_INTEGRATIONS_ABSENT")
+        if not source_email:
+            fail("TEST_EMAIL_SETTINGS_MISSING")
+        if not source_github:
+            fail("TEST_GITHUB_APP_SETTINGS_MISSING")
         source_email_data = unseal(source_email, test["CREDENTIALS_ENCRYPTION_KEY"], "TEST_EMAIL") if source_email else None
         source_github_data = unseal(source_github, test["CREDENTIALS_ENCRYPTION_KEY"], "TEST_GITHUB") if source_github else None
         if source_email_data is not None and not mail_ready(source_email_data):

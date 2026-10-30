@@ -1,31 +1,19 @@
-name: LIVE | Validate and deploy master
+name: LIVE | Promote master
 
 on:
-  pull_request:
-    branches: [master]
   workflow_dispatch:
-    inputs:
-      confirmation:
-        description: "diagnose LIVE, audit TEST integrations, sync encrypted TEST settings into LIVE, or deploy master"
-        required: true
-        type: choice
-        default: diagnose
-        options:
-          - diagnose
-          - audit-integrations
-          - sync-integrations
-          - promote
 
 permissions:
   contents: read
 
 concurrency:
+  # Exactly one LIVE deployment at a time.
   group: opencode-live-deploy
   cancel-in-progress: false
 
 jobs:
   validate:
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.confirmation == 'promote')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,79 +66,8 @@ jobs:
           node tests/browser/test-admin-user-editor.cjs
           node tests/browser/test-existing-account-recovery.cjs
 
-  diagnose:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.confirmation == 'diagnose'
-    runs-on: ubuntu-latest
-    environment: production
-    timeout-minutes: 8
-    steps:
-      - name: Checkout exact master diagnostic script
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - name: Connect to existing LIVE VPS without modifying services
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-        run: |
-          set -euo pipefail
-          : "${VPS_HOST:?Missing VPS_HOST}"
-          : "${VPS_USER:?Missing VPS_USER}"
-          : "${VPS_SSH_KEY:?Missing VPS_SSH_KEY}"
-          port="${VPS_SSH_PORT:-22}"
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-            'cd "$HOME/opencode-gateway/backend" && set -a && . "$HOME/opencode-gateway/.env" && set +a && exec ../.venv/bin/python -' \
-            < scripts/live-integration-diagnostics.py
-
-  integrations:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && (inputs.confirmation == 'audit-integrations' || inputs.confirmation == 'sync-integrations')
-    runs-on: ubuntu-latest
-    environment: production
-    timeout-minutes: 10
-    steps:
-      - name: Checkout exact reviewed master
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - name: Validate the integration sync script
-        run: python3 -m py_compile scripts/sync-test-platform-integrations.py
-      - name: Inspect TEST and safely copy platform integrations into LIVE
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          OPERATION: ${{ inputs.confirmation }}
-        run: |
-          set -euo pipefail
-          : "${VPS_HOST:?Missing VPS_HOST}"
-          : "${VPS_USER:?Missing VPS_USER}"
-          : "${VPS_SSH_KEY:?Missing VPS_SSH_KEY}"
-          port="${VPS_SSH_PORT:-22}"
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
-          mode=audit
-          if [[ "$OPERATION" == sync-integrations ]]; then mode=apply; fi
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-            '"$HOME/opencode-gateway/.venv/bin/python" - '"$mode" \
-            < scripts/sync-test-platform-integrations.py
-      - name: Check both domains without exposing service settings
-        run: |
-          set -euo pipefail
-          curl -fsS --retry 3 --retry-delay 2 https://opencode-gateway.codes/api/health
-          curl -fsS --retry 3 --retry-delay 2 https://test.opencode-gateway.codes/api/health
-          echo
-
   deploy:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.confirmation == 'promote'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     needs: validate
     runs-on: ubuntu-latest
     environment: production
@@ -176,6 +93,18 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
           ssh -p "$port" -o BatchMode=yes "$VPS_USER@$VPS_HOST" 'mkdir -p "$HOME/opencode-gateway-release"'
+      - name: Audit TEST integration settings before touching LIVE
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${VPS_SSH_PORT:-22}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            '"$HOME/opencode-gateway/.venv/bin/python" - audit' \
+            < scripts/sync-test-platform-integrations.py
+
       - name: Upload source; leave LIVE .env and data untouched
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -201,6 +130,18 @@ jobs:
           port="${VPS_SSH_PORT:-22}"
           ssh -p "$port" "$VPS_USER@$VPS_HOST" \
             'PROMOTE_NATIVE_LIVE_CONFIRM=promote bash "$HOME/opencode-gateway-release/scripts/live-native-promote.sh"'
+      - name: Synchronize encrypted TEST Resend and GitHub App settings into LIVE
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${VPS_SSH_PORT:-22}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            '"$HOME/opencode-gateway/.venv/bin/python" - apply' \
+            < scripts/sync-test-platform-integrations.py
+
       - name: Confirm production domain routes to LIVE backend
         run: |
           set -euo pipefail
