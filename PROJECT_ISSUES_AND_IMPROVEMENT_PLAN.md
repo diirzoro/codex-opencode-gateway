@@ -174,3 +174,13 @@ Only if the cleaned/modular vanilla frontend remains difficult to maintain shoul
 - no replacement of provider credential architecture
 - no billing/PayPal redesign
 - no weakening of session or retention controls
+
+## Production migration recovery — 2026-10-30
+
+- Owner explicitly requested continuing the production deployment after run `41058049189` (and repeat `41058929067`) failed. This is a narrow authorization to repair the migration blocker and use the existing production workflow; no Native runtime or workflow edits.
+- Confirmed failure at source `eb73dad9966e`: Alembic attempted to record the 35-character revision `0026_unique_registration_identities` in its default `VARCHAR(32)` version column. SSH and upload succeeded. The workflow stopped Gateway and installed source before this failure, and did not reach startup/health checks.
+- Fix: migration 0026 widens only `alembic_version.version_num` to PostgreSQL TEXT, after checking for duplicate accounts and before Alembic records the revision. No revision renaming/stamping, new dependencies, schema reset, user deletion, or account-data rewrite. A later migration alone cannot repair this earlier blocker. The widening and normal upgrade share PostgreSQL's transaction.
+- Local reproduction: the unmodified source produced the same PostgreSQL truncation error using PGlite (embedded PostgreSQL through the official socket adapter) and the pinned psycopg/Alembic stack. This is local integration testing, not production acceptance.
+- Local acceptance: fresh database -> all 30 migrations -> `0030_staged_registration` PASS; existing 0025 database with a synthetic user/marker -> head preserving data/PK PASS; repeat upgrade PASS; duplicate account identities rejected with prior version/data/schema preserved PASS. Existing identity regression suite: 3 PASS. Migration chain: 30 revisions, one head PASS.
+- Reproducible opt-in QA: `scripts/verify_postgres_migrations.py` supports fresh/existing/duplicates on separate empty disposable loopback PostgreSQL databases. It never drops/truncates data and refuses nonempty databases. No database server or PGlite package was added to application requirements.
+- Deployment result pending the approved workflow rerun. Backup restorability, final live process/health, and database revision must be reported from the actual run, not inferred from the local tests.

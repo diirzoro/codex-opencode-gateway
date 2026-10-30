@@ -34,6 +34,14 @@ def upgrade():
     if any(duplicates):
         counts=', '.join(name+'='+str(len(group)) for name,group in zip(('username','email','phone'),duplicates))
         raise RuntimeError('Existing normalized account duplicates require owner reconciliation; no users were changed: '+counts)
+    # Alembic defaults to VARCHAR(32), but this existing revision ID is 35
+    # characters. Widen before Alembic records it; a later migration cannot
+    # repair an upgrade that fails here. TEXT only removes the length limit,
+    # preserving the recorded revision and primary key, including wider tables.
+    # Keep this in the same transaction as the upgrade; never rename/stamp IDs.
+    if bind.dialect.name == 'postgresql':
+        op.alter_column('alembic_version', 'version_num', type_=sa.Text(),
+                        existing_type=sa.String(32), existing_nullable=False)
     for name,size in [('username_identity',50),('email_identity',254),('phone_identity',32)]:op.add_column('users',sa.Column(name,sa.String(size),nullable=True))
     for uid,(username,email,phone) in normalized:
         bind.execute(sa.text('UPDATE users SET username_identity=:u,email_identity=:e,phone_identity=:p WHERE id=:id'),{'u':username,'e':email,'p':phone,'id':uid})
