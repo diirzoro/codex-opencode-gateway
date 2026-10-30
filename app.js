@@ -758,10 +758,45 @@ applyPrefs();
   });
   window.confirmAction=async(title)=>Boolean(await window.requestForm(title,[],tr('Confirm','تأكيد')));
   window.requestInput=async(title,value='',type='text')=>{const result=await window.requestForm(title,[{name:'value',label:title,value,type}],tr('Continue','متابعة'));return result?.value??null;};
-  window.editProfileForm=()=>window.requestForm(tr('Edit profile','تعديل الملف'),[
-    {name:'phone',label:tr('Phone','الهاتف'),type:'tel',value:currentUser?.phone||'',required:true},
-    {name:'postal_code',label:tr('Postal code','الرمز البريدي'),value:currentUser?.postal_code||'',required:true}
-  ]);
+  window.editProfileForm=async()=>{
+    if(!currentUser)return false;
+    const original={username:currentUser.username||'',email:currentUser.email||'',
+      phone:currentUser.phone||'',postal_code:currentUser.postal_code||''};
+    const values=await window.requestForm(tr('Edit identity · verification required','تعديل البيانات الشخصية · يلزم التحقق'),[
+      {name:'username',label:tr('Username','اسم المستخدم'),value:original.username,required:true},
+      {name:'email',label:tr('Email','البريد الإلكتروني'),type:'email',value:original.email,required:true},
+      {name:'phone',label:tr('Phone with international code','الهاتف مع مفتاح الدولة'),type:'tel',value:original.phone,required:true},
+      {name:'postal_code',label:tr('Country dialling code','مفتاح الاتصال الدولي'),value:original.postal_code,required:true},
+      {name:'current_password',label:tr('Current password to authorize changes','كلمة المرور الحالية للسماح بالتعديل'),type:'password',required:true}
+    ],tr('Send 60-second verification code','إرسال رمز تحقق صالح لمدة دقيقة'));
+    if(!values)return false;
+    const changes={};
+    for(const key of Object.keys(original)){
+      const value=String(values[key]||'').trim();
+      if(value!==original[key])changes[key]=value;
+    }
+    if(!Object.keys(changes).length){toast(tr('No changes were made.','لم تُعدّل أي بيانات.'));return false;}
+    try{
+      const requested=await api('/api/profile/change/request',{method:'POST',
+        body:JSON.stringify({...changes,current_password:values.current_password})});
+      const target=requested.destination==='new_email'
+        ?tr('the NEW email address','البريد الجديد')
+        :tr('your CURRENT registered email','بريدك الحالي المسجل');
+      const code=await window.requestInput(tr(
+        'Enter the six-digit code sent to '+target+'. It expires in 60 seconds. Cancel leaves the previous details unchanged.',
+        'أدخل رمز التفعيل المكون من 6 أرقام الذي أُرسل إلى '+target+'. ينتهي خلال 60 ثانية. الإلغاء يترك بياناتك القديمة دون تغيير.'
+      ));
+      if(code===null)return false;
+      const changed=await api('/api/profile/change/confirm',{method:'POST',
+        body:JSON.stringify({...changes,challenge_id:requested.challenge_id,code:String(code).trim()})});
+      renderProfile(changed);
+      toast(tr('Your verified profile details were updated.','تم تحديث بياناتك بعد التحقق من البريد.'));
+      return true;
+    }catch(error){
+      toast(error.message);
+      return false;
+    }
+  };
   const basePage=page;page=async function(...args){document.querySelectorAll('dialog[data-form-dialog][open]').forEach(dialog=>dialog.close());return basePage(...args);};
   document.addEventListener('DOMContentLoaded',()=>{
     for(const [id,en,ar] of [['adminPlanForm','Add plan','إضافة خطة'],['adminPolicyForm','Advanced access restrictions','قيود الوصول المتقدمة'],['createProjectForm','Create project','إنشاء مشروع']]){
