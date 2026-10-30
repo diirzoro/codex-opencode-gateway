@@ -1078,7 +1078,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
   function emptyState(iconHref, title, desc, actionLabel, actionFn) { var box = textElement('div', '', 'empty-state'); var ic = textElement('div', '', 'es-icon'); ic.appendChild(navIcon(iconHref)); box.append(ic); box.append(textElement('h3', title)); if (desc) box.append(textElement('p', desc)); if (actionLabel && actionFn) { var b = textElement('button', actionLabel, 'button'); b.onclick = actionFn; box.append(b); } return box; }
   function listCard(iconHref, title, subtitle) { var card = textElement('div', '', 'list-card'); var ic = textElement('div', '', 'lc-icon'); ic.appendChild(navIcon(iconHref)); card.append(ic); var main = textElement('div', '', 'lc-main'); main.append(textElement('b', title)); if (subtitle) main.append(textElement('small', subtitle)); card.append(main); card.append(textElement('div', '', 'lc-actions')); return card; }
   function statusBadge(status) { var map = { ready: ['good', tr('Ready', 'جاهز')], creating: ['info', tr('Creating', 'جارٍ الإنشاء')], failed: ['danger', tr('Failed', 'فشل')], pushed: ['good', tr('Pushed', 'تم الدفع')], active: ['good', tr('Active', 'نشط')], suspended: ['danger', tr('Suspended', 'موقوف')], cancelled: ['danger', tr('Cancelled', 'ملغى')], pending_payment: ['info', tr('Pending payment', 'بانتظار الدفع')], trial: ['info', tr('Trial', 'تجريبي')], completed: ['good', tr('Completed', 'مكتمل')], idle: ['muted', tr('Idle', 'خامل')], submitted: ['info', tr('Running', 'قيد التشغيل')] }; var m = map[status]; return badge(m ? m[1] : status, m ? m[0] : 'muted'); }
-  function statusText(status) { var m = { ready: tr('Ready', 'جاهز'), creating: tr('Creating', 'جارٍ الإنشاء'), failed: tr('Failed', 'فشل'), pushed: tr('Pushed', 'تم الدفع'), active: tr('Active', 'نشط'), suspended: tr('Suspended', 'موقوف'), cancelled: tr('Cancelled', 'ملغى'), pending_payment: tr('Pending payment', 'بانتظار الدفع'), trial: tr('Trial', 'تجريبي'), completed: tr('Completed', 'مكتمل'), idle: tr('Idle', 'خامل'), submitted: tr('Running', 'قيد التشغيل'), expired: tr('Expired', 'منتهي') }; return m[status] || status; }
+  function statusText(status) { var m = { ready: tr('Ready', 'جاهز'), creating: tr('Creating', 'جارٍ الإنشاء'), failed: tr('Failed', 'فشل'), pushed: tr('Pushed', 'تم الدفع'), active: tr('Active', 'نشط'), suspended: tr('Suspended', 'موقوف'), cancelled: tr('Cancelled', 'ملغى'), pending_payment: tr('Pending payment', 'بانتظار الدفع'), trial: tr('Trial', 'تجريبي'), completed: tr('Completed', 'مكتمل'), idle: tr('Idle', 'خامل'), submitted: tr('Running', 'قيد التشغيل'), expired: tr('Expired', 'منتهي'), archived: tr('Archived', 'مؤرشف'), identity_released: tr('Identity released', 'تم تحرير بيانات التسجيل') }; return m[status] || status; }
   function projectSourceIcon(source) { return source === 'github' ? '#icon-github' : (source === 'template' ? '#icon-grid' : '#icon-folder'); }
 
   function injectNavIcons() {
@@ -1561,6 +1561,58 @@ window.renderGithubConfirmation=function(root,status,refresh){
   /* ============ 5. grids for admin sections ============ */
   var NOT_AVAILABLE = tr('Not available yet', 'غير متاح بعد');
 
+  function openAdminAccountRemoval(u){
+    const body=document.createElement('section');
+    const info=textElement('p',tr(
+      'Choose archive to suspend access while preserving account identity and recovery. Choose permanent login-identity removal to irreversibly free this username, email and phone for a NEW verified account. Project ownership, original files, billing history and audit records remain attached to the old UUID; this does NOT erase those historical records.',
+      'اختر الأرشفة لتعطيل الدخول مع الاحتفاظ بهوية الحساب وإمكانية استرجاعه. اختر الحذف النهائي لهوية الدخول لتحرير اسم المستخدم والبريد والهاتف بصورة لا رجعة فيها للتسجيل الجديد بعد التحقق. المشاريع والملفات والسجلات المالية والتدقيق تبقى مرتبطة بمعرّف العميل القديم، ولا تُحذف هنا.'
+    ));
+    const feedback=textElement('p','','manage-identity-removal-feedback');
+    feedback.setAttribute('role','alert');
+    body.append(info,feedback);
+    const archive=textElement('button',tr('Archive · recoverable','أرشفة · قابلة للاسترجاع'),'button ghost small');
+    archive.type='button';
+    archive.disabled=u.status==='archived'||u.status==='identity_released';
+    archive.onclick=async()=>{
+      if(!await window.confirmAction(tr('Archive '+u.username+'? The customer may request account reactivation later.','أرشفة '+u.username+'؟ يمكن للعميل لاحقًا طلب إعادة تفعيل حسابه.')))return;
+      archive.disabled=remove.disabled=true;
+      try{
+        await api('/api/admin/users/'+u.id,{method:'DELETE'});
+        feedback.textContent=tr('Account archived; identifiers remain reserved.','تمت الأرشفة؛ تظل بيانات التسجيل محجوزة.');
+        modal.close();await gridUsers();
+      }catch(error){feedback.textContent=error.message;archive.disabled=remove.disabled=false;}
+    };
+    const remove=textElement('button',tr('Remove login identity permanently','حذف هوية الدخول نهائيًا'),'button danger small');
+    remove.type='button';
+    remove.disabled=u.status==='identity_released';
+    remove.onclick=async()=>{
+      const typed=await window.requestInput(tr(
+        'Permanent identity release: enter the exact username '+u.username+'. Original project and financial records will NOT be deleted. Account restoration will be impossible.',
+        'تحرير بيانات التسجيل بلا رجعة: اكتب اسم المستخدم '+u.username+' حرفيًا. لن تُحذف المشاريع والسجلات المالية القديمة، ولن يتمكن صاحب الحساب من استعادة هويته القديمة.'
+      ));
+      if(typed!==u.username){if(typed!==null)feedback.textContent=tr('Username confirmation did not match.','اسم المستخدم المُدخل لا يطابق المطلوب.');return;}
+      if(!await window.confirmAction(tr(
+        'Final confirmation: permanently disable account recovery and release username/email/phone? This is NOT a deletion of project/billing records.',
+        'تأكيد نهائي: تعطيل استرجاع هذا الحساب وتحرير اسم المستخدم والبريد والهاتف نهائيًا؟ لن تُحذف المشاريع أو سجلات الفوترة.'
+      )))return;
+      archive.disabled=remove.disabled=true;
+      try{
+        if(u.status!=='archived')await api('/api/admin/users/'+u.id,{method:'DELETE'});
+        const result=await api('/api/admin/users/'+u.id+'/release-identifiers',{
+          method:'POST',body:JSON.stringify({confirm_username:u.username})
+        });
+        if(result.account_reactivation_disabled!==true)throw Error(tr('Server did not confirm identity release.','لم يؤكد الخادم تحرير هوية الحساب.'));
+        feedback.textContent=tr('Login identifiers released. Existing project/billing records retained.','تم تحرير بيانات الدخول؛ احتُفظ بالمشاريع والسجلات القديمة.');
+        modal.close();await gridUsers();
+      }catch(error){
+        feedback.textContent=error.message;
+        archive.disabled=remove.disabled=false;
+        await gridUsers();
+      }
+    };
+    const modal=openModal(tr('Account removal · '+u.username,'حذف الحساب · '+u.username),body,[archive,remove]);
+  }
+
   async function gridUsers() {
     var list = await api('/api/admin/users');
     var body = document.getElementById('adminUsersBody');
@@ -1596,9 +1648,9 @@ window.renderGithubConfirmation=function(root,status,refresh){
         return cellActions([
           ['icon-eye', tr('View details', 'عرض التفاصيل'), function () { openUserModal(u, false); }],
           ['icon-edit', tr('Edit user', 'تعديل المستخدم'), function () { openUserModal(u, true); }],
-          ['icon-close', u.status==='active'?tr('Suspend','تعليق'):tr('Activate','تفعيل'), function(){return adminPatchUser(u.id,{status:u.status==='active'?'suspended':'active'});},u.id===currentUser.id||u.role==='owner'||(currentUser.role!=='owner'&&u.role==='admin')],
+          ['icon-close', u.status==='active'?tr('Suspend','تعليق'):tr('Activate','تفعيل'), function(){return adminPatchUser(u.id,{status:u.status==='active'?'suspended':'active'});},u.id===currentUser.id||u.role==='owner'||['archived','identity_released'].includes(u.status)||(currentUser.role!=='owner'&&u.role==='admin')],
           ['icon-plus',tr('Extend trial','تمديد التجربة'),async function(){var value=await window.requestInput(tr('Trial days','أيام التجربة'),'10');if(value===null)return;var days=Number(value);if(!Number.isInteger(days)||days<0||days>3650){toast(tr('Invalid days','عدد أيام غير صالح'));return;}await adminPatchUser(u.id,{trial_days:days});}],
-          ['icon-trash',tr('Remove account access (archive, preserve data)','حذف الوصول للحساب (أرشفة مع حفظ البيانات)'),async function(){if(!await window.confirmAction(tr('Remove this account from use? Sessions will be revoked. Projects, conversations and billing records are preserved.','حذف الحساب من الاستخدام؟ تُلغى جلساته وتُحفظ المشاريع والمحادثات والفواتير.')))return;try{await api('/api/admin/users/'+u.id,{method:'DELETE'});apiMessage('adminUserMessage',tr('Account archived; all data preserved.','أُرشف الحساب مع حفظ جميع البيانات.'));await gridUsers();}catch(error){apiMessage('adminUserMessage',error.message,true);}},u.id===currentUser.id||['admin','owner'].includes(u.role)||u.status==='archived'],
+          ['icon-trash',tr('Choose archive or permanent login-identity removal','اختيار الأرشفة أو حذف هوية الدخول نهائيًا'),function(){openAdminAccountRemoval(u);},u.id===currentUser.id||['admin','owner'].includes(u.role)||u.status==='identity_released'],
         ]);
       },
     });
@@ -1699,9 +1751,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
             ]), []);
           }],
           ['icon-edit', tr('Edit plan', 'تعديل الخطة'), function () { openPlanModal(plan); }],
-          ['icon-close', u.status==='active'?tr('Suspend','تعليق'):tr('Activate','تفعيل'), function(){return adminPatchUser(u.id,{status:u.status==='active'?'suspended':'active'});},u.id===currentUser.id||u.role==='owner'||(currentUser.role!=='owner'&&u.role==='admin')],
-          ['icon-plus',tr('Extend trial','تمديد التجربة'),async function(){var value=await window.requestInput(tr('Trial days','أيام التجربة'),'10');if(value===null)return;var days=Number(value);if(!Number.isInteger(days)||days<0||days>3650){toast(tr('Invalid days','عدد أيام غير صالح'));return;}await adminPatchUser(u.id,{trial_days:days});}],
-          ['icon-trash',tr('Remove account access (archive, preserve data)','حذف الوصول للحساب (أرشفة مع حفظ البيانات)'),async function(){if(!await window.confirmAction(tr('Remove this account from use? Sessions will be revoked. Projects, conversations and billing records are preserved.','حذف الحساب من الاستخدام؟ تُلغى جلساته وتُحفظ المشاريع والمحادثات والفواتير.')))return;try{await api('/api/admin/users/'+u.id,{method:'DELETE'});apiMessage('adminUserMessage',tr('Account archived; all data preserved.','أُرشف الحساب مع حفظ جميع البيانات.'));await gridUsers();}catch(error){apiMessage('adminUserMessage',error.message,true);}},u.id===currentUser.id||['admin','owner'].includes(u.role)||u.status==='archived'],
+
         ]);
       },
     });
