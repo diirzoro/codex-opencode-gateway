@@ -10,7 +10,7 @@ from backend.app.routes import admin
 def setup(boundary,monkeypatch):
     client,(actor,target),calls,engine,config=boundary
     client.app.include_router(admin.router)
-    for model in (models.Plan,models.Country,models.Region,models.City,models.PasswordReset,models.EmailVerification):model.__table__.create(engine,checkfirst=True)
+    for model in (models.Plan,models.Country,models.Region,models.City,models.PasswordReset,models.EmailVerification,models.GithubAuthState):model.__table__.create(engine,checkfirst=True)
     with Session(engine) as db:
         user=db.get(models.User,actor.id);user.role='admin';db.commit()
     monkeypatch.setattr(admin.opencode,'stop_workspace',Mock())
