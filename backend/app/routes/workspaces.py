@@ -78,6 +78,9 @@ def _workspace_and_project(db,user,workspace_id):
 
 @router.get("/opencode/health")
 def health(user: User=Depends(require_user)):
+    if native_sessions.enabled():
+        native_sessions.admit(user)
+        return native_sessions.metadata('GET','/global/health',native_provider_accounts.root(user))
     return opencode.shared_health()
 
 def _account_catalog_state(db, user, data):
