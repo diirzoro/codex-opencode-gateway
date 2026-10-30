@@ -95,6 +95,57 @@ def test_cannot_release_active_or_privileged_customer_identity(boundary,monkeypa
     assert foreign.status_code==403
 
 
+def test_permanent_user_deletion_physically_removes_empty_archived_row_and_dependencies(boundary,monkeypatch):
+    import uuid
+    from datetime import datetime,timedelta,timezone
+    client,actor,target,engine,config=setup(boundary,monkeypatch)
+    now=datetime.now(timezone.utc)
+    uid=uuid.uuid4()
+    with Session(engine) as db:
+        user=models.User(id=uid,username='delete_empty',email='delete-empty@example.org',
+            phone='+967777543215',postal_code='+967',password_hash='synthetic-only',
+            status='archived',role='customer',trial_started_at=now,trial_ends_at=now+timedelta(days=1))
+        db.add(user)
+        db.add(models.AuthSession(id=uuid.uuid4(),user_id=uid,token_hash=uuid.uuid4().hex,
+            expires_at=now+timedelta(hours=1)))
+        db.add(models.AccountAudit(subject_id=uid,actor_id=actor.id,action='synthetic.test'))
+        db.commit()
+    path=f'/api/admin/users/{uid}/delete-permanently'
+    assert authenticated(client,path,actor,config,'POST',{'confirm_username':'wrong','confirmation':'DELETE PERMANENTLY'}).status_code==400
+    assert authenticated(client,path,actor,config,'POST',{'confirm_username':'delete_empty','confirmation':'incorrect'}).status_code==422
+    ok=authenticated(client,path,actor,config,'POST',{'confirm_username':'delete_empty','confirmation':'DELETE PERMANENTLY'})
+    assert ok.status_code==200,ok.text
+    assert ok.json()['database_row_deleted'] is True
+    with Session(engine) as db:
+        assert db.get(models.User,uid) is None,'Must really remove users row, never make released tombstone'
+        assert not list(db.scalars(select(models.AuthSession).where(models.AuthSession.user_id==uid)))
+        assert not list(db.scalars(select(models.AccountAudit).where(models.AccountAudit.subject_id==uid)))
+        assert db.get(models.User,actor.id) is not None
+        assert db.get(models.Project,target.project) is not None
+        assert target.root.joinpath('marker.txt').is_file()
+
+
+def test_permanent_delete_refuses_projects_without_erasing_files_or_account(boundary,monkeypatch):
+    client,actor,target,engine,config=setup(boundary,monkeypatch)
+    path=f'/api/admin/users/{target.id}/delete-permanently'
+    active=authenticated(client,path,actor,config,'POST',{
+        'confirm_username':'fixture-b','confirmation':'DELETE PERMANENTLY'})
+    assert active.status_code==409
+    assert authenticated(client,f'/api/admin/users/{target.id}',actor,config,'DELETE').status_code==200
+    blocked=authenticated(client,path,actor,config,'POST',{
+        'confirm_username':'fixture-b','confirmation':'DELETE PERMANENTLY'})
+    assert blocked.status_code==409
+    assert 'projects' in blocked.text
+    with Session(engine) as db:
+        assert db.get(models.User,target.id).status=='archived'
+        assert db.get(models.Project,target.project) is not None
+        assert db.get(models.Workspace,target.workspace) is not None
+        assert target.root.joinpath('marker.txt').read_text()=='synthetic-marker-b'
+    denied=authenticated(client,f'/api/admin/users/{actor.id}/delete-permanently',actor,config,'POST',{
+        'confirm_username':'fixture-a','confirmation':'DELETE PERMANENTLY'})
+    assert denied.status_code==403
+
+
 def test_admin_cannot_archive_another_administrator(boundary,monkeypatch):
     client,actor,target,engine,config=setup(boundary,monkeypatch)
     with Session(engine) as db:
