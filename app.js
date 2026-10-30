@@ -353,7 +353,9 @@ $('#loginForm').onsubmit=async event=>{
   try{if($('#rememberIdentity').checked)localStorage.setItem('og-login-identity',value('loginIdentity'));else localStorage.removeItem('og-login-identity');}catch(error){}
   await openWorkspaceAfterLogin();
  }catch(error){
-  apiMessage('loginMessage',error.message,true);
+  apiMessage('loginMessage',error.status===403&&error.message.startsWith('Confirm your email')
+    ?(lang==='ar'?'حسابك مسجل ولكنه غير مفعّل. يمكنك استرجاع الحساب عبر البريد المسجّل وتعيين كلمة مرور جديدة بعد التحقق.':'Your existing account is not activated. You can recover it through its registered email and set a new password after verification.')
+    :error.message,true);
   if(error.status===403&&/Confirm your email|Account archived|Account is not active/.test(error.message)){
     try{await offerExistingAccountRecovery(value('loginIdentity'),'loginMessage');}
     catch(recoveryError){apiMessage('loginMessage',recoveryError.message,true);}
