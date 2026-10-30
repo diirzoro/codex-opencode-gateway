@@ -99,7 +99,6 @@ jobs:
           : "${VPS_SUDO_PASSWORD:?Set VPS_SUDO_PASSWORD as a protected production Actions secret}"
           [[ "$VPS_USER" == "$EXPECTED_VPS_USER" ]] || { echo "Selected username does not match configured production SSH user"; exit 1; }
           [[ "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "Invalid SSH username"; exit 1; }
-          [[ "$VPS_SUDO_PASSWORD" != *
           port="${VPS_SSH_PORT:-22}"
           install -d -m 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
@@ -147,79 +146,6 @@ jobs:
           # Never pass it via a workflow input, CLI argument, file or log.
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             'PROMOTE_NATIVE_LIVE_CONFIRM=promote LIVE_SUDO_PASS_STDIN=1 bash "$HOME/opencode-gateway-release/scripts/live-native-promote.sh"'
-      - name: Synchronize encrypted TEST Resend and GitHub App settings into LIVE
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ inputs.vps_username }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-        run: |
-          set -euo pipefail
-          port="${VPS_SSH_PORT:-22}"
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-            '"$HOME/opencode-gateway/.venv/bin/python" - apply' \
-            < scripts/sync-test-platform-integrations.py
-
-      - name: Confirm production domain routes to LIVE backend
-        run: |
-          set -euo pipefail
-          curl -fsS --retry 5 --retry-delay 3 https://opencode-gateway.codes/api/health
-          echo
-          echo "LIVE basic health passed. Authenticated Native/SSE acceptance still required."
-      - name: Report LIVE registration and GitHub integration readiness
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ inputs.vps_username }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-        run: |
-          set -euo pipefail
-          port="${VPS_SSH_PORT:-22}"
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-            'cd "$HOME/opencode-gateway/backend" && set -a && . "$HOME/opencode-gateway/.env" && set +a && exec ../.venv/bin/python -' \
-            < scripts/live-integration-diagnostics.py
-\n'* ]] || { echo "Sudo password cannot contain a newline"; exit 1; }
-          port="${VPS_SSH_PORT:-22}"
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
-          ssh -p "$port" -o BatchMode=yes "$VPS_USER@$VPS_HOST" 'mkdir -p "$HOME/opencode-gateway-release"'
-      - name: Audit TEST integration settings before touching LIVE
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ inputs.vps_username }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-        run: |
-          set -euo pipefail
-          port="${VPS_SSH_PORT:-22}"
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-            '"$HOME/opencode-gateway/.venv/bin/python" - audit' \
-            < scripts/sync-test-platform-integrations.py
-
-      - name: Upload source; leave LIVE .env and data untouched
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ inputs.vps_username }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-        run: |
-          set -euo pipefail
-          port="${VPS_SSH_PORT:-22}"
-          rsync -az \
-            --exclude='.git/' --exclude='.github/' \
-            --exclude='.env' --exclude='.env.*' \
-            --exclude='.venv/' --exclude='node_modules/' \
-            --exclude='runtime/' --exclude='workspaces/' \
-            --exclude='receipts/' --exclude='logs/' \
-            -e "ssh -p $port" ./ "$VPS_USER@$VPS_HOST:~/opencode-gateway-release/"
-      - name: Validate LIVE; promote code and schema without backup or cleanup
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ inputs.vps_username }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-        run: |
-          set -euo pipefail
-          port="${VPS_SSH_PORT:-22}"
-          ssh -p "$port" "$VPS_USER@$VPS_HOST" \
-            'PROMOTE_NATIVE_LIVE_CONFIRM=promote bash "$HOME/opencode-gateway-release/scripts/live-native-promote.sh"'
       - name: Synchronize encrypted TEST Resend and GitHub App settings into LIVE
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
