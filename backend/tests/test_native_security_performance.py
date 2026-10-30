@@ -82,6 +82,41 @@ def test_unknown_tools_shell_and_secrets_stay_denied():
   assert last['action']=='deny'
 
 
+def test_native_merged_session_permission_suffix_is_authoritative():
+    from pathlib import Path
+    root=Path('/synthetic-owned-workspace')
+    expected=policy.native_session_permissions(NS(allowed_tools='[]',allowed_models='[]',allowed_providers='[]'),root)
+    assert native.native_restrictions_persisted({'permission':expected},expected)
+    assert native.native_restrictions_persisted({'permission':[
+        {'permission':'bash','pattern':'*','action':'allow'},*expected]},expected)
+    assert not native.native_restrictions_persisted({'permission':[
+        *expected,{'permission':'bash','pattern':'*','action':'allow'}]},expected)
+    assert not native.native_restrictions_persisted({'permission':expected[:-1]},expected)
+    assert not native.native_restrictions_persisted({'permission':None},expected)
+
+
+def test_native_patch_merge_survives_authoritative_read(monkeypatch):
+    from pathlib import Path
+    root=Path('/synthetic-owned-workspace')
+    rules=[{'permission':'*','pattern':'*','action':'deny'},
+           {'permission':'read','pattern':'*','action':'ask'},
+           {'permission':'bash','pattern':'*','action':'deny'}]
+    old=[{'permission':'bash','pattern':'*','action':'allow'}]
+    stored=list(old)
+    methods=[]
+    def metadata(method,path,directory,data=None):
+        methods.append(method)
+        if method=='PATCH':
+            stored.extend(data['permission'])
+            return {'id':'ses_owned','directory':str(root),'permission':old}
+        return {'id':'ses_owned','directory':str(root),'permission':list(stored)}
+    monkeypatch.setattr(native,'metadata',metadata)
+    result=native.confirm_native_session_restrictions('ses_owned',root,rules)
+    assert native.native_restrictions_persisted(result,rules)
+    assert methods==['PATCH','GET']
+    assert len(result['permission'])==len(old)+len(rules)
+
+
 def test_native_policy_patch_uses_confirmed_read_not_stale_patch_response(monkeypatch):
     from pathlib import Path
     root=Path('/synthetic-owned-workspace')
