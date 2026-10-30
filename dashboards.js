@@ -470,7 +470,7 @@
     const owner=currentUser.id;
     // Never retain an imported workspace in the open file panel after the
     // source account has been disconnected. This is UI cleanup, not deletion.
-    if(activeProject&&(activeProject.source_type==='github'||activeProject.github_installation_id)){
+    if(activeProject?.source_type==='github'){
       stopEvents();
       workspaceSelectionRevision++;
       activeProject=activeWorkspace=activeSession=null;
