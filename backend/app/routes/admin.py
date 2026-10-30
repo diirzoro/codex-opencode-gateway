@@ -112,6 +112,8 @@ def update_user(user_id: str, data: UserAdminPatch, actor: User = Depends(requir
         raise HTTPException(422, "Invalid user id")
     if user is None:
         raise HTTPException(404, "User not found")
+    if user.status=='identity_released':
+        raise HTTPException(409, 'Released archived identities cannot be edited or reactivated')
     if user.id == actor.id or user.role == 'owner' or (actor.role != 'owner' and user.role == 'admin'):
         raise HTTPException(403, 'Cannot change this administrator account')
     if data.role is not None and actor.role != 'owner':
@@ -167,11 +169,71 @@ def archive_user(user_id:_uuid.UUID,actor:User=Depends(require_admin),db:Session
     if user is None:raise HTTPException(404,'User not found')
     if user.id==actor.id or user.role in {'admin','owner'}:
         raise HTTPException(403,'Administrator accounts cannot be removed')
+    if user.status=='identity_released':
+        raise HTTPException(409,'This account identity has already been released; archival cannot restore it')
     from .management import stop_work,revoke,audit
     if user.status!='archived':
         stop_work(db,user);revoke(db,user);user.status='archived'
         audit(db,actor,'account.admin_archived',user.id);db.commit()
     return {'archived':True,'data_preserved':True,'id':str(user.id)}
+
+class ReleaseArchivedIdentifiers(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    # Explicit re-entry of the actual archived username, not a reusable token.
+    confirm_username:str=Field(min_length=1,max_length=50)
+
+
+@router.post('/users/{user_id}/release-identifiers')
+def release_archived_identifiers(user_id:_uuid.UUID,data:ReleaseArchivedIdentifiers,
+                                 actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Irreversibly release archived signup identifiers; preserve owned data.
+
+    Archive means recoverable and keeps its identifiers. This separate action
+    de-identifies the original account and permanently disables reactivation.
+    Projects, Native history, subscriptions and payment records keep their
+    original UUID/foreign keys. This is NOT a hard-delete/personal-data purge.
+    """
+    from ..models import AuthSession, PasswordReset, EmailVerification, GithubAuthState
+    from .management import revoke, audit
+    user=db.scalar(select(User).where(User.id==user_id).with_for_update())
+    if user is None:raise HTTPException(404,'User not found')
+    if user.id==actor.id or user.role in {'admin','owner'} or actor.role not in {'admin','owner'}:
+        raise HTTPException(403,'Administrator accounts cannot be released')
+    if user.status!='archived':
+        raise HTTPException(409,'Only archived accounts can release registration identifiers')
+    if data.confirm_username!=user.username:
+        raise HTTPException(400,'Enter the archived username exactly to confirm permanent identity release')
+    if db.scalar(select(GithubConnection.id).where(GithubConnection.user_id==user.id)):
+        raise HTTPException(409,'Disconnect the archived account GitHub connection before releasing identifiers')
+    if db.scalar(select(GithubAuthState.state).where(GithubAuthState.user_id==user.id)):
+        raise HTTPException(409,'Pending GitHub authorization must expire and be cleared before identity release')
+    # A released account cannot log in, obtain an account-recovery link or
+    # enter the paid reactivation flow. Rotating the identity, not User.id,
+    # leaves original project ownership isolated from subsequent signups.
+    revoke(db,user)
+    now=datetime.now(timezone.utc)
+    db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
+    db.execute(update(EmailVerification).where(
+        EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None)).values(used_at=now))
+    marker=user.id.hex
+    user.username='released_'+marker
+    user.email='released-'+marker+'@invalid.example'
+    user.phone=''
+    user.postal_code=''
+    user.github_subject=None
+    user.google_subject=None
+    user.password_hash='!archived!'
+    user.status='identity_released'
+    user.last_login_at=None
+    audit(db,actor,'account.identifiers_released',user.id)
+    try:db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409,'Identity release conflicted with a concurrent account change') from None
+    return {'released':True,'id':str(user.id),'registration_identifiers_available':True,
+            'account_reactivation_disabled':True,'project_data_preserved':True,
+            'permanent_account_deletion':False}
+
 
 @router.get("/overview")
 def overview(_: User = Depends(require_admin), db: Session = Depends(get_db)):
