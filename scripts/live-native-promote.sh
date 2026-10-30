@@ -4,6 +4,20 @@
 set -euo pipefail
 umask 077
 [[ "${PROMOTE_NATIVE_LIVE_CONFIRM:-}" == promote ]] || { echo 'Requires PROMOTE_NATIVE_LIVE_CONFIRM=promote' >&2; exit 2; }
+# Password is received once from GitHub's protected secret over encrypted SSH stdin.
+# No plaintext credentials are stored on disk, logged or passed as CLI arguments.
+sudo_password=''
+if [[ "${LIVE_SUDO_PASS_STDIN:-0}" == 1 ]]; then
+  IFS= read -r sudo_password || { echo 'Missing protected sudo authorization' >&2; exit 9; }
+  [[ -n "$sudo_password" ]] || { echo 'Empty protected sudo authorization' >&2; exit 9; }
+fi
+sudo_operator() {
+  if [[ -n "$sudo_password" ]]; then
+    printf '%s\n' "$sudo_password" | sudo -S -p '' "$@"
+  else
+    sudo -n "$@"
+  fi
+}
 APP="$HOME/opencode-gateway"
 RELEASE="$HOME/opencode-gateway-release"
 # Backups and cleanup are intentionally deferred until LIVE acceptance.
@@ -21,30 +35,19 @@ done
 ss -ltn | grep -F '127.0.0.2:4097' >/dev/null
 ss -ltn | grep -F '127.0.0.1:18097' >/dev/null
 ss -ltn | grep -F '127.0.0.1:18098' >/dev/null
-# LIVE internal locations MUST be added to the existing production TLS server.
-# Verify the already-installed production Nginx locations directly without
-# invoking password-protected sudo -n nginx -T from a noninteractive workflow.
-LIVE_NGINX_CONF=/etc/nginx/sites-enabled/opencode-gateway
-LIVE_NATIVE_SNIPPET=/etc/nginx/snippets/opencode-native-live.conf
-if ! test -r "$LIVE_NGINX_CONF" || ! test -r "$LIVE_NATIVE_SNIPPET"; then
-  echo 'LIVE Nginx config files are unreadable to deployment user' >&2
-  exit 4
-fi
-if ! grep -Fq 'server_name opencode-gateway.codes;' "$LIVE_NGINX_CONF" ||
-   ! grep -Fq 'proxy_pass http://127.0.0.1:8000;' "$LIVE_NGINX_CONF" ||
-   ! grep -Fq 'include /etc/nginx/snippets/opencode-native-live.conf;' "$LIVE_NGINX_CONF" ||
-   ! grep -Fq 'location @native_session_live {' "$LIVE_NATIVE_SNIPPET" ||
-   ! grep -Fq 'location @native_discovery_live {' "$LIVE_NATIVE_SNIPPET"; then
-  echo 'LIVE Nginx production domain, backend or Native include is not installed' >&2
-  exit 4
-fi
-echo 'LIVE Nginx production and Native routes verified without sudo'
-# Check unattended restart authorization before modifying LIVE files or .env.
-# GitHub Actions cannot answer an interactive sudo password prompt.
-if ! sudo -n -l /usr/bin/systemctl restart opencode-gateway.service >/dev/null 2>&1; then
-  echo 'GitHub SSH user lacks noninteractive permission to restart only opencode-gateway.service; deployment stopped before modifications' >&2
+# Inspect the actual active Nginx configuration with operator authorization.
+# Avoid guessing the name of the VPS Nginx sites-enabled file.
+nginx_config="$(sudo_operator /usr/sbin/nginx -T 2>/dev/null || true)"
+[[ "$nginx_config" == *'location @native_session_live'* &&
+   "$nginx_config" == *'location @native_discovery_live'* ]] ||
+   { echo 'LIVE Nginx Native locations missing or cannot inspect with supplied authorization' >&2; exit 4; }
+unset nginx_config
+# Confirm permission before editing any source, environment, or schema.
+if ! sudo_operator -l /usr/bin/systemctl restart opencode-gateway.service >/dev/null 2>&1; then
+  echo 'Operator authorization cannot restart opencode-gateway.service; deployment stopped before modifications' >&2
   exit 8
 fi
+echo 'LIVE Nginx routes and Gateway-only restart authorization verified'
 # Validate LIVE configuration only. Do not create backups, delete files,
 # replace the database, or change production callback/domain values.
 "$APP/.venv/bin/python" - "$APP/.env" <<'PY'
@@ -98,8 +101,9 @@ set -a
 . "$APP/.env"
 set +a
 (cd "$APP/backend" && ../.venv/bin/python -m alembic upgrade head && ../.venv/bin/python -m alembic current)
-sudo -n /usr/bin/systemctl restart opencode-gateway.service
-sudo -n /usr/bin/systemctl is-active --quiet opencode-gateway.service
+sudo_operator /usr/bin/systemctl restart opencode-gateway.service
+unset sudo_password
+/usr/bin/systemctl is-active --quiet opencode-gateway.service
 curl -fsS --retry 15 --retry-delay 2 --retry-connrefused http://127.0.0.1:8000/api/health
 echo "LIVE_CODE_AND_SCHEMA_PROMOTED no-backup-created; old files retained"
 # Real Native prompts, file permissions, SSE and cross-user isolation still
