@@ -57,7 +57,7 @@ def forgot(data:Forgot,db:Session=Depends(get_db)):
     message={'message':'If an eligible account matches and email delivery is available, a recovery link will be sent.'}
     from ..services.email_service_policies import enabled
     if not enabled(db,'password_reset',True):return message
-    user=db.scalar(select(User).where(func.lower(User.email)==str(data.email).lower(),User.status.in_(['active','archived'])))
+    user=db.scalar(select(User).where(func.lower(User.email)==str(data.email).lower(),User.status.in_(['active','archived','pending_email'])))
     if user and user.status=='archived' and not reactivation_eligible(user): return message
     if not user: return message
     count=db.scalar(select(func.count()).select_from(PasswordReset).where(PasswordReset.user_id==user.id,PasswordReset.created_at>now()-timedelta(hours=1)))
@@ -90,8 +90,8 @@ def recovery_record(db,token,*,lock=False):
 def recovery_status(data:RecoveryToken,db:Session=Depends(get_db)):
     record=recovery_record(db,data.token)
     user=db.get(User,record.user_id)
-    if not user or user.status not in {'active','archived'}: raise HTTPException(400,'Recovery link is invalid or expired')
-    return {'reactivation_required':reactivation_eligible(user)}
+    if not user or user.status not in {'active','archived','pending_email'}: raise HTTPException(400,'Recovery link is invalid or expired')
+    return {'reactivation_required':reactivation_eligible(user),'account_activation_required':user.status=='pending_email'}
 
 def reactivation_payload(db,user):
     from ..services.entitlements import access_payload
@@ -143,11 +143,23 @@ def reactivation_password(data:ReactivationPassword,response:Response,user:User=
 def reset(data:Reset,response:Response,db:Session=Depends(get_db)):
     record=recovery_record(db,data.token,lock=True)
     user=db.scalar(select(User).where(User.id==record.user_id).with_for_update().execution_options(populate_existing=True))
-    if not user or user.status!='active': raise HTTPException(400,'Use account reactivation to renew this archived account')
+    if not user or user.status not in {'active','pending_email'}: raise HTTPException(400,'Use account reactivation to renew this archived account')
+    activating_legacy=user.status=='pending_email'
     finishing_reactivation=reactivation_eligible(user)
     if finishing_reactivation and not reactivation_payload(db,user)['payment_verified']:
         raise HTTPException(409,'Complete a verified real payment before setting the reactivation password')
     user.password_hash=hash_password(data.password); revoke(db,user)
+    if activating_legacy:
+        from ..services.entitlements import CORE_TRIAL_DAYS
+        from ..models import EmailVerification
+        issued_at=now()
+        user.status='active'
+        user.trial_started_at=issued_at
+        user.trial_ends_at=issued_at+timedelta(days=CORE_TRIAL_DAYS)
+        db.execute(update(EmailVerification).where(
+            EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None)
+        ).values(used_at=issued_at))
+        audit(db,user,'account.email_verified_recovery')
     db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
     audit(db,user,'password.reset')
     if finishing_reactivation: audit(db,user,'account.reactivation_completed')
@@ -155,7 +167,7 @@ def reset(data:Reset,response:Response,db:Session=Depends(get_db)):
     from ..config import settings
     response.delete_cookie(settings.session_cookie_name,path='/',secure=settings.cookie_secure,httponly=True,samesite='strict')
     response.delete_cookie(reactivation_cookie_name(),path='/api',secure=settings.cookie_secure,httponly=True,samesite='strict')
-    return {'message':'Password reset. Sign in with your new password.'}
+    return {'message':'Email verified and account activated. Sign in with your new password.' if activating_legacy else 'Password reset. Sign in with your new password.'}
 
 class Lifecycle(BaseModel):
     action: str=Field(pattern='^(suspend|delete)$')
