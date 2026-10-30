@@ -8,6 +8,12 @@ APP="$HOME/opencode-gateway"
 RELEASE="$HOME/opencode-gateway-release"
 BACKUPS="$HOME/opencode-backups"
 test -f "$APP/.env" && test -f "$RELEASE/backend/app/main.py" && test -x "$APP/.venv/bin/python" || { echo 'LIVE/release files missing' >&2; exit 3; }
+# Verify published frontend files really match the actual TEST working tree.
+TEST_APP="$HOME/opencode-gateway-test"
+test -d "$TEST_APP" || { echo 'TEST deployment root is missing' >&2; exit 5; }
+for file in index.html app.js styles.css dashboards.js enhancements.js management.js native-session-client.js runtime-client.js; do
+  cmp -s "$TEST_APP/$file" "$RELEASE/$file" || { echo "TEST frontend differs from GitHub source: $file" >&2; exit 6; }
+done
 ss -ltn | grep -F '127.0.0.2:4097' >/dev/null
 ss -ltn | grep -F '127.0.0.1:18097' >/dev/null
 ss -ltn | grep -F '127.0.0.1:18098' >/dev/null
