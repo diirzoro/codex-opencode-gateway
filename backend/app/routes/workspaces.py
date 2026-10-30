@@ -413,10 +413,77 @@ def archive_project(project_id: uuid.UUID,user: User=Depends(require_user),db: S
     db.commit()
     return manager.project_payload(row)
 
+class ConfirmLocalProjectDelete(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    confirm_name:str=Field(min_length=1,max_length=120)
+    confirmation:Literal['DELETE LOCAL PROJECT']
+
+
 @router.delete("/projects/{project_id}")
-def delete_project(project_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    manager.owned(db,Project,project_id,user.id)
-    raise HTTPException(409,"Deletion is unavailable; use archive to hide it safely until verified remote backup and retention safeguards are implemented")
+def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
+                   user:User=Depends(require_user),db:Session=Depends(get_db)):
+    """Owner-confirmed deletion of one LOCAL project; never remote GitHub.
+
+    This endpoint refuses projects with Native conversation records. Those
+    belong to OpenCode Native and require their own verified session-deletion
+    workflow before erasing the worktree. Deleting a local project with zero
+    sessions reclaims quota; an imported GitHub working copy is not eligible.
+    """
+    import shutil
+    from sqlalchemy import delete,inspect
+    from ..models import PreviewRuntimeLease
+    from ..services import workspace_cache
+    project=db.scalar(select(Project).where(
+        Project.id==project_id,Project.user_id==user.id).with_for_update())
+    if project is None:raise HTTPException(404,'Project not found')
+    if project.source_type=='github':
+        raise HTTPException(409,'GitHub working copies use their own disconnect/retention workflow; no GitHub repository was deleted')
+    if data.confirm_name!=project.name:
+        raise HTTPException(400,'Type the project name exactly to confirm local deletion')
+    rows=list(db.scalars(select(Workspace).where(
+        Workspace.project_id==project.id,Workspace.user_id==user.id).with_for_update()))
+    if db.scalar(select(WorkspaceSession.id).where(
+        WorkspaceSession.workspace_id.in_([w.id for w in rows])).limit(1)) if rows else None:
+        raise HTTPException(409,'This project has OpenCode conversations. Delete its Native sessions first; files and history were preserved.')
+    # Preview leases may be running or contain tasks outside the Native
+    # conversation path; refuse rather than stopping unrelated runtimes.
+    if inspect(db.connection()).has_table('preview_runtime_leases') and rows:
+        live=db.scalar(select(PreviewRuntimeLease.id).where(
+            PreviewRuntimeLease.workspace_id.in_([w.id for w in rows]),
+            PreviewRuntimeLease.state.in_(['queued','starting','running'])).limit(1))
+        if live:raise HTTPException(409,'Stop this project preview before deleting local files')
+    paths=[]
+    for row in rows:
+        if not workspace_cache.runtime_idle(row):
+            raise HTTPException(409,'OpenCode must confirm all project tools are idle before deletion')
+        path=manager.root_for(row,allow_expired=True)
+        if path.is_symlink() or path.parent.is_symlink() or path.parent.parent.is_symlink():
+            raise HTTPException(403,'Unsafe project worktree; manual review required')
+        paths.append(path)
+    # Recheck activity just before deleting the directory. Other owners' paths
+    # are never derived from user-supplied strings or traversed.
+    for row in rows:
+        if not workspace_cache.runtime_idle(row):
+            raise HTTPException(409,'Project became active; nothing was deleted')
+    for path in paths:
+        if path.exists():
+            try:shutil.rmtree(path)
+            except OSError:
+                raise HTTPException(503,'Local worktree could not be removed safely; project record retained') from None
+    ids=[w.id for w in rows]
+    if ids:
+        db.execute(delete(ProviderCredential).where(ProviderCredential.workspace_id.in_(ids)))
+        if inspect(db.connection()).has_table('preview_runtime_leases'):
+            db.execute(delete(PreviewRuntimeLease).where(PreviewRuntimeLease.workspace_id.in_(ids)))
+        db.execute(delete(Workspace).where(Workspace.id.in_(ids),Workspace.user_id==user.id))
+    db.delete(project)
+    try:db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409,'Project has other database dependencies. Files were removed; the original record needs operator review') from None
+    return {'deleted':True,'project_id':str(project_id),'source_type':'local',
+            'remote_repository_deleted':False,'local_worktrees_removed':len(paths)}
+
 
 @router.post("/projects/{project_id}/publish")
 def publish_project(project_id: uuid.UUID,data: PublishProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
