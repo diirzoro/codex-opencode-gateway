@@ -6,9 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "Type promote to deploy LIVE source and migrations"
+        description: "diagnose checks LIVE integrations without changes; promote deploys the approved master"
         required: true
-        type: string
+        type: choice
+        default: diagnose
+        options:
+          - diagnose
+          - promote
 
 permissions:
   contents: read
@@ -19,6 +23,7 @@ concurrency:
 
 jobs:
   validate:
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.confirmation == 'promote')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +39,7 @@ jobs:
           python -m compileall -q backend/app
           python scripts/validate_migration_chain.py
           bash -n scripts/live-native-promote.sh
+          python -m py_compile scripts/live-integration-diagnostics.py
           test -s docs/NATIVE_SESSION_LIVE_NGINX.conf
       - name: Native ownership, LIVE boundaries and email regressions
         run: |
@@ -67,6 +73,36 @@ jobs:
           node tests/browser/test-admin-users-table.cjs
           node tests/browser/test-admin-user-editor.cjs
           node tests/browser/test-existing-account-recovery.cjs
+
+  diagnose:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.confirmation == 'diagnose'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact master diagnostic script
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Connect to existing LIVE VPS without modifying services
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${VPS_HOST:?Missing VPS_HOST}"
+          : "${VPS_USER:?Missing VPS_USER}"
+          : "${VPS_SSH_KEY:?Missing VPS_SSH_KEY}"
+          port="${VPS_SSH_PORT:-22}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            'cd "$HOME/opencode-gateway/backend" && set -a && . "$HOME/opencode-gateway/.env" && set +a && exec ../.venv/bin/python -' \
+            < scripts/live-integration-diagnostics.py
 
   deploy:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.confirmation == 'promote'
@@ -126,3 +162,14 @@ jobs:
           curl -fsS --retry 5 --retry-delay 3 https://opencode-gateway.codes/api/health
           echo
           echo "LIVE basic health passed. Authenticated Native/SSE acceptance still required."
+      - name: Report LIVE registration and GitHub integration readiness
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${VPS_SSH_PORT:-22}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            'cd "$HOME/opencode-gateway/backend" && set -a && . "$HOME/opencode-gateway/.env" && set +a && exec ../.venv/bin/python -' \
+            < scripts/live-integration-diagnostics.py
