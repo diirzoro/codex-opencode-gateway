@@ -15,8 +15,7 @@ async function fixture(status='active'){
   openModal:(title,body,actions)=>{choices=actions;messages.push(body.textContent);return modal;},
   api:async(path,options)=>{
    calls.push({path,method:options.method,body:options.body});
-   if(path.endsWith('/release-identifiers'))return {account_reactivation_disabled:true,
-      permanent_account_deletion:false,project_data_preserved:true};
+   if(path.endsWith('/delete-permanently'))return {database_row_deleted:true,deleted:true};
    return {archived:true,data_preserved:true};
   },
  };
@@ -33,22 +32,22 @@ async function fixture(status='active'){
  assert.deepEqual(f.calls.map(x=>[x.path,x.method]),[['/api/admin/users/synthetic-user','DELETE']]);
  assert(f.modal.closed&&f.reloads()===1);f.window.close();
  f=await fixture('active');
- f.setName('incorrect');
  await f.choices[1].onclick();
- assert.equal(f.calls.length,0,'Wrong typed username cannot mutate account');
- f.setName('sample_user');
- await f.choices[1].onclick();
- assert.deepEqual(f.calls.map(x=>[x.path,x.method]),[
-  ['/api/admin/users/synthetic-user','DELETE'],
-  ['/api/admin/users/synthetic-user/release-identifiers','POST']]);
- assert.deepEqual(JSON.parse(f.calls[1].body),{confirm_username:'sample_user'});
- assert(f.modal.closed&&f.reloads()===1);f.window.close();
+ assert.equal(f.calls.length,0,'Permanent delete must refuse an active account until separately archived');
+ assert.match(f.messages[0],/حذف سجل/);f.window.close();
  f=await fixture('archived');
  assert.equal(f.choices[0].disabled,true);
+ f.setName('incorrect');await f.choices[1].onclick();
+ assert.equal(f.calls.length,0,'Wrong typed username cannot mutate account');
+ f.setName('sample_user');await f.choices[1].onclick();
+ assert.deepEqual(f.calls.map(x=>[x.path,x.method]),[
+  ['/api/admin/users/synthetic-user/delete-permanently','POST']]);
+ assert.deepEqual(JSON.parse(f.calls[0].body),{confirm_username:'sample_user',confirmation:'DELETE PERMANENTLY'});
+ assert(f.modal.closed&&f.reloads()===1);f.window.close();
+ f=await fixture('identity_released');
+ assert(f.choices[0].disabled);assert(!f.choices[1].disabled);
  await f.choices[1].onclick();
  assert.equal(f.calls.length,1);
  assert.equal(f.calls[0].method,'POST');f.window.close();
- f=await fixture('identity_released');
- assert(f.choices[0].disabled&&f.choices[1].disabled);f.window.close();
- console.log('PASS admin removal requires explicit archive vs irreversible login identity release with retyped username and data preservation');
+ console.log('PASS admin archive separate from physically deleting empty user row with double confirmation and no implicit archive');
 })().catch(e=>{console.error(e);process.exitCode=1});
