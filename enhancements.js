@@ -1568,8 +1568,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
   function openAdminAccountRemoval(u){
     const body=document.createElement('section');
     const info=textElement('p',tr(
-      'Choose archive to suspend access while preserving account identity and recovery. Choose permanent login-identity removal to irreversibly free this username, email and phone for a NEW verified account. Project ownership, original files, billing history and audit records remain attached to the old UUID; this does NOT erase those historical records.',
-      'اختر الأرشفة لتعطيل الدخول مع الاحتفاظ بهوية الحساب وإمكانية استرجاعه. اختر الحذف النهائي لهوية الدخول لتحرير اسم المستخدم والبريد والهاتف بصورة لا رجعة فيها للتسجيل الجديد بعد التحقق. المشاريع والملفات والسجلات المالية والتدقيق تبقى مرتبطة بمعرّف العميل القديم، ولا تُحذف هنا.'
+      'Archive: keep access disabled and allow account recovery. Delete permanently: physically erase the CUSTOMER row from the database after explicit confirmations. Deletion is REFUSED while projects, conversations, connected GitHub or payment orders remain; review those assets separately first. No project files or invoices are silently deleted.',
+      'الأرشفة: تعطيل الحساب مع إمكانية استرجاعه. الحذف النهائي: حذف سجل العميل فعليًا من قاعدة البيانات بعد تأكيدين واضحين. يُرفض الحذف إذا بقيت مشاريع أو محادثات أو اتصال GitHub أو طلبات دفع؛ راجع هذه البيانات أولًا. لن تُحذف الملفات أو الفواتير بصمت.'
     ));
     const feedback=textElement('p','','manage-identity-removal-feedback');
     feedback.setAttribute('role','alert');
@@ -1578,7 +1578,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     archive.type='button';
     archive.disabled=u.status==='archived'||u.status==='identity_released';
     archive.onclick=async()=>{
-      if(!await window.confirmAction(tr('Archive '+u.username+'? The customer may request account reactivation later.','أرشفة '+u.username+'؟ يمكن للعميل لاحقًا طلب إعادة تفعيل حسابه.')))return;
+      if(!await window.confirmAction(tr('Archive '+u.username+'? This account remains in the database and may be recovered.','أرشفة '+u.username+'؟ يبقى الحساب في قاعدة البيانات ويمكن استرجاعه.')))return;
       archive.disabled=remove.disabled=true;
       try{
         await api('/api/admin/users/'+u.id,{method:'DELETE'});
@@ -1586,27 +1586,29 @@ window.renderGithubConfirmation=function(root,status,refresh){
         modal.close();await gridUsers();
       }catch(error){feedback.textContent=error.message;archive.disabled=remove.disabled=false;}
     };
-    const remove=textElement('button',tr('Remove login identity permanently','حذف هوية الدخول نهائيًا'),'button danger small');
+    const remove=textElement('button',tr('Delete customer from database permanently','حذف العميل نهائيًا من قاعدة البيانات'),'button danger small');
     remove.type='button';
-    remove.disabled=u.status==='identity_released';
     remove.onclick=async()=>{
+      if(u.status!=='archived'&&u.status!=='identity_released'){
+        feedback.textContent=tr('First archive this account using the separate Archive button. No change was made.','يجب أرشفة هذا العميل أولًا من زر الأرشفة المنفصل. لم يتم تعديل الحساب.');return;
+      }
       const typed=await window.requestInput(tr(
-        'Permanent identity release: enter the exact username '+u.username+'. Original project and financial records will NOT be deleted. Account restoration will be impossible.',
-        'تحرير بيانات التسجيل بلا رجعة: اكتب اسم المستخدم '+u.username+' حرفيًا. لن تُحذف المشاريع والسجلات المالية القديمة، ولن يتمكن صاحب الحساب من استعادة هويته القديمة.'
+        'Permanently delete this customer from the database. Type the EXACT current username: '+u.username+'. Deletion will be refused if projects, conversations or payments remain.',
+        'لحذف هذا العميل نهائيًا من قاعدة البيانات اكتب اسم المستخدم الحالي حرفيًا: '+u.username+'. يُرفض الحذف إذا بقيت مشاريع أو محادثات أو مدفوعات.'
       ));
       if(typed!==u.username){if(typed!==null)feedback.textContent=tr('Username confirmation did not match.','اسم المستخدم المُدخل لا يطابق المطلوب.');return;}
       if(!await window.confirmAction(tr(
-        'Final confirmation: permanently disable account recovery and release username/email/phone? This is NOT a deletion of project/billing records.',
-        'تأكيد نهائي: تعطيل استرجاع هذا الحساب وتحرير اسم المستخدم والبريد والهاتف نهائيًا؟ لن تُحذف المشاريع أو سجلات الفوترة.'
+        'PERMANENT DATABASE DELETE of '+u.username+'. This cannot be undone. Are you certain?',
+        'حذف نهائي لا رجعة فيه لسجل '+u.username+' من قاعدة البيانات. هل تؤكد ذلك؟'
       )))return;
       archive.disabled=remove.disabled=true;
       try{
-        if(u.status!=='archived')await api('/api/admin/users/'+u.id,{method:'DELETE'});
-        const result=await api('/api/admin/users/'+u.id+'/release-identifiers',{
-          method:'POST',body:JSON.stringify({confirm_username:u.username})
+        const result=await api('/api/admin/users/'+u.id+'/delete-permanently',{
+          method:'POST',body:JSON.stringify({confirm_username:u.username,confirmation:'DELETE PERMANENTLY'})
         });
-        if(result.account_reactivation_disabled!==true)throw Error(tr('Server did not confirm identity release.','لم يؤكد الخادم تحرير هوية الحساب.'));
-        feedback.textContent=tr('Login identifiers released. Existing project/billing records retained.','تم تحرير بيانات الدخول؛ احتُفظ بالمشاريع والسجلات القديمة.');
+        if(result.database_row_deleted!==true||result.deleted!==true)
+          throw Error(tr('Database deletion was not confirmed.','لم تؤكد قاعدة البيانات حذف العميل.'));
+        feedback.textContent=tr('Customer row deleted permanently.','حُذف سجل العميل نهائيًا من قاعدة البيانات.');
         modal.close();await gridUsers();
       }catch(error){
         feedback.textContent=error.message;
@@ -1614,7 +1616,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
         await gridUsers();
       }
     };
-    const modal=openModal(tr('Account removal · '+u.username,'حذف الحساب · '+u.username),body,[archive,remove]);
+    const modal=openModal(tr('Manage account · '+u.username,'إدارة الحساب · '+u.username),body,[archive,remove]);
   }
 
   async function gridUsers() {
