@@ -292,6 +292,7 @@ def sessions(workspace_id:uuid.UUID,request:Request,data:Create|None=None,user:U
         if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
         if not access_payload(db,user)['allowed']:raise HTTPException(402,'Workspace access has expired')
         workspaces.require_quota_headroom(workspace)
+        if workspace.project.source_type!='github':workspaces.require_account_local_headroom(db,user.id)
         permissions=policy.native_session_permissions(policy.load(db),root)
         live=metadata('POST','/session',root,{'title':(data or Create()).title,'permission':permissions})
         if not isinstance(live,dict) or not re.fullmatch('ses'+ID,str(live.get('id',''))) or not isinstance(live.get('title'),str) or live.get('directory')!=str(root):raise HTTPException(502,'Invalid native session metadata')
@@ -495,6 +496,7 @@ def _authorize_native(workspace_id,resource,request,user,db,raw):
                     except ValueError:raise HTTPException(403,'Attachment is outside this Workspace') from None
                     if not workspaces.safe_path(workspace,relative).is_file():raise HTTPException(403,'Attachment is unavailable')
             workspaces.require_quota_headroom(workspace)
+            if workspace.project.source_type!='github':workspaces.require_account_local_headroom(db,user.id)
             # Lease only after every authorization check. Nginx still forwards
             # the original prompt; Gateway neither executes nor stores it.
             from ..services import chat_attachments
