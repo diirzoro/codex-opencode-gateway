@@ -246,3 +246,10 @@ def test_native_prevents_accidental_dual_environment_flags(monkeypatch):
     monkeypatch.setenv('OPENCODE_NATIVE_LIVE_ENABLED','true')
     with pytest.raises(RuntimeError):
         native.deployment()
+
+
+def test_native_shared_loopback_is_valid_backend_config(monkeypatch):
+    from backend.app.config import Settings
+    monkeypatch.setenv('DATABASE_URL','postgresql+psycopg://fixture:fixture@127.0.0.1/opencode_gateway')
+    monkeypatch.setenv('OPENCODE_BASE_URL','http://127.0.0.2:4097')
+    assert Settings.from_environment().opencode_url=='http://127.0.0.2:4097'
