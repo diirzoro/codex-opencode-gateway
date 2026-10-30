@@ -49,6 +49,52 @@ def test_archive_revokes_sessions_and_preserves_projects_and_files(boundary,monk
     assert authenticated(client,f'/api/admin/users/{target.id}',actor,config,'DELETE').status_code==200
 
 
+def test_archived_customer_can_release_identity_without_erasing_projects_or_history(boundary,monkeypatch):
+    from backend.app.security.sessions import reactivation_eligible
+    from sqlalchemy.exc import IntegrityError
+    client,actor,target,engine,config=setup(boundary,monkeypatch)
+    with Session(engine) as db:
+        original=db.get(models.User,target.id)
+        name,email,phone=original.username,original.email,original.phone
+    assert authenticated(client,f'/api/admin/users/{target.id}',actor,config,'DELETE').status_code==200
+    invalid=authenticated(client,f'/api/admin/users/{target.id}/release-identifiers',actor,config,'POST',{'confirm_username':'wrong_name'})
+    assert invalid.status_code==400
+    released=authenticated(client,f'/api/admin/users/{target.id}/release-identifiers',actor,config,'POST',{'confirm_username':name})
+    assert released.status_code==200,released.text
+    assert released.json()['account_reactivation_disabled'] is True
+    assert released.json()['permanent_account_deletion'] is False
+    with Session(engine) as db:
+        old=db.get(models.User,target.id)
+        assert old.status=='identity_released'
+        assert old.username!=name and old.email!=email and old.phone_identity is None
+        assert old.password_hash=='!archived!' and not reactivation_eligible(old)
+        assert db.get(models.Project,target.project) is not None
+        assert db.get(models.WorkspaceSession,target.session) is not None
+        assert target.root.joinpath('marker.txt').read_text()=='synthetic-marker-b'
+        assert all(r.revoked_at is not None for r in db.scalars(select(models.AuthSession).where(models.AuthSession.user_id==target.id)))
+        # The same name/email/phone now belong to a genuinely NEW owner id.
+        from datetime import datetime,timedelta,timezone
+        import uuid
+        now=datetime.now(timezone.utc)
+        new=models.User(id=uuid.uuid4(),username=name,email=email,phone=phone,
+            password_hash='new-fixture-hash',postal_code='00000',
+            trial_started_at=now,trial_ends_at=now+timedelta(days=30))
+        db.add(new);db.commit()
+        assert new.id!=target.id and db.get(models.Project,target.project).user_id==target.id
+    assert authenticated(client,f'/api/admin/users/{target.id}',actor,config,'PATCH',{'status':'active'}).status_code==409
+    assert authenticated(client,f'/api/admin/users/{target.id}/release-identifiers',actor,config,'POST',{'confirm_username':name}).status_code==409
+
+
+def test_cannot_release_active_or_privileged_customer_identity(boundary,monkeypatch):
+    client,actor,target,engine,config=setup(boundary,monkeypatch)
+    active=authenticated(client,f'/api/admin/users/{target.id}/release-identifiers',actor,config,'POST',{'confirm_username':'fixture-b'})
+    assert active.status_code==409
+    admin_identity=authenticated(client,f'/api/admin/users/{actor.id}/release-identifiers',actor,config,'POST',{'confirm_username':'fixture-a'})
+    assert admin_identity.status_code==403
+    foreign=authenticated(client,f'/api/admin/users/{target.id}/release-identifiers',target,config,'POST',{'confirm_username':'fixture-b'})
+    assert foreign.status_code==403
+
+
 def test_admin_cannot_archive_another_administrator(boundary,monkeypatch):
     client,actor,target,engine,config=setup(boundary,monkeypatch)
     with Session(engine) as db:
