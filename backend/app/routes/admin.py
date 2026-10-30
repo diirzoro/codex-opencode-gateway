@@ -816,9 +816,7 @@ def permanently_delete_user(user_id:_uuid.UUID,data:PermanentUserDelete,
     """
     from sqlalchemy import delete, or_, inspect
     from ..database import Base
-    from ..models import GithubAuthState
-    from ..models.management import AccountAudit
-    user=db.scalar(select(User).where(User.id==user_id).with_for_update())
+        user=db.scalar(select(User).where(User.id==user_id).with_for_update())
     if user is None:raise HTTPException(404,'User not found')
     if user.id==actor.id or user.role in {'admin','owner'}:
         raise HTTPException(403,'Administrators and the current account cannot be permanently deleted here')
@@ -857,7 +855,7 @@ def permanently_delete_user(user_id:_uuid.UUID,data:PermanentUserDelete,
             if table.name=='payment_orders':
                 continue
             owned=table.c.get('user_id')
-            if owned is not None and owned in columns:
+            if owned is not None and any(owned is col for col in columns):
                 db.execute(delete(table).where(owned==user.id))
             for column in columns:
                 if column is owned:continue
