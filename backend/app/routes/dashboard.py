@@ -8,16 +8,16 @@ from ..models import Project, ProviderCredential, User, Workspace, WorkspaceSess
 from ..services import github, session_lifecycle
 from ..services.accounts import user_payload
 from ..services.entitlements import access_payload
-from ..services.workspaces import project_payload, workspace_payload
+from ..services.workspaces import project_payload, workspace_payload, visible_project_predicate
 from .dependencies import require_user
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 @router.get("")
 def dashboard(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    projects = list(db.scalars(select(Project).where(Project.user_id == user.id, Project.archived_at.is_(None)).order_by(Project.created_at.desc())))
-    workspaces = list(db.scalars(select(Workspace).join(Project, Project.id == Workspace.project_id).where(Workspace.user_id == user.id, Project.archived_at.is_(None)).order_by(Workspace.created_at.desc())))
-    sessions = list(db.scalars(select(WorkspaceSession).join(Workspace, Workspace.id == WorkspaceSession.workspace_id).join(Project, Project.id == Workspace.project_id).where(WorkspaceSession.user_id == user.id, Project.archived_at.is_(None)).order_by(WorkspaceSession.created_at.desc())))
+    projects = list(db.scalars(select(Project).where(Project.user_id == user.id, Project.archived_at.is_(None), visible_project_predicate(user.id)).order_by(Project.created_at.desc())))
+    workspaces = list(db.scalars(select(Workspace).join(Project, Project.id == Workspace.project_id).where(Workspace.user_id == user.id, Project.archived_at.is_(None), visible_project_predicate(user.id)).order_by(Workspace.created_at.desc())))
+    sessions = list(db.scalars(select(WorkspaceSession).join(Workspace, Workspace.id == WorkspaceSession.workspace_id).join(Project, Project.id == Workspace.project_id).where(WorkspaceSession.user_id == user.id, Project.archived_at.is_(None), visible_project_predicate(user.id)).order_by(WorkspaceSession.created_at.desc())))
     session_states = session_lifecycle.states(db, sessions)
     sessions = [s for s in sessions if session_states[s.id] not in {"deleted", "archived"}]
     credentials_count = db.scalar(select(func.count()).select_from(ProviderCredential).where(ProviderCredential.user_id == user.id)) or 0
