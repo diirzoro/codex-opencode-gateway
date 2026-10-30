@@ -101,6 +101,38 @@ def test_plain_disconnect_keeps_files_and_renews_73_hour_grace(review):
         assert not workspace_cache.github_copy_is_saved(row)
 
 
+def test_disconnected_github_project_is_hidden_and_unavailable_but_copy_survives(review):
+    f=review;a=f.owners[0]
+    assert any(p['id']==str(a.project) for p in f.request('/api/projects').json())
+    assert any(w['id']==str(a.workspace) for w in f.request('/api/workspaces').json())
+    assert f.request(f'/api/workspaces/{a.workspace}/files').status_code==200
+    response=f.request('/api/github/disconnect',method='POST')
+    assert response.status_code==200,response.text
+    assert not any(p['id']==str(a.project) for p in f.request('/api/projects').json())
+    assert not any(w['id']==str(a.workspace) for w in f.request('/api/workspaces').json())
+    assert f.request('/api/workspace-context').json()['workspace'] is None
+    assert f.request(f'/api/workspaces/{a.workspace}/files').status_code==409
+    assert f.request(f'/api/workspaces/{a.workspace}').status_code==409
+    assert f.request(f'/api/projects/{a.project}').status_code==409
+    assert a.root.joinpath('marker.txt').read_text()=='synthetic-marker-a'
+    with Session(f.engine) as db:
+        assert db.get(models.Project,a.project) is not None
+        assert db.get(models.WorkspaceSession,a.session) is not None
+    # Reconnecting the ORIGINAL authorized GitHub identity restores the same
+    # working-copy owner UUID; it does not create a parallel customer project.
+    f.callback(f.start());assert f.confirm().status_code==200
+    assert f.request(f'/api/workspaces/{a.workspace}/files').status_code==200
+    assert any(p['id']==str(a.project) for p in f.request('/api/projects').json())
+
+
+def test_internal_project_stays_visible_when_github_is_disconnected(flow):
+    f=flow;a=f.owners[0];f.callback(f.start());assert f.confirm().status_code==200
+    assert f.request('/api/github/disconnect',method='POST').status_code==200
+    assert any(p['id']==str(a.project) for p in f.request('/api/projects').json())
+    assert f.request(f'/api/workspaces/{a.workspace}/files').status_code==200
+    assert a.root.joinpath('marker.txt').exists()
+
+
 def test_pending_identity_cannot_revoke_another_users_grant(flow,monkeypatch):
     f=flow;calls=[]
     monkeypatch.setattr(github,'revoke_token',lambda token,cfg,**kw:calls.append(kw.get('grant',False)) or 'verified')
