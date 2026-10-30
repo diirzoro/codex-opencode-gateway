@@ -44,7 +44,7 @@ jobs:
           test "$count" -eq 1
 
       - name: Test GitHub customer authorization and repository policy
-        run: python -m pytest -q backend/tests/test_github_boundaries.py
+        run: python -m pytest -q backend/tests/test_github_boundaries.py backend/tests/test_github_disconnect_review.py
 
       - name: Test one-minute account, recovery and GitHub verification boundaries
         run: |
