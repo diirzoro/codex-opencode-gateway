@@ -251,7 +251,7 @@ def test_legacy_unverified_account_recovery_requires_saved_email_and_new_passwor
     result=f[0].post('/api/auth/forgot-password',json={'email':legacy.email})
     assert result.status_code==202,result.text
     assert len(messages)==1 and messages[0]['To']==legacy.email
-    token=re.search(r'reset-password=([^\\s]+)',messages[-1].get_content()).group(1)
+    token=re.search(r'reset-password=([^\s]+)',messages[-1].get_content()).group(1)
     pending=f[0].post('/api/auth/recovery-status',json={'token':token})
     assert pending.status_code==200
     assert pending.json()['account_activation_required'] is True
