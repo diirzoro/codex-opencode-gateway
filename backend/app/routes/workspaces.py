@@ -357,7 +357,7 @@ def runtime_status(user: User=Depends(require_user)):
             if not isinstance(health,dict):raise HTTPException(502,'Invalid native health response')
         except HTTPException:
             health={'healthy':False,'version':None}
-        return {**health,'runtime_mode':'native-test','public_multi_user_ready':False}
+        return {**health,'runtime_mode':'native-'+native_sessions.deployment(),'public_multi_user_ready':False}
     try: health=opencode.shared_health()
     except HTTPException: health={"healthy":False,"version":None}
     return {**health,"runtime_mode":settings.runtime_mode,"public_multi_user_ready":False}
