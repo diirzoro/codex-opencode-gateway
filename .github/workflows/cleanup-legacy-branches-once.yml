@@ -1,4 +1,4 @@
-name: One-time archive and remove obsolete Git branches
+name: One-time delete obsolete branches
 on:
   push:
     branches: [master]
@@ -32,19 +32,19 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t candidates <<'BRANCHES'
-          'backup-master-before-native-first-merge-2026-10-30|16a7a687187be649e5f7729d5d0ae1b5845334e4'
-          'backup-master-premerge-2026-10-14|bff094a1e4079e51e1673942160e86a28293cc69'
-          'fix-live-ci-and-sync-test-integrations-20261030|72c2a9a408db08e6fe6179ee998598c8e57a1d46'
-          'fix-live-promotion-nginx-preflight-20261030|28f2da4284dc77825bfb3068318552f3a18e10aa'
-          'live-actions-integration-readiness-20261030|0e31d7cd4503b53afedd7c1f80bc4b3acf474a7f'
-          'live-fast-promote-no-full-validation-20261030|9f5b9607b0fa6235283a1b855f9880fa50505054'
-          'live-one-click-promote-integrations-20261030|b26ba58ec0d0931f33c74ddd15de917c1047a77b'
-          'live-optional-skip-backup-20261030|c4e40e5a2ced617c932ed00a6e0ed0972da10912'
-          'live-promote-operator-username-sudo-secret-20261030|445f75a59703c47bbd8ee756416dc0e056a67af1'
-          'promote-native-live-20261030|12e23689e1938b3f969d0a8ec70537b6963faa41'
-          'release/2026-10-16-updates-to-master|6f7db3e639ce56513d417a89938523d0432c77e8'
-          'rollback-updates-2026-10-13|4e8dc91d8e2f007fb19ea3914f606c7d41fca377'
-          'separate-test-live-actions-20261030|4a1193b03076d0ec223d8ce6db6cd63a2a7e4223'
+          backup-master-before-native-first-merge-2026-10-30|16a7a687187be649e5f7729d5d0ae1b5845334e4
+          backup-master-premerge-2026-10-14|bff094a1e4079e51e1673942160e86a28293cc69
+          fix-live-ci-and-sync-test-integrations-20261030|72c2a9a408db08e6fe6179ee998598c8e57a1d46
+          fix-live-promotion-nginx-preflight-20261030|28f2da4284dc77825bfb3068318552f3a18e10aa
+          live-actions-integration-readiness-20261030|0e31d7cd4503b53afedd7c1f80bc4b3acf474a7f
+          live-fast-promote-no-full-validation-20261030|9f5b9607b0fa6235283a1b855f9880fa50505054
+          live-one-click-promote-integrations-20261030|b26ba58ec0d0931f33c74ddd15de917c1047a77b
+          live-optional-skip-backup-20261030|c4e40e5a2ced617c932ed00a6e0ed0972da10912
+          live-promote-operator-username-sudo-secret-20261030|445f75a59703c47bbd8ee756416dc0e056a67af1
+          promote-native-live-20261030|12e23689e1938b3f969d0a8ec70537b6963faa41
+          release/2026-10-16-updates-to-master|6f7db3e639ce56513d417a89938523d0432c77e8
+          rollback-updates-2026-10-13|4e8dc91d8e2f007fb19ea3914f606c7d41fca377
+          separate-test-live-actions-20261030|4a1193b03076d0ec223d8ce6db6cd63a2a7e4223
           BRANCHES
           for item in "${candidates[@]}"; do
             branch="${item%%|*}"
