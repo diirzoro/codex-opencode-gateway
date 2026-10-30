@@ -14,6 +14,10 @@ test -d "$TEST_APP" || { echo 'TEST deployment root is missing' >&2; exit 5; }
 for file in index.html app.js styles.css dashboards.js enhancements.js management.js native-session-client.js runtime-client.js; do
   cmp -s "$TEST_APP/$file" "$RELEASE/$file" || { echo "TEST frontend differs from GitHub source: $file" >&2; exit 6; }
 done
+# Also prevent promoting a backend that does not match the tested implementation.
+for file in app/main.py app/config.py app/routes/native_sessions.py app/services/native_provider_accounts.py; do
+  cmp -s "$TEST_APP/backend/$file" "$RELEASE/backend/$file" || { echo "TEST backend differs from GitHub source: $file" >&2; exit 7; }
+done
 ss -ltn | grep -F '127.0.0.2:4097' >/dev/null
 ss -ltn | grep -F '127.0.0.1:18097' >/dev/null
 ss -ltn | grep -F '127.0.0.1:18098' >/dev/null
