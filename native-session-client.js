@@ -331,6 +331,16 @@
     try{await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
       messageID,model:{providerID,modelID},...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,timeout:30000});}
     catch(error){
+      // A user-initiated Stop/attachment cancellation MUST release the
+      // original submission immediately. A message-history GET can itself
+      // remain blocked on an interrupted image read; do not await it here.
+      // forceStop owns the subsequent Native abort + idle verification and
+      // only that path clears the pending message receipt.
+      if(submissionController.signal.aborted&&
+         (sendGenerations.get(id)||0)!==sendGeneration&&
+         owner()===user&&epoch===sendEpoch)
+        throw Error(label('Submission interrupted by Stop. The session can resume after Native confirms idle.',
+                          'قوطع إرسال المرفق بالإلغاء. يمكن متابعة المحادثة بعد أن يؤكد OpenCode التوقف.'));
       // The HTTP response can fail after Native accepted an async prompt.
       // Resolve the exact Native message ID against authoritative history
       // before reporting uncertainty. Never send the prompt a second time.
