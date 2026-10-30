@@ -3,9 +3,9 @@ from pathlib import Path, PureWindowsPath
 from datetime import datetime, timezone
 import base64, difflib, os, re, stat, subprocess, uuid, time, tempfile, zipfile
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_, exists
 from ..config import settings
-from ..models import Project, Workspace
+from ..models import Project, Workspace, GithubConnection
 
 TEMPLATES = {
     "html": {"index.html": "<!doctype html>\n<html lang=\"en\"><meta charset=\"utf-8\"><title>New project</title><link rel=\"stylesheet\" href=\"styles.css\"><h1>New project</h1><script src=\"app.js\"></script></html>\n", "styles.css": "body { font-family: system-ui; margin: 3rem; }\n", "app.js": "'use strict';\n"},
@@ -16,10 +16,38 @@ TEMPLATES = {
 _FULL_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
 
+def github_project_attached(db, user_id, project):
+    """An imported/published GitHub workspace is usable ONLY with its owner
+    connection and original authorized installation. Never delete its files
+    merely because OAuth was revoked; reauthorization can restore access.
+    """
+    if project.source_type != 'github' and project.github_installation_id is None:
+        return True
+    if project.github_installation_id is None:
+        return False
+    return db.scalar(select(GithubConnection.id).where(
+        GithubConnection.user_id == user_id,
+        GithubConnection.installation_id == project.github_installation_id,
+        GithubConnection.suspended.is_(False))) is not None
+
+
+def visible_project_predicate(user_id):
+    connected = exists(select(GithubConnection.id).where(
+        GithubConnection.user_id == user_id,
+        GithubConnection.installation_id == Project.github_installation_id,
+        GithubConnection.suspended.is_(False)))
+    return or_(and_(Project.source_type != 'github',Project.github_installation_id.is_(None)),
+               and_(Project.github_installation_id.is_not(None),connected))
+
+
 def owned(db, model, identifier, user_id):
     row = db.scalar(select(model).where(model.id == identifier, model.user_id == user_id))
     if row is None:
         raise HTTPException(404, "Not found")
+    if model in (Project, Workspace):
+        project=row if model is Project else row.project
+        if not github_project_attached(db,user_id,project):
+            raise HTTPException(409, "GitHub project disconnected. Reauthorize the original GitHub account and installation to reopen this workspace; local files are preserved.")
     return row
 
 def root_for(workspace, *, allow_expired=False):
