@@ -189,7 +189,7 @@ def public_file(name):
         if name == "index.html":
             html = (frontend / name).read_text(encoding="utf-8")
             if native_sessions.enabled():
-                html=html.replace('<script defer src="runtime-client.js', '<script defer src="native-session-client.js?v=native-test"></script>\n  <script defer src="runtime-client.js')
+                html=html.replace('<script defer src="runtime-client.js', '<script defer src="native-session-client.js?v=native"></script>\n  <script defer src="runtime-client.js')
             # Content versions change automatically when any script/style changes.
             html = re.sub(r'(src|href)="([\w.-]+)\?v=[^"]*"',
                           lambda match: f'{match[1]}="{match[2]}?v={asset_version(match[2])}"'
