@@ -27,7 +27,7 @@ jobs:
           test "$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" --jq 'length')" = 0
           git remote -v
           git ls-remote --exit-code --heads origin refs/heads/master refs/heads/updates
-      - name: Archive unmerged commit tips as tags, then delete only verified obsolete refs
+      - name: Delete verified obsolete refs without archives or backups
         shell: bash
         run: |
           set -euo pipefail
@@ -59,25 +59,22 @@ jobs:
               echo "REF_CHANGED_STOP $branch"
               exit 1
             fi
-            git fetch --no-tags origin "$branch"
-            if git merge-base --is-ancestor "$expected" origin/master; then
-              echo "IN_MASTER_HISTORY $branch"
-            else
-              tag="archive/legacy-20261030/$branch"
-              tag_current="$(git ls-remote --tags origin "refs/tags/$tag" | awk '{print $1}')"
-              if [[ -n "$tag_current" && "$tag_current" != "$expected" ]]; then
-                echo "ARCHIVE_TAG_CONFLICT $branch"
-                exit 1
-              fi
-              if [[ -z "$tag_current" ]]; then
-                git tag "$tag" "$expected"
-                git push origin "refs/tags/$tag"
-              fi
-              check="$(git ls-remote --tags origin "refs/tags/$tag" | awk '{print $1}')"
-              [[ "$check" == "$expected" ]] || { echo "ARCHIVE_TAG_VERIFY_FAILED $branch"; exit 1; }
-              echo "ARCHIVED $branch"
-            fi
+            # Delete only this exact ref, without creating any archive or backup.
             git push origin --delete "$branch"
             echo "BRANCH_DELETED $branch"
           done
-          echo "Only master and updates should remain"
+          # Remove only tags created by the earlier temporary archive workflow,
+          # if they exist. Do not touch any unrelated release tags.
+          for item in "${candidates[@]}"; do
+            branch="${item%%|*}"
+            expected="${item##*|}"
+            tag="archive/legacy-20261030/$branch"
+            tag_current="$(git ls-remote --tags origin "refs/tags/$tag" | awk '{print $1}')"
+            if [[ "$tag_current" == "$expected" ]]; then
+              git push origin ":refs/tags/$tag"
+              echo "TEMP_ARCHIVE_TAG_REMOVED $tag"
+            elif [[ -n "$tag_current" ]]; then
+              echo "UNEXPECTED_TAG_TARGET_SKIP $tag"
+            fi
+          done
+          echo "Only master and updates should remain; no archive tags retained"
