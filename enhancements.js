@@ -100,6 +100,10 @@ window.disconnectGithubWithReview=async function(){
           if(currentUser?.id!==owner)throw Error(tr('Account changed; operation stopped.','تغير الحساب؛ توقفت العملية.'));
           const result=await api('/api/github/disconnect',{method:'POST',body:JSON.stringify({connection_id:plan.connection_id})});
           toast(result.grant_revocation==='verified'?tr('Disconnected. GitHub grant revoked.','تم الفصل وإلغاء تفويض GitHub.'):tr('Disconnected locally. GitHub grant revocation needs review.','تم الفصل محليًا؛ إلغاء تفويض GitHub يحتاج مراجعة.'));
+          // Invalidate already-open project/file trees in this browser and
+          // other tabs. The backend independently blocks detached GitHub IDs.
+          window.dispatchEvent(new CustomEvent('gateway-github-changed',{detail:{owner}}));
+          try{localStorage.setItem('og-github-revision:'+owner,String(Date.now()));}catch(error){}
           finish(true);
         }catch(error){feedback.textContent=error.message+(deleted?tr(' Verified local copies already removed: ',' عدد النسخ المحفوظة التي حُذفت بالفعل: ')+deleted:'');}
         finally{busy=false;save.disabled=!selected.some(x=>!x.copy.blocked);keep.disabled=cancel.disabled=false;}
