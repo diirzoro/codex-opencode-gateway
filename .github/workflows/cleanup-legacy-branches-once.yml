@@ -1,0 +1,83 @@
+name: One-time archive and remove obsolete Git branches
+on:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/cleanup-legacy-branches-once.yml']
+permissions:
+  contents: write
+concurrency:
+  group: one-time-legacy-branch-cleanup
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check repository and protect master and updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "diirzoro/codex-opencode-gateway"
+          test "$GITHUB_REF" = "refs/heads/master"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" --jq 'length')" = 0
+          git remote -v
+          git ls-remote --exit-code --heads origin refs/heads/master refs/heads/updates
+      - name: Archive unmerged commit tips as tags, then delete only verified obsolete refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t candidates <<'BRANCHES'
+          'backup-master-before-native-first-merge-2026-10-30|16a7a687187be649e5f7729d5d0ae1b5845334e4'
+          'backup-master-premerge-2026-10-14|bff094a1e4079e51e1673942160e86a28293cc69'
+          'fix-live-ci-and-sync-test-integrations-20261030|72c2a9a408db08e6fe6179ee998598c8e57a1d46'
+          'fix-live-promotion-nginx-preflight-20261030|28f2da4284dc77825bfb3068318552f3a18e10aa'
+          'live-actions-integration-readiness-20261030|0e31d7cd4503b53afedd7c1f80bc4b3acf474a7f'
+          'live-fast-promote-no-full-validation-20261030|9f5b9607b0fa6235283a1b855f9880fa50505054'
+          'live-one-click-promote-integrations-20261030|b26ba58ec0d0931f33c74ddd15de917c1047a77b'
+          'live-optional-skip-backup-20261030|c4e40e5a2ced617c932ed00a6e0ed0972da10912'
+          'live-promote-operator-username-sudo-secret-20261030|445f75a59703c47bbd8ee756416dc0e056a67af1'
+          'promote-native-live-20261030|12e23689e1938b3f969d0a8ec70537b6963faa41'
+          'release/2026-10-16-updates-to-master|6f7db3e639ce56513d417a89938523d0432c77e8'
+          'rollback-updates-2026-10-13|4e8dc91d8e2f007fb19ea3914f606c7d41fca377'
+          'separate-test-live-actions-20261030|4a1193b03076d0ec223d8ce6db6cd63a2a7e4223'
+          BRANCHES
+          for item in "${candidates[@]}"; do
+            branch="${item%%|*}"
+            expected="${item##*|}"
+            case "$branch" in master|updates) echo "Refusing protected branch: $branch"; exit 1 ;; esac
+            current="$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')"
+            if [[ -z "$current" ]]; then
+              echo "ALREADY_REMOVED $branch"
+              continue
+            fi
+            if [[ "$current" != "$expected" ]]; then
+              echo "REF_CHANGED_STOP $branch"
+              exit 1
+            fi
+            git fetch --no-tags origin "$branch"
+            if git merge-base --is-ancestor "$expected" origin/master; then
+              echo "IN_MASTER_HISTORY $branch"
+            else
+              tag="archive/legacy-20261030/$branch"
+              tag_current="$(git ls-remote --tags origin "refs/tags/$tag" | awk '{print $1}')"
+              if [[ -n "$tag_current" && "$tag_current" != "$expected" ]]; then
+                echo "ARCHIVE_TAG_CONFLICT $branch"
+                exit 1
+              fi
+              if [[ -z "$tag_current" ]]; then
+                git tag "$tag" "$expected"
+                git push origin "refs/tags/$tag"
+              fi
+              check="$(git ls-remote --tags origin "refs/tags/$tag" | awk '{print $1}')"
+              [[ "$check" == "$expected" ]] || { echo "ARCHIVE_TAG_VERIFY_FAILED $branch"; exit 1; }
+              echo "ARCHIVED $branch"
+            fi
+            git push origin --delete "$branch"
+            echo "BRANCH_DELETED $branch"
+          done
+          echo "Only master and updates should remain"
