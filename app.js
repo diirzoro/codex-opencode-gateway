@@ -325,14 +325,14 @@ async function offerExistingAccountRecovery(email,context){
   // No user enumeration: the prompt and success message never reveal the
   // prior account status. Existing recovery sends only to its saved address.
   let target=String(email||'').trim().toLowerCase();
-  if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(target)){
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)){
     const entered=await window.requestInput(lang==='ar'
       ?'أدخل البريد الإلكتروني المسجّل في حسابك السابق لإرسال رابط الاسترجاع إليه.'
       :'Enter the registered email to receive the recovery link.');
     if(entered===null)return false;
     target=String(entered).trim().toLowerCase();
   }
-  if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(target)){
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)){
     apiMessage(context,lang==='ar'?'أدخل بريدًا إلكترونيًا صحيحًا.':'Enter a valid email address.',true);return false;
   }
   if(!await window.confirmAction(lang==='ar'
