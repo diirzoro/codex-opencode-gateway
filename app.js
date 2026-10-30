@@ -286,7 +286,13 @@ $('#registerForm').onsubmit=async event=>{
   renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));
   $('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');
   if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120);
- }catch(error){apiMessage('registerMessage',error.message,true);}
+ }catch(error){
+  apiMessage('registerMessage',error.message,true);
+  if(error.status===409&&!isEdit){
+    try{await offerExistingAccountRecovery(value('registerEmail'),'registerMessage');}
+    catch(recoveryError){apiMessage('registerMessage',recoveryError.message,true);}
+  }
+ }
  finally{button.disabled=false;}
 };
 // Successful sign-in should land in the customer's existing workspace, not Account.
@@ -315,7 +321,45 @@ async function openWorkspaceAfterLogin(){
 })();
  try{return await job.promise;}finally{if(openWorkspaceAfterLogin.pending===job)openWorkspaceAfterLogin.pending=null;}
 }
-$('#loginForm').onsubmit=async event=>{event.preventDefault();if($('#loginSubmit').disabled||!event.currentTarget.reportValidity())return;const button=$('#loginSubmit');button.disabled=true;try{renderProfile(await api('/api/auth/login',{method:'POST',body:JSON.stringify({identity:value('loginIdentity'),password:$('#loginPassword').value})}));$('#loginPassword').value='';try{if($('#rememberIdentity').checked)localStorage.setItem('og-login-identity',value('loginIdentity'));else localStorage.removeItem('og-login-identity');}catch(error){}await openWorkspaceAfterLogin();}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
+async function offerExistingAccountRecovery(email,context){
+  // No user enumeration: the prompt and success message never reveal the
+  // prior account status. Existing recovery sends only to its saved address.
+  let target=String(email||'').trim().toLowerCase();
+  if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(target)){
+    const entered=await window.requestInput(lang==='ar'
+      ?'أدخل البريد الإلكتروني المسجّل في حسابك السابق لإرسال رابط الاسترجاع إليه.'
+      :'Enter the registered email to receive the recovery link.');
+    if(entered===null)return false;
+    target=String(entered).trim().toLowerCase();
+  }
+  if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(target)){
+    apiMessage(context,lang==='ar'?'أدخل بريدًا إلكترونيًا صحيحًا.':'Enter a valid email address.',true);return false;
+  }
+  if(!await window.confirmAction(lang==='ar'
+    ?'قد تكون هذه البيانات مرتبطة بحساب سابق غير مفعّل أو مؤرشف. هل تريد إرسال رابط الاسترجاع إلى البريد المسجّل؟ لن يتم تفعيل الحساب إلا بعد التحقق.'
+    :'These details may belong to an existing unverified or archived account. Send a recovery link to the registered mailbox? Verification is required.'))return false;
+  await api('/api/auth/forgot-password',{method:'POST',body:JSON.stringify({email:target})});
+  apiMessage(context,lang==='ar'
+    ?'إذا كان البريد مرتبطًا بحساب مؤهل ستصلك رسالة الاسترجاع. افحص البريد الوارد والرسائل غير المرغوبة. تنتهي صلاحية الرابط بعد 60 ثانية، وقد يتطلب الحساب المؤرشف إكمال إجراءات إعادة التفعيل.'
+    :'If the email belongs to an eligible account, you will receive a recovery email. Check inbox/spam. The link expires after 60 seconds; archived accounts may require reactivation.');
+  return true;
+}
+$('#loginForm').onsubmit=async event=>{
+ event.preventDefault();if($('#loginSubmit').disabled||!event.currentTarget.reportValidity())return;
+ const button=$('#loginSubmit');button.disabled=true;
+ try{
+  renderProfile(await api('/api/auth/login',{method:'POST',body:JSON.stringify({identity:value('loginIdentity'),password:$('#loginPassword').value})}));
+  $('#loginPassword').value='';
+  try{if($('#rememberIdentity').checked)localStorage.setItem('og-login-identity',value('loginIdentity'));else localStorage.removeItem('og-login-identity');}catch(error){}
+  await openWorkspaceAfterLogin();
+ }catch(error){
+  apiMessage('loginMessage',error.message,true);
+  if(error.status===403&&/Confirm your email|Account archived|Account is not active/.test(error.message)){
+    try{await offerExistingAccountRecovery(value('loginIdentity'),'loginMessage');}
+    catch(recoveryError){apiMessage('loginMessage',recoveryError.message,true);}
+  }
+ }finally{button.disabled=false;}
+};
 $('#resendEmailVerification').onclick=async()=>{const identity=value('loginIdentity').trim();const password=$('#loginPassword').value;if(!identity||!password){apiMessage('loginMessage',lang==='ar'?'أدخل البريد أو اسم المستخدم وكلمة المرور لإعادة إرسال التفعيل.':'Enter your email or username and password to resend verification.',true);return}const button=$('#resendEmailVerification');button.disabled=true;try{const result=await api('/api/auth/resend-verification',{method:'POST',body:JSON.stringify({identity,password})});$('#loginPassword').value='';showEmailCodeStep(result,result.email||identity)}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
 $('#logoutButton').onclick=()=>window.logoutSession().catch(error=>toast(error.message));
 
