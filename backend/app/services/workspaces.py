@@ -133,8 +133,9 @@ def account_local_storage_payload(db,user_id):
 
 def require_account_local_headroom(db,user_id,additional=0):
     if additional<0:raise HTTPException(422,'Invalid storage reservation')
-    if account_local_storage(db,user_id,stop_at=WORKSPACE_QUOTA_BYTES)+additional>WORKSPACE_QUOTA_BYTES:
-        raise HTTPException(413,'Your account local-project storage is full. Delete a local project after confirmation, or export it before deleting.')
+    used=account_local_storage(db,user_id,stop_at=WORKSPACE_QUOTA_BYTES)
+    if used>=WORKSPACE_QUOTA_BYTES or used+additional>WORKSPACE_QUOTA_BYTES:
+        raise HTTPException(413,'Your account local-project storage is full. Export and remove an old local project to free this owner-only 50 MB allocation.')
 
 
 def storage_payload(workspace):
