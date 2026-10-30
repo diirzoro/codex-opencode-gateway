@@ -21,7 +21,9 @@ def github_project_attached(db, user_id, project):
     connection and original authorized installation. Never delete its files
     merely because OAuth was revoked; reauthorization can restore access.
     """
-    if project.source_type != 'github' and project.github_installation_id is None:
+    # A local project stays local even when its owner has previously
+    # published it to a GitHub remote; unlinking GitHub cannot lock it.
+    if project.source_type != 'github':
         return True
     if project.github_installation_id is None:
         return False
@@ -36,8 +38,8 @@ def visible_project_predicate(user_id):
         GithubConnection.user_id == user_id,
         GithubConnection.installation_id == Project.github_installation_id,
         GithubConnection.suspended.is_(False)))
-    return or_(and_(Project.source_type != 'github',Project.github_installation_id.is_(None)),
-               and_(Project.github_installation_id.is_not(None),connected))
+    return or_(Project.source_type != 'github',
+               and_(Project.source_type == 'github',Project.github_installation_id.is_not(None),connected))
 
 
 def owned(db, model, identifier, user_id):
