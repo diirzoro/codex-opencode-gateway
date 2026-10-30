@@ -49,7 +49,8 @@ jobs:
           python -m pytest -q \
             backend/tests/test_native_control_plane.py \
             backend/tests/test_native_security_performance.py \
-            backend/tests/test_email_verification_contracts.py
+            backend/tests/test_email_verification_contracts.py \
+            backend/tests/test_live_integration_sync.py
 
       - name: Full authorization, account and attachment regression suite
         run: |
