@@ -78,6 +78,9 @@ jobs:
           npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund jsdom@26.1.0
           node tests/browser/test-github-email-proof.cjs
           node tests/browser/test-native-ux.cjs
+          node tests/browser/test-admin-account-removal.cjs
+          node tests/browser/test-admin-users-table.cjs
+          node tests/browser/test-admin-user-editor.cjs
 
       - name: Preserve canonical memos and issue history
         shell: bash
