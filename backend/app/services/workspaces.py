@@ -105,6 +105,38 @@ def usage_bytes(workspace, *, stop_at=None):
         raise HTTPException(503,'Workspace storage inspection is unavailable; retry before continuing') from None
     return total
 
+def account_local_storage(db,user_id,*,stop_at=None):
+    """Total on-disk bytes for ALL local project workspaces of this owner.
+
+    A local project published to GitHub stays local; GitHub-imported copies
+    have independent cache quotas and must not consume this client's local
+    allocation. Iterate owned rows only; never scan another customer's tree.
+    """
+    used=0
+    rows=db.scalars(select(Workspace).join(Project,Project.id==Workspace.project_id).where(
+        Workspace.user_id==user_id,Project.user_id==user_id,
+        Project.source_type!='github',Workspace.status.not_in(['cache_expiring','cache_expired'])))
+    for row in rows:
+        remaining=None if stop_at is None else max(0,stop_at-used)
+        used+=usage_bytes(row,stop_at=remaining)
+        if stop_at is not None and used>=stop_at:break
+    return used
+
+
+def account_local_storage_payload(db,user_id):
+    used=account_local_storage(db,user_id)
+    limit=WORKSPACE_QUOTA_BYTES
+    return {'used_bytes':used,'limit_bytes':limit,'remaining_bytes':max(0,limit-used),
+            'used_mb':round(used/1048576,2),'limit_mb':limit//1048576,
+            'over_limit':used>=limit,'scope':'account_local_projects'}
+
+
+def require_account_local_headroom(db,user_id,additional=0):
+    if additional<0:raise HTTPException(422,'Invalid storage reservation')
+    if account_local_storage(db,user_id,stop_at=WORKSPACE_QUOTA_BYTES)+additional>WORKSPACE_QUOTA_BYTES:
+        raise HTTPException(413,'Your account local-project storage is full. Delete a local project after confirmation, or export it before deleting.')
+
+
 def storage_payload(workspace):
     from .workspace_cache import cache_payload
     used = usage_bytes(workspace)
