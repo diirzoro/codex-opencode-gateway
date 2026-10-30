@@ -67,6 +67,54 @@ def test_quota_is_fresh_counts_regular_files_and_ignores_external_symlinks(bound
   assert error.value.status_code==413
 
 
+def test_fifty_megabytes_is_per_client_total_of_local_projects(boundary):
+    _,(a,b),_,engine,_=boundary
+    from sqlalchemy.orm import Session
+    import uuid
+    with Session(engine) as db:
+        second=models.Project(id=uuid.uuid4(),user_id=a.id,name='Second local',source_type='blank')
+        ws=models.Workspace(id=uuid.uuid4(),user_id=a.id,project=second,status='ready')
+        db.add_all([second,ws]);db.commit()
+        second_root=workspaces.root_for(ws)
+        second_root.mkdir(parents=True,exist_ok=True)
+        with (a.root/'one.data').open('wb') as f:f.truncate(30*1048576)
+        with (second_root/'two.data').open('wb') as f:f.truncate(19*1048576)
+        own=workspaces.account_local_storage_payload(db,a.id)
+        foreign=workspaces.account_local_storage_payload(db,b.id)
+        assert own['limit_bytes']==50*1048576
+        assert own['used_bytes']>=49*1048576
+        assert foreign['used_bytes']<1048576
+        assert foreign['limit_bytes']==own['limit_bytes']
+        # The second project still counts against owner A, not owner B.
+        with pytest.raises(HTTPException) as error:
+            workspaces.require_account_local_headroom(db,a.id,2*1048576)
+        assert error.value.status_code==413
+        workspaces.require_account_local_headroom(db,b.id,2*1048576)
+        other=models.Project(id=uuid.uuid4(),user_id=a.id,name='Imported source',source_type='github')
+        source=models.Workspace(id=uuid.uuid4(),user_id=a.id,project=other,status='ready')
+        db.add_all([other,source]);db.flush()
+        foreign_copy=workspaces.root_for(source);foreign_copy.mkdir(parents=True,exist_ok=True)
+        with (foreign_copy/'source.data').open('wb') as f:f.truncate(60*1048576)
+        assert workspaces.account_local_storage_payload(db,a.id)['used_bytes']==own['used_bytes']
+        with (second_root/'two.data').open('wb') as f:f.truncate(1*1048576)
+        workspaces.require_account_local_headroom(db,a.id,2*1048576)
+
+
+def test_local_storage_endpoint_displays_account_total_not_just_current_workspace(boundary):
+    client,(a,b),_,engine,config=boundary
+    from sqlalchemy.orm import Session
+    with (a.root/'size.data').open('wb') as f:f.truncate(2*1048576)
+    own=authenticated(client,f'/api/workspaces/{a.workspace}/storage',a,config)
+    assert own.status_code==200,own.text
+    assert own.json()['scope']=='account_local_projects'
+    assert own.json()['limit_mb']==50
+    assert own.json()['used_bytes']>=2*1048576
+    other=authenticated(client,f'/api/workspaces/{b.workspace}/storage',b,config)
+    assert other.status_code==200
+    assert other.json()['used_bytes']<1048576
+    assert authenticated(client,f'/api/workspaces/{b.workspace}/storage',a,config).status_code==404
+
+
 def test_storage_scan_failure_cannot_admit_execution(boundary,monkeypatch):
  _,(owner,_),_,engine,_=boundary
  monkeypatch.setattr(workspaces.os,'fwalk',Mock(side_effect=PermissionError('synthetic denied')))
