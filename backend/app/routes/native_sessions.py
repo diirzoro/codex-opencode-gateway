@@ -107,6 +107,22 @@ def session_permissions(db,workspace,root,live,location=None):
             if error.status_code!=403:raise
     return policy.native_session_permissions(policy.load(db),root,grants)
 
+def native_restrictions_persisted(session, expected):
+    """Match OpenCode's documented PATCH merge semantics.
+
+    Native appends newly supplied session permission rules to existing rules,
+    rather than replacing the whole array. Permission evaluation uses the
+    LAST matching rule. A full expected suffix overrides earlier rules while
+    preserving path-specific denies and file grants. NEVER accept an arbitrary
+    subset or only a successful PATCH response.
+    """
+    if not isinstance(session,dict):return False
+    stored=session.get('permission')
+    if not isinstance(stored,list) or len(stored)<len(expected):return False
+    if not expected:return not stored
+    return stored[-len(expected):]==expected
+
+
 def confirm_native_session_restrictions(session_id,root,expected):
     """Verify Native's persisted session policy, not a possibly stale PATCH reply.
 
@@ -117,7 +133,8 @@ def confirm_native_session_restrictions(session_id,root,expected):
     metadata('PATCH','/session/'+session_id,root,{'permission':expected})
     confirmed=metadata('GET','/session/'+session_id,root)
     if (not isinstance(confirmed,dict) or confirmed.get('id')!=session_id
-        or confirmed.get('directory')!=str(root) or confirmed.get('permission')!=expected):
+        or confirmed.get('directory')!=str(root)
+        or not native_restrictions_persisted(confirmed,expected)):
         raise HTTPException(503,'Native session did not persist required tool restrictions; prompt not forwarded')
     return confirmed
 
@@ -455,7 +472,7 @@ def _authorize_native(workspace_id,resource,request,user,db,raw):
             # execution, including sessions created under the older ask-all rules.
             # Never alter a running session and pretend its old tools were revoked.
             permissions=session_permissions(db,workspace,root,session_live)
-            if session_live.get('permission')!=permissions:
+            if not native_restrictions_persisted(session_live,permissions):
                 statuses=metadata('GET','/session/status',root)
                 if statuses.get(row.opencode_session_id,{}).get('type','idle')!='idle':raise HTTPException(409,'Stop this conversation before applying its new tool restrictions')
                 # Native may return a stale/minimal PATCH acknowledgement. The
