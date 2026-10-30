@@ -1,21 +1,19 @@
 name: LIVE | Promote master
 
 on:
-  pull_request:
-    branches: [master]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # PR validations must not block live deployment; LIVE deploys remain serialized.
-  group: ${{ github.event_name == 'pull_request' && format('opencode-live-pr-{0}', github.event.pull_request.number) || 'opencode-live-deploy' }}
+  # Exactly one LIVE deployment at a time.
+  group: opencode-live-deploy
   cancel-in-progress: false
 
 jobs:
   validate:
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
