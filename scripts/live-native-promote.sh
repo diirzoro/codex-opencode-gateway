@@ -22,9 +22,29 @@ ss -ltn | grep -F '127.0.0.2:4097' >/dev/null
 ss -ltn | grep -F '127.0.0.1:18097' >/dev/null
 ss -ltn | grep -F '127.0.0.1:18098' >/dev/null
 # LIVE internal locations MUST be added to the existing production TLS server.
-nginx_config="$(sudo -n nginx -T 2>/dev/null || nginx -T 2>/dev/null || true)"
-[[ "$nginx_config" == *'location @native_session_live'* && "$nginx_config" == *'location @native_discovery_live'* ]] || { echo 'Install LIVE Nginx Native locations first' >&2; exit 4; }
-unset nginx_config
+# Verify the already-installed production Nginx locations directly without
+# invoking password-protected sudo -n nginx -T from a noninteractive workflow.
+LIVE_NGINX_CONF=/etc/nginx/sites-enabled/opencode-gateway
+LIVE_NATIVE_SNIPPET=/etc/nginx/snippets/opencode-native-live.conf
+if ! test -r "$LIVE_NGINX_CONF" || ! test -r "$LIVE_NATIVE_SNIPPET"; then
+  echo 'LIVE Nginx config files are unreadable to deployment user' >&2
+  exit 4
+fi
+if ! grep -Fq 'server_name opencode-gateway.codes;' "$LIVE_NGINX_CONF" ||
+   ! grep -Fq 'proxy_pass http://127.0.0.1:8000;' "$LIVE_NGINX_CONF" ||
+   ! grep -Fq 'include /etc/nginx/snippets/opencode-native-live.conf;' "$LIVE_NGINX_CONF" ||
+   ! grep -Fq 'location @native_session_live {' "$LIVE_NATIVE_SNIPPET" ||
+   ! grep -Fq 'location @native_discovery_live {' "$LIVE_NATIVE_SNIPPET"; then
+  echo 'LIVE Nginx production domain, backend or Native include is not installed' >&2
+  exit 4
+fi
+echo 'LIVE Nginx production and Native routes verified without sudo'
+# Check unattended restart authorization before modifying LIVE files or .env.
+# GitHub Actions cannot answer an interactive sudo password prompt.
+if ! sudo -n -l /usr/bin/systemctl restart opencode-gateway.service >/dev/null 2>&1; then
+  echo 'GitHub SSH user lacks noninteractive permission to restart only opencode-gateway.service; deployment stopped before modifications' >&2
+  exit 8
+fi
 # Validate LIVE configuration only. Do not create backups, delete files,
 # replace the database, or change production callback/domain values.
 "$APP/.venv/bin/python" - "$APP/.env" <<'PY'
@@ -78,8 +98,8 @@ set -a
 . "$APP/.env"
 set +a
 (cd "$APP/backend" && ../.venv/bin/python -m alembic upgrade head && ../.venv/bin/python -m alembic current)
-sudo -n systemctl restart opencode-gateway.service
-sudo -n systemctl is-active --quiet opencode-gateway.service
+sudo -n /usr/bin/systemctl restart opencode-gateway.service
+sudo -n /usr/bin/systemctl is-active --quiet opencode-gateway.service
 curl -fsS --retry 15 --retry-delay 2 --retry-connrefused http://127.0.0.1:8000/api/health
 echo "LIVE_CODE_AND_SCHEMA_PROMOTED no-backup-created; old files retained"
 # Real Native prompts, file permissions, SSE and cross-user isolation still
