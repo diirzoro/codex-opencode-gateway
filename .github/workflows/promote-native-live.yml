@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "diagnose LIVE, audit TEST integrations, sync encrypted TEST settings into LIVE, or deploy master"
+        description: "diagnose LIVE, audit/sync integrations only, or promote code plus TEST platform integrations"
         required: true
         type: choice
         default: diagnose
@@ -176,6 +176,18 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
           ssh -p "$port" -o BatchMode=yes "$VPS_USER@$VPS_HOST" 'mkdir -p "$HOME/opencode-gateway-release"'
+      - name: Audit TEST integration settings before touching LIVE
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${VPS_SSH_PORT:-22}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            '"$HOME/opencode-gateway/.venv/bin/python" - audit' \
+            < scripts/sync-test-platform-integrations.py
+
       - name: Upload source; leave LIVE .env and data untouched
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -201,6 +213,18 @@ jobs:
           port="${VPS_SSH_PORT:-22}"
           ssh -p "$port" "$VPS_USER@$VPS_HOST" \
             'PROMOTE_NATIVE_LIVE_CONFIRM=promote bash "$HOME/opencode-gateway-release/scripts/live-native-promote.sh"'
+      - name: Synchronize encrypted TEST Resend and GitHub App settings into LIVE
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${VPS_SSH_PORT:-22}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            '"$HOME/opencode-gateway/.venv/bin/python" - apply' \
+            < scripts/sync-test-platform-integrations.py
+
       - name: Confirm production domain routes to LIVE backend
         run: |
           set -euo pipefail
