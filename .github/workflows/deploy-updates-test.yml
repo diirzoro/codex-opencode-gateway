@@ -1,9 +1,14 @@
-name: Audit and deploy all updates to TEST
+name: TEST | Validate and deploy updates
 on:
+  push:
+    branches: [updates]
+    paths-ignore:
+      - '.github/workflows/**'
+      - 'docs/**'
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "Full TEST: audit without changes or deploy all approved app source"
+        description: "TEST: push to updates deploys automatically; dispatch permits audit, deploy or rollback"
         required: true
         type: choice
         default: audit-test
@@ -18,11 +23,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: test-native-audit-deploy
+  group: opencode-test-deploy
   cancel-in-progress: false
 jobs:
   test:
-    if: github.ref == 'refs/heads/updates' && github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/updates' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: test
     timeout-minutes: 20
@@ -34,12 +39,13 @@ jobs:
         run: |
           set -euo pipefail
           mode="$(printf '%s' "$CONFIRMATION" | tr -d '[:space:]')"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then mode=deploy-test; fi
           [[ "$mode" == "audit-test" || "$mode" == "deploy-test" || "$mode" == "rollback-test" ]]
           printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
           [[ "$GITHUB_REF" == "refs/heads/updates" ]]
       - uses: actions/checkout@v4
         with:
-          ref: updates
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Validate full TEST source and migration chain
         run: |
@@ -63,6 +69,27 @@ jobs:
           assert pathlib.Path('index.html').is_file()
           print('FULL_SOURCE_PREFLIGHT_SUCCESS',len(versions),'migrations')
           PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+      - name: Run backend authorization, account, Native and attachment regressions
+        run: |
+          python -m pytest -q \
+            backend/tests/test_github_boundaries.py \
+            backend/tests/test_github_disconnect_review.py \
+            backend/tests/test_email_verification_contracts.py \
+            backend/tests/test_email_code_signup.py \
+            backend/tests/test_registration_identity_uniqueness.py \
+            backend/tests/test_github_email_ownership.py \
+            backend/tests/test_admin_account_controls.py \
+            backend/tests/test_native_security_performance.py \
+            backend/tests/test_native_control_plane.py \
+            backend/tests/test_chat_attachments.py \
+            backend/tests/test_native_24h_retention.py
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -72,6 +99,15 @@ jobs:
           for file in app.js dashboards.js enhancements.js management.js native-session-client.js runtime-client.js; do
             node --check "$file"
           done
+      - name: Test protected browser flows
+        run: |
+          npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund jsdom@26.1.0
+          node tests/browser/test-github-email-proof.cjs
+          node tests/browser/test-native-ux.cjs
+          node tests/browser/test-admin-account-removal.cjs
+          node tests/browser/test-admin-users-table.cjs
+          node tests/browser/test-admin-user-editor.cjs
+          node tests/browser/test-existing-account-recovery.cjs
       - name: Configure pinned SSH for TEST
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -122,6 +158,14 @@ jobs:
           fi
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
+      - name: Verify TEST and LIVE health after TEST operation
+        if: steps.confirm.outputs.mode != 'audit-test'
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 6 --retry-delay 2 https://test.opencode-gateway.codes/api/health
+          echo
+          curl -fsS --retry 3 --retry-delay 2 https://opencode-gateway.codes/api/health
+          echo
       - name: Report scope
         if: always()
         run: |

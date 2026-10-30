@@ -1,6 +1,8 @@
-name: Promote approved Native First source to LIVE
+name: LIVE | Validate and deploy master
 
 on:
+  pull_request:
+    branches: [master]
   workflow_dispatch:
     inputs:
       confirmation:
@@ -12,12 +14,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: promote-native-first-live
+  group: opencode-live-deploy
   cancel-in-progress: false
 
 jobs:
   validate:
-    if: github.ref == 'refs/heads/master' && inputs.confirmation == 'promote'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +34,7 @@ jobs:
           python -m compileall -q backend/app
           python scripts/validate_migration_chain.py
           bash -n scripts/live-native-promote.sh
+          test -s docs/NATIVE_SESSION_LIVE_NGINX.conf
       - name: Native ownership, LIVE boundaries and email regressions
         run: |
           python -m pytest -q \
@@ -40,7 +42,34 @@ jobs:
             backend/tests/test_native_security_performance.py \
             backend/tests/test_email_verification_contracts.py
 
+      - name: Full authorization, account and attachment regression suite
+        run: |
+          python -m pytest -q \
+            backend/tests/test_github_boundaries.py \
+            backend/tests/test_github_disconnect_review.py \
+            backend/tests/test_email_code_signup.py \
+            backend/tests/test_registration_identity_uniqueness.py \
+            backend/tests/test_github_email_ownership.py \
+            backend/tests/test_admin_account_controls.py \
+            backend/tests/test_chat_attachments.py \
+            backend/tests/test_native_24h_retention.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate JavaScript syntax and protected browser flows
+        run: |
+          set -euo pipefail
+          for file in app.js dashboards.js enhancements.js management.js native-session-client.js runtime-client.js; do node --check "$file"; done
+          npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund jsdom@26.1.0
+          node tests/browser/test-github-email-proof.cjs
+          node tests/browser/test-native-ux.cjs
+          node tests/browser/test-admin-account-removal.cjs
+          node tests/browser/test-admin-users-table.cjs
+          node tests/browser/test-admin-user-editor.cjs
+          node tests/browser/test-existing-account-recovery.cjs
+
   deploy:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.confirmation == 'promote'
     needs: validate
     runs-on: ubuntu-latest
     environment: production
