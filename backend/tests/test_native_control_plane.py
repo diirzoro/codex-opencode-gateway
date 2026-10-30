@@ -212,3 +212,37 @@ def test_stale_or_broad_native_grants_are_removed_and_path_metadata_is_coalesced
   assert [r for r in rules if r['action']=='allow' and r['permission'] in policy.NATIVE_FILE_TOOLS]==[good]
   (a.root/'marker.txt').unlink();(a.root/'marker.txt').symlink_to(b.root/'marker.txt')
   assert good not in native.session_permissions(db,workspace,a.root,{'permission':rules})
+
+
+def test_native_live_deployment_has_distinct_authorized_database_and_origin(monkeypatch):
+    config=replace(native.settings, public_base_url='https://opencode-gateway.codes',
+                   database_url='postgresql+psycopg://fixture:fixture@127.0.0.1/opencode_gateway',
+                   runtime_mode='disabled')
+    monkeypatch.setattr(native,'settings',config)
+    monkeypatch.delenv('OPENCODE_NATIVE_TEST_ENABLED',raising=False)
+    monkeypatch.setenv('OPENCODE_NATIVE_LIVE_ENABLED','true')
+    assert native.deployment()=='live'
+    assert native.enabled()
+
+
+@pytest.mark.parametrize('mode,origin,database',[
+    ('local','https://opencode-gateway.codes','opencode_gateway'),
+    ('disabled','https://test.opencode-gateway.codes','opencode_gateway'),
+    ('disabled','https://opencode-gateway.codes','opencode_gateway_test'),
+])
+def test_native_live_rejects_legacy_runtime_or_cross_environment(monkeypatch,mode,origin,database):
+    config=replace(native.settings, public_base_url=origin,
+                   database_url='postgresql+psycopg://fixture:fixture@127.0.0.1/'+database,
+                   runtime_mode=mode)
+    monkeypatch.setattr(native,'settings',config)
+    monkeypatch.delenv('OPENCODE_NATIVE_TEST_ENABLED',raising=False)
+    monkeypatch.setenv('OPENCODE_NATIVE_LIVE_ENABLED','true')
+    with pytest.raises(RuntimeError):
+        native.deployment()
+
+
+def test_native_prevents_accidental_dual_environment_flags(monkeypatch):
+    monkeypatch.setenv('OPENCODE_NATIVE_TEST_ENABLED','true')
+    monkeypatch.setenv('OPENCODE_NATIVE_LIVE_ENABLED','true')
+    with pytest.raises(RuntimeError):
+        native.deployment()
