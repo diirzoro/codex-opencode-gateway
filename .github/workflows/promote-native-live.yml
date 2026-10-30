@@ -39,6 +39,7 @@ jobs:
           python -m compileall -q backend/app
           python scripts/validate_migration_chain.py
           bash -n scripts/live-native-promote.sh
+          python -m py_compile scripts/live-integration-diagnostics.py
           test -s docs/NATIVE_SESSION_LIVE_NGINX.conf
       - name: Native ownership, LIVE boundaries and email regressions
         run: |
