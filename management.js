@@ -541,10 +541,12 @@
   async function recover(reset=false){
     await authReady;window.passwordRecoveryActive=true;document.getElementById('authDialog')?.close();showPage('authPage');$('#authPage .auth-shell').hidden=true;recovery.hidden=false;
     recovery.replaceChildren(node('h2',tr(reset?'Reset password':'Recover password',reset?'إعادة تعيين كلمة المرور':'استعادة كلمة المرور')));
-    let archived=false;
+    let archived=false,activationRequired=false;
     if(reset){
       const status=node('p',tr('Checking recovery link…','جارٍ التحقق من رابط الاستعادة…'));status.setAttribute('role','status');recovery.append(status);
-      try{archived=(await api('/api/auth/recovery-status',{method:'POST',body:JSON.stringify({token:resetToken})})).reactivation_required;status.remove();}
+      try{const state=await api('/api/auth/recovery-status',{method:'POST',body:JSON.stringify({token:resetToken})});
+        archived=state.reactivation_required===true;
+        activationRequired=state.account_activation_required===true;status.remove();}
       catch(error){status.textContent=error.message;status.setAttribute('role','alert');recovery.append(button(tr('Back to recovery','العودة للاستعادة'),()=>recover()));return;}
     }
     if(archived){
@@ -553,6 +555,10 @@
         const state=await api('/api/auth/reactivation/verify',{method:'POST',body:JSON.stringify({token:resetToken})});resetToken=null;clearAuthenticatedState();window.reactivationAccount=state;await window.openReactivation();
       });
     }else{
+      if(activationRequired)recovery.append(node('p',tr(
+        'Your previous account has not been activated. This email link proves mailbox ownership. Set a NEW password to activate the account; the old password will stop working.',
+        'حسابك السابق لم يُفعّل بعد. يثبت رابط البريد ملكيتك للعنوان. عيّن كلمة مرور جديدة لتفعيل الحساب؛ لن تبقى كلمة المرور القديمة صالحة.'
+      )));
       form(recovery,f=>{const i=input(f,tr(reset?'New password: 8+, number and symbol':'Account email',reset?'كلمة جديدة: 8 أحرف ورقم ورمز':'بريد الحساب'),reset?'password':'email',reset?'password':'email');i.required=true;if(reset){i.minLength=8;i.maxLength=128;i.autocomplete='new-password';}},tr(reset?'Reset':'Send recovery link',reset?'إعادة تعيين':'إرسال رابط الاستعادة'),async(values,f)=>{
         const data=await api(reset?'/api/auth/reset-password':'/api/auth/forgot-password',{method:'POST',body:JSON.stringify(reset?{token:resetToken,password:values.password}:values)});
         if(reset){finishPasswordReset(f);}
