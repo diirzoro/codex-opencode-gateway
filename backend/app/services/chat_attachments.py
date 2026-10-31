@@ -146,7 +146,7 @@ def public(value):
     return {k:value[k] for k in ('id','name','size','mime','state')} | {'path':DIRECTORY+'/'+value['id']+'/'+value['name'], 'temporary':True}
 
 
-async def upload(workspace, identifier, request):
+async def upload(workspace, identifier, request, db=None):
     total = 0
     fd = None
     owns_transfer=False
@@ -170,7 +170,7 @@ async def upload(workspace, identifier, request):
         with locked(workspace,identifier) as (value,path):
             if not value or value['state'] != 'uploading': raise HTTPException(409, 'Upload cancelled')
             if total != value['size']: raise HTTPException(422, 'Incomplete attachment upload')
-            if workspaces.storage_payload(workspace)["used_bytes"] > workspaces.quota_bytes(workspace):
+            if db is not None and workspaces.account_storage(db,workspace.user_id) > workspaces.quota_bytes(workspace,db):
                 raise HTTPException(413, 'Gateway shared account storage limit reached')
             directory=_directory(workspace,value)
             directory_fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
