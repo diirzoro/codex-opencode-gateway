@@ -749,7 +749,19 @@ applyPrefs();
       if(field.options){input=element('select');for(const option of field.options)input.add(new Option(option.label||option,option.value||option));}
       else{input=element('input');input.type=field.type||'text';}
       input.name=field.name;input.id=id;input.value=field.value??'';input.required=field.required??false;input.autocomplete=field.type==='password'?'off':field.autocomplete||'off';
-      for(const key of ['min','max','minLength','maxLength','pattern'])if(field[key]!==undefined)input[key]=field[key];label.htmlFor=id;label.append(input);form.append(label);
+      for(const key of ['min','max','minLength','maxLength','pattern'])if(field[key]!==undefined)input[key]=field[key];
+      label.htmlFor=id;label.append(input);
+      if(field.type==='password'){
+        const reveal=element('button',tr('Show password','إظهار كلمة المرور'),'button ghost small');
+        reveal.type='button';reveal.setAttribute('aria-controls',id);reveal.setAttribute('aria-pressed','false');
+        reveal.onclick=()=>{
+          const visible=input.type==='password';input.type=visible?'text':'password';
+          reveal.textContent=visible?tr('Hide password','إخفاء كلمة المرور'):tr('Show password','إظهار كلمة المرور');
+          reveal.setAttribute('aria-pressed',String(visible));input.focus();
+        };
+        label.append(reveal);
+      }
+      form.append(label);
     }
     const save=element('button',submitLabel,'button');save.type='submit';form.append(save);host.append(form);document.body.append(host);
     const dialog=window.mountFormDialog(host,form,title);form.dialogTrigger.hidden=true;
@@ -758,6 +770,45 @@ applyPrefs();
   });
   window.confirmAction=async(title)=>Boolean(await window.requestForm(title,[],tr('Confirm','تأكيد')));
   window.requestInput=async(title,value='',type='text')=>{const result=await window.requestForm(title,[{name:'value',label:title,value,type}],tr('Continue','متابعة'));return result?.value??null;};
+  window.requestTimedVerificationCode=(destination,expiresIn=60,expiresAt=null)=>new Promise(resolve=>{
+    const host=element('div'),form=element('form','','manage-form');
+    const hint=element('p',tr(
+      'Enter the six-digit code sent to '+destination+'. Cancel keeps your previous details.',
+      'أدخل الرمز المكون من 6 أرقام المرسل إلى '+destination+'. الإلغاء يبقي البيانات السابقة كما هي.'
+    ));
+    const timer=element('p','','profile-verification-countdown');
+    timer.setAttribute('role','timer');timer.setAttribute('aria-live','off');
+    const label=element('label',tr('Verification code','رمز التحقق'));
+    const input=element('input');input.name='code';input.type='text';input.inputMode='numeric';
+    input.autocomplete='one-time-code';input.pattern='[0-9]{6}';input.minLength=6;input.maxLength=6;
+    input.required=true;input.dir='ltr';input.placeholder='000000';
+    label.append(input);
+    const submit=element('button',tr('Verify and save','تحقق واحفظ'),'button');submit.type='submit';
+    form.append(hint,timer,label,submit);host.append(form);document.body.append(host);
+    const dialog=window.mountFormDialog(host,form,tr('Email verification','التحقق من البريد'));
+    form.dialogTrigger.hidden=true;
+    const end=expiresAt && Number.isFinite(Date.parse(expiresAt))
+      ? Date.parse(expiresAt) : Date.now()+Math.min(Math.max(Number(expiresIn)||60,1),60)*1000;
+    let result=null,interval=null,expired=false;
+    const update=()=>{
+      const remaining=Math.max(0,Math.ceil((end-Date.now())/1000));
+      expired=remaining===0;
+      timer.textContent=expired?tr('Code expired. Request a new code.','انتهت صلاحية الرمز. اطلب رمزًا جديدًا.'):
+        tr('Code expires in ','تنتهي صلاحية الرمز خلال ')+remaining+tr(' seconds',' ثانية');
+      submit.disabled=expired;
+      if(expired){input.disabled=true;timer.setAttribute('aria-live','polite');}
+    };
+    update();interval=setInterval(update,250);
+    form.onsubmit=event=>{
+      event.preventDefault();update();
+      if(expired||!form.reportValidity())return;
+      result=input.value.trim();dialog.close();
+    };
+    dialog.addEventListener('close',()=>{
+      clearInterval(interval);input.value='';host.remove();resolve(result);
+    },{once:true});
+    form.openDialog();
+  });
   window.editProfileForm=async()=>{
     if(!currentUser)return false;
     const original={username:currentUser.username||'',email:currentUser.email||'',
@@ -767,7 +818,7 @@ applyPrefs();
       {name:'email',label:tr('Email','البريد الإلكتروني'),type:'email',value:original.email,required:true},
       {name:'phone',label:tr('Phone with international code','الهاتف مع مفتاح الدولة'),type:'tel',value:original.phone,required:true},
       {name:'postal_code',label:tr('Country dialling code','مفتاح الاتصال الدولي'),value:original.postal_code,required:true},
-      {name:'current_password',label:tr('Current password to authorize changes','كلمة المرور الحالية للسماح بالتعديل'),type:'password',required:true}
+      {name:'current_password',label:tr('Current password (for security; it will NOT be changed)','كلمة المرور الحالية للتحقق الأمني (لن تتغير كلمة المرور)'),type:'password',required:true}
     ],tr('Send 60-second verification code','إرسال رمز تحقق صالح لمدة دقيقة'));
     if(!values)return false;
     const changes={};
@@ -782,10 +833,7 @@ applyPrefs();
       const target=requested.destination==='new_email'
         ?tr('the NEW email address','البريد الجديد')
         :tr('your CURRENT registered email','بريدك الحالي المسجل');
-      const code=await window.requestInput(tr(
-        'Enter the six-digit code sent to '+target+'. It expires in 60 seconds. Cancel leaves the previous details unchanged.',
-        'أدخل رمز التفعيل المكون من 6 أرقام الذي أُرسل إلى '+target+'. ينتهي خلال 60 ثانية. الإلغاء يترك بياناتك القديمة دون تغيير.'
-      ));
+      const code=await window.requestTimedVerificationCode(target,requested.expires_in,requested.expires_at);
       if(code===null)return false;
       const changed=await api('/api/profile/change/confirm',{method:'POST',
         body:JSON.stringify({...changes,challenge_id:requested.challenge_id,code:String(code).trim()})});
