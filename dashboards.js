@@ -20,8 +20,8 @@
   protectedPages.add('workspaceHomePage');protectedPages.add('connectionsPage');
   Object.assign(copy.en,{workspaceHome:'Workspace / Home',connectionsSettings:'Settings / Connections'});
   Object.assign(copy.ar,{workspaceHome:'مساحة العمل / الرئيسية',connectionsSettings:'الإعدادات / الاتصالات'});
-  Object.assign(copy.en,{ui51:'Local project · 50 MB',ui53:'GitHub-backed project',githubHintText:'Choose a repository and branch authorized by your GitHub App connection.'});
-  Object.assign(copy.ar,{ui51:'مشروع محلي · 50 MB',ui53:'مشروع مرتبط بـGitHub',githubHintText:'اختر مستودعًا وفرعًا مصرحًا بهما عبر اتصال GitHub App الخاص بك.'});
+  Object.assign(copy.en,{ui51:'Local project · shared Gateway quota',ui53:'GitHub-backed project · same quota',githubHintText:'Choose an authorized repository. Both local and GitHub projects share ONE storage quota; connect your own AI model/API.'});
+  Object.assign(copy.ar,{ui51:'مشروع محلي · حصة المنصة الموحدة',ui53:'مشروع GitHub · الحصة نفسها',githubHintText:'اختر مستودعًا مصرحًا به. المحلي وGitHub يستخدمان حصة واحدة؛ يربط العميل نماذج AI ومفاتيح API الخاصة به.'});
   Object.assign(copy.en,{accountPageTitle:'My account & profile',accountPageLead:'Your details and preferences, clearly organized.',accountReturnWorkspace:'Return to workspace',accountProfileTab:'My profile',accountSecurityTab:'Security & sign-in',accountDetailsTitle:'My details & preferences',accountDetailsLead:'Contact details and display settings.',accountLanguage:'Language',accountAppearance:'Appearance',accountLight:'Light',accountDark:'Dark',accountAdditional:'Sign-in methods, storage and data policies'});
   Object.assign(copy.ar,{accountPageTitle:'حسابي وملفي الشخصي',accountPageLead:'بياناتك وتفضيلاتك، في مكان واضح وبسيط.',accountReturnWorkspace:'العودة لمساحة العمل',accountProfileTab:'ملفي الشخصي',accountSecurityTab:'الأمان والدخول',accountDetailsTitle:'بياناتي وتفضيلاتي',accountDetailsLead:'معلومات التواصل وإعدادات العرض.',accountLanguage:'اللغة',accountAppearance:'المظهر',accountLight:'فاتح',accountDark:'داكن',accountAdditional:'طرق الدخول والتخزين وسياسات البيانات'});
   Object.assign(copy.en,{adminEmailNav:'Email & Verification',adminEmailCenterTitle:'Email & Verification',adminEmailCenterLead:'Manage email delivery, verification, and support inbox securely.',adminEmailProviders:'Providers',adminEmailServices:'Services',adminEmailInbox:'Support Inbox',adminEmailRefresh:'Refresh status',adminEmailDelivery:'Email Delivery'});
@@ -551,7 +551,20 @@
   const context=textElement('div','','composer-context');projectbar.append(context);const workspaceDetails=q('connectionsWorkspace');workspaceDetails.append(title('Workspace details','تفاصيل مساحة العمل'),q('workspaceRepo'),q('workspaceBranch'));const gitState=textElement('span',tr('GitHub: checking…','GitHub: جارٍ التحقق…'));gitState.id='workspaceGithubState';workspaceDetails.append(gitState,q('runtimeStatus'));context.append(workspaceDays);
   const storageChip=textElement('span',tr('Storage: …','التخزين: …'));storageChip.id='workspaceStorage';context.append(storageChip);
   let storageTimer=null,storagePending=null,storageData=null;
-  renderStorage=()=>{if(!storageData)return;storageChip.hidden=false;storageChip.title=window.workspaceRetentionNotice(storageData.cache);storageChip.textContent=tr('Storage used: ','التخزين المستخدم: ')+storageData.used_mb+' MB · '+tr('remaining','المتبقي')+' '+(storageData.remaining_bytes/1048576).toFixed(1)+' MB';};
+  renderStorage=()=>{
+    if(!storageData)return;
+    const sum=storageData,part=sum.workspace_source==='github'?sum.github_used_mb:sum.local_used_mb;
+    storageChip.hidden=false;
+    storageChip.title=window.workspaceRetentionNotice(sum.cache)+' · '+tr('Gateway subscription covers the platform, not AI API/models. Connect your own provider.','الاشتراك للمنصة وليس للنماذج أو API. اربط مزودك الخاص.');
+    storageChip.textContent=tr('Shared account storage: ','المساحة الموحدة للحساب: ')+sum.used_mb+' / '+sum.limit_mb+' MB · '+tr('Remaining: ','المتبقي: ')+(sum.remaining_bytes/1048576).toFixed(2)+' MB';
+    for(const [kind,bucket] of projectBuckets){
+      const used=kind==='github'?sum.github_used_mb:sum.local_used_mb;
+      const notice=bucket.usageNotice;
+      notice.textContent=tr('Same account quota: ','نفس حصة الحساب: ')+sum.used_mb+' / '+sum.limit_mb+' MB · '+tr('Remaining: ','المتبقي: ')+(sum.remaining_bytes/1048576).toFixed(2)+' MB · '+tr('This category: ','هذا القسم: ')+used+' MB';
+      notice.title=tr('Both sections use one quota; GitHub remote storage is not counted.','القسمان يستخدمان حصة واحدة؛ لا تدخل مساحة المستودعات البعيدة في GitHub ضمن الحد.');
+      notice.classList.toggle('storage-warning',sum.percent_used>=80);
+    }
+  };
   async function loadStorage(){
     if(!activeWorkspace){storageChip.textContent='';return;}
     const workspaceId=activeWorkspace.id;if(storagePending?.id===workspaceId)return storagePending.promise;
@@ -1245,7 +1258,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   for(const [kind,en,ar] of [['local','Workspace','مساحة العمل'],['github','GitHub projects','مشاريع GitHub']]){
     const group=document.createElement('details');group.className='project-source-group';group.open=true;group.dataset.source=kind;
     const list=textElement('div','','project-source-list'),summary=document.createElement('summary'),heading=textElement('span','','project-source-heading'),meta=textElement('span','','project-source-meta');
-    heading.append(text('span',en,ar),meta);summary.append(heading);group.append(summary,list);projectGroups.append(group);projectBuckets.set(kind,{group,list,meta,summary});
+    const usageNotice=textElement('div',tr('Loading shared storage…','جارٍ تحميل المساحة الموحدة…'),'muted-small shared-storage-notice');
+    usageNotice.style.cssText='padding:4px 12px 8px;line-height:1.7;white-space:normal;overflow-wrap:anywhere';
+    heading.append(text('span',en,ar),meta);summary.append(heading);group.append(summary,usageNotice,list);projectGroups.append(group);projectBuckets.set(kind,{group,list,meta,summary,usageNotice});
   }
   const linkGithub=btn('linkWorkspaceGithubProject','Open a GitHub project','فتح مشروع GitHub',()=>window.openGithubProject(),'icon-btn');
   linkGithub.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';linkGithub.title=tr('Open a GitHub project','فتح مشروع GitHub');linkGithub.setAttribute('aria-label',linkGithub.title);
