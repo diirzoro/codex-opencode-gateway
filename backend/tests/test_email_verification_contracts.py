@@ -69,3 +69,64 @@ def test_missing_smtp_configuration_blocks_delivery(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         email_verification.send_link("test@example.org", "fake")
     assert exc.value.status_code == 503
+
+
+def test_profile_change_password_is_optional_and_password_is_not_changed():
+    from backend.app.routes.profile_changes import Begin, Confirm
+    request = Begin.model_validate({"email": "new@example.org"})
+    assert request.current_password is None
+    assert request.email == "new@example.org"
+    assert Confirm.model_fields["current_password"].default is None if "current_password" in Confirm.model_fields else True
+
+
+def test_resend_https_delivery_accepts_id_without_smtp(monkeypatch):
+    from email.message import EmailMessage
+    from types import SimpleNamespace
+    from backend.app.services import email_delivery
+    sent = {}
+    class FakeClient:
+        def __init__(self, **kwargs):
+            assert kwargs["follow_redirects"] is False
+            assert kwargs["trust_env"] is False
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def post(self, url, headers, json):
+            sent["url"],sent["headers"],sent["payload"]=url,headers,json
+            return SimpleNamespace(status_code=200,json=lambda:{"id":"email_fixture"})
+    monkeypatch.setattr(email_delivery.httpx,"Client",FakeClient)
+    msg=EmailMessage()
+    msg["From"]="sender@example.org";msg["To"]="recipient@example.org"
+    msg["Subject"]="Fixture verification";msg.set_content("123456")
+    config={"provider":"resend","smtp_host":"smtp.resend.com","smtp_port":587,
+            "smtp_from":"sender@example.org","smtp_username":"resend",
+            "smtp_password":"fixture-resend-api-key"}
+    email_delivery.send(config,msg,error_status=503,timeout=12)
+    assert sent["url"]=="https://api.resend.com/emails"
+    assert sent["headers"]["Authorization"]=="Bearer fixture-resend-api-key"
+    assert sent["payload"]["to"]==["recipient@example.org"]
+    assert "fixture-resend-api-key" not in str(sent["payload"])
+
+
+def test_resend_rejected_sender_never_reveals_api_key(monkeypatch):
+    from email.message import EmailMessage
+    from types import SimpleNamespace
+    from backend.app.services import email_delivery
+    class FakeClient:
+        def __init__(self,**kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self,*args): return False
+        def post(self,*args,**kwargs):
+            return SimpleNamespace(status_code=422,text="server might contain secrets")
+    monkeypatch.setattr(email_delivery.httpx,"Client",FakeClient)
+    msg=EmailMessage()
+    msg["From"]="sender@example.org";msg["To"]="recipient@example.org"
+    msg["Subject"]="Verify";msg.set_content("123456")
+    config={"provider":"resend","smtp_host":"smtp.resend.com","smtp_from":"sender@example.org",
+            "smtp_username":"resend","smtp_password":"fixture-do-not-expose"}
+    with pytest.raises(HTTPException) as exc:
+        email_delivery.send(config,msg,error_status=503,timeout=12)
+    assert exc.value.status_code==503
+    assert "HTTP 422" in str(exc.value.detail)
+    assert "fixture-do-not-expose" not in str(exc.value.detail)
