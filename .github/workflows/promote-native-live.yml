@@ -1,9 +1,6 @@
 name: LIVE | Promote master
 
 on:
-  push:
-    branches: [master]
-    paths: ['.github/workflows/promote-native-live.yml']
   workflow_dispatch:
     inputs:
       vps_username:
@@ -22,7 +19,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.ref == 'refs/heads/master'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -38,7 +35,7 @@ jobs:
       - name: Prepare SSH from existing GitHub secrets
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ github.event_name == 'workflow_dispatch' && inputs.vps_username || secrets.VPS_USER }}
+          VPS_USER: ${{ inputs.vps_username }}
           EXPECTED_VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -58,11 +55,10 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
           ssh -p "$port" -o BatchMode=yes "$VPS_USER@$VPS_HOST" 'mkdir -p "$HOME/opencode-gateway-release"'
-      - name: Audit TEST integration settings (missing TEST encryption key does not block code deployment)
-        id: test_integrations
+      - name: Audit TEST integration settings before touching LIVE
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ github.event_name == 'workflow_dispatch' && inputs.vps_username || secrets.VPS_USER }}
+          VPS_USER: ${{ inputs.vps_username }}
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
           VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
         run: |
@@ -73,29 +69,14 @@ jobs:
           # Password travels only through encrypted SSH stdin, not logs or CLI.
           # Remote shell consumes the first line; Python reads the script on stdin
           # and the sudo credential from a separate inherited file descriptor.
-          set +e
-          audit_output="$(
-            { printf '%s\n' "$VPS_SUDO_PASSWORD"; cat scripts/sync-test-platform-integrations.py; } |
-              ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-                'IFS= read -r sudo_auth; exec 3<<< "$sudo_auth"; unset sudo_auth; exec "$HOME/opencode-gateway/.venv/bin/python" - audit' 2>&1
-          )"
-          audit_status=$?
-          set -e
-          if [[ "$audit_status" -eq 0 ]]; then
-            printf '%s\n' "$audit_output"
-            echo 'migration=ready' >> "$GITHUB_OUTPUT"
-          elif grep -Fq 'INTEGRATIONS_SYNC_FAILED=TEST_ENCRYPTION_KEY_MISSING' <<< "$audit_output"; then
-            echo '::warning::TEST encryption key missing. LIVE application deploy will continue; Resend and GitHub credentials will not be copied.'
-            echo 'migration=skipped_missing_test_key' >> "$GITHUB_OUTPUT"
-          else
-            printf '%s\n' "$audit_output" >&2
-            exit "$audit_status"
-          fi
+          { printf '%s\n' "$VPS_SUDO_PASSWORD"; cat scripts/sync-test-platform-integrations.py; } |
+            ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+              'IFS= read -r sudo_auth; exec 3<<< "$sudo_auth"; unset sudo_auth; exec "$HOME/opencode-gateway/.venv/bin/python" - audit'
 
       - name: Upload source; leave LIVE .env and data untouched
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ github.event_name == 'workflow_dispatch' && inputs.vps_username || secrets.VPS_USER }}
+          VPS_USER: ${{ inputs.vps_username }}
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
         run: |
           set -euo pipefail
@@ -110,7 +91,7 @@ jobs:
       - name: Promote LIVE with operator-authorized sudo (password never logged)
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ github.event_name == 'workflow_dispatch' && inputs.vps_username || secrets.VPS_USER }}
+          VPS_USER: ${{ inputs.vps_username }}
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
           VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
         run: |
@@ -122,10 +103,9 @@ jobs:
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             'PROMOTE_NATIVE_LIVE_CONFIRM=promote LIVE_SUDO_PASS_STDIN=1 bash "$HOME/opencode-gateway-release/scripts/live-native-promote.sh"'
       - name: Synchronize encrypted TEST Resend and GitHub App settings into LIVE
-        if: steps.test_integrations.outputs.migration == 'ready'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ github.event_name == 'workflow_dispatch' && inputs.vps_username || secrets.VPS_USER }}
+          VPS_USER: ${{ inputs.vps_username }}
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
           VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
         run: |
@@ -149,7 +129,7 @@ jobs:
       - name: Report LIVE registration and GitHub integration readiness
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ github.event_name == 'workflow_dispatch' && inputs.vps_username || secrets.VPS_USER }}
+          VPS_USER: ${{ inputs.vps_username }}
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
         run: |
           set -euo pipefail
