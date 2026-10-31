@@ -187,3 +187,11 @@
 - الإصلاح المشترك في مصدر `updates`: حقل `social_signup` اختياري (افتراضيًا false)، وخادم `auth.register` لا يستخدم هوية Google إلا بطلب صريح مع Cookie صالح؛ التسجيل العادي يتجاهل/يمسح Cookie Google القديم ويبدأ مسودة OTP ويرسل رمزها. الواجهة ترسل العلامة فقط عندما تعود من Google OAuth بهوية معلقة مؤكدة، ولا تستدعي Profile لحساب عادي قبل OTP. أُضيف اختبار يمنع تجاوز OTP بـCookie قديم واختبار يرفض مسار Google الصريح من دون إثبات OAuth.
 - الملفات المعنية حصريًا: `backend/app/schemas/account.py` و`backend/app/routes/auth.py` و`app.js` و`backend/tests/test_email_code_signup.py`. لا تعديل في Workflows أو إعدادات الدفع أو قاعدة البيانات أو مفاتيحها أو OpenCode Native.
 - التمييز إلزامي بين إصلاح المصدر ونجاح TEST/LIVE الفعلي؛ لا تعتبر الدمج نشرًا ولا تعتبر HTTP 201 وحده دليلًا على وصول رسالة البريد.
+
+
+## تشخيص محسوم 31 أكتوبر 2026 — سبب `Authentication required` بعد `POST /api/auth/register 201` في TEST وLIVE
+- الأدلة من سجلات VPS التي أرسلها المالك: المنصتان تقدمان `NEW FRONTEND`، لكن كل محاولة تسجيل تُظهر `POST /api/auth/register => 201` ثم `PATCH /api/profile => 401`، دون `GET /api/auth/me` بينهما.
+- **السبب في المصدر**: `app.js` يضع معالج التسجيل الحديث الذي يفهم `pending_verification` ويتحقق من الجلسة، لكن `enhancements.js` المحمّل بعده كان يعيد إسناد `$('#registerForm').onsubmit` إلى معالج قديم لا يفهم إلا `pending_email`، فيتجاوز خطوة OTP ويطلب `PATCH /api/profile` بلا جلسة. هذا يفسر التسلسل المرصود رغم تطابق الكود المنشور.
+- **الإصلاح**: أزيل معالج إنشاء الحساب المكرر من `enhancements.js`، مع الاحتفاظ بمعالج تسجيل الدخول وبقية الميزات في الملف؛ بقي `app.js` المالك الوحيد لتدفق التسجيل والتحقق من البريد. أضيف فحص رجعي إلى `tests/browser/test-existing-account-recovery.cjs` ضمن الاختبارات الحالية، دون تعديل Workflow.
+- تحقق مصدر JavaScript: تمرير parse لكلا الملفين، والتحقق من وجود معالج `registerForm` واحد في `app.js` وصفر في `enhancements.js`، وبقاء معالج `loginForm`، وترتيب السكربتات الصحيح. هذا اختبار مصدر وليس قبول تسجيل فعلي.
+- **لا تغييرات** على `.github/workflows/**`، أو مدفوعات TEST/LIVE، أو قاعدة البيانات، أو الـCredentials، أو محرك Native. نجاح GitHub merge لا يساوي نجاح نشر TEST/LIVE أو وصول OTP.
