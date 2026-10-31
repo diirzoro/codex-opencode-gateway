@@ -68,3 +68,6 @@ function fixture({approve=true,promptEmail='recover@example.org'}={}){
  assert.equal(f.calls.length,0,'Invalid mail must NEVER be submitted');
  console.log('PASS explicit YES/NO, no mail before consent, registered-address recovery and one-minute notice');
 })().catch(error=>{console.error(error);process.exitCode=1});
+
+// CI-protected browser test entry includes the TEST-only dialog regression.
+require('./test-dynamic-provider-dialog.cjs');
