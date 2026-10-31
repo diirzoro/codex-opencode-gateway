@@ -60,12 +60,18 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ inputs.vps_username }}
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
         run: |
           set -euo pipefail
+          : "${VPS_SUDO_PASSWORD:?Missing protected production sudo secret}"
+          [[ "$VPS_SUDO_PASSWORD" != *$'\n'* ]] || { echo "Invalid multi-line sudo secret"; exit 1; }
           port="${VPS_SSH_PORT:-22}"
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-            '"$HOME/opencode-gateway/.venv/bin/python" - audit' \
-            < scripts/sync-test-platform-integrations.py
+          # Password travels only through encrypted SSH stdin, not logs or CLI.
+          # Remote shell consumes the first line; Python reads the script on stdin
+          # and the sudo credential from a separate inherited file descriptor.
+          { printf '%s\n' "$VPS_SUDO_PASSWORD"; cat scripts/sync-test-platform-integrations.py; } |
+            ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+              'IFS= read -r sudo_auth; exec 3<<< "$sudo_auth"; unset sudo_auth; exec "$HOME/opencode-gateway/.venv/bin/python" - audit'
 
       - name: Upload source; leave LIVE .env and data untouched
         env:
@@ -101,12 +107,18 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ inputs.vps_username }}
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
         run: |
           set -euo pipefail
+          : "${VPS_SUDO_PASSWORD:?Missing protected production sudo secret}"
+          [[ "$VPS_SUDO_PASSWORD" != *$'\n'* ]] || { echo "Invalid multi-line sudo secret"; exit 1; }
           port="${VPS_SSH_PORT:-22}"
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-            '"$HOME/opencode-gateway/.venv/bin/python" - apply' \
-            < scripts/sync-test-platform-integrations.py
+          # Password travels only through encrypted SSH stdin, not logs or CLI.
+          # Remote shell consumes the first line; Python reads the script on stdin
+          # and the sudo credential from a separate inherited file descriptor.
+          { printf '%s\n' "$VPS_SUDO_PASSWORD"; cat scripts/sync-test-platform-integrations.py; } |
+            ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+              'IFS= read -r sudo_auth; exec 3<<< "$sudo_auth"; unset sudo_auth; exec "$HOME/opencode-gateway/.venv/bin/python" - apply'
 
       - name: Confirm production domain routes to LIVE backend
         run: |
