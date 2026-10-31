@@ -71,6 +71,8 @@ def main():
         # This is the shared Native service; no restart and no direct storage edits.
         health=native.get('/global/health')
         health.raise_for_status()
+        if not health.headers.get("content-type","").startswith("application/json"):
+            raise RuntimeError("NATIVE_HEALTH_NOT_JSON")
         for side,(workspaces,runtime) in PATHS.items():
             work=scan(workspaces,True)
             legacy=scan(runtime,False)
@@ -98,10 +100,11 @@ def main():
                     raise RuntimeError(side+'_NATIVE_SESSIONS_STILL_PRESENT')
                 safe_child(folder.parent,folder)
                 shutil.rmtree(folder)
-            for folder,_ in legacy:
-                safe_child(folder.parent,folder)
-                shutil.rmtree(folder)
-            print(side+'_FILES_PURGED=YES',flush=True)
+            # Never delete UUID runtime trees blindly: they may hold account
+            # provider OAuth/auth material even after demo project DB cleanup.
+            # A separate ownership mapping is required before touching them.
+            print(side+'_LEGACY_RUNTIME_TREES_PRESERVED='+str(len(legacy)),flush=True)
+            print(side+'_PROJECT_FILES_PURGED=YES',flush=True)
             print(side+'_NATIVE_SESSIONS_DELETED='+str(deleted_sessions),flush=True)
         print('FILE_PURGE_COMPLETE_WITH_NATIVE_ENGINE_UNCHANGED',flush=True)
 
