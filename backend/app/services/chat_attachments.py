@@ -105,10 +105,11 @@ def _create(db,workspace,session_id,name,size,mime):
     # and the chosen provider report actual support after secure transport.
     # One authoritative quota scan suffices; the size-aware comparison below
     # already rejects both full workspaces and the incoming attachment.
-    used_bytes = workspaces.usage_bytes(workspace)
-    quota_limit = workspaces.quota_bytes(workspace)
+    totals = workspaces.account_local_storage_payload(db,workspace.user_id)
+    used_bytes = totals["used_bytes"]
+    quota_limit = totals["limit_bytes"]
     if used_bytes + size > quota_limit:
-        raise HTTPException(413, 'Workspace storage limit reached')
+        raise HTTPException(413, 'Gateway account storage is full across local and GitHub projects')
     # Bounded number of live uploads prevents reserving unlimited disk slots.
     area = _area(workspace)
     count = 0;reserved_bytes=0
@@ -145,7 +146,7 @@ def public(value):
     return {k:value[k] for k in ('id','name','size','mime','state')} | {'path':DIRECTORY+'/'+value['id']+'/'+value['name'], 'temporary':True}
 
 
-async def upload(workspace, identifier, request):
+async def upload(workspace, identifier, request, db=None):
     total = 0
     fd = None
     owns_transfer=False
@@ -169,8 +170,8 @@ async def upload(workspace, identifier, request):
         with locked(workspace,identifier) as (value,path):
             if not value or value['state'] != 'uploading': raise HTTPException(409, 'Upload cancelled')
             if total != value['size']: raise HTTPException(422, 'Incomplete attachment upload')
-            if workspaces.usage_bytes(workspace) > workspaces.quota_bytes(workspace):
-                raise HTTPException(413, 'Workspace storage limit reached')
+            if db is not None and workspaces.account_storage(db,workspace.user_id) > workspaces.quota_bytes(workspace,db):
+                raise HTTPException(413, 'Gateway shared account storage limit reached')
             directory=_directory(workspace,value)
             directory_fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
             try: os.rename('upload.part',value['name'],src_dir_fd=directory_fd,dst_dir_fd=directory_fd)

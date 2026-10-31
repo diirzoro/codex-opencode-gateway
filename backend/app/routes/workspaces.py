@@ -382,7 +382,9 @@ def _github_source(db,user,data):
 def create_project(data: CreateProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
     if data.working_paths and data.source_type!="github": raise HTTPException(422,"Selective working directories apply only to GitHub projects")
     github_source=_github_source(db,user,data) if data.source_type=="github" else None
-    if data.source_type!='github':manager.require_account_local_headroom(db,user.id)
+    # Serialize this owner's simultaneous imports against the unified quota.
+    db.scalar(select(User).where(User.id==user.id).with_for_update())
+    manager.require_account_local_headroom(db,user.id)
     project,workspace=manager.create(db,user,data.project_name,data.source_type,data.template,data.repository,data.branch,github_source)
     if github_source:
         require_advanced(db,user,start=True); db.commit()
@@ -698,7 +700,7 @@ def export_workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db
 def new_session(workspace_id: uuid.UUID,data: NewSession,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Workspace,workspace_id,user.id)
     if row.project.source_type=="github": require_advanced(db,user)
-    manager.require_quota_headroom(row)
+    manager.require_quota_headroom(row,db)
     session_lifecycle.lock_workspace(db,row)
     session_lifecycle.require_slot(db,row)
     runtime_id=opencode.for_workspace(row,db=db).create_session(data.title)
@@ -726,7 +728,7 @@ def create_attachment(workspace_id:uuid.UUID,data:TemporaryAttachment,user:User=
     native_sessions.context(db,user,row.id,session.id)
     from ..services import workspace_cache
     row=workspace_cache.touch(db,row.id,user.id)
-    if row.project.source_type!='github':manager.require_account_local_headroom(db,user.id,data.size)
+    manager.require_account_local_headroom(db,user.id,data.size)
     result=chat_attachments.create(db,row,data.session_id,data.name,data.size,data.mime)
     db.commit()
     return result
@@ -753,7 +755,7 @@ async def upload_attachment(workspace_id:uuid.UUID,attachment_id:uuid.UUID,reque
     from ..services import workspace_cache
     row=workspace_cache.touch(db,row.id,user.id)
     db.commit()
-    return await chat_attachments.upload(row,attachment_id,request)
+    return await chat_attachments.upload(row,attachment_id,request,db=db)
 
 @router.get('/workspaces/{workspace_id}/attachments/pending')
 def pending_chat_attachments(workspace_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
@@ -799,10 +801,10 @@ def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),pat
     folder=(path or "").strip().strip("/")
     if '__gateway_chat_attachments' in folder.split('/'): raise HTTPException(403,'Temporary attachments use the owned conversation upload flow')
     if folder and not re.fullmatch(r"[A-Za-z0-9._/-]{1,500}",folder): raise HTTPException(422,"Invalid folder path")
-    storage=manager.storage_payload(row)
-    content=file.file.read(storage['limit_bytes']+1)
+    storage=manager.storage_payload(row,db)
+    content=file.file.read(storage['remaining_bytes']+1)
     if len(content)>storage['remaining_bytes']: raise HTTPException(413,"Workspace storage limit reached. Remove files before uploading.")
-    if row.project.source_type!='github':manager.require_account_local_headroom(db,user.id,len(content))
+    manager.require_account_local_headroom(db,user.id,len(content))
     target=manager.safe_path(row,(folder+"/" if folder else "")+name)
     target.parent.mkdir(parents=True,exist_ok=True)
     # Never replace an existing project file via a general upload endpoint.
@@ -810,17 +812,13 @@ def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),pat
     try:
         with target.open('xb') as output: output.write(content)
     except FileExistsError:raise HTTPException(409,'File already exists; choose a new name or use Native editing') from None
-    return {"path":(folder+"/" if folder else "")+name,"size":len(content),"storage":manager.storage_payload(row)}
+    return {"path":(folder+"/" if folder else "")+name,"size":len(content),"storage":manager.storage_payload(row,db)}
 
 @router.get("/workspaces/{workspace_id}/storage")
 def storage(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     workspace=manager.owned(db,Workspace,workspace_id,user.id)
-    result=manager.storage_payload(workspace)
-    if workspace.project.source_type!='github':
-        # Cache/working-copy totals stay workspace-specific, but the actual
-        # 50 MB client allowance covers ALL local projects owned by this user.
-        result.update(manager.account_local_storage_payload(db,user.id))
-    return result
+    # Both GitHub and local projects return the exact same owner-wide totals.
+    return manager.storage_payload(workspace,db)
 
 @router.get("/workspaces/{workspace_id}/sessions")
 def sessions(workspace_id: uuid.UUID,include_archived: bool=False,user: User=Depends(require_user),db: Session=Depends(get_db)):

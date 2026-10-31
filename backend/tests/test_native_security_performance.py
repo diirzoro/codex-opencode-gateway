@@ -61,13 +61,13 @@ def test_quota_is_fresh_counts_regular_files_and_ignores_external_symlinks(bound
  with Session(engine) as db:
   row=db.get(models.Workspace,owner.workspace)
   assert workspaces.usage_bytes(row)==len('synthetic-marker-a')
-  workspaces.require_quota_headroom(row)
-  with (owner.root/'huge.bin').open('wb') as handle:handle.truncate(workspaces.quota_bytes(row)+1)
-  with pytest.raises(HTTPException) as error:workspaces.require_quota_headroom(row)
+  workspaces.require_quota_headroom(row,db)
+  with (owner.root/'huge.bin').open('wb') as handle:handle.truncate(workspaces.quota_bytes(row,db)+1)
+  with pytest.raises(HTTPException) as error:workspaces.require_quota_headroom(row,db)
   assert error.value.status_code==413
 
 
-def test_fifty_megabytes_is_per_client_total_of_local_projects(boundary):
+def test_fifty_megabytes_is_unified_for_local_and_github_workspaces(boundary):
     _,(a,b),_,engine,_=boundary
     from sqlalchemy.orm import Session
     import uuid
@@ -95,7 +95,13 @@ def test_fifty_megabytes_is_per_client_total_of_local_projects(boundary):
         db.add_all([other,source]);db.flush()
         foreign_copy=workspaces.root_for(source);foreign_copy.mkdir(parents=True,exist_ok=True)
         with (foreign_copy/'source.data').open('wb') as f:f.truncate(60*1048576)
-        assert workspaces.account_local_storage_payload(db,a.id)['used_bytes']==own['used_bytes']
+        combined=workspaces.account_local_storage_payload(db,a.id)
+        assert combined['used_bytes']>=own['used_bytes']+60*1048576
+        assert combined['github_used_bytes']>=60*1048576
+        with pytest.raises(HTTPException) as exceeded:
+            workspaces.require_account_local_headroom(db,a.id,2*1048576)
+        assert exceeded.value.status_code==413
+        with (foreign_copy/'source.data').open('wb') as f:f.truncate(0)
         with (second_root/'two.data').open('wb') as f:f.truncate(1*1048576)
         workspaces.require_account_local_headroom(db,a.id,2*1048576)
 
@@ -106,7 +112,7 @@ def test_local_storage_endpoint_displays_account_total_not_just_current_workspac
     with (a.root/'size.data').open('wb') as f:f.truncate(2*1048576)
     own=authenticated(client,f'/api/workspaces/{a.workspace}/storage',a,config)
     assert own.status_code==200,own.text
-    assert own.json()['scope']=='account_local_projects'
+    assert own.json()['scope']=='account_all_projects'
     assert own.json()['limit_mb']==50
     assert own.json()['used_bytes']>=2*1048576
     other=authenticated(client,f'/api/workspaces/{b.workspace}/storage',b,config)
@@ -161,7 +167,7 @@ def test_storage_scan_failure_cannot_admit_execution(boundary,monkeypatch):
  _,(owner,_),_,engine,_=boundary
  monkeypatch.setattr(workspaces.os,'fwalk',Mock(side_effect=PermissionError('synthetic denied')))
  with Session(engine) as db:
-  with pytest.raises(HTTPException) as error:workspaces.require_quota_headroom(db.get(models.Workspace,owner.workspace))
+  with pytest.raises(HTTPException) as error:workspaces.require_quota_headroom(db.get(models.Workspace,owner.workspace),db)
  assert error.value.status_code==503
 
 

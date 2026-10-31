@@ -66,13 +66,18 @@ def root_for(workspace, *, allow_expired=False):
         raise HTTPException(403, "Unsafe workspace path")
     return candidate
 
-# Temporary workspace storage allowance for client projects (files, not database storage).
+# Unified owner-wide limit. Storage in GitHub.com is not part of this allowance.
+# Legacy constants are retained for consumers but do not define a second quota.
 WORKSPACE_QUOTA_BYTES = 50 * 1024 * 1024
-# Working materialization bound, distinct from the local-project product quota.
 GITHUB_WORKTREE_LIMIT_BYTES = 512 * 1024 * 1024
 
-def quota_bytes(workspace):
-    return GITHUB_WORKTREE_LIMIT_BYTES if workspace.project.source_type == "github" else WORKSPACE_QUOTA_BYTES
+def quota_bytes(workspace, db=None):
+    from .storage_policy import quota_mb, MIB
+    if db is not None:
+        return quota_mb(db, workspace.user_id) * MIB
+    from ..database import SessionLocal
+    with SessionLocal() as session:
+        return quota_mb(session, workspace.user_id) * MIB
 
 def usage_bytes(workspace, *, stop_at=None):
     if workspace.status in {"cache_expiring", "cache_expired"}:
@@ -105,51 +110,82 @@ def usage_bytes(workspace, *, stop_at=None):
         raise HTTPException(503,'Workspace storage inspection is unavailable; retry before continuing') from None
     return total
 
-def account_local_storage(db,user_id,*,stop_at=None):
-    """Total on-disk bytes for ALL local project workspaces of this owner.
 
-    A local project published to GitHub stays local; GitHub-imported copies
-    have independent cache quotas and must not consume this client's local
-    allocation. Iterate owned rows only; never scan another customer's tree.
+def account_storage_parts(db,user_id,*,stop_at=None):
+    """Count regular on-disk files owned by this account, local + GitHub alike.
+
+    Count each Workspace's working files (including local .git metadata).
+    Never traverse another owner's path or follow a link.
     """
-    used=0
+    local=github=0
     rows=db.scalars(select(Workspace).join(Project,Project.id==Workspace.project_id).where(
         Workspace.user_id==user_id,Project.user_id==user_id,
-        Project.source_type!='github',Workspace.status.not_in(['cache_expiring','cache_expired'])))
+        Workspace.status.not_in(['cache_expiring','cache_expired'])))
     for row in rows:
-        remaining=None if stop_at is None else max(0,stop_at-used)
-        used+=usage_bytes(row,stop_at=remaining)
-        if stop_at is not None and used>=stop_at:break
-    return used
+        remaining=None if stop_at is None else max(0,stop_at-local-github)
+        amount=usage_bytes(row,stop_at=remaining)
+        if row.project.source_type=='github':github+=amount
+        else:local+=amount
+        if stop_at is not None and local+github>=stop_at:break
+    return local,github
+
+
+def account_storage(db,user_id,*,stop_at=None):
+    return sum(account_storage_parts(db,user_id,stop_at=stop_at))
+
+
+def account_local_storage(db,user_id,*,stop_at=None):
+    """Compatibility helper returning local-only usage, not a second allowance."""
+    return account_storage_parts(db,user_id,stop_at=stop_at)[0]
 
 
 def account_local_storage_payload(db,user_id):
-    used=account_local_storage(db,user_id)
-    limit=WORKSPACE_QUOTA_BYTES
+    from .storage_policy import quota_mb, capacity_label, MIB
+    local,github=account_storage_parts(db,user_id)
+    used=local+github
+    limit_mb=quota_mb(db,user_id)
+    limit=limit_mb*MIB
     return {'used_bytes':used,'limit_bytes':limit,'remaining_bytes':max(0,limit-used),
-            'used_mb':round(used/1048576,2),'limit_mb':limit//1048576,
-            'over_limit':used>=limit,'scope':'account_local_projects'}
+            'used_mb':round(used/MIB,2),'limit_mb':limit_mb,
+            'local_used_mb':round(local/MIB,2),'github_used_mb':round(github/MIB,2),
+            'local_used_bytes':local,'github_used_bytes':github,
+            'over_limit':used>=limit,'percent_used':round(100*used/limit,1),
+            'plan_label':capacity_label(db,user_id),'scope':'account_all_projects',
+            'plan_disclaimer':'Gateway platform and workspace storage only. No AI model/API subscription or tokens; connect your own provider.'}
 
 
 def require_account_local_headroom(db,user_id,additional=0):
-    if additional<0:raise HTTPException(422,'Invalid storage reservation')
-    used=account_local_storage(db,user_id,stop_at=WORKSPACE_QUOTA_BYTES)
-    if used>=WORKSPACE_QUOTA_BYTES or used+additional>WORKSPACE_QUOTA_BYTES:
-        raise HTTPException(413,'Your account local-project storage is full. Export and remove an old local project to free this owner-only 50 MB allocation.')
+    """Legacy call sites enforce the SAME shared quota, including GitHub."""
+    from .storage_policy import require_headroom
+    return require_headroom(db,user_id,additional=additional)
 
 
-def storage_payload(workspace):
+def storage_payload(workspace, db=None):
     from .workspace_cache import cache_payload
-    used = usage_bytes(workspace)
-    limit = quota_bytes(workspace)
-    remaining = max(0, limit - used)
-    return {"cache": cache_payload(workspace), "used_bytes": used, "limit_bytes": limit, "remaining_bytes": remaining,
-            "scope": "github_working_copy" if workspace.project.source_type == "github" else "local_project",
-            "used_mb": round(used / (1024 * 1024), 2), "limit_mb": limit // (1024 * 1024), "over_limit": used >= limit}
+    from ..database import SessionLocal
+    own_session=db is None
+    if own_session:
+        db=SessionLocal()
+    try:
+        account=account_local_storage_payload(db,workspace.user_id)
+        workspace_used=usage_bytes(workspace)
+        return {**account,'cache':cache_payload(workspace),
+                'workspace_used_mb':round(workspace_used/1048576,2),
+                'workspace_used_bytes':workspace_used,
+                'workspace_source':workspace.project.source_type}
+    finally:
+        if own_session:db.close()
 
-def require_quota_headroom(workspace):
-    if usage_bytes(workspace,stop_at=quota_bytes(workspace)) >= quota_bytes(workspace):
-        raise HTTPException(413, "Workspace storage limit reached. Export or safely resolve files before continuing.")
+
+def require_quota_headroom(workspace,db=None,additional=0):
+    from ..database import SessionLocal
+    from .storage_policy import require_headroom
+    own_session=db is None
+    if own_session:db=SessionLocal()
+    try:
+        return require_headroom(db,workspace.user_id,additional=additional)
+    finally:
+        if own_session:db.close()
 
 PROTECTED_WORKSPACE_NAMES = frozenset({'.git','.ssh','.aws','.config','.opencode','opencode.json','opencode.jsonc','auth.json','credentials.json'})
 
@@ -298,6 +334,9 @@ def create(db, user, name, source_type, template=None, repository=None, branch=N
             for filename, content in TEMPLATES.get(template,{}).items():
                 (path/filename).write_text(content,encoding="utf-8")
             git(workspace,"init","--initial-branch=work")
+        # Verify aggregate owner use AFTER clone/template creation and BEFORE publish.
+        # No secondary GitHub-only allowance.
+        require_quota_headroom(workspace,db)
         workspace.status="ready"
         db.commit()
     except Exception:
