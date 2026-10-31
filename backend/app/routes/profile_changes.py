@@ -32,7 +32,7 @@ class ProfileValues(BaseModel):
     postal_code:str|None=Field(default=None,min_length=2,max_length=24)
 
 class Begin(ProfileValues):
-    current_password:str=Field(min_length=1,max_length=128)
+    current_password:str|None=Field(default=None,max_length=128)
 
 class Confirm(ProfileValues):
     challenge_id:uuid.UUID
@@ -79,7 +79,7 @@ def _github_email_guard(db,user,values):
 
 @router.post('/request')
 def request_change(data:Begin,user:User=Depends(require_user),db:Session=Depends(get_db)):
-    if not verify_password(data.current_password,user.password_hash):
+    if data.current_password and not verify_password(data.current_password,user.password_hash):
         raise HTTPException(403,'Current account password is incorrect')
     values=_values(db,user,data)
     _github_email_guard(db,user,values)
@@ -88,25 +88,69 @@ def request_change(data:Begin,user:User=Depends(require_user),db:Session=Depends
     now=datetime.now(timezone.utc)
     recent=db.scalar(select(EmailVerification).where(
         EmailVerification.user_id==user.id,
-        EmailVerification.verification_method=='profile')
+        EmailVerification.verification_method.in_(['profile','profile_authorize']))
         .order_by(EmailVerification.created_at.desc()).limit(1))
     if recent and recent.created_at:
         created=recent.created_at if recent.created_at.tzinfo else recent.created_at.replace(tzinfo=timezone.utc)
         if now-created<timedelta(seconds=60):
             raise HTTPException(429,'Wait 60 seconds before requesting another profile verification code')
     for row in db.scalars(select(EmailVerification).where(
-        EmailVerification.user_id==user.id,EmailVerification.verification_method=='profile',
+        EmailVerification.user_id==user.id,EmailVerification.verification_method.in_(['profile','profile_authorize']),
         EmailVerification.used_at.is_(None))):row.used_at=now
+    # Without password, prove control of the CURRENT mailbox before any update.
+    method='profile' if data.current_password else 'profile_authorize'
     identifier=uuid.uuid4();code=f'{secrets.randbelow(1000000):06d}'
+    expires=now+timedelta(seconds=60)
     db.add(EmailVerification(id=identifier,user_id=user.id,token_hash=_digest(identifier,code,values),
-        verification_method='profile',code_attempts=0,expires_at=now+timedelta(seconds=60)))
+        verification_method=method,code_attempts=0,expires_at=expires))
     db.flush()
-    target=values.get('email',user.email)
+    target=values.get('email',user.email) if method=='profile' else user.email
     email_verification.send_code(target,code,db)
     db.commit()
     return {'challenge_id':str(identifier),'expires_in':60,
-            'expires_at':(now+timedelta(seconds=60)).isoformat(),
-            'destination':'new_email' if 'email' in values and values['email']!=user.email else 'current_email'}
+            'expires_at':expires.isoformat(),
+            'stage':'confirm' if method=='profile' else 'authorize_current_email',
+            'destination':'new_email' if target!=user.email else 'current_email'}
+
+@router.post('/authorize')
+def authorize_without_password(data:Confirm,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    """Current-mailbox OTP authorizes changes; new-email changes need a second OTP."""
+    email_verification.require_code_schema(db)
+    row=db.scalar(select(EmailVerification).where(
+        EmailVerification.id==data.challenge_id,
+        EmailVerification.user_id==user.id).with_for_update().execution_options(populate_existing=True))
+    now=datetime.now(timezone.utc)
+    expires=(row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)) if row and row.expires_at else None
+    if not row or row.verification_method!='profile_authorize' or row.used_at is not None or row.code_attempts>=5 or expires is None or expires<=now:
+        raise HTTPException(400,'Current email verification expired or invalid')
+    values=_values(db,user,data)
+    _github_email_guard(db,user,values)
+    if not hmac.compare_digest(row.token_hash,_digest(row.id,data.code,values)):
+        row.code_attempts+=1
+        if row.code_attempts>=5:row.used_at=now
+        db.commit()
+        raise HTTPException(400,'Incorrect code or changed profile details; request a new code')
+    row.used_at=now
+    if 'email' in values and values['email']!=user.email:
+        next_id=uuid.uuid4();next_code=f'{secrets.randbelow(1000000):06d}'
+        new_expiry=now+timedelta(seconds=60)
+        db.add(EmailVerification(
+            id=next_id,user_id=user.id,token_hash=_digest(next_id,next_code,values),
+            verification_method='profile',code_attempts=0,expires_at=new_expiry))
+        db.flush()
+        email_verification.send_code(values['email'],next_code,db)
+        db.commit()
+        return {'stage':'confirm','challenge_id':str(next_id),'expires_in':60,
+                'expires_at':new_expiry.isoformat(),'destination':'new_email'}
+    for key,value in values.items():setattr(user,key,value)
+    db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='account.profile_verified_update'))
+    try:db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409,'An account identifier was already claimed during verification') from None
+    db.refresh(user)
+    return {'stage':'complete','profile':user_payload(user)}
+
 
 @router.post('/confirm')
 def confirm_change(data:Confirm,user:User=Depends(require_user),db:Session=Depends(get_db)):
