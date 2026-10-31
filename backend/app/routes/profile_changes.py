@@ -88,17 +88,17 @@ def request_change(data:Begin,user:User=Depends(require_user),db:Session=Depends
     now=datetime.now(timezone.utc)
     recent=db.scalar(select(EmailVerification).where(
         EmailVerification.user_id==user.id,
-        EmailVerification.verification_method.in_(['profile','profile_authorize']))
+        EmailVerification.verification_method.in_(['profile','profotp']))
         .order_by(EmailVerification.created_at.desc()).limit(1))
     if recent and recent.created_at:
         created=recent.created_at if recent.created_at.tzinfo else recent.created_at.replace(tzinfo=timezone.utc)
         if now-created<timedelta(seconds=60):
             raise HTTPException(429,'Wait 60 seconds before requesting another profile verification code')
     for row in db.scalars(select(EmailVerification).where(
-        EmailVerification.user_id==user.id,EmailVerification.verification_method.in_(['profile','profile_authorize']),
+        EmailVerification.user_id==user.id,EmailVerification.verification_method.in_(['profile','profotp']),
         EmailVerification.used_at.is_(None))):row.used_at=now
     # Without password, prove control of the CURRENT mailbox before any update.
-    method='profile' if data.current_password else 'profile_authorize'
+    method='profile' if data.current_password else 'profotp'
     identifier=uuid.uuid4();code=f'{secrets.randbelow(1000000):06d}'
     expires=now+timedelta(seconds=60)
     db.add(EmailVerification(id=identifier,user_id=user.id,token_hash=_digest(identifier,code,values),
@@ -121,7 +121,7 @@ def authorize_without_password(data:Confirm,user:User=Depends(require_user),db:S
         EmailVerification.user_id==user.id).with_for_update().execution_options(populate_existing=True))
     now=datetime.now(timezone.utc)
     expires=(row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)) if row and row.expires_at else None
-    if not row or row.verification_method!='profile_authorize' or row.used_at is not None or row.code_attempts>=5 or expires is None or expires<=now:
+    if not row or row.verification_method!='profotp' or row.used_at is not None or row.code_attempts>=5 or expires is None or expires<=now:
         raise HTTPException(400,'Current email verification expired or invalid')
     values=_values(db,user,data)
     _github_email_guard(db,user,values)
