@@ -164,3 +164,13 @@ from backend.tests.test_dynamic_payment_provider_profiles import (
     test_sensitive_fields_cannot_be_public_or_store_bank_auth_codes,
     test_profile_validation_admin_only_and_no_payment_capture_routes,
 )
+
+
+# Exercise receipt-verified manual checkout publication on synthetic account rows.
+# Reuse the above "db" fixture with independent Stripe/Cryptomus rows retained.
+from backend.tests.test_real_profile_checkout import (
+    test_real_manual_receipt_checkout_publishes_without_api_or_secrets,
+    test_draft_changes_disable_public_payment_until_admin_republishes,
+    test_api_drafts_cannot_impersonate_verified_payment_provider,
+    test_incomplete_manual_bank_and_fake_receiving_details_never_publish,
+)
