@@ -46,12 +46,18 @@ class RegistrationOut(UserOut):
 def register(data: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     # Google social signup already has a trusted verified mailbox. Password
     # signup is NEVER a User row until the six-digit email proof succeeds.
-    pending=request.cookies.get(social_login.SIGNUP_COOKIE)
-    if not pending:
+    # Password signup always starts email OTP. A leftover Google signup cookie
+    # must never silently switch a customer to a different authorization flow.
+    pending=request.cookies.get(social_login.SIGNUP_COOKIE) if data.social_signup else None
+    if not data.social_signup:
         payload,ticket=registration_drafts.start(db,data)
+        response.delete_cookie(social_login.SIGNUP_COOKIE,path='/api/auth',
+                               secure=settings.cookie_secure,httponly=True,samesite='strict')
         response.set_cookie(registration_drafts.COOKIE,ticket,httponly=True,
             secure=settings.cookie_secure,samesite='strict',path='/api/auth',max_age=3600)
         return payload
+    if not pending:
+        raise HTTPException(400,'Google signup authorization is missing; start Google sign-in again')
     identity=social_login.unseal(pending,'signup')
     email=str(data.email).strip().casefold()
     if email!=identity['email']:
