@@ -13,29 +13,49 @@ DEFAULT_REPLY_TO = 'support@opencode-gateway.codes'
 PROVIDERS = ('resend', 'brevo')
 
 
+def _transport_provider(config):
+    # Old TEST/LIVE .env values stored Resend SMTP credentials without a
+    # provider label. Resend's API key works over HTTPS; never accidentally
+    # fall back to outbound SMTP just because that label is absent.
+    selected = config.get('provider')
+    if selected:
+        return selected
+    if (config.get('smtp_host') or '').strip().lower() == 'smtp.resend.com' and (config.get('smtp_username') or '').strip().lower() == 'resend':
+        return 'resend'
+    return 'legacy_smtp'
+
+
 def ready(config):
-    if config.get('provider') == 'brevo':
+    provider = _transport_provider(config)
+    if provider == 'brevo':
         return bool(config.get('api_key') and config.get('smtp_from'))
+    if provider == 'resend':
+        return bool(config.get('smtp_from') and config.get('smtp_password'))
+    # Historical non-Resend SMTP remains supported without changing the
+    # configuration of unrelated deployments.
     return all(config.get(key) for key in ('smtp_host', 'smtp_from', 'smtp_username', 'smtp_password'))
 
 
 def public_config(config):
-    provider = config.get('provider', 'resend')
+    provider = _transport_provider(config)
     return {'provider': provider, 'configured': ready(config),
             'sender': config.get('smtp_from') or DEFAULT_SENDER,
             'sender_name': config.get('sender_name') or DEFAULT_NAME,
             'reply_to': DEFAULT_REPLY_TO,
-            'transport': 'https' if provider == 'brevo' else 'smtp',
+            'transport': 'https' if provider in ('brevo', 'resend') else 'smtp',
             'smtp_host': BREVO_URL if provider == 'brevo' else config.get('smtp_host', 'smtp.resend.com'),
             'smtp_port': None if provider == 'brevo' else config.get('smtp_port', 587),
             'smtp_username': '' if provider == 'brevo' else config.get('smtp_username', 'resend')}
 
 
 def send(config, message, *, error_status=502, timeout=15):
+    provider = _transport_provider(config)
     if not ready(config):
-        raise HTTPException(503, 'Email delivery is not configured')
+        hint = ('Resend sending key and sender address must be configured by an administrator'
+                if provider == 'resend' else 'Email delivery is not configured')
+        raise HTTPException(503, hint)
     if 'Reply-To' not in message:message['Reply-To']=DEFAULT_REPLY_TO
-    if config.get('provider') == 'resend':
+    if provider == 'resend':
         # Resend HTTPS API uses the same provider API key as SMTP, but only
         # requires outbound HTTPS (443), not SMTP 587 which some VPSs block.
         sender = formataddr((config.get('sender_name') or DEFAULT_NAME, config['smtp_from']))
@@ -67,7 +87,7 @@ def send(config, message, *, error_status=502, timeout=15):
             raise HTTPException(error_status,
                 'Resend did not confirm acceptance; do not resend automatically')
         return
-    if config.get('provider') == 'brevo':
+    if provider == 'brevo':
         sender={'email':config['smtp_from'], 'name':config.get('sender_name') or DEFAULT_NAME}
         payload={'sender':sender,'to':[{'email':str(message['To'])}],
                  'subject':str(message['Subject']),'textContent':message.get_content(),
