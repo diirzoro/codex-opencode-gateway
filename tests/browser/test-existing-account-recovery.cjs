@@ -20,11 +20,15 @@ assert.match(landingCss,/#landing \.pricing-cards>\.price-card\s*\{[^}]*min-widt
   'Individual landing pricing cards must not force wrapping');
 assert.match(landingCss,/@media\(max-width:560px\)[\s\S]*?#landing \.pricing-cards\s*\{grid-template-columns:repeat\(4,220px\)/,
   'On phones, four cards remain side-by-side in a horizontally scrollable row');
-assert(landingHtml.includes('styles.css?v=20261031-four-pricing-cards-test'), 'Pricing CSS must be cache-busted');
+assert(landingHtml.includes('styles.css?v=20261031-dynamic-providers-test'), 'Pricing CSS must be cache-busted');
 assert(landingHtml.includes('enhancements.js?v=20261031-four-pricing-cards-test'), 'Pricing copy JS must be cache-busted');
 assert(enhancements.includes("disclaimer.textContent=platformOnlyNote()"),
   'Full disclaimer that AI APIs/models are not included must be shown after pricing cards');
-console.log('PASS TEST four horizontal pricing cards, swipe row, versioned assets, and AI/API disclaimer');
+assert(enhancements.includes("providerExamples=[") && enhancements.includes("code:'custom'"),
+  'Optional payment templates must retain unrestricted custom-provider entry');
+assert(!landingHtml.includes('src="payment-gateways-ui.js'),
+  'Fixed-provider settings panel must not replace TEST dynamic admin configuration');
+console.log('PASS TEST four pricing columns, swipe row, dynamic provider templates/custom option, and API disclaimer');
 
 const start=source.indexOf('async function offerExistingAccountRecovery(');
 const end=source.indexOf("$('#loginForm').onsubmit=",start);
