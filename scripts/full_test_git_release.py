@@ -163,7 +163,7 @@ def rollout(target,mode):
                     known_tables=("alembic_version","users","billing_methods",
                                   "payment_provider_profiles","payment_profile_publications")
                     for table in known_tables:
-                        if re.search(r"permission denied for table\\s+"+re.escape(table)+r"(?:\\b|$)",msg):
+                        if re.search(r"permission denied for table\s+"+re.escape(table)+r"(?:\b|$)",msg):
                             category += "_" + table.upper()
                             break
                 print("TEST_MIGRATION_GATE_FAILURE_CATEGORY",category,flush=True)
