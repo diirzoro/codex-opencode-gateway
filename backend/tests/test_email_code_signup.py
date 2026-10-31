@@ -298,3 +298,79 @@ def test_0025_migration_preserves_old_link_rows(signup):
         with Operations.context(MigrationContext.configure(conn)):module.upgrade()
         row=conn.execute(text('SELECT token_hash,verification_method,code_attempts FROM email_verifications')).one()
         assert tuple(row)==('legacy_hash','link',0)
+
+
+def test_pending_draft_recovers_otp_screen_without_another_email(signup):
+    f, messages = signup
+    started = register(f)
+    assert started.status_code == 201, started.text
+    challenge = started.json()['verification_challenge']
+    first_count = len(messages)
+    # Another submit while the OTP is fresh may be throttled, but the
+    # original browser can still get the exact same challenge for code entry.
+    again = register(f)
+    assert again.status_code == 429
+    recovered = f[0].get('/api/auth/registration/pending')
+    assert recovered.status_code == 200, recovered.text
+    data = recovered.json()
+    assert data['pending'] is True
+    assert data['verification_challenge'] == challenge
+    assert data['status'] == 'pending_verification'
+    assert data['email'] == 'owned-fixture@example.org'
+    assert recovered.headers['cache-control'] == 'no-store'
+    assert 'password' not in recovered.text and 'ticket' not in recovered.text
+    assert len(messages) == first_count
+    assert confirm(f, messages, data).status_code == 200
+
+
+def test_pending_code_resume_still_works_after_otp_expires(signup):
+    f, messages = signup
+    started = register(f).json()
+    challenge = started['verification_challenge']
+    with Session(f[2]) as db:
+        row = pending(db, challenge)
+        row.code_expires_at = datetime.now(timezone.utc)-timedelta(seconds=2)
+        row.last_sent_at = datetime.now(timezone.utc)-timedelta(seconds=61)
+        db.commit()
+    resumed = f[0].get('/api/auth/registration/pending')
+    assert resumed.status_code == 200
+    assert resumed.json()['pending'] is True
+    assert resumed.json()['verification_expires_in'] == 0
+    assert resumed.json()['resend_in'] == 0
+    assert len(messages) == 1  # Read-only resume did not resend anything.
+    resent = f[0].post('/api/auth/registration/resend',
+                       json={'challenge_id': challenge})
+    assert resent.status_code == 200
+    assert len(messages) == 2
+    assert confirm(f, messages, resent.json()).status_code == 200
+
+
+def test_pending_draft_is_not_visible_without_its_httponly_cookie(signup):
+    f, messages = signup
+    created = register(f).json()
+    assert f[0].get('/api/auth/registration/pending').json()['pending'] is True
+    f[0].cookies.clear()
+    response = f[0].get('/api/auth/registration/pending')
+    assert response.status_code == 200
+    assert response.json() == {'pending': False}
+    assert len(messages) == 1
+    assert f[0].post('/api/auth/registration/confirm',json={
+        'challenge_id':created['verification_challenge'],
+        'code':code(messages)}).status_code == 404
+
+
+def test_expired_or_completed_draft_cannot_be_recovered(signup):
+    f, messages = signup
+    first = register(f).json()
+    with Session(f[2]) as db:
+        row = pending(db, first['verification_challenge'])
+        row.expires_at = datetime.now(timezone.utc)-timedelta(seconds=2)
+        db.commit()
+    assert f[0].get('/api/auth/registration/pending').json() == {'pending':False}
+    # Restore only the draft lifespan, then actually validate the OTP.
+    with Session(f[2]) as db:
+        row = pending(db, first['verification_challenge'])
+        row.expires_at = datetime.now(timezone.utc)+timedelta(minutes=5)
+        db.commit()
+    assert confirm(f, messages, first).status_code == 200
+    assert f[0].get('/api/auth/registration/pending').json() == {'pending':False}
