@@ -5,6 +5,7 @@ subscription activation is performed by these profiles. Existing payment
 methods and processor credentials are intentionally independent.
 """
 import json
+import re
 
 from fastapi import HTTPException
 from sqlalchemy import inspect, text
@@ -92,6 +93,14 @@ def _prepare_fields(fields, previous):
         raise HTTPException(422, "Choose between 1 and 30 configuration fields")
     for item in fields:
         key = item.key
+        # Never collect online banking authentication or transient MFA data in a
+        # merchant configuration form. Generic merchant secrets must stay masked.
+        if re.search(r"(?:^|_)(?:otp|2fa|mfa|cvv|cvc|pin|card_number|card_pan|bank_password|bank_login)(?:_|$)",key):
+            raise HTTPException(422, "Do not store bank login, cards, PIN or one-time authentication codes")
+        if (key.endswith(("_key", "_secret", "_token")) or key in
+                {"secret", "security_code", "api_token", "access_token"}) and key not in {
+                "publishable_key", "public_key"} and item.kind != "secret":
+            raise HTTPException(422, "Mark confidential merchant credentials as Secret")
         if key in seen:
             raise HTTPException(422, "Duplicate field key: " + key)
         seen.add(key)
