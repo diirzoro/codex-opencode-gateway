@@ -82,7 +82,13 @@ def list_profiles(db):
         "SELECT slug,label,category,connection_mode,environment,"
         "encrypted_fields,updated_at FROM payment_provider_profiles ORDER BY label,slug"
     )).mappings()
-    return [_public(dict(row)) for row in rows]
+    from . import payment_profile_publications
+    result=[]
+    for row in rows:
+        item=_public(dict(row))
+        item["publication"]=payment_profile_publications.publication_status(db,item["slug"])
+        result.append(item)
+    return result
 
 
 def _prepare_fields(fields, previous):
@@ -145,6 +151,11 @@ def save_profile(db, actor_id, data, *, create):
         "connection_mode": data.connection_mode, "environment": data.environment,
         "encrypted_fields": token, "actor": actor_id
     }
+    if not create:
+        # Updating a merchant/bank profile must immediately disable any
+        # previously published receiving method until an admin republishes.
+        from . import payment_profile_publications
+        payment_profile_publications.disable_on_edit(db,data.slug)
     if create:
         db.execute(text(
             "INSERT INTO payment_provider_profiles "
@@ -166,8 +177,9 @@ def delete_profile(db, slug):
     _require_ready(db)
     if _one(db, slug, lock=True) is None:
         raise HTTPException(404, "Provider profile not found")
-    # Only this configuration draft is deleted: never delete orders,
-    # subscriptions, existing BillingMethods or remote accounts.
+    # Disable the linked public method but preserve it for historical orders.
+    from . import payment_profile_publications
+    payment_profile_publications.forget_profile(db,slug)
     db.execute(text("DELETE FROM payment_provider_profiles WHERE slug=:slug"),
                {"slug": slug})
     db.commit()
