@@ -165,8 +165,16 @@ function renderProfile(user){
 }
 async function savePrefs(){applyPrefs();if(currentUser)try{await api('/api/profile',{method:'PATCH',body:JSON.stringify({preferred_language:lang,preferred_theme:dark?'dark':'light'})})}catch(error){toast(error.message)}}
 $$('#langBtn,.lang-mirror').forEach(el=>el.onclick=()=>{lang=lang==='ar'?'en':'ar';savePrefs()});$$('#themeBtn,.theme-mirror,.workspace-theme').forEach(el=>el.onclick=()=>{dark=!dark;savePrefs()});
-$$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));$$('[data-start]').forEach(el=>el.onclick=()=>page(currentUser?'onboarding':'authPage'));$$('[data-demo]').forEach(el=>el.onclick=()=>page('onboarding'));$$('[data-scroll]').forEach(el=>el.onclick=()=>$('#'+el.dataset.scroll).scrollIntoView({behavior:'smooth'}));
-$$('[data-auth-tab]').forEach(el=>el.onclick=()=>{$$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-auth-form]').forEach(f=>f.classList.toggle('active',f.dataset.authForm===el.dataset.authTab))});
+let authViewRevision=0;
+function setAuthIntent(intent){try{sessionStorage.setItem('og-auth-intent',intent);}catch(error){}}
+function getAuthIntent(){try{return sessionStorage.getItem('og-auth-intent');}catch(error){return null;}}
+document.addEventListener('click',event=>{
+ // Includes late-added header/sidebar Login buttons.
+ if(event.target.closest('[data-go="authPage"]'))$('[data-auth-tab="login"]')?.click();
+},true);
+$$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));
+$$('[data-start]').forEach(el=>el.onclick=()=>{if(!currentUser)$('[data-auth-tab="register"]')?.click();page(currentUser?'onboarding':'authPage');});$$('[data-demo]').forEach(el=>el.onclick=()=>page('onboarding'));$$('[data-scroll]').forEach(el=>el.onclick=()=>$('#'+el.dataset.scroll).scrollIntoView({behavior:'smooth'}));
+$$('[data-auth-tab]').forEach(el=>el.onclick=()=>{authViewRevision++;setAuthIntent(el.dataset.authTab);$$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-auth-form]').forEach(f=>f.classList.toggle('active',f.dataset.authForm===el.dataset.authTab))});
 $('#registerCountry').onchange=async()=>{try{await fillSelect('registerRegion',value('registerCountry')?`/api/locations/countries/${value('registerCountry')}/regions`:null,'Optional');await fillSelect('registerCity',null,'Optional')}catch(error){toast(error.message)}};
 $('#registerRegion').onchange=async()=>{try{await fillSelect('registerCity',value('registerRegion')?`/api/locations/regions/${value('registerRegion')}/cities`:null,'Optional')}catch(error){toast(error.message)}};
 /* Signup proof: only a validated code creates a User. */
@@ -184,6 +192,8 @@ function showEmailCodeStep(result,email){
   staged,expiresAt:result.expiresAt||Date.now()+1000*(result.verification_expires_in??60),
   resendAt:result.resendAt||Date.now()+1000*(result.resend_in??60)};
  try{sessionStorage.setItem('og-email-verification',JSON.stringify(verificationState));}catch{}
+ setAuthIntent('verify');
+ $$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b.dataset.authTab==='register'));
  $$('[data-auth-form]').forEach(f=>f.classList.remove('active'));$('#verifyEmailForm').classList.add('active');
  $('#verifyEmailDestination').textContent=(lang==='ar'?'أُرسل الرمز إلى ':'Code sent to ')+verificationState.email;
  $('#verifyEmailCode').value='';$('#verifyEmailCode').removeAttribute('aria-invalid');
@@ -204,9 +214,10 @@ function showEmailCodeStep(result,email){
  tick();$('#verifyEmailCode').focus();
 }
 window.showEmailCodeStep=showEmailCodeStep;
-async function recoverPendingRegistrationFor(email=''){
+async function recoverPendingRegistrationFor(email='',expectedRevision=null){
  // Only the HttpOnly cookie can identify a pending draft; this does not mail.
  const result=await api('/api/auth/registration/pending',{allowAnonymous:true});
+ if(expectedRevision!==null&&expectedRevision!==authViewRevision)return false;
  if(!result?.pending||!result.verification_challenge)return false;
  if(email&&String(result.email||'').trim().toLowerCase()!==String(email).trim().toLowerCase())return false;
  if(currentUser)return false;
@@ -240,11 +251,12 @@ $('#verifyEmailForm').onsubmit=async event=>{
 };
 $('#resendVerificationCode').onclick=async()=>{
  const state=verificationState,button=$('#resendVerificationCode');if(!state||button.disabled)return;
+ const resendRevision=authViewRevision;
  button.disabled=true;
  try{
   const result=await api(state.staged?'/api/auth/registration/resend':'/api/auth/resend-verification-code',{
    method:'POST',body:JSON.stringify({challenge_id:state.challenge})});
-  if(verificationState===state)showEmailCodeStep({...result,staged:state.staged},result.email||state.email);
+  if(verificationState===state&&resendRevision===authViewRevision)showEmailCodeStep({...result,staged:state.staged},result.email||state.email);
  }catch(error){if(verificationState===state)showSignupError(error);}
  finally{button.disabled=false;}
 };
@@ -275,12 +287,14 @@ $('#registerForm').onsubmit=async event=>{
   apiMessage('registerMessage',t('passwordHint'),true);return;
  }
  button.disabled=true;
+ const submissionRevision=authViewRevision;
  try{
   if(isEdit){
    const patch={};for(const [k,v] of Object.entries(registrationPayload()))if(v!==''&&v!==null)patch[k]=v;
    if(!Object.keys(patch).length)throw new Error(lang==='ar'?'أدخل المعلومات المراد تعديلها.':'Enter details to edit.');
    const result=await api('/api/auth/registration/update?challenge_id='+encodeURIComponent(verificationState.challenge),{
     method:'PATCH',body:JSON.stringify(patch)});
+   if(submissionRevision!==authViewRevision)return;
    showEmailCodeStep({...result,staged:true},result.email);
    apiMessage('verifyEmailMessage',result.email_changed
     ?(lang==='ar'?'تم إرسال رمز جديد إلى البريد المصحح.':'A new code was sent to the updated email.')
@@ -289,9 +303,15 @@ $('#registerForm').onsubmit=async event=>{
   }
   const prefs={preferred_language:lang,preferred_theme:dark?'dark':'light'};
   const registered=await api('/api/auth/register',{method:'POST',body:JSON.stringify(registrationPayload())});
-  if(['pending_email','pending_verification'].includes(registered.status)){
+  if(registered.verification_challenge||['pending_email','pending_verification'].includes(registered.status)){
+   // A late registration response must never override the customer's explicit Login choice.
+   if(submissionRevision!==authViewRevision)return;
    showEmailCodeStep({...registered,staged:registered.status==='pending_verification'},value('registerEmail'));return;
   }
+  if(submissionRevision!==authViewRevision)return;
+  if(registered.status!=='active')throw new Error(lang==='ar'?'استجابة التسجيل غير مكتملة؛ أعد فتح التحقق أو حاول مجددًا.':'Incomplete registration response; resume verification or retry.');
+  const loggedIn=await api('/api/auth/me',{allowAnonymous:true});
+  if(!loggedIn||loggedIn.status!=='active')throw new Error(lang==='ar'?'لم يتم إنشاء جلسة دخول؛ لا يمكن تجاوز التحقق من البريد.':'No authenticated session; email verification cannot be bypassed.');
   renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));
   $('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');
   if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120);
@@ -300,7 +320,7 @@ $('#registerForm').onsubmit=async event=>{
    // Response to an already-accepted message may have been lost; do not send
    // another OTP when a draft with a valid same-browser ticket exists.
    let resumed=false;
-   try{resumed=await recoverPendingRegistrationFor(value('registerEmail'));}catch(_error){}
+   try{resumed=await recoverPendingRegistrationFor(value('registerEmail'),submissionRevision);}catch(_error){}
    if(resumed){
     apiMessage('verifyEmailMessage',lang==='ar'
      ?'طلب التسجيل السابق محفوظ. أدخل الرمز الذي وصلك؛ لم نرسل رسالة أخرى. إذا انتهت الدقيقة فانتظر تفعيل إعادة الإرسال.'
@@ -385,7 +405,7 @@ $('#loginForm').onsubmit=async event=>{
   }
  }finally{button.disabled=false;}
 };
-$('#resendEmailVerification').onclick=async()=>{const identity=value('loginIdentity').trim();const password=$('#loginPassword').value;if(!identity||!password){apiMessage('loginMessage',lang==='ar'?'أدخل البريد أو اسم المستخدم وكلمة المرور لإعادة إرسال التفعيل.':'Enter your email or username and password to resend verification.',true);return}const button=$('#resendEmailVerification');button.disabled=true;try{const result=await api('/api/auth/resend-verification',{method:'POST',body:JSON.stringify({identity,password})});$('#loginPassword').value='';showEmailCodeStep(result,result.email||identity)}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
+$('#resendEmailVerification').onclick=async()=>{const identity=value('loginIdentity').trim();const password=$('#loginPassword').value;if(!identity||!password){apiMessage('loginMessage',lang==='ar'?'أدخل البريد أو اسم المستخدم وكلمة المرور لإعادة إرسال التفعيل.':'Enter your email or username and password to resend verification.',true);return}const button=$('#resendEmailVerification');const resendRevision=authViewRevision;button.disabled=true;try{const result=await api('/api/auth/resend-verification',{method:'POST',body:JSON.stringify({identity,password})});$('#loginPassword').value='';if(resendRevision===authViewRevision)showEmailCodeStep(result,result.email||identity)}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
 $('#logoutButton').onclick=()=>window.logoutSession().catch(error=>toast(error.message));
 
 $$('[data-preview-action]').forEach(el=>{el.disabled=true;el.title='Not available yet'});
@@ -935,14 +955,20 @@ navigationReady.then(async()=>{
   return;
  }
  if(currentUser)return;
- // Recover the pending, cookie-bound server draft even after the 60s OTP
- // expires, so the user can resend from the code screen instead of re-signing up.
+ // Do not bring a past OTP draft over a login screen on initial load.
+ // A reload during an actual registration can still resume its verified draft.
+ const savedIntent=getAuthIntent();
+ let savedVerification=null;
+ try{savedVerification=JSON.parse(sessionStorage.getItem('og-email-verification')||'null');}catch(error){}
+ if(savedIntent!=='verify'&&(savedIntent!==null||!savedVerification?.challenge))return;
+ const recoveryRevision=authViewRevision;
  try{
-  if(!await recoverPendingRegistrationFor())clearEmailCodeState();
+  if(!await recoverPendingRegistrationFor('',recoveryRevision)&&recoveryRevision===authViewRevision)clearEmailCodeState();
  }catch(error){
+  if(recoveryRevision!==authViewRevision)return;
   try{
    const state=JSON.parse(sessionStorage.getItem('og-email-verification')||'null');
-   if(state?.challenge&&state.expiresAt>Date.now()){
+   if(state?.challenge&&state.expiresAt>Date.now()&&getAuthIntent()!=='login'){
     showPage('authPage');showEmailCodeStep({verification_challenge:state.challenge,...state},state.email);
    }else clearEmailCodeState();
   }catch(_error){clearEmailCodeState();}
