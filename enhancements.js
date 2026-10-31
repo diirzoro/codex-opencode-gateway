@@ -2227,6 +2227,21 @@ window.renderGithubConfirmation=function(root,status,refresh){
     ['account_number','Account number','text'],
     ['payment_url','Hosted checkout URL','url']
   ];
+  // Templates are editable EXAMPLES, never an allowed-provider list.
+  const providerExamples=[
+    {code:'custom',name:tr('Another company / custom','شركة أخرى / مخصّصة'),label:'',slug:'',
+     category:'other',mode:'manual',fields:[]},
+    {code:'paypal',name:'PayPal',label:'PayPal',slug:'paypal',
+     category:'processor',mode:'api',fields:[['merchant_id','Merchant ID','text'],['client_id','Client ID','text'],['client_secret','Client secret','secret'],['webhook_id','Webhook ID','text']]},
+    {code:'stripe',name:'Stripe',label:'Stripe',slug:'stripe',
+     category:'processor',mode:'api',fields:[['publishable_key','Publishable key','text'],['secret_key','API secret key','secret'],['webhook_secret','Webhook signing secret','secret']]},
+    {code:'cryptomus',name:'Cryptomus',label:'Cryptomus',slug:'cryptomus',
+     category:'crypto',mode:'api',fields:[['merchant_id','Merchant ID','text'],['payment_api_key','Payment API key','secret'],['payout_api_key','Payout API key (optional)','secret']]},
+    {code:'bank',name:tr('Bank transfer template','نموذج حساب بنكي'),label:'',slug:'',
+     category:'bank',mode:'manual',fields:[['bank_name','Bank name','text'],['account_name','Account holder','text'],['account_number','Account number','text'],['iban','IBAN (optional)','text'],['swift_bic','SWIFT/BIC (optional)','text']]},
+    {code:'wallet',name:tr('Wallet / mobile money template','نموذج محفظة إلكترونية'),label:'',slug:'',
+     category:'wallet',mode:'manual',fields:[['wallet_name','Wallet name','text'],['account_name','Account name','text'],['account_reference','Wallet / account reference','text']]}
+  ];
   function selectInput(label,options,defaultValue){
     const wrap=el('label',label),s=el('select');
     for(const [value,name] of options){
@@ -2290,6 +2305,13 @@ window.renderGithubConfirmation=function(root,status,refresh){
         'كل حقل اختياري ما لم تحدده كمطلوب. يمكن حفظ المسودة ناقصة. أدخل مفاتيح التاجر الدائمة فقط؛ لا تحفظ رموز OTP أو 2FA أو كلمات مرور البنك أو أرقام البطاقات أو CVV.')));
     const form=el('form','','dynamic-provider-form manage-form');
     form.autocomplete='off';
+    let templatePicker=null;
+    if(!profile){
+      const template=selectInput(tr('Optional ready-made example (you can change its company name and fields)','اختر نموذجًا اختياريًا (يمكن تعديل اسم الشركة وكل الحقول)'),
+        providerExamples.map(p=>[p.code,p.name]),'custom');
+      templatePicker=template.input;
+      form.append(template.wrap);
+    }
     const name=textInput(tr('Provider / bank name','اسم البنك أو خدمة الدفع'),profile?.label||'',100);
     const slug=textInput(tr('Unique code in English, e.g. bank_uk or my_wallet','رمز مميز بالإنجليزية مثل bank_uk أو my_wallet'),profile?.slug||'',60);
     slug.input.pattern='[a-z][a-z0-9_-]{1,59}';
@@ -2337,6 +2359,30 @@ window.renderGithubConfirmation=function(root,status,refresh){
       })});
     }
     for(const field of (profile?.fields||[]))addField(field);
+    if(templatePicker){
+      templatePicker.addEventListener('change',async()=>{
+        const example=providerExamples.find(p=>p.code===templatePicker.value);
+        if(!example)return;
+        const typed=name.input.value.trim()||slug.input.value.trim()||
+          rowControls.some(r=>r.element.isConnected);
+        if(typed){
+          const approved=typeof window.confirmAction==='function'
+            ? await window.confirmAction(tr('Replace the unsaved field draft with this example? Existing saved providers will not change.',
+               'استبدال الحقول غير المحفوظة بهذا النموذج؟ لن تتغير الشركات المحفوظة.'))
+            : false;
+          if(!approved){templatePicker.value='custom';return;}
+        }
+        name.input.value=example.label;
+        slug.input.value=example.slug;
+        category.input.value=example.category;
+        mode.input.value=example.mode;
+        rows.replaceChildren();
+        rowControls.length=0;
+        for(const [key,label,kind] of example.fields){
+          addField({key,label,kind,required:false,value:''});
+        }
+      });
+    }
     const addActions=el('div','','dynamic-provider-presets');
     for(const [key,label,kind] of presets){
       addActions.append(button('+ '+label,()=>{
