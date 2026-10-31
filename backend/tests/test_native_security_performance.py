@@ -314,6 +314,7 @@ def test_successful_native_forward_has_no_rejection_marker(boundary):
 def test_catalog_initialization_and_7_14_schedule_do_not_download(monkeypatch,tmp_path):
  monkeypatch.setattr(maintenance,'settings',NS(runtime_root=tmp_path))
  monkeypatch.setattr(maintenance,'test_scope',lambda:None)
+ monkeypatch.setattr(maintenance,'maintenance_leader',lambda:True)
  monkeypatch.setattr(maintenance,'public',lambda value,*args:value)
  clock=1000.0;monkeypatch.setattr(maintenance.time,'time',lambda:clock)
  refresh=Mock(side_effect=AssertionError('No download on initialization/read'))

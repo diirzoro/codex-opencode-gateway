@@ -78,6 +78,9 @@ def _workspace_and_project(db,user,workspace_id):
 
 @router.get("/opencode/health")
 def health(user: User=Depends(require_user)):
+    if native_sessions.enabled():
+        native_sessions.admit(user)
+        return native_sessions.metadata('GET','/global/health',native_provider_accounts.root(user))
     return opencode.shared_health()
 
 def _account_catalog_state(db, user, data):
@@ -357,7 +360,7 @@ def runtime_status(user: User=Depends(require_user)):
             if not isinstance(health,dict):raise HTTPException(502,'Invalid native health response')
         except HTTPException:
             health={'healthy':False,'version':None}
-        return {**health,'runtime_mode':'native-test','public_multi_user_ready':False}
+        return {**health,'runtime_mode':'native-'+native_sessions.deployment(),'public_multi_user_ready':False}
     try: health=opencode.shared_health()
     except HTTPException: health={"healthy":False,"version":None}
     return {**health,"runtime_mode":settings.runtime_mode,"public_multi_user_ready":False}

@@ -93,7 +93,7 @@ class Settings:
             valid_port = parsed.port is None or 1 <= parsed.port <= 65535
         except ValueError:
             valid_port = False
-        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or parsed.username is not None or parsed.password is not None or parsed.path or parsed.query or parsed.fragment or not valid_port:
+        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "127.0.0.2", "localhost", "::1"} or parsed.username is not None or parsed.password is not None or parsed.path or parsed.query or parsed.fragment or not valid_port:
             raise RuntimeError("OPENCODE_BASE_URL must be an internal loopback HTTP origin without credentials")
         public_base = os.getenv("PUBLIC_BASE_URL", f"http://{host}:{app_port}").rstrip("/")
         callback = os.getenv("GITHUB_CALLBACK_URL", f"{public_base}/api/github/callback").strip()

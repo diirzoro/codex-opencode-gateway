@@ -1,4 +1,4 @@
-"""TEST-only ownership gate. Nginx, never Python, transports native messages/SSE."""
+"""Environment-scoped ownership gate. Nginx, never Python, transports native messages/SSE."""
 import os
 import re
 import uuid
@@ -25,12 +25,32 @@ router=APIRouter(tags=['native-test'])
 ID=r'[A-Za-z0-9_-]{1,120}'
 _metadata_request=ContextVar('native_metadata_request',default=None)
 
-def enabled():return os.getenv('OPENCODE_NATIVE_TEST_ENABLED','').lower() in {'1','true','yes'}
+def deployment():
+    """Select one exact deployment boundary; a wrong environment fails closed.
+
+    TEST retains its original opt-in flag. LIVE needs its own deliberate opt-in;
+    neither the public Host header nor a browser flag selects the environment.
+    """
+    truth={'1','true','yes'}
+    test=os.getenv('OPENCODE_NATIVE_TEST_ENABLED','').lower() in truth
+    live=os.getenv('OPENCODE_NATIVE_LIVE_ENABLED','').lower() in truth
+    if test and live:raise RuntimeError('Native TEST and LIVE cannot both be enabled in one Gateway')
+    if not test and not live:return None
+    environment='test' if test else 'live'
+    expected_origin=('https://test.opencode-gateway.codes' if test
+                     else 'https://opencode-gateway.codes')
+    expected_db='opencode_gateway_test' if test else 'opencode_gateway'
+    actual_db=settings.database_url.rsplit('/',1)[-1].split('?',1)[0]
+    if settings.public_base_url.rstrip('/')!=expected_origin or actual_db!=expected_db:
+        raise RuntimeError('Native deployment origin/database mismatch; nothing was forwarded')
+    if live and settings.runtime_mode!='disabled':
+        raise RuntimeError('LIVE Native requires the legacy per-workspace runtime disabled')
+    return environment
+
+def enabled():return deployment() is not None
 
 def admit(user):
-    if not enabled():raise HTTPException(503,'Native TEST transport is not enabled')
-    if settings.public_base_url.rstrip('/')!='https://test.opencode-gateway.codes' or settings.database_url.rsplit('/',1)[-1].split('?',1)[0]!='opencode_gateway_test':
-        raise HTTPException(503,'Native transport requires the TEST deployment')
+    if not enabled():raise HTTPException(503,'Native transport is not enabled')
 
 def context(db,user,workspace_id,session_id=None):
     admit(user)
@@ -283,7 +303,7 @@ class Create(BaseModel):
 def state(user:User=Depends(require_user)):
     if not enabled():return {'enabled':False}
     admit(user)
-    return {'enabled':True,'mode':'authenticated-development-test','version':'1.19.4','public_multi_user_ready':False}
+    return {'enabled':True,'mode':'authenticated-development-test' if deployment()=='test' else 'authenticated-native-live','version':'1.19.4','public_multi_user_ready':False}
 
 @router.api_route('/api/native-test/workspaces/{workspace_id}/sessions',methods=['GET','POST'])
 def sessions(workspace_id:uuid.UUID,request:Request,data:Create|None=None,user:User=Depends(require_user),db:Session=Depends(get_db)):
@@ -505,4 +525,4 @@ def _authorize_native(workspace_id,resource,request,user,db,raw):
                     relative=Path(unquote(urlsplit(part['url']).path)).relative_to(root).as_posix()
                     chat_attachments.lease(workspace,row,relative,body.get('messageID'))
     query=urlencode({'directory':str(root)})
-    return Response(headers={'X-Accel-Redirect':'@native_discovery_test' if discovery else '@native_session_test','X-Native-URI':'/'+resource+'?'+query,'Cache-Control':'no-store'})
+    return Response(headers={'X-Accel-Redirect':'@native_discovery_'+deployment() if discovery else '@native_session_'+deployment(),'X-Native-URI':'/'+resource+'?'+query,'Cache-Control':'no-store'})

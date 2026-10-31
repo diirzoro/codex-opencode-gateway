@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
 from .routes import workspaces, agent, github, dashboard, plans, billing, management, homepage
 from .services import workspace_cache, customer_lifecycle, preview_access
-from .routes import preview_public, native_sessions
+from .routes import preview_public, native_sessions, payment_gateways
 
 async def retention_maintenance():
     # Retention bookkeeping must not delay the HTML shell or authentication.
@@ -81,6 +81,7 @@ app.include_router(github.router)
 app.include_router(dashboard.router)
 app.include_router(plans.router)
 app.include_router(billing.router)
+app.include_router(payment_gateways.router)
 app.include_router(management.router)
 app.include_router(homepage.router)
 @app.get("/api/health")
@@ -189,7 +190,7 @@ def public_file(name):
         if name == "index.html":
             html = (frontend / name).read_text(encoding="utf-8")
             if native_sessions.enabled():
-                html=html.replace('<script defer src="runtime-client.js', '<script defer src="native-session-client.js?v=native-test"></script>\n  <script defer src="runtime-client.js')
+                html=html.replace('<script defer src="runtime-client.js', '<script defer src="native-session-client.js?v=native"></script>\n  <script defer src="runtime-client.js')
             # Content versions change automatically when any script/style changes.
             html = re.sub(r'(src|href)="([\w.-]+)\?v=[^"]*"',
                           lambda match: f'{match[1]}="{match[2]}?v={asset_version(match[2])}"'
