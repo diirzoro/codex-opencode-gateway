@@ -11,6 +11,21 @@ assert(source.includes("['pending_email','pending_verification']")||
   'canonical registration handler must recognize pending_verification');
 console.log('PASS one canonical registration handler; no legacy OTP override');
 
+// TEST-only landing presentation guard: four plans must never wrap into 2 x 2.
+const landingCss=fs.readFileSync('styles.css','utf8');
+const landingHtml=fs.readFileSync('index.html','utf8');
+assert.match(landingCss,/#landing \.pricing-cards\s*\{[^}]*display:grid;[^}]*grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/s,
+  'Landing must display four equal-width columns on desktop');
+assert.match(landingCss,/#landing \.pricing-cards>\.price-card\s*\{[^}]*min-width:0;/s,
+  'Individual landing pricing cards must not force wrapping');
+assert.match(landingCss,/@media\(max-width:560px\)\s*\{[^}]*#landing \.pricing-cards\s*\{grid-template-columns:repeat\(4,220px\)/s,
+  'On phones, four cards remain side-by-side in a horizontally scrollable row');
+assert(landingHtml.includes('styles.css?v=20261031-four-pricing-cards-test'), 'Pricing CSS must be cache-busted');
+assert(landingHtml.includes('enhancements.js?v=20261031-four-pricing-cards-test'), 'Pricing copy JS must be cache-busted');
+assert(enhancements.includes("disclaimer.textContent=platformOnlyNote()"),
+  'Full disclaimer that AI APIs/models are not included must be shown after pricing cards');
+console.log('PASS TEST four horizontal pricing cards, swipe row, versioned assets, and AI/API disclaimer');
+
 const start=source.indexOf('async function offerExistingAccountRecovery(');
 const end=source.indexOf("$('#loginForm').onsubmit=",start);
 assert(start>0&&end>start,'Recover-existing-account helper is missing');
