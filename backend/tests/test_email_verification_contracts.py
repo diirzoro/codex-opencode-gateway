@@ -76,7 +76,7 @@ def test_profile_change_password_is_optional_and_password_is_not_changed():
     request = Begin.model_validate({"email": "new@example.org"})
     assert request.current_password is None
     assert request.email == "new@example.org"
-    assert Confirm.model_fields["current_password"].default is None if "current_password" in Confirm.model_fields else True
+    assert "current_password" not in Confirm.model_fields
 
 
 def test_resend_https_delivery_accepts_id_without_smtp(monkeypatch):
