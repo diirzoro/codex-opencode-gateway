@@ -204,6 +204,15 @@ function showEmailCodeStep(result,email){
  tick();$('#verifyEmailCode').focus();
 }
 window.showEmailCodeStep=showEmailCodeStep;
+async function recoverPendingRegistrationFor(email=''){
+ // Only the HttpOnly cookie can identify a pending draft; this does not mail.
+ const result=await api('/api/auth/registration/pending',{allowAnonymous:true});
+ if(!result?.pending||!result.verification_challenge)return false;
+ if(email&&String(result.email||'').trim().toLowerCase()!==String(email).trim().toLowerCase())return false;
+ if(currentUser)return false;
+ showPage('authPage');showEmailCodeStep({...result,staged:true},result.email);
+ return true;
+}
 function showSignupError(error){
  const message=error.status===400?(lang==='ar'?'رمز التفعيل غير صحيح أو منتهي الصلاحية. صحّح الرمز أو اطلب رمزًا جديدًا.':'Incorrect or expired code. Retry or request another.'):
   error.status===429?(lang==='ar'?'مهلة إعادة الإرسال أو عدد المحاولات؛ '+error.message:'Retry limit: '+error.message):
@@ -287,7 +296,21 @@ $('#registerForm').onsubmit=async event=>{
   $('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');
   if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120);
  }catch(error){
-  apiMessage('registerMessage',error.message,true);
+  if(error.status===429&&!isEdit){
+   // Response to an already-accepted message may have been lost; do not send
+   // another OTP when a draft with a valid same-browser ticket exists.
+   let resumed=false;
+   try{resumed=await recoverPendingRegistrationFor(value('registerEmail'));}catch(_error){}
+   if(resumed){
+    apiMessage('verifyEmailMessage',lang==='ar'
+     ?'طلب التسجيل السابق محفوظ. أدخل الرمز الذي وصلك؛ لم نرسل رسالة أخرى. إذا انتهت الدقيقة فانتظر تفعيل إعادة الإرسال.'
+     :'Your previous registration is ready. Enter the code already sent; no new email was sent. If expired, wait for Resend to unlock.');
+    return;
+   }
+  }
+  apiMessage('registerMessage',error.status===429
+   ?(lang==='ar'?'انتظر حتى تنتهي مهلة الـ60 ثانية قبل طلب رمز جديد. إذا وصلك رمز سابق فارجع إلى شاشة التحقق من المتصفح نفسه.':'Wait for the 60-second cooldown before requesting a new code. Return to verification in the original browser if you already received a code.')
+   :error.message,true);
   if(error.status===409&&!isEdit){
     try{await offerExistingAccountRecovery(value('registerEmail'),'registerMessage');}
     catch(recoveryError){apiMessage('registerMessage',recoveryError.message,true);}
@@ -912,7 +935,16 @@ navigationReady.then(()=>{
   return;
  }
  if(currentUser)return;
- try{const state=JSON.parse(sessionStorage.getItem('og-email-verification')||'null');if(state?.challenge&&state.expiresAt>Date.now()){
-  showPage('authPage');showEmailCodeStep({verification_challenge:state.challenge,...state},state.email);
- }else clearEmailCodeState();}catch(error){clearEmailCodeState();}
+ // Recover the pending, cookie-bound server draft even after the 60s OTP
+ // expires, so the user can resend from the code screen instead of re-signing up.
+ try{
+  if(!await recoverPendingRegistrationFor())clearEmailCodeState();
+ }catch(error){
+  try{
+   const state=JSON.parse(sessionStorage.getItem('og-email-verification')||'null');
+   if(state?.challenge&&state.expiresAt>Date.now()){
+    showPage('authPage');showEmailCodeStep({verification_challenge:state.challenge,...state},state.email);
+   }else clearEmailCodeState();
+  }catch(_error){clearEmailCodeState();}
+ }
 }).catch(()=>{});
