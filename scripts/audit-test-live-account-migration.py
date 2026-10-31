@@ -153,6 +153,38 @@ def run():
             print("MISSING_LIVE_TABLES=" + ",".join(missing), flush=True)
         else:
             print("SCHEMA_TABLE_SET_MATCH=YES", flush=True)
+        from sqlalchemy import MetaData
+        for table in sorted(set(totals["TEST"]) & set(totals["LIVE"])):
+            with engines["TEST"].connect() as source, engines["LIVE"].connect() as target:
+                src_ins = inspect(source)
+                pk = src_ins.get_pk_constraint(table).get("constrained_columns") or []
+                if not pk:
+                    continue
+                columns = ",".join('"' + k + '"' for k in pk)
+                ids_source = {tuple(row) for row in source.execute(
+                    text('SELECT ' + columns + ' FROM "' + table + '"')).all()}
+                ids_live = {tuple(row) for row in target.execute(
+                    text('SELECT ' + columns + ' FROM "' + table + '"')).all()}
+                overlap = len(ids_source & ids_live)
+                newly = len(ids_source - ids_live)
+                if newly or overlap:
+                    print("TABLE_DELTA_" + table.upper() + "=" + str(newly) +
+                          "_NEW_" + str(overlap) + "_SHARED", flush=True)
+        with engines["TEST"].connect() as sc, engines["LIVE"].connect() as dc:
+            src = sc.execute(text("""SELECT id, username_identity, email_identity,
+                                            phone_identity FROM users""")).mappings().all()
+            dst = dc.execute(text("""SELECT id, username_identity, email_identity,
+                                            phone_identity FROM users""")).mappings().all()
+            identities = ("username_identity", "email_identity", "phone_identity")
+            collisions = 0
+            for source_user in src:
+                for live_user in dst:
+                    if source_user["id"] == live_user["id"]:
+                        continue
+                    if any(source_user[k] is not None and source_user[k] == live_user[k]
+                           for k in identities):
+                        collisions += 1
+            print("ACCOUNT_IDENTITY_COLLISIONS=" + str(collisions), flush=True)
         print("READ_ONLY_AUDIT_FINISHED", flush=True)
     finally:
         for e in engines.values():
