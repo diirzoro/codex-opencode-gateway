@@ -105,6 +105,7 @@ def request_change(data:Begin,user:User=Depends(require_user),db:Session=Depends
     email_verification.send_code(target,code,db)
     db.commit()
     return {'challenge_id':str(identifier),'expires_in':60,
+            'expires_at':(now+timedelta(seconds=60)).isoformat(),
             'destination':'new_email' if 'email' in values and values['email']!=user.email else 'current_email'}
 
 @router.post('/confirm')
