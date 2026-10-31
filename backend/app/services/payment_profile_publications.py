@@ -3,13 +3,13 @@
 Payment APIs require dedicated verified adapters; selecting 'api' never
 automatically grants entitlement. The legacy PayPal flow is not touched.
 """
-import uuid
+import json
 from fastapi import HTTPException
 from sqlalchemy import inspect, text
 
 from ..models import BillingMethod
 from ..routes.management import MethodInput, method_values, validate_receiving_method
-from . import payment_provider_profiles as profiles
+from . import payment_provider_profiles as profiles, credentials
 
 
 def schema_ready(db):
@@ -32,7 +32,7 @@ def publication_status(db, slug):
         "published":bool(method and method.enabled and method.user_id is None),
         "method_id":str(method.id) if method else None,
         "checkout_mode":None if not method else
-            __import__("json").loads(__import__("backend.app.services.credentials",fromlist=["decrypt"]).decrypt(method.details)).get("checkout_mode"),
+            json.loads(credentials.decrypt(method.details)).get("checkout_mode"),
         "receipt_review_required":True,
         "automatic_capture":False,
     }
