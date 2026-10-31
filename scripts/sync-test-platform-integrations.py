@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import subprocess
 import sys
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -38,11 +39,49 @@ def fail(message):
     raise RuntimeError(message)
 
 
+_sudo_authorization = None
+
+
+def _private_env_text(path):
+    """Read only the two approved local .env files. Use sudo cat only if unreadable.
+
+    Password is supplied over a dedicated inherited FD, never an environment
+    variable, command argument, logged output, temporary file or repository.
+    Application database operations still run as the unprivileged SSH user.
+    """
+    global _sudo_authorization
+    if path not in (TEST_ENV, LIVE_ENV):
+        fail("PRIVATE_ENV_PATH_NOT_ALLOWLISTED")
+    try:
+        return path.read_text()
+    except PermissionError:
+        if _sudo_authorization is None:
+            try:
+                with os.fdopen(3, "r", encoding="utf-8") as reader:
+                    _sudo_authorization = reader.readline().rstrip("\n")
+            except OSError:
+                fail("PROTECTED_ENV_SUDO_CREDENTIAL_NOT_PROVIDED")
+        if not _sudo_authorization:
+            fail("PROTECTED_ENV_SUDO_CREDENTIAL_EMPTY")
+        try:
+            result = subprocess.run(
+                ["sudo", "-S", "-p", "", "/usr/bin/cat", str(path)],
+                input=_sudo_authorization + "\n",
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, check=False, timeout=12,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            fail("PROTECTED_ENV_PRIVILEGED_READ_UNAVAILABLE")
+        if result.returncode != 0:
+            fail("PROTECTED_ENV_PRIVILEGED_READ_REJECTED")
+        return result.stdout
+
+
 def env_file(path):
     if not path.is_file() or path.is_symlink():
         fail("MISSING_OR_UNSAFE_ENV_FILE")
     values = {}
-    for line in path.read_text().splitlines():
+    for line in _private_env_text(path).splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -234,6 +273,14 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         # Do not leak SQL URLs, provider credentials or encrypted data into CI logs.
-        message = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+        if isinstance(exc, RuntimeError):
+            message = str(exc)
+        elif isinstance(exc, PermissionError):
+            resource = getattr(exc, "filename", None)
+            message = ("TEST_ENV_ACCESS_DENIED" if resource == str(TEST_ENV)
+                       else "LIVE_ENV_ACCESS_DENIED" if resource == str(LIVE_ENV)
+                       else "OTHER_PERMISSION_DENIED")
+        else:
+            message = type(exc).__name__
         print("INTEGRATIONS_SYNC_FAILED=" + message, file=sys.stderr)
         sys.exit(1)
