@@ -100,10 +100,10 @@ def test_draft_changes_disable_public_payment_until_admin_republishes(db):
     refreshed=publishing.publish(db,"custom_bank",actor,currency="USD",
         instructions="Use updated details, then upload real payment receipt.")
     assert refreshed["method_id"]==original
-    assert db.get(BillingMethod,original).label=="Updated bank name"
+    assert db.get(BillingMethod,UUID(original)).label=="Updated bank name"
     profiles.delete_profile(db,"custom_bank")
-    assert db.get(BillingMethod,original) is not None
-    assert db.get(BillingMethod,original).enabled is False
+    assert db.get(BillingMethod,UUID(original)) is not None
+    assert db.get(BillingMethod,UUID(original)).enabled is False
 
 
 def test_api_drafts_cannot_impersonate_verified_payment_provider(db):
