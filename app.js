@@ -251,11 +251,12 @@ $('#verifyEmailForm').onsubmit=async event=>{
 };
 $('#resendVerificationCode').onclick=async()=>{
  const state=verificationState,button=$('#resendVerificationCode');if(!state||button.disabled)return;
+ const resendRevision=authViewRevision;
  button.disabled=true;
  try{
   const result=await api(state.staged?'/api/auth/registration/resend':'/api/auth/resend-verification-code',{
    method:'POST',body:JSON.stringify({challenge_id:state.challenge})});
-  if(verificationState===state)showEmailCodeStep({...result,staged:state.staged},result.email||state.email);
+  if(verificationState===state&&resendRevision===authViewRevision)showEmailCodeStep({...result,staged:state.staged},result.email||state.email);
  }catch(error){if(verificationState===state)showSignupError(error);}
  finally{button.disabled=false;}
 };
@@ -293,6 +294,7 @@ $('#registerForm').onsubmit=async event=>{
    if(!Object.keys(patch).length)throw new Error(lang==='ar'?'أدخل المعلومات المراد تعديلها.':'Enter details to edit.');
    const result=await api('/api/auth/registration/update?challenge_id='+encodeURIComponent(verificationState.challenge),{
     method:'PATCH',body:JSON.stringify(patch)});
+   if(submissionRevision!==authViewRevision)return;
    showEmailCodeStep({...result,staged:true},result.email);
    apiMessage('verifyEmailMessage',result.email_changed
     ?(lang==='ar'?'تم إرسال رمز جديد إلى البريد المصحح.':'A new code was sent to the updated email.')
@@ -403,7 +405,7 @@ $('#loginForm').onsubmit=async event=>{
   }
  }finally{button.disabled=false;}
 };
-$('#resendEmailVerification').onclick=async()=>{const identity=value('loginIdentity').trim();const password=$('#loginPassword').value;if(!identity||!password){apiMessage('loginMessage',lang==='ar'?'أدخل البريد أو اسم المستخدم وكلمة المرور لإعادة إرسال التفعيل.':'Enter your email or username and password to resend verification.',true);return}const button=$('#resendEmailVerification');button.disabled=true;try{const result=await api('/api/auth/resend-verification',{method:'POST',body:JSON.stringify({identity,password})});$('#loginPassword').value='';showEmailCodeStep(result,result.email||identity)}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
+$('#resendEmailVerification').onclick=async()=>{const identity=value('loginIdentity').trim();const password=$('#loginPassword').value;if(!identity||!password){apiMessage('loginMessage',lang==='ar'?'أدخل البريد أو اسم المستخدم وكلمة المرور لإعادة إرسال التفعيل.':'Enter your email or username and password to resend verification.',true);return}const button=$('#resendEmailVerification');const resendRevision=authViewRevision;button.disabled=true;try{const result=await api('/api/auth/resend-verification',{method:'POST',body:JSON.stringify({identity,password})});$('#loginPassword').value='';if(resendRevision===authViewRevision)showEmailCodeStep(result,result.email||identity)}catch(error){apiMessage('loginMessage',error.message,true)}finally{button.disabled=false}};
 $('#logoutButton').onclick=()=>window.logoutSession().catch(error=>toast(error.message));
 
 $$('[data-preview-action]').forEach(el=>{el.disabled=true;el.title='Not available yet'});
