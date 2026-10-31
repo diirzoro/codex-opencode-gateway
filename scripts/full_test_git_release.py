@@ -157,6 +157,15 @@ def rollout(target,mode):
                 )
                 category=next((code for needle,code in indicators if needle in msg),
                               "MIGRATION_GATE_FAILED_UNCLASSIFIED")
+                if category == "DB_TABLE_PERMISSION_DENIED":
+                    # Output only a fixed allowlist of public schema table names,
+                    # never arbitrary captured text or database connection values.
+                    known_tables=("alembic_version","users","billing_methods",
+                                  "payment_provider_profiles","payment_profile_publications")
+                    for table in known_tables:
+                        if re.search(r"permission denied for table\\s+"+re.escape(table)+r"(?:\\b|$)",msg):
+                            category += "_" + table.upper()
+                            break
                 print("TEST_MIGRATION_GATE_FAILURE_CATEGORY",category,flush=True)
                 raise RuntimeError("TEST database migration gate failed; "
                                    "deployment rolled back. Credentials are never logged.") from None
