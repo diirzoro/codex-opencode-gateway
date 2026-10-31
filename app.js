@@ -770,56 +770,24 @@ applyPrefs();
   });
   window.confirmAction=async(title)=>Boolean(await window.requestForm(title,[],tr('Confirm','تأكيد')));
   window.requestInput=async(title,value='',type='text')=>{const result=await window.requestForm(title,[{name:'value',label:title,value,type}],tr('Continue','متابعة'));return result?.value??null;};
-  window.requestTimedVerificationCode=(destination,expiresIn=60,expiresAt=null)=>new Promise(resolve=>{
-    const host=element('div'),form=element('form','','manage-form');
-    const hint=element('p',tr(
-      'Enter the six-digit code sent to '+destination+'. Cancel keeps your previous details.',
-      'أدخل الرمز المكون من 6 أرقام المرسل إلى '+destination+'. الإلغاء يبقي البيانات السابقة كما هي.'
-    ));
-    const timer=element('p','','profile-verification-countdown');
-    timer.setAttribute('role','timer');timer.setAttribute('aria-live','off');
-    const label=element('label',tr('Verification code','رمز التحقق'));
-    const input=element('input');input.name='code';input.type='text';input.inputMode='numeric';
-    input.autocomplete='one-time-code';input.pattern='[0-9]{6}';input.minLength=6;input.maxLength=6;
-    input.required=true;input.dir='ltr';input.placeholder='000000';
-    label.append(input);
-    const submit=element('button',tr('Verify and save','تحقق واحفظ'),'button');submit.type='submit';
-    form.append(hint,timer,label,submit);host.append(form);document.body.append(host);
-    const dialog=window.mountFormDialog(host,form,tr('Email verification','التحقق من البريد'));
-    form.dialogTrigger.hidden=true;
-    const end=expiresAt && Number.isFinite(Date.parse(expiresAt))
-      ? Date.parse(expiresAt) : Date.now()+Math.min(Math.max(Number(expiresIn)||60,1),60)*1000;
-    let result=null,interval=null,expired=false;
-    const update=()=>{
-      const remaining=Math.max(0,Math.ceil((end-Date.now())/1000));
-      expired=remaining===0;
-      timer.textContent=expired?tr('Code expired. Request a new code.','انتهت صلاحية الرمز. اطلب رمزًا جديدًا.'):
-        tr('Code expires in ','تنتهي صلاحية الرمز خلال ')+remaining+tr(' seconds',' ثانية');
-      submit.disabled=expired;
-      if(expired){input.disabled=true;timer.setAttribute('aria-live','polite');}
-    };
-    update();interval=setInterval(update,250);
-    form.onsubmit=event=>{
-      event.preventDefault();update();
-      if(expired||!form.reportValidity())return;
-      result=input.value.trim();dialog.close();
-    };
-    dialog.addEventListener('close',()=>{
-      clearInterval(interval);input.value='';host.remove();resolve(result);
-    },{once:true});
-    form.openDialog();
-  });
   window.editProfileForm=async()=>{
     if(!currentUser)return false;
     const original={username:currentUser.username||'',email:currentUser.email||'',
       phone:currentUser.phone||'',postal_code:currentUser.postal_code||''};
-    const values=await window.requestForm(tr('Edit identity · verification required','تعديل البيانات الشخصية · يلزم التحقق'),[
-      {name:'username',label:tr('Username','اسم المستخدم'),value:original.username,required:true},
-      {name:'email',label:tr('Email','البريد الإلكتروني'),type:'email',value:original.email,required:true},
-      {name:'phone',label:tr('Phone with international code','الهاتف مع مفتاح الدولة'),type:'tel',value:original.phone,required:true},
-      {name:'postal_code',label:tr('Country dialling code','مفتاح الاتصال الدولي'),value:original.postal_code,required:true},
-      {name:'current_password',label:tr('Current password (optional; skips the extra current-email code, never changes your password)','كلمة المرور الحالية (اختياري، لتجاوز رمز البريد الحالي الإضافي، ولن تتغير)'),type:'password',required:false}
-    ],tr('Send 60-second verification code','إرسال رمز تحقق صالح لمدة دقيقة'));
+    const values=await window.requestForm(
+      tr('Edit account · password ownership confirmation','تعديل الحساب · إثبات الملكية بكلمة المرور'),
+      [
+        {name:'username',label:tr('Username','اسم المستخدم'),value:original.username,required:true},
+        {name:'email',label:tr('Email','البريد الإلكتروني'),type:'email',value:original.email,required:true},
+        {name:'phone',label:tr('Phone with international code','الهاتف مع مفتاح الدولة'),type:'tel',value:original.phone,required:true},
+        {name:'postal_code',label:tr('Country dialling code','مفتاح الاتصال الدولي'),value:original.postal_code,required:true},
+        {name:'current_password',label:tr(
+          'Prove account ownership: enter your CURRENT password (it will not be changed)',
+          'لإثبات ملكية الحساب، يجب إدخال كلمة المرور الحالية (لن يتم تغييرها)'
+        ),type:'password',autocomplete:'current-password',required:true}
+      ],
+      tr('Verify password and save changes (no email code)','تأكيد كلمة المرور وحفظ التعديل (بدون رمز بريد)')
+    );
     if(!values)return false;
     const changes={};
     for(const key of Object.keys(original)){
@@ -828,31 +796,11 @@ applyPrefs();
     }
     if(!Object.keys(changes).length){toast(tr('No changes were made.','لم تُعدّل أي بيانات.'));return false;}
     try{
-      const requested=await api('/api/profile/change/request',{method:'POST',
+      const changed=await api('/api/profile/change/update',{method:'POST',
         body:JSON.stringify({...changes,current_password:values.current_password})});
-      const target=requested.destination==='new_email'
-        ?tr('the NEW email address','البريد الجديد')
-        :tr('your CURRENT registered email','بريدك الحالي المسجل');
-      const code=await window.requestTimedVerificationCode(target,requested.expires_in,requested.expires_at);
-      if(code===null)return false;
-      let confirmed;
-      if(requested.stage==='authorize_current_email'){
-        const authorized=await api('/api/profile/change/authorize',{method:'POST',
-          body:JSON.stringify({...changes,challenge_id:requested.challenge_id,code:String(code).trim()})});
-        if(authorized.stage==='complete')confirmed=authorized.profile;
-        else if(authorized.stage==='confirm'){
-          const newCode=await window.requestTimedVerificationCode(
-            tr('the NEW email address','البريد الجديد'),authorized.expires_in,authorized.expires_at);
-          if(newCode===null)return false;
-          confirmed=await api('/api/profile/change/confirm',{method:'POST',
-            body:JSON.stringify({...changes,challenge_id:authorized.challenge_id,code:String(newCode).trim()})});
-        }else throw Error(tr('Unexpected verification state','حالة تحقق غير متوقعة'));
-      }else{
-        confirmed=await api('/api/profile/change/confirm',{method:'POST',
-          body:JSON.stringify({...changes,challenge_id:requested.challenge_id,code:String(code).trim()})});
-      }
-      renderProfile(confirmed);
-      toast(tr('Your verified profile details were updated. Password remains unchanged.','تم تحديث بياناتك بعد التحقق من البريد. كلمة المرور لم تتغير.'));
+      renderProfile(changed);
+      toast(tr('Account details updated. Your password was not changed. No verification email was sent.',
+        'تم تحديث بيانات الحساب. كلمة المرور لم تتغير ولم يتم إرسال بريد للتحقق.'));
       return true;
     }catch(error){
       toast(error.message);
