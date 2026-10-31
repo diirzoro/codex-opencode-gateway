@@ -63,6 +63,7 @@ def save_stripe_settings(
     _cache_safe(response)
     values = data.model_dump(exclude_unset=True)
     mode = data.mode
+    values["mode"] = mode
     for name, prefix in (
         ("publishable_key", "pk_" + mode + "_"),
         ("secret_key", ("sk_" + mode + "_", "rk_" + mode + "_")),
