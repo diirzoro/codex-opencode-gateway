@@ -81,6 +81,25 @@ def find(db,challenge,ticket):
     return row
 
 
+def recover(db,ticket):
+    """Resume an already-sent OTP from the HttpOnly draft cookie without mailing.
+
+    The cookie bearer ticket is the ONLY lookup key. Never recover a draft
+    by supplied email, which would leak other applicants' verification state.
+    The account is still not created, and OTP expiry remains authoritative.
+    """
+    require_schema(db)
+    if not isinstance(ticket,str) or len(ticket)<32 or len(ticket)>256:
+        return {'pending':False}
+    fingerprint_ticket=hashlib.sha256(ticket.encode()).hexdigest()
+    row=db.scalar(select(PendingRegistration).where(
+        PendingRegistration.ticket_hash==fingerprint_ticket))
+    if row is None or aware(row.expires_at)<=datetime.now(timezone.utc):
+        return {'pending':False}
+    return {'pending':True, **public(row)}
+
+
+
 def _email_send_limit(db,email,now,skip=None):
     fp=fingerprint(email)
     recent=list(db.scalars(select(PendingRegistration).where(
