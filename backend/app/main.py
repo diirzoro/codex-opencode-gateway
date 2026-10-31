@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
 from .routes import workspaces, agent, github, dashboard, plans, billing, management, homepage
 from .services import workspace_cache, customer_lifecycle, preview_access
-from .routes import preview_public, native_sessions
+from .routes import preview_public, native_sessions, payment_gateways
 
 async def retention_maintenance():
     # Retention bookkeeping must not delay the HTML shell or authentication.
@@ -81,6 +81,7 @@ app.include_router(github.router)
 app.include_router(dashboard.router)
 app.include_router(plans.router)
 app.include_router(billing.router)
+app.include_router(payment_gateways.router)
 app.include_router(management.router)
 app.include_router(homepage.router)
 @app.get("/api/health")
