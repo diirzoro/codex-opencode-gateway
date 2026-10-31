@@ -47,7 +47,7 @@ def test_stripe_draft_encrypts_and_does_not_expose_secrets(db):
         "secret_key": "sk_test_private_credential",
         "webhook_secret": "whsec_hidden_webhook",
     }
-    result = config.save(db, "stripe", uuid.uuid4(), data, origin="https://test.example.invalid")
+    result = config.save(db, "stripe", str(uuid.uuid4()), data, origin="https://test.example.invalid")
     assert result["ready_to_integrate"] is True
     assert result["checkout_enabled"] is False
     assert result["webhook_enabled"] is False
@@ -58,7 +58,7 @@ def test_stripe_draft_encrypts_and_does_not_expose_secrets(db):
     raw = db.execute(text("SELECT encrypted_data FROM payment_gateway_settings")).scalar_one()
     assert data["secret_key"] not in raw
     assert data["webhook_secret"] not in raw
-    updated = config.save(db, "stripe", uuid.uuid4(),
+    updated = config.save(db, "stripe", str(uuid.uuid4()),
                           {"mode": "test", "secret_key": "", "webhook_secret": ""},
                           origin="https://test.example.invalid")
     assert updated["secret_key_configured"]
@@ -67,10 +67,10 @@ def test_stripe_draft_encrypts_and_does_not_expose_secrets(db):
 
 
 def test_cryptomus_is_independent_and_payouts_never_enabled(db):
-    config.save(db, "stripe", uuid.uuid4(), {"mode": "test"},
+    config.save(db, "stripe", str(uuid.uuid4()), {"mode": "test"},
                 origin="https://test.example.invalid")
     merchant = str(uuid.uuid4())
-    result = config.save(db, "cryptomus", uuid.uuid4(), {
+    result = config.save(db, "cryptomus", str(uuid.uuid4()), {
         "merchant_id": merchant, "payment_api_key": "mock_private_payment",
         "payout_api_key": "mock_private_payout",
     }, origin="https://test.example.invalid")
