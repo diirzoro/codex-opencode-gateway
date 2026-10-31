@@ -618,10 +618,15 @@ window.renderGithubConfirmation=function(root,status,refresh){
   }
 
   function planDisplayName(plan) {
-    return lang === 'ar' ? planDurationLabel(plan.duration_days) : plan.name;
+    const names={gateway_100:['Basic · 100 MB','أساسية · 100 ميجابايت'],gateway_150:['Standard · 150 MB','متوسطة · 150 ميجابايت'],gateway_250:['Plus · 250 MB','متقدمة · 250 ميجابايت']};
+    return names[plan.code]?tr(...names[plan.code]):plan.name;
   }
   function planDisplayTerm(plan) {
-    return lang === 'ar' ? plan.duration_days + ' ' + tr('days', 'يومًا') : planDurationLabel(plan.duration_days);
+    return (plan.storage_mb||50)+' MB · '+planDurationLabel(plan.duration_days);
+  }
+  function platformOnlyNote(){
+    return tr('Gateway platform access, free available services and ONE shared quota for local + GitHub projects. AI subscriptions, paid models, API keys and tokens are NOT included: connect your own AI provider.',
+      'الاشتراك لاستخدام منصة OpenCode Gateway وخدماتها المجانية المتاحة، وبحصة واحدة للمشاريع المحلية وGitHub. لا يشمل اشتراكات الذكاء الاصطناعي أو النماذج المدفوعة أو مفاتيح API؛ يربط العميل مزوّديه بنفسه.');
   }
   window.planDisplayName = planDisplayName;
   window.planDisplayTerm = planDisplayTerm;
@@ -633,6 +638,11 @@ window.renderGithubConfirmation=function(root,status,refresh){
     try {
       var plans = await api('/api/plans', { cache: 'no-store' });
       cards.replaceChildren();
+      var free=textElement('div','','price-card');
+      free.append(textElement('b','$0'),textElement('span',tr('Free trial · 50 MB','تجربة مجانية · 50 ميجابايت')),
+        textElement('small',tr('One 30-day trial · local + GitHub storage combined','تجربة واحدة لمدة 30 يومًا · المحلي وGitHub بحصة موحدة')),
+        textElement('small',platformOnlyNote()));
+      cards.append(free);
       var parts = [];
       plans.forEach(function (plan) {
         var duration = plan.durationLabel || planDurationLabel(plan.duration_days);
@@ -642,6 +652,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
         card.append(textElement('b', money(plan.price_cents)));
         card.append(textElement('span', main));
         card.append(textElement('small', sub));
+        card.append(textElement('small',tr('Local and GitHub combined · one account quota','المشاريع المحلية وGitHub معًا · حصة واحدة للحساب')));
+        card.append(textElement('small',platformOnlyNote()));
         var choose=textElement('button',tr('Subscribe','اشترك'),'button small');choose.type='button';choose.dataset.planId=plan.id;choose.onclick=async function(){window.pendingCheckoutPlan=plan.id;if(currentUser){await window.openClientView('billing');await window.beginCheckout(plan.id);}else await page('authPage');};card.append(choose);
         cards.append(card);
         parts.push(money(plan.price_cents) + ' · ' + main);
@@ -988,6 +1000,11 @@ window.renderGithubConfirmation=function(root,status,refresh){
     }
     var plans = document.getElementById('billingPlans'); if (plans) {
       plans.replaceChildren();
+      var trialCard=textElement('div','','price-card');
+      trialCard.append(textElement('b','$0'),textElement('span',tr('Free trial · 50 MB','تجربة مجانية · 50 ميجابايت')),
+        textElement('small',tr('One trial for 30 days after verification','تجربة واحدة لمدة 30 يومًا بعد التفعيل')),
+        textElement('small',platformOnlyNote()));
+      plans.append(trialCard);
       (data.plans || []).forEach(function (plan, idx) {
         var card = textElement('div', '', 'price-card');
         var isCurrent = data.plan && data.plan.id === plan.id;
@@ -998,6 +1015,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
         var duration = plan.durationLabel || planDurationLabel(plan.duration_days);
         card.append(textElement('span', planDisplayName(plan)));
         card.append(textElement('small', planDisplayTerm(plan)));
+        card.append(textElement('small',tr('Shared account storage: GitHub + local workspaces','مساحة الحساب مشتركة: GitHub + المشاريع المحلية')));
+        card.append(textElement('small',platformOnlyNote()));
         var select = textElement('button', isCurrent ? tr('Current plan', 'الخطة الحالية') : (isSelected ? tr('Selected', 'محددة') : tr('Select', 'اختيار')), 'button small');
         if (isCurrent || isSelected) select.className = 'button small';
         select.onclick = async function () {
@@ -1007,7 +1026,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
         card.append(select); plans.append(card);
       });
     }
-    var note = document.getElementById('billingPaymentNote'); if (note) note.textContent = tr('Select a plan to pay using a platform method. Manual transfers activate after receipt verification. Card checkout is not configured yet.', 'اختر خطة للدفع بإحدى وسائل المنصة. يُفعّل التحويل اليدوي بعد التحقق من الاستلام. الدفع بالبطاقة غير مهيأ بعد.');
+    var note = document.getElementById('billingPaymentNote'); if (note) note.textContent = platformOnlyNote()+' '+tr('Access starts only after verified payment.','يبدأ الاشتراك المدفوع بعد تأكيد الدفع فقط.');
 
 
   }
@@ -1247,8 +1266,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
       document.querySelectorAll('[data-account-section]').forEach(button=>button.onclick=()=>window.openClientView(button.dataset.accountSection));
       var connections=textElement('button',tr('Connected providers · selected workspace','المزوّدات المتصلة · مساحة العمل المختارة'),'button ghost small');connections.onclick=()=>window.openConnections('providers');extras.append(connections);
       if(!access.advanced_integrations||!access.core_access){var upgrade=textElement('button',tr('View plans / upgrade','عرض الخطط / الاشتراك'),'button small');upgrade.onclick=()=>window.openClientView('billing');extras.append(upgrade);}
-      var storage=document.createElement('details');storage.append(textElement('summary',tr('Local storage (50 MB per client across all projects)','التخزين المحلي (50 MB لكل عميل لجميع مشاريعه)')));var usage=textElement('div','');storage.append(usage);extras.append(storage);var loaded=false;
-      storage.ontoggle=async()=>{if(!storage.open||loaded)return;loaded=true;usage.replaceChildren(textElement('p',tr('Loading storage usage…','جارٍ تحميل استخدام التخزين…')));try{var sum=await api('/api/profile/storage');if(currentUser?.id!==user.id)return;usage.replaceChildren(textElement('p',tr('Total across ALL your local projects: ','إجمالي جميع مشاريعك المحلية: ')+sum.used_mb+' / '+sum.limit_mb+' MB · '+tr('Remaining: ','المتبقي: ')+(sum.remaining_bytes/1048576).toFixed(2)+' MB'));}catch(error){loaded=false;usage.replaceChildren(textElement('p',error.message));}};
+      var storage=document.createElement('details');storage.append(textElement('summary',tr('Shared Gateway storage · local + GitHub','مساحة Gateway الموحدة · المحلي وGitHub')));var usage=textElement('div','');storage.append(usage);extras.append(storage);var loaded=false;
+      storage.ontoggle=async()=>{if(!storage.open||loaded)return;loaded=true;usage.replaceChildren(textElement('p',tr('Loading storage usage…','جارٍ تحميل استخدام التخزين…')));try{var sum=await api('/api/profile/storage');if(currentUser?.id!==user.id)return;usage.replaceChildren(textElement('p',tr('Shared usage across ALL local + GitHub workspaces: ','الاستخدام الموحد لجميع مشاريع المحلي وGitHub: ')+sum.used_mb+' / '+sum.limit_mb+' MB · '+tr('Remaining: ','المتبقي: ')+(sum.remaining_bytes/1048576).toFixed(2)+' MB · '+tr('Local: ','محلي: ')+sum.local_used_mb+' MB · GitHub: '+sum.github_used_mb+' MB'));}catch(error){loaded=false;usage.replaceChildren(textElement('p',error.message));}};
       var signIns=textElement('div','','account-sign-ins');signIns.append(textElement('h4',tr('Link a sign-in identity','ربط هوية للدخول')));extras.append(signIns);
       api('/api/auth/social/options').then(function(options){if(currentUser?.id!==user.id||!signIns.isConnected)return;for(const provider of ['google']){var link=textElement('button',tr('Link sign-in with ','ربط الدخول عبر ')+provider,'button ghost small');link.disabled=!options[provider];link.title=link.disabled?tr('Not configured on this server','غير مهيأ على هذا الخادم'):'';link.onclick=()=>window.linkSignInProvider(provider);signIns.append(link);}signIns.append(textElement('p',tr('Sign-in identity does not authorize GitHub repositories. Linking requires an active sign-in session.','هوية الدخول لا تمنح صلاحية لمستودعات GitHub. الربط يتطلب جلسة دخول نشطة.')));}).catch(function(error){signIns.append(textElement('p',error.message));});
       extras.append(textElement('h4',tr('How your data is handled','كيف تُدار بياناتك')),textElement('p',tr('Local projects remain on Gateway. GitHub repositories remain in your GitHub account; OpenCode uses a server-side working copy. Credentials are encrypted server-side. Trial expiry does not delete files. Local project files are cleaned after 7 days of meaningful inactivity; temporary GitHub worktrees after 73 hours. Customer records are archived after 90 days of expired access; identity, billing history and explicit marketing-consent state are preserved, while operational secrets are removed. Hardware isolation is not provided.','تبقى المشاريع المحلية في Gateway ومستودعات GitHub في حسابك؛ يستخدم OpenCode نسخة عمل على الخادم. تُشفّر بيانات الاعتماد على الخادم. انتهاء التجربة لا يحذف الملفات. تُنظّف ملفات المشاريع المحلية بعد 7 أيام من الخمول الحقيقي ونسخ GitHub المؤقتة بعد 73 ساعة. يُؤرشف العميل بعد 90 يومًا من انتهاء الوصول مع حفظ الهوية وسجل الفوترة وحالة الموافقة التسويقية الصريحة، وتنظيف بيانات التشغيل الحساسة. لا يُقدّم عزل عتادي.')));
