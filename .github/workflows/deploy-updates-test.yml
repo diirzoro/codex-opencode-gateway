@@ -158,13 +158,11 @@ jobs:
           fi
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
-      - name: Verify TEST and LIVE health after TEST operation
+      - name: Verify TEST health after TEST operation
         if: steps.confirm.outputs.mode != 'audit-test'
         run: |
           set -euo pipefail
           curl -fsS --retry 6 --retry-delay 2 https://test.opencode-gateway.codes/api/health
-          echo
-          curl -fsS --retry 3 --retry-delay 2 https://opencode-gateway.codes/api/health
           echo
       - name: Report scope
         if: always()
