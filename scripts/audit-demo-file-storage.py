@@ -47,10 +47,10 @@ def main():
         values=read_env(base/'.env')
         for var,kind in (('WORKSPACE_ROOT','workspaces'),('RUNTIME_ROOT','runtime')):
             path=Path(values.get(var,base/kind)).resolve()
-            if not path.is_relative_to(base) or path == base:
-                print(env+'_'+kind.upper()+'_OUTSIDE_DEPLOYMENT=YES')
-                continue
             roots[(env,kind)]=path
+            print(env+'_'+kind.upper()+'_PATH='+str(path),flush=True)
+            print(env+'_'+kind.upper()+'_OUTSIDE_DEPLOYMENT='+
+                  str(not path.is_relative_to(base) or path==base).upper(),flush=True)
             print(env+'_'+kind.upper()+'_ROOT='+inspect(path),flush=True)
     if len(set(roots.values()))!=len(roots):raise RuntimeError('OVERLAPPING_STORAGE_ROOTS')
     print('DISK_STORAGE_AUDIT_FINISHED')
