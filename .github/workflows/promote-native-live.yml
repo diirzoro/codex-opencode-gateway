@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  migration_audit:
+  cleanup_demo:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     environment: production
@@ -29,9 +29,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-      - name: Verify read-only migration audit and cleanup script syntax
-        run: python3 -m py_compile scripts/audit-test-live-account-migration.py scripts/cleanup-demo-users-projects.py
-      - name: Audit TEST and LIVE data/key readiness without changing anything
+      - name: Validate cleanup script syntax
+        run: python3 -m py_compile scripts/cleanup-demo-users-projects.py
+      - name: Keep admin and testuser; remove demo users, projects and sessions in TEST and LIVE
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -40,32 +40,21 @@ jobs:
           VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
         run: |
           set -euo pipefail
-          : "${VPS_HOST:?Missing VPS_HOST}"
-          : "${VPS_USER:?Missing VPS_USER}"
-          : "${VPS_SSH_KEY:?Missing VPS_SSH_KEY}"
-          : "${VPS_SUDO_PASSWORD:?Missing VPS_SUDO_PASSWORD}"
+          : "${VPS_HOST:?Missing host}"
+          : "${VPS_USER:?Missing user}"
+          : "${VPS_SSH_KEY:?Missing SSH key}"
+          : "${VPS_SUDO_PASSWORD:?Missing sudo authorization}"
           port="${VPS_SSH_PORT:-22}"
           install -d -m 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
-          { printf '%s\n' "$VPS_SUDO_PASSWORD"; cat scripts/audit-test-live-account-migration.py; } |
-            ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-              'IFS= read -r sudo_auth; exec 3<<< "$sudo_auth"; unset sudo_auth; exec "$HOME/opencode-gateway/.venv/bin/python" -'
-
-      - name: Verify demo cleanup scope before any deletion
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
-        run: |
-          set -euo pipefail
-          : "${VPS_SUDO_PASSWORD:?Missing sudo secret}"
-          port="${VPS_SSH_PORT:-22}"
-          { printf '%s\n' "$VPS_SUDO_PASSWORD"; cat scripts/cleanup-demo-users-projects.py; } |
-            ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-              'IFS= read -r sudo_auth; exec 3<<< "$sudo_auth"; unset sudo_auth; exec "$HOME/opencode-gateway/.venv/bin/python" - audit'
+          for mode in audit apply audit; do
+            echo "CLEANUP_STAGE=$mode"
+            { printf '%s\n' "$VPS_SUDO_PASSWORD"; cat scripts/cleanup-demo-users-projects.py; } |
+              ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+                "IFS= read -r sudo_auth; exec 3<<< \"\$sudo_auth\"; unset sudo_auth; exec \"\$HOME/opencode-gateway/.venv/bin/python\" - $mode"
+          done
 
   deploy:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
