@@ -73,3 +73,8 @@
 2. التحقق من تنفيذ Native end-to-end وسريان أذونات العملاء بعد إنشاء مشاريع/محادثات **جديدة** فقط؛ لا تستخدم مشاريع الاختبار المحذوفة.
 3. إعادة الحماية اليدوية لـLIVE وإزالة Workflow/سكربتات التنظيف المؤقتة بعد انتهاء التنفيذ. تظل مذكرة المعمارية `CANONICAL_NATIVE_FIRST_ARCHITECTURE_AR.md` هي المصدر الوحيد لتوزيع مسؤوليات Native/Python/Nginx.
 
+### 6.6 إغلاق عملية التنظيف والتحقق النهائي من GitHub
+- أعيد `promote-native-live.yml` إلى **التشغيل اليدوي فقط** مع `environment: production` و`VPS_SUDO_PASSWORD`، وحُذف Job التلقائي المؤقت بعد إنجاز الحذف؛ Commit [9c0e0d0](https://github.com/diirzoro/codex-opencode-gateway/commit/9c0e0d0d3c402c6a41f1e45c1ff185105db6ec36).
+- أُزيلت من `master` سكربتات الجرد والحذف لمرة واحدة (`audit-test-live-account-migration.py`, `audit-demo-file-storage.py`, `cleanup-demo-users-projects.py`, `purge-demo-project-files.py`, `cleanup-demo-runtime-contents.py`) لمنع إعادة استخدامها بالخطأ. توجد سجلات التنفيذ والمراجعة في GitHub Actions وتاريخ Git، لا في مخازن التطبيق الحالية.
+- **الحالة النهائية المؤكدة بالعمليات:** حسابان في كل PostgreSQL، صفر مشاريع/Workspaces/Workspace Sessions في القاعدتين، صفر مجلدات مشاريع في المسارين المحددين، حذف محادثات Native المعروفة وعددها 12، وصفر مجلدات Runtime يتيمة بعد الجرد. أصول الحسابين ومفاتيح Runtime اللازمة لهما محفوظة. لا توجد وسيلة إثبات تلقائية هنا لمسح كل تخزين Native العام خارج المجلدات التي راجعناها.
+- لم يُشغّل نشر جديد للتطبيق بعد عمليات التنظيف؛ لا تفسّر نجاح Jobs الحذف على أنه إثبات جديد لصحة البريد أو OAuth أو جميع خدمات Native. فحص صحة الإنتاج المباشر بعد الحذف **غير مثبت في هذا السجل**.
