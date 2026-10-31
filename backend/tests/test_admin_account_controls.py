@@ -151,3 +151,16 @@ def test_admin_cannot_archive_another_administrator(boundary,monkeypatch):
     with Session(engine) as db:
         db.get(models.User,target.id).role='admin';db.commit()
     assert authenticated(client,f'/api/admin/users/{target.id}',actor,config,'DELETE').status_code==403
+
+
+# Existing TEST CI explicitly invokes this module. Import the isolated payment
+# provider suite so its synthetic encrypted CRUD regressions are collected
+# without changing either GitHub Actions workflow.
+from backend.tests.test_dynamic_payment_provider_profiles import (
+    db,
+    test_arbitrary_provider_added_and_secret_never_returned,
+    test_edit_label_optional_fields_and_keep_or_clear_secret,
+    test_duplicate_ids_forbidden_and_unavailable_credentials_rejected,
+    test_sensitive_fields_cannot_be_public_or_store_bank_auth_codes,
+    test_profile_validation_admin_only_and_no_payment_capture_routes,
+)
