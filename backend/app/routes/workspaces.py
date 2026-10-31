@@ -755,7 +755,7 @@ async def upload_attachment(workspace_id:uuid.UUID,attachment_id:uuid.UUID,reque
     from ..services import workspace_cache
     row=workspace_cache.touch(db,row.id,user.id)
     db.commit()
-    return await chat_attachments.upload(row,attachment_id,request)
+    return await chat_attachments.upload(row,attachment_id,request,db=db)
 
 @router.get('/workspaces/{workspace_id}/attachments/pending')
 def pending_chat_attachments(workspace_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
