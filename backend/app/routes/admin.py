@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, ProviderCredential, Subscription, User, Workspace, WorkspaceSession
+from ..services.storage_policy import PLAN_MB
 from ..models.platform import get_policy
 from ..services import opencode, github
 from ..services.accounts import user_payload
@@ -93,7 +94,8 @@ def _runtime_health():
         return {"mode": settings.runtime_mode, "healthy": False, "detail": "Runtime is not reachable"}
 
 def plan_payload(row: Plan) -> dict:
-    return {"id": row.id, "code": row.code, "name": row.name, "price_cents": row.price_cents, "currency": row.currency, "duration_days": row.duration_days, "active": bool(row.active), "sort_order": row.sort_order}
+    return {"id": row.id, "code": row.code, "name": row.name, "price_cents": row.price_cents, "currency": row.currency, "duration_days": row.duration_days, "active": bool(row.active), "sort_order": row.sort_order, "storage_mb": PLAN_MB.get(row.code,50),
+            "includes_ai_api": False}
 
 @router.get("/users")
 def users(_: User = Depends(require_admin), db: Session = Depends(get_db)):
