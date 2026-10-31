@@ -2307,6 +2307,24 @@ window.renderGithubConfirmation=function(root,status,refresh){
           'dynamic-provider-hint'));
       const actions=el('div','','dynamic-provider-actions');
       actions.append(button(tr('Edit connection','تعديل بيانات الربط'),()=>editor(profile),'button small'));
+      if(profile.connection_mode==='api'){
+        card.append(el('p',tr('API credentials are saved, but automatic payment needs a verified provider-specific integration.',
+          'تم حفظ بيانات API، لكن الدفع الآلي يتطلب تكاملًا موثقًا خاصًا بالمزوّد.'),'dynamic-provider-hint'));
+      }else{
+        actions.append(button(tr('Configure customer checkout','إعداد الدفع للعملاء'),
+          ()=>publishDialog(profile),'button small'));
+        if(profile.publication?.published){
+          actions.append(button(tr('Disable checkout','إيقاف الدفع'),async()=>{
+            if(typeof window.confirmAction!=='function')return;
+            if(!await window.confirmAction(tr('Disable this payment method for new orders?',
+              'إيقاف وسيلة الدفع للطلبات الجديدة؟')))return;
+            try{
+              await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+'/publish',{method:'DELETE'});
+              await load();
+            }catch(e){detail.append(el('p',e.message));}
+          },'button ghost small'));
+        }
+      }
       actions.append(button(tr('Delete draft','حذف المسودة'),async()=>{
         if(typeof window.confirmAction!=='function')return;
         if(!await window.confirmAction(tr('Delete saved settings for '+profile.label+'? Existing payment records will remain untouched.',
@@ -2322,6 +2340,59 @@ window.renderGithubConfirmation=function(root,status,refresh){
     picker.input.addEventListener('change',showSelected);
     showSelected();
 
+  }
+
+
+  async function publishDialog(profile){
+    const popup=el('dialog','','dynamic-provider-dialog dynamic-provider-publish-dialog');
+    popup.setAttribute('aria-modal','true');
+    const heading=el('div','','dynamic-provider-modal-head');
+    heading.append(el('h2',tr('Activate verified-receipt checkout','تفعيل الدفع بمراجعة الإيصال')),
+      button('×',()=>popup.close(),'dynamic-provider-close'));
+    popup.append(heading,el('p',tr(
+      'This offers real receiving details or a hosted link to TEST customers. Payments do not activate subscriptions until an administrator verifies the receipt. Never pay real money when testing.',
+      'تظهر بيانات الاستلام أو رابط الدفع لعملاء TEST. لا تُفعّل الاشتراكات حتى تتحقق الإدارة من الإيصال. لا تدفع أموالًا حقيقية أثناء الاختبار.'),
+      'dynamic-provider-modal-lead'));
+    const form=el('form','','dynamic-provider-form manage-form');
+    const currency=selectInput(tr('Currency','العملة'),[['USD','USD'],['GBP','GBP'],['EUR','EUR'],['YER','YER']],'USD');
+    const notes=el('label',tr('Payment instructions for customers','تعليمات الدفع للعملاء'));
+    const instruction=el('textarea');instruction.required=true;instruction.minLength=10;instruction.maxLength=1000;instruction.rows=4;
+    notes.append(instruction);
+    form.append(currency.wrap,notes);
+    let plan=null;
+    if(profile.connection_mode==='hosted'){
+      const response=await api('/api/plans');
+      const items=Array.isArray(response)?response:(response.plans||[]);
+      const candidates=items.filter(p=>p.active!==false&&p.currency==='USD'&&p.price_cents>0);
+      plan=selectInput(tr('Subscription plan for this link','الخطة المرتبطة بالرابط'),
+        [['',tr('Choose a plan','اختر خطة')],...candidates.map(p=>[String(p.id),p.name])],'');
+      plan.input.required=true;form.append(plan.wrap);
+    }
+    const consent=el('label',tr('I confirmed the account/link details and will verify actual payment before activating any subscription.',
+      'أؤكد صحة حساب الاستلام أو الرابط وسأتحقق من وصول المال قبل تفعيل أي اشتراك.'),'dynamic-provider-consent');
+    const checked=el('input');checked.type='checkbox';checked.required=true;consent.prepend(checked);
+    const actions=el('div','','dynamic-provider-actions');
+    const save=el('button',tr('Enable for TEST','تفعيل في TEST'),'button');save.type='submit';
+    actions.append(save,button(tr('Cancel','إلغاء'),()=>popup.close(),'button ghost small'));
+    const error=el('p','','dynamic-provider-feedback');
+    form.append(consent,error,actions);popup.append(form);document.body.append(popup);
+    popup.addEventListener('close',()=>popup.remove(),{once:true});
+    popup.showModal();
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();save.disabled=true;
+      try{
+        const payload={
+          currency:currency.input.value,
+          instructions:instruction.value.trim(),
+          plan_id:plan?Number(plan.input.value):null,
+          confirmed_receiving_details:true
+        };
+        const result=await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+
+          '/publish',{method:'POST',body:JSON.stringify(payload)});
+        if(!result.published)throw new Error(tr('Checkout was not enabled','لم يتم تفعيل وسيلة الدفع'));
+        popup.close();activeSlug=profile.slug;await load();
+      }catch(e){error.textContent=e.message;save.disabled=false;}
+    });
   }
 
   function editor(profile){
