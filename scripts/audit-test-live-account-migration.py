@@ -185,6 +185,14 @@ def run():
                            for k in identities):
                         collisions += 1
             print("ACCOUNT_IDENTITY_COLLISIONS=" + str(collisions), flush=True)
+            for side, conn in (("TEST", sc), ("LIVE", dc)):
+                rows = conn.execute(text("SELECT username, role FROM users")).mappings().all()
+                print(side + "_ADMIN_ROLE_COUNT=" +
+                      str(sum(str(r["role"]).lower() in ("admin", "owner") for r in rows)), flush=True)
+                for candidate in ("admin", "test", "testuser", "test_user"):
+                    matches = sum(str(r["username"]).casefold() == candidate for r in rows)
+                    print(side + "_USERNAME_" + candidate.upper() + "_EXISTS=" +
+                          str(matches == 1).upper(), flush=True)
         print("READ_ONLY_AUDIT_FINISHED", flush=True)
     finally:
         for e in engines.values():
