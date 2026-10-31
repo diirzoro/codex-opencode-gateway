@@ -334,6 +334,9 @@ def create(db, user, name, source_type, template=None, repository=None, branch=N
             for filename, content in TEMPLATES.get(template,{}).items():
                 (path/filename).write_text(content,encoding="utf-8")
             git(workspace,"init","--initial-branch=work")
+        # Verify aggregate owner use AFTER clone/template creation and BEFORE publish.
+        # No secondary GitHub-only allowance.
+        require_quota_headroom(workspace,db)
         workspace.status="ready"
         db.commit()
     except Exception:
