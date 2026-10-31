@@ -4,6 +4,7 @@ Payment APIs require dedicated verified adapters; selecting 'api' never
 automatically grants entitlement. The legacy PayPal flow is not touched.
 """
 import json
+import uuid
 from fastapi import HTTPException
 from sqlalchemy import inspect, text
 
@@ -22,7 +23,8 @@ def _linked_id(db, slug, *, lock=False):
     query="SELECT method_id FROM payment_profile_publications WHERE profile_slug=:slug"
     if lock and db.bind.dialect.name=="postgresql":
         query+=" FOR UPDATE"
-    return db.execute(text(query),{"slug":slug}).scalar_one_or_none()
+    value=db.execute(text(query),{"slug":slug}).scalar_one_or_none()
+    return uuid.UUID(str(value)) if value is not None else None
 
 
 def publication_status(db, slug):
@@ -114,7 +116,7 @@ def publish(db,slug,actor_id, *, currency, instructions,plan_id=None,available_c
         db.execute(text(
             "INSERT INTO payment_profile_publications(profile_slug,method_id) "
             "VALUES (:slug,:method_id)"
-        ),{"slug":slug,"method_id":method.id})
+        ),{"slug":slug,"method_id":method.id.hex})
     db.commit()
     return publication_status(db,slug)
 
