@@ -7,7 +7,7 @@ const source=fs.readFileSync('enhancements.js','utf8');
 const marker='/* TEST: administrator-defined payment/bank settings; no automatic checkout. */';
 const idx=source.lastIndexOf(marker);
 assert(idx>0,'Dynamic admin provider module is missing');
-const module=source.slice(idx);
+const moduleSource=source.slice(idx);
 const css=fs.readFileSync('styles.css','utf8');
 assert.match(css,/:root dialog\.dynamic-provider-dialog\{[^}]*width:min\(820px,calc\(100vw - 28px\)\)/,
   'Payment editor must be a width-constrained native dialog');
@@ -41,7 +41,7 @@ async function main(){
   throw Error('Unexpected mocked payment provider API: '+path+' '+options.method);
  };
  const context={document,window:dom.window,lang:'ar',currentUser:{role:'owner'},api,console};
- vm.createContext(context);vm.runInContext(module,context);
+ vm.createContext(context);vm.runInContext(moduleSource,context);
  const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve()};
  document.querySelector('#adminNav [data-admin-view="billing"]').click();await settle();
  const picker=document.querySelector('#dynamicProviderSelect');
