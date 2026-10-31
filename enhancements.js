@@ -1033,27 +1033,9 @@ window.renderGithubConfirmation=function(root,status,refresh){
     } catch (error) { apiMessage('loginMessage', error.message, true); }
     finally { button.disabled = false; }
   };
-  $('#registerForm').onsubmit = async function (event) {
-    event.preventDefault();if($('#registerSubmit').disabled||!event.currentTarget.reportValidity())return;
-    if (value('registerUsername') && value('registerUsername').length < 6) { apiMessage('registerMessage', t('usernameHint'), true); return; }
-    const password = $('#registerPassword').value;
-    if (password.length < 8 || !/[0-9]/.test(password) || ![...password].some(function (c) { return passwordSymbols.includes(c); })) { apiMessage('registerMessage', t('passwordHint'), true); return; }
-    const button = $('#registerSubmit'); button.disabled = true;
-    try {
-      const prefs = { preferred_language: lang, preferred_theme: dark ? 'dark' : 'light' };
-      const registered = await api('/api/auth/register', { method: 'POST', body: JSON.stringify(registrationPayload()) });
-      if (registered.status === 'pending_email') {
-        $('#registerPassword').value = '';
-        window.showEmailCodeStep(registered,value('registerEmail'));
-        return;
-      }
-      renderProfile(await api('/api/profile', { method: 'PATCH', body: JSON.stringify(prefs) }));
-      $('#registerPassword').value = '';
-      if (pendingIdea) { $('#projectName').value = pendingIdea.slice(0, 120); pendingIdea = ''; }
-      await routeHome();
-    } catch (error) { apiMessage('registerMessage', error.message, true); }
-    finally { button.disabled = false; }
-  };
+  // app.js owns registerForm.onsubmit: password signup must display the
+  // pending_verification OTP step and MUST NOT call /api/profile before proof.
+  // Do not override registration here; enhancement routing applies only to login.
 
   navigationReady.then(async function () {
     if(window.passwordRecoveryActive)return;

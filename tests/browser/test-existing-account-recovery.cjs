@@ -1,5 +1,16 @@
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
 const source=fs.readFileSync('app.js','utf8');
+const enhancements=fs.readFileSync('enhancements.js','utf8');
+// Regression: enhancements must never replace the canonical OTP form handler.
+assert.equal((source.match(/\$\('#registerForm'\)\.onsubmit\s*=/g)||[]).length,1,
+  'app.js must own exactly one registration submit handler');
+assert(!/\$\('#registerForm'\)\.onsubmit\s*=/.test(enhancements),
+  'enhancements.js must not overwrite the staged registration/OTP handler');
+assert(source.includes("['pending_email','pending_verification']")||
+       source.includes("['pending_email', 'pending_verification']"),
+  'canonical registration handler must recognize pending_verification');
+console.log('PASS one canonical registration handler; no legacy OTP override');
+
 const start=source.indexOf('async function offerExistingAccountRecovery(');
 const end=source.indexOf("$('#loginForm').onsubmit=",start);
 assert(start>0&&end>start,'Recover-existing-account helper is missing');
