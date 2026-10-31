@@ -7,6 +7,11 @@ on:
       - 'docs/**'
   workflow_dispatch:
     inputs:
+      vps_username:
+        description: "VPS username (same as LIVE)"
+        required: true
+        type: string
+        default: tahir
       confirmation:
         description: "TEST: push to updates deploys automatically; dispatch permits audit, deploy or rollback"
         required: true
@@ -111,13 +116,16 @@ jobs:
       - name: Configure pinned SSH for TEST
         env:
           HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ secrets.STAGING_USER }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          EXPECTED_VPS_USER: ${{ secrets.VPS_USER }}
           KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           : "${HOST:?Missing STAGING_HOST}"
-          : "${USER:?Missing STAGING_USER}"
+          : "${USER:?Missing VPS username}"
+          : "${EXPECTED_VPS_USER:?Missing VPS_USER secret}"
+          [[ "$USER" == "$EXPECTED_VPS_USER" ]] || { echo "VPS username does not match existing VPS_USER secret"; exit 1; }
           : "${KEY:?Missing STAGING_SSH_PRIVATE_KEY}"
           : "${KNOWN_HOSTS:?Missing STAGING_SSH_KNOWN_HOSTS}"
           install -d -m 700 "$HOME/.ssh"
@@ -128,7 +136,8 @@ jobs:
       - name: Inspect TEST identity and service health
         env:
           HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ secrets.STAGING_USER }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          EXPECTED_VPS_USER: ${{ secrets.VPS_USER }}
           PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
         run: |
           set -euo pipefail
@@ -138,11 +147,13 @@ jobs:
       - name: Full TEST audit or deploy by pinned GitHub commit
         env:
           HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ secrets.STAGING_USER }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          EXPECTED_VPS_USER: ${{ secrets.VPS_USER }}
           PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
           TARGET_SHA: ${{ github.sha }}
           MODE: ${{ steps.confirm.outputs.mode }}
           ROLLBACK_SHA: ${{ inputs.rollback_sha }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
         run: |
           set -euo pipefail
           port="${PORT:-22}"
@@ -156,8 +167,11 @@ jobs:
             [[ "$ROLLBACK_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Supply an exact 40-character GitHub commit SHA for rollback"; exit 1; }
             TARGET_SHA="$ROLLBACK_SHA"
           fi
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
+          : "${VPS_SUDO_PASSWORD:?Missing protected VPS_SUDO_PASSWORD secret}"
+          [[ "$VPS_SUDO_PASSWORD" != *$'\n'* ]] || { echo "Invalid multi-line sudo secret"; exit 1; }
+          # Password travels only over encrypted SSH stdin; never in log or CLI arguments.
+          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates </dev/null && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && TEST_SUDO_PASS_STDIN=1 python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
       - name: Verify TEST health after TEST operation
         if: steps.confirm.outputs.mode != 'audit-test'
         run: |
