@@ -6,7 +6,7 @@ orders retain their method ID and are never deleted on unpublication.
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0034_payment_profile_publications"
+revision = "0034_profile_publications"
 down_revision = "0033_payment_profiles"
 branch_labels = depends_on = None
 
