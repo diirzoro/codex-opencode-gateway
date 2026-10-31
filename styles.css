@@ -1300,6 +1300,7 @@ body:has(#workspacePage.active) .app-header{display:none!important}
   display:flex;flex-direction:row;align-items:center;
   gap:8px;font-weight:500;font-size:12px;min-height:35px
 }
+:root dialog.dynamic-provider-dialog .dynamic-provider-field .dynamic-provider-check[hidden]{display:none}
 :root dialog.dynamic-provider-dialog .dynamic-provider-check input[type=checkbox]{
   appearance:auto;width:16px;height:16px;min-width:16px;flex:none;
   margin:0;accent-color:var(--primary)
