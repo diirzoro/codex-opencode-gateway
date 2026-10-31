@@ -3,6 +3,8 @@ import string
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 class RegisterRequest(BaseModel):
+    # Explicit Google-signup completion; stale OAuth cookies never change password registration.
+    social_signup: bool = False
     username: str | None = Field(None, min_length=6, max_length=50, pattern=r"^[A-Za-z0-9_.-]+$")
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
