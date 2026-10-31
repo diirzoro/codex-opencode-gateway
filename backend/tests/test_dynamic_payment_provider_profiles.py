@@ -51,6 +51,15 @@ def db(monkeypatch):
         """))
         c.execute(text("INSERT INTO payment_gateway_settings(provider,encrypted_data)"
                        " VALUES ('stripe','legacy-preserve-this')"))
+        c.execute(text("""CREATE TABLE billing_methods(
+            id CHAR(32) PRIMARY KEY, user_id CHAR(32),
+            kind VARCHAR(20),label VARCHAR(100),details TEXT NOT NULL,
+            enabled BOOLEAN NOT NULL)"""))
+        c.execute(text("""CREATE TABLE payment_profile_publications(
+            profile_slug VARCHAR(60) PRIMARY KEY,
+            method_id CHAR(32) UNIQUE,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""))
+
     try:
         with Session(engine) as session:
             yield session
