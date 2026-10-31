@@ -818,7 +818,7 @@ applyPrefs();
       {name:'email',label:tr('Email','البريد الإلكتروني'),type:'email',value:original.email,required:true},
       {name:'phone',label:tr('Phone with international code','الهاتف مع مفتاح الدولة'),type:'tel',value:original.phone,required:true},
       {name:'postal_code',label:tr('Country dialling code','مفتاح الاتصال الدولي'),value:original.postal_code,required:true},
-      {name:'current_password',label:tr('Current password (for security; it will NOT be changed)','كلمة المرور الحالية للتحقق الأمني (لن تتغير كلمة المرور)'),type:'password',required:true}
+      {name:'current_password',label:tr('Current password (optional; skips the extra current-email code, never changes your password)','كلمة المرور الحالية (اختياري، لتجاوز رمز البريد الحالي الإضافي، ولن تتغير)'),type:'password',required:false}
     ],tr('Send 60-second verification code','إرسال رمز تحقق صالح لمدة دقيقة'));
     if(!values)return false;
     const changes={};
@@ -835,10 +835,24 @@ applyPrefs();
         :tr('your CURRENT registered email','بريدك الحالي المسجل');
       const code=await window.requestTimedVerificationCode(target,requested.expires_in,requested.expires_at);
       if(code===null)return false;
-      const changed=await api('/api/profile/change/confirm',{method:'POST',
-        body:JSON.stringify({...changes,challenge_id:requested.challenge_id,code:String(code).trim()})});
-      renderProfile(changed);
-      toast(tr('Your verified profile details were updated.','تم تحديث بياناتك بعد التحقق من البريد.'));
+      let confirmed;
+      if(requested.stage==='authorize_current_email'){
+        const authorized=await api('/api/profile/change/authorize',{method:'POST',
+          body:JSON.stringify({...changes,challenge_id:requested.challenge_id,code:String(code).trim()})});
+        if(authorized.stage==='complete')confirmed=authorized.profile;
+        else if(authorized.stage==='confirm'){
+          const newCode=await window.requestTimedVerificationCode(
+            tr('the NEW email address','البريد الجديد'),authorized.expires_in,authorized.expires_at);
+          if(newCode===null)return false;
+          confirmed=await api('/api/profile/change/confirm',{method:'POST',
+            body:JSON.stringify({...changes,challenge_id:authorized.challenge_id,code:String(newCode).trim()})});
+        }else throw Error(tr('Unexpected verification state','حالة تحقق غير متوقعة'));
+      }else{
+        confirmed=await api('/api/profile/change/confirm',{method:'POST',
+          body:JSON.stringify({...changes,challenge_id:requested.challenge_id,code:String(code).trim()})});
+      }
+      renderProfile(confirmed);
+      toast(tr('Your verified profile details were updated. Password remains unchanged.','تم تحديث بياناتك بعد التحقق من البريد. كلمة المرور لم تتغير.'));
       return true;
     }catch(error){
       toast(error.message);
