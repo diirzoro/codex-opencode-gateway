@@ -107,6 +107,14 @@ def check_signup_origin(request:Request):
         raise HTTPException(403,'Invalid registration origin')
 
 
+@router.get('/registration/pending')
+def pending_registration(request:Request,response:Response,db:Session=Depends(get_db)):
+    """Resume this browser's pending OTP only; do not generate/send another."""
+    check_signup_origin(request)
+    response.headers['Cache-Control']='no-store'
+    return registration_drafts.recover(db,signup_ticket(request))
+
+
 @router.post('/registration/confirm',response_model=UserOut)
 def confirm_registration(data:StagedCode,request:Request,response:Response,db:Session=Depends(get_db)):
     check_signup_origin(request)
