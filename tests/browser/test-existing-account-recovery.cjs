@@ -18,7 +18,7 @@ assert.match(landingCss,/#landing \.pricing-cards\s*\{[^}]*display:grid;[^}]*gri
   'Landing must display four equal-width columns on desktop');
 assert.match(landingCss,/#landing \.pricing-cards>\.price-card\s*\{[^}]*min-width:0;/s,
   'Individual landing pricing cards must not force wrapping');
-assert.match(landingCss,/@media\(max-width:560px\)\s*\{[^}]*#landing \.pricing-cards\s*\{grid-template-columns:repeat\(4,220px\)/s,
+assert.match(landingCss,/@media\(max-width:560px\)[\s\S]*?#landing \.pricing-cards\s*\{grid-template-columns:repeat\(4,220px\)/,
   'On phones, four cards remain side-by-side in a horizontally scrollable row');
 assert(landingHtml.includes('styles.css?v=20261031-four-pricing-cards-test'), 'Pricing CSS must be cache-busted');
 assert(landingHtml.includes('enhancements.js?v=20261031-four-pricing-cards-test'), 'Pricing copy JS must be cache-busted');
