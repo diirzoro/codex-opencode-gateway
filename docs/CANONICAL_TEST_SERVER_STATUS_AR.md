@@ -30,3 +30,46 @@
 
 ## 5. التسجيل المستقبلي
 لكل اختبار: UTC time، service، deployed commit، HTTP route/status/error category، نتيجة عملية Native الفعلية، memory/latency، PASS/FAIL/BLOCKED، بلا رسائل خاصة أو credentials. هذا المستند المصدر الوحيد **لحالة السيرفر وفحوصاته**، وليس وثيقة حلول المنتج.
+
+## 6. تحديث 31 أكتوبر 2026 — سجل النشر والتنظيف الفعلي (TEST وLIVE)
+**هذا قسم أدلة تشغيل جديدة بتاريخ 31 أكتوبر 2026، ويحل محل أي عبارة قديمة في الأقسام أعلاه تمنع التنظيف التجريبي الذي صرّح به المالك صراحة في هذا التاريخ. لا يغير معمارية Native First.** التاريخ السابق لقطة 29 أكتوبر فقط.
+
+### 6.1 حدود البيئتين التي تأكدنا منها
+| | TEST / updates | LIVE / master |
+|---|---|---|
+| نطاق | `test.opencode-gateway.codes` | `opencode-gateway.codes` |
+| Gateway | `127.0.0.1:8001` | `127.0.0.1:8000` |
+| PostgreSQL | `opencode_gateway_test` | `opencode_gateway` |
+| مصدر التطبيق | `/home/tahir/opencode-gateway-test` | `/home/tahir/opencode-gateway` |
+| ملفات المشاريع | `/var/lib/opencode-workspaces-test` | `/var/lib/opencode-workspaces` |
+| Runtime | `/var/lib/opencode-runtime-test` | `/var/lib/opencode-runtime` |
+
+خدمة OpenCode Native الأصلية مشتركة: `opencode-native-test.service` عند `127.0.0.2:4097`، ومسارا Nginx الداخليان `18097` و`18098`. **لم تُغيّر منافذها ولم يُعَد تشغيل محرك Native أثناء التنظيف**. Gateway يتولى التحقق من هوية العميل وملكية الموارد؛ رد Native/JSON/SSE لا يعود عبر Python.
+
+### 6.2 GitHub Actions والتحرير
+- ثبّت المالك الاحتفاظ بفرعين فقط: `master` للإنتاج و`updates` للاختبار. حُذفت 13 فرعًا مؤقتًا. لا أرشيف جديد للفروع. Workflowان أصليان فقط: `promote-native-live.yml` و`deploy-updates-test.yml`.
+- إصلاحات LIVE السابقة: PR #19 (فصل الإجراءات)، #20 (تشخيص الإضافات)، #21 (مزامنة التهيئة المشفّرة)، #22 (زر Promote واحد)، #23 (استخدام GitHub Environment Secret `VPS_SUDO_PASSWORD`)، #24 (إزالة الاختبارات الثقيلة المتكررة من LIVE).
+- أعطال من سجل التنفيذ: فقد `VPS_SUDO_PASSWORD`، ثم `INTEGRATIONS_SYNC_FAILED=PermissionError`، ثم `INTEGRATIONS_SYNC_FAILED=TEST_ENCRYPTION_KEY_MISSING`؛ حُسمت مشكلة sudo وSSH. يجب عدم اعتبار كل فشل سابق عيب كود/DB.
+- **نشر التطبيق والإسكيما نجح** في Run [41165132316](https://github.com/diirzoro/codex-opencode-gateway/actions/runs/41165132316): `LIVE_CODE_AND_SCHEMA_PROMOTED`، واستجابة `/api/health` بقيمة `{"status":"ok"}`. هذا لا يثبت عمل كل وظائف التكامل أو SSE.
+- حماية `production` كانت قائمة أثناء التشغيل. جرى تشغيل Job مؤقت على `push` لتنفيذ أعمال المالك المأذون بها، ثم تُعاد آلية LIVE إلى `workflow_dispatch` يدويًا فقط. لا ينبغي إبقاء مهام الحذف الدائم في Workflow المنتج.
+
+### 6.3 جرد قاعدة البيانات قبل التنظيف — دليل فعلي
+- Run القراءة [41165799626](https://github.com/diirzoro/codex-opencode-gateway/actions/runs/41165799626): PostgreSQL لديه 32 جدولًا في كل بيئة.
+- TEST: 7 حسابات و43 مشروعًا و43 Workspace و55 Workspace Session؛ LIVE: 4 حسابات و8 مشاريع و8 Workspaces و25 Workspace Sessions.
+- أربعة حسابات كانت تشترك في نفس المعرّفات بين البيئتين، وثلاثة حسابات إضافية في TEST. `ACCOUNT_IDENTITY_COLLISIONS=0`.
+- أسماء الحسابات المطلوب إبقاؤها تطابقت حرفيًا في البيئتين: `admin` (صلاحية Admin واحدة) و`testuser`. هذه حسابات **موجودة مسبقًا في كل قاعدة**؛ لم يتم استيراد حسابات أو تغيير Password Hash.
+- TEST مخزون إداري: سجل Resend/SMTP واحد، سجل GitHub App واحد، 3 سياسات بريد. LIVE قبل المزامنة: صفر في الجداول الثلاثة. مفتاح TEST غائب من ملف `.env` لكنه موجود في بيئة عملية `opencode-gateway-test.service`، ومفتاح LIVE موجود في `.env` وخدمته. تم إثبات فك تشفير إعدادات البريد `1/1` وGitHub App `1/1` وUser Provider `1/1`؛ سجل Provider قديم `0/1` **لم يمكن فك تشفيره**.
+- إن نتيجة الجرد لا تعني أن البيانات السرية قد نُقلت إلى LIVE. **إعدادات Resend/GitHub لم تثبت مزامنتها بعد**؛ آخر تشخيص LIVE أعطى `EMAIL_SENDING_CONFIGURED=FAIL` و`GITHUB_APP_CONFIGURED=FAIL`. ممنوع نقل `CREDENTIALS_ENCRYPTION_KEY` من TEST لتحل محل مفتاح LIVE؛ المطلوب فك المصدر وإعادة تشفير المحتوى بمفتاح LIVE الأصلي دون عرض أي سر أو حفظه في Git.
+
+### 6.4 تنظيف البيانات الذي طلبه المالك وأثبتته السجلات
+- [Run 41166256377](https://github.com/diirzoro/codex-opencode-gateway/actions/runs/41166256377): حذف مستخدمين تجريبيين بعدد **5 من TEST و2 من LIVE**؛ الاحتفاظ فقط بـ`admin` و`testuser` في كل قاعدة. حذف جميع صفوف المشاريع وWorkspaces والجلسات والمحادثات المساعدة وسجلات المصادقة التجريبية. بعد الحذف: **TEST_USERS_REMAIN=2، LIVE_USERS_REMAIN=2، ومشاريع/جلسات العمل=0** في الجهتين. تبقى بيانات الملف الشخصي وكلمات المرور والاشتراكات المرتبطة بالحسابين، وإعدادات تشغيل المنصة.
+- [Run 41166615948](https://github.com/diirzoro/codex-opencode-gateway/actions/runs/41166615948): بعد جرد ملفات منفصل، إزالة **18 مجلد مشروع في TEST** و**7 في LIVE**، وحذف **12 محادثة Native من TEST** باستخدام واجهة OpenCode الرسمية `DELETE /session/{id}`، وصفر محادثات Native ضمن تلك المسارات في LIVE. إعادة جرد بعد العملية: **0 مجلدات مشاريع و0 محادثات في المسارات المفحوصة**.
+- [Run 41166757048](https://github.com/diirzoro/codex-opencode-gateway/actions/runs/41166757048): إزالة **3 أشجار Runtime يتيمة في TEST** و**7 في LIVE**، وصفر مخلفات Runtime مصنفة يتيمة عند المراجعة اللاحقة. **حُفظت 4 عناصر Runtime مرتبطة بالحسابات في TEST و3 في LIVE**؛ لم تُحذف كي لا تضيع مفاتيح/OAuth الحسابين.
+- لم تنفذ هذه العمليات `pg_dump` أو نسخ احتياطية جديدة، ولم تنسخ TEST DB فوق LIVE، ولم تغيّر الدومين/Nginx/Native أو منفذ Gateway. عمليات الحذف المأذون بها **نهائية**؛ لا تفترض إمكان استعادة المحادثات من Git أو من سجل Actions.
+- نطاق التحقق من المحادثات: مجلدات المشاريع التي أمكن تعيينها إلى OpenCode Native ومسارات Runtime التابعة للبيئتين. **لا يوجد دليل بفحص شامل مستقل لكل مخازن Native العامة خارج هذه المسارات**، فلا تُعلن خلو كامل XDG الخاص بـNative إلا بعد جرد مستقل لا يمس أسرار الحسابات.
+
+### 6.5 ما بقي بعد التنظيف
+1. تهيئة Resend وGitHub App في LIVE: لازالت غير مثبتة. يلزم استخدام مفتاح TEST الأصلي من مصدر آمن، وفك سجلات الإعدادات ثم إعادة تشفيرها بالمفتاح الحالي لـLIVE، والتحقق من البريد وGitHub OAuth فعليًا.
+2. التحقق من تنفيذ Native end-to-end وسريان أذونات العملاء بعد إنشاء مشاريع/محادثات **جديدة** فقط؛ لا تستخدم مشاريع الاختبار المحذوفة.
+3. إعادة الحماية اليدوية لـLIVE وإزالة Workflow/سكربتات التنظيف المؤقتة بعد انتهاء التنفيذ. تظل مذكرة المعمارية `CANONICAL_NATIVE_FIRST_ARCHITECTURE_AR.md` هي المصدر الوحيد لتوزيع مسؤوليات Native/Python/Nginx.
+
