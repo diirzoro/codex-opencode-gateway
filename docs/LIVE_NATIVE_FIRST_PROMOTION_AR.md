@@ -40,3 +40,17 @@
 - النتائج النهائية المقيسة: حسابان في TEST وحسابان في LIVE؛ **صفر مشاريع/Workspaces/جلسات عمل في PostgreSQL**، وصفر مجلدات مشاريع ومحادثات Native في المسارات التي جرى حصرها، وصفر أشجار Runtime يتيمة. حُفظت عناصر Runtime المخصصة للحسابات ولم يُمس محرك OpenCode Native المشترك.
 - **الإعدادات التجارية لم تنتقل بعد بالكامل**: `EMAIL_SENDING_CONFIGURED=FAIL` و`GITHUB_APP_CONFIGURED=FAIL` في آخر تشخيص إنتاج. مصدر TEST يتضمن إعدادين مشفّرين، ومفتاحه الأصلي موجود داخل بيئة خدمة TEST لا داخل ملف `.env`. لا يُسمح بإدخال مفاتيح التشفير أو Resend أو GitHub private key في GitHub repository، ولا استبدال مفتاح LIVE بمفتاح TEST. إعادة التشفير تُجرى في السيرفر دون طباعة الأسرار، ثم يجب اختبار البريد وOAuth فعليًا.
 - يجب الحفاظ على المسار المعماري: Client → Nginx → Python (authorization only) → internal Nginx → Native؛ والرد/stream لا يعود إلى Python.
+
+## إعدادات بوابات الدفع الجديدة — Stripe وCryptomus (31 أكتوبر 2026)
+**المرحلة الحالية: تجهيز لوحة الإدارة وتخزين الإعدادات مشفّرة فقط؛ لم يُفعّل الدفع أو السحب.**
+
+- تمت إضافة إصدار PostgreSQL `0031_payment_gateway_settings` لإنشاء جدول `payment_gateway_settings` دون تغيير `users` أو `subscriptions` أو `payment_orders`. بيانات كل بوابة تُشفَّر بمفتاح `CREDENTIALS_ENCRYPTION_KEY` الموجود أصلًا **داخل بيئتها**، ولا يُستبدل بمفتاح TEST ولا يوضع في GitHub.
+- تمت إضافة `GET /api/admin/payment-gateways` و`PUT /api/admin/payment-gateways/stripe` و`PUT /api/admin/payment-gateways/cryptomus`، وكلها تتطلب تسجيل دخول Admin. تعرض GET حالة الاتصال والفجوات فقط، دون إظهار مفتاح API أو Webhook أو Payout. حفظ حقل سري فارغ يبقي القيمة المشفّرة القديمة.
+- صفحة إعدادات باللغتين العربية والإنجليزية تظهر في تبويب **Administration → Billing** وتعرض Stripe وCryptomus في بطاقتين منفصلتين. تُحفظ المسودات دون إجراء طلبات خارجية إلى أي مزود.
+- Stripe: بيئة `test` أو `live`، المفتاح العام `pk_test_…` أو `pk_live_…`، المفتاح الخلفي السري `sk_test_/sk_live_` أو محدد الصلاحيات `rk_test_/rk_live_`، ومفتاح توقيع Webhook المنفصل `whsec_…`. يتحقق النظام من تطابق أنواع المفاتيح والبيئة. إرشادات المزود: https://docs.stripe.com/keys
+- Cryptomus: `Merchant ID` (UUID) و`Payment API key`، وحقل اختياري منفصل لـ`Payout API key`؛ لا تُستخدم بيانات السحب الآن. إصدار مفاتيح Merchant يتطلب إنشاء/مراجعة التاجر وتأكيد النطاق، وقد يتطلب اعتمادًا من Cryptomus: https://doc.cryptomus.com/merchant-api/getting-api-keys
+- روابط webhook **مخططة فقط** حسب نطاق البيئة: `/api/billing/webhooks/stripe` و`/api/billing/webhooks/cryptomus`. ليست نقاط استقبال عاملة حتى تُنفذ المصادقة بالتوقيع، التسوية، منع التكرار، وسجلات المدفوعات. Cryptomus يستخدم `url_callback` عند إنشاء كل فاتورة؛ لا تُنشأ فواتير في هذه المرحلة.
+- قيم الحالة ترجع دائمًا `checkout_enabled=false`، `webhook_enabled=false`، و`payouts_enabled=false`. حتى لو تم حفظ مفاتيح API بنجاح، **هذا لا يعني اتصالًا متحققًا أو استلامًا/خصمًا أو تفعيل اشتراك**.
+- للإكمال لاحقًا: فحص الهويات التجارية والتشغيل الفعلي في Stripe/Cryptomus، بناء Checkout عبر Backend، webhook مع تحقق توقيع المزود وإثبات `order_id` والمبلغ والعملة، سياسة idempotency، تسوية `PaymentOrder` في PostgreSQL، إقرار الاشتراك بعد تحصيل فعلي، وإجراءات الاسترداد والسحب ضمن صلاحيات منفصلة. لا يتغير PayPal الحالي.
+- رفع ملفات الكود إلى `master` **لا ينشرها تلقائيًا على VPS**. يلزم إجراء Promote بنجاح وتنفيذ Migration 0031 في LIVE قبل ظهور الحفظ الفعلي. لا تسجل المفاتيح في الكود أو المحادثة أو سجل GitHub Actions.
+
