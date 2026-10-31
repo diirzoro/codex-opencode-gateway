@@ -124,7 +124,51 @@ def rollout(target,mode):
         # A missing or failed gate must block restart and release marking.
         if mode == "deploy":
             gate = "/usr/local/sbin/opencode-gateway-test-migrate"
-            run("sudo","-n",gate,"upgrade",timeout=180)
+            try:
+                run("sudo","-n",gate,"upgrade",timeout=180)
+            except subprocess.CalledProcessError as ex:
+                # The root-owned migration gate may capture sensitive stderr.
+                # Never print stderr/stdout or DATABASE_URL/credentials; only
+                # emit stable diagnostic categories for secure troubleshooting.
+                output=(ex.stderr or b"") + b"\n" + (ex.stdout or b"")
+                msg=output.decode("utf-8",errors="replace").lower()
+                indicators=(
+                    ("password authentication failed","DB_AUTH_FAILED"),
+                    ("authentication failed","DB_AUTH_FAILED"),
+                    ("connection refused","DB_CONNECTION_REFUSED"),
+                    ("could not connect","DB_CONNECTION_FAILED"),
+                    ("permission denied for schema","DB_SCHEMA_CREATE_PERMISSION_DENIED"),
+                    ("permission denied for database","DB_DATABASE_PERMISSION_DENIED"),
+                    ("permission denied for relation","DB_RELATION_PERMISSION_DENIED"),
+                    ("permission denied for table","DB_TABLE_PERMISSION_DENIED"),
+                    ("permission denied for sequence","DB_SEQUENCE_PERMISSION_DENIED"),
+                    ("permission denied","MIGRATION_PERMISSION_DENIED"),
+                    ("insufficientprivilege","MIGRATION_PERMISSION_DENIED"),
+                    ("multiple head revisions","ALEMBIC_MULTIPLE_HEADS"),
+                    ("can't locate revision","ALEMBIC_UNKNOWN_REVISION"),
+                    ("cannot locate revision","ALEMBIC_UNKNOWN_REVISION"),
+                    ("database does not exist","DB_NOT_FOUND"),
+                    ("already exists","MIGRATION_OBJECT_EXISTS"),
+                    ("value too long","ALEMBIC_REVISION_TOO_LONG"),
+                    ("wrong database","DB_IDENTITY_GUARD_FAILED"),
+                    ("not authorized","MIGRATION_GATE_UNAUTHORIZED"),
+                    ("not allowed","MIGRATION_GATE_REJECTED"),
+                    ("refusing","MIGRATION_GATE_REJECTED"),
+                )
+                category=next((code for needle,code in indicators if needle in msg),
+                              "MIGRATION_GATE_FAILED_UNCLASSIFIED")
+                if category == "DB_TABLE_PERMISSION_DENIED":
+                    # Output only a fixed allowlist of public schema table names,
+                    # never arbitrary captured text or database connection values.
+                    known_tables=("alembic_version","users","billing_methods",
+                                  "payment_provider_profiles","payment_profile_publications")
+                    for table in known_tables:
+                        if re.search(r"permission denied for table\s+"+re.escape(table)+r"(?:\b|$)",msg):
+                            category += "_" + table.upper()
+                            break
+                print("TEST_MIGRATION_GATE_FAILURE_CATEGORY",category,flush=True)
+                raise RuntimeError("TEST database migration gate failed; "
+                                   "deployment rolled back. Credentials are never logged.") from None
             print("TEST_MIGRATION_GATE_PASSED",flush=True)
         run("sudo","-n","/usr/bin/systemctl","restart",GATEWAY)
         time.sleep(3)

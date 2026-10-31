@@ -2172,3 +2172,368 @@ window.renderGithubConfirmation=function(root,status,refresh){
     document.addEventListener('visibilitychange', function () { if (document.getElementById('landing')?.classList.contains('active')) homeKick(); });
     window.addEventListener('focus', homeKick);
 })();
+
+
+/* TEST: administrator-defined payment/bank settings; no automatic checkout. */
+(() => {
+  const billingTab = document.querySelector('#adminNav [data-admin-view="billing"]');
+  const panel = document.querySelector('[data-admin-panel="billing"]');
+  if (!panel || !billingTab) return;
+  const host = document.createElement('section');
+  host.id = 'dynamicPaymentProviders';
+  host.className = 'admin-section dynamic-payment-providers';
+  panel.prepend(host);
+  let revision = 0;
+  let activeSlug = '';
+  const tr = (en, ar) => (typeof lang !== 'undefined' && lang === 'ar') ? ar : en;
+  const el = (tag, text='', cls='') => {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    if (cls) node.className = cls;
+    return node;
+  };
+  const button = (label, handler, cls='button small') => {
+    const b=el('button',label,cls);
+    b.type='button';
+    b.addEventListener('click',handler);
+    return b;
+  };
+  const categories=[
+    ['bank',tr('Bank','بنك')],['wallet',tr('Wallet','محفظة')],
+    ['processor',tr('Payment service','خدمة دفع')],
+    ['crypto',tr('Digital asset service','خدمة أصول رقمية')],
+    ['other',tr('Other / custom','أخرى / مخصّصة')]
+  ];
+  const modes=[
+    ['manual',tr('Manual transfer + receipt review','تحويل يدوي مع مراجعة إيصال')],
+    ['hosted',tr('Provider-hosted payment link (configuration only)','رابط دفع لدى مزوّد (إعداد فقط)')],
+    ['api',tr('API integration (credentials only)','API (حفظ بيانات الربط فقط)')]
+  ];
+  const environments=[['test',tr('Test / Sandbox','تجريبي / Sandbox')],
+                      ['live',tr('Live credentials — storage only','مفاتيح حقيقية — تخزين فقط')]];
+  const fieldKinds=[
+    ['text',tr('Text / identifier','نص / معرّف')],
+    ['secret',tr('Secret / API key','مفتاح سري / API')],
+    ['url',tr('URL','رابط')]
+  ];
+  const presets=[
+    ['merchant_id','Merchant ID','text'],
+    ['security_key','Security / signing key','secret'],
+    ['api_key','API key','secret'],
+    ['webhook_secret','Webhook signing secret','secret'],
+    ['iban','IBAN','text'],
+    ['swift_bic','SWIFT / BIC','text'],
+    ['bank_name','Bank name','text'],
+    ['account_name','Account holder','text'],
+    ['account_number','Account number','text'],
+    ['payment_url','Hosted checkout URL','url']
+  ];
+  // Templates are editable EXAMPLES, never an allowed-provider list.
+  const providerExamples=[
+    {code:'custom',name:tr('Another company / custom','شركة أخرى / مخصّصة'),label:'',slug:'',
+     category:'other',mode:'manual',fields:[]},
+    {code:'paypal',name:'PayPal',label:'PayPal',slug:'paypal',
+     category:'processor',mode:'api',fields:[['merchant_id','Merchant ID','text'],['client_id','Client ID','text'],['client_secret','Client secret','secret'],['webhook_id','Webhook ID','text']]},
+    {code:'stripe',name:'Stripe',label:'Stripe',slug:'stripe',
+     category:'processor',mode:'api',fields:[['publishable_key','Publishable key','text'],['secret_key','API secret key','secret'],['webhook_secret','Webhook signing secret','secret']]},
+    {code:'cryptomus',name:'Cryptomus',label:'Cryptomus',slug:'cryptomus',
+     category:'crypto',mode:'api',fields:[['merchant_id','Merchant ID','text'],['payment_api_key','Payment API key','secret'],['payout_api_key','Payout API key (optional)','secret']]},
+    {code:'bank',name:tr('Bank transfer template','نموذج حساب بنكي'),label:'',slug:'',
+     category:'bank',mode:'manual',fields:[['bank_name','Bank name','text'],['account_name','Account holder','text'],['account_number','Account number','text'],['iban','IBAN (optional)','text'],['swift_bic','SWIFT/BIC (optional)','text']]},
+    {code:'wallet',name:tr('Wallet / mobile money template','نموذج محفظة إلكترونية'),label:'',slug:'',
+     category:'wallet',mode:'manual',fields:[['wallet_name','Wallet name','text'],['account_name','Account name','text'],['account_reference','Wallet / account reference','text']]}
+  ];
+  function selectInput(label,options,defaultValue){
+    const wrap=el('label',label),s=el('select');
+    for(const [value,name] of options){
+      const option=el('option',name);option.value=value;s.append(option);
+    }
+    s.value=defaultValue||options[0][0];
+    wrap.append(s);return {wrap,input:s};
+  }
+  function textInput(label,value='',maxLength=100){
+    const wrap=el('label',label),i=el('input');
+    i.type='text';i.value=value;i.maxLength=maxLength;i.autocomplete='off';wrap.append(i);
+    return {wrap,input:i};
+  }
+  async function load(){
+    const sequence=++revision;
+    if(!['admin','owner'].includes(typeof currentUser==='undefined'?'':currentUser?.role))return;
+    host.replaceChildren(el('h2',tr('Flexible payment & bank connections','إدارة البنوك وخدمات الدفع الديناميكية')),
+      el('p',tr('Add any bank or provider and define the fields it requires. Save Merchant ID, API/security keys, IBAN or custom fields from here. This is encrypted configuration only; it does NOT charge customers, enable a webhook or change existing payment methods.',
+        'أضف أي بنك أو مزوّد وحدد الحقول التي يتطلبها. احفظ Merchant ID ومفاتيح API والتوقيع وIBAN أو أي حقول أخرى من هنا. هذه إعدادات مشفّرة فقط ولا تُحصّل من العملاء أو تُفعّل Webhook أو تغيّر وسائل الدفع الحالية.')));
+    let data;
+    try{ data=await api('/api/admin/payment-gateways/profiles',{cache:'no-store'}); }
+    catch(err){if(sequence===revision)host.append(el('p',err.message,'api-message'));return;}
+    if(sequence!==revision)return;
+    const toolbar=el('div','','dynamic-provider-toolbar');
+    const picker=selectInput(tr('Choose an existing bank or payment service','اختر بنكًا أو خدمة دفع محفوظة'),
+      [['',tr('Select a provider','اختر الشركة / البنك')],...data.profiles.map(p=>[p.slug,p.label])],
+      data.profiles.some(p=>p.slug===activeSlug)?activeSlug:(data.profiles[0]?.slug||''));
+    picker.input.id='dynamicProviderSelect';
+    activeSlug=picker.input.value;
+    const add=button(tr('+ Add new provider','+ إضافة جديد'),()=>editor(null),'button small');
+    add.id='dynamicProviderAdd';
+    toolbar.append(picker.wrap,add);
+    host.append(toolbar);
+    const detail=el('div','','dynamic-provider-cards');
+    host.append(detail);
+    function showSelected(){
+      detail.replaceChildren();
+      activeSlug=picker.input.value;
+      const profile=data.profiles.find(p=>p.slug===activeSlug);
+      if(!profile){
+        detail.append(el('div',tr('Select a saved provider, or add any new bank or service.',
+          'اختر بنكًا أو خدمة محفوظة، أو اضغط «إضافة جديد» لإضافة أي شركة.'),'dynamic-provider-empty'));
+        return;
+      }
+      const card=el('article','','dynamic-provider-card');
+      const head=el('div','','dynamic-provider-summary');
+      const icon=el('span',profile.category==='bank'?'▦':profile.category==='wallet'?'◈':'◇','dynamic-provider-symbol');
+      icon.setAttribute('aria-hidden','true');
+      const names=el('div');
+      names.append(el('h3',profile.label),
+        el('p',profile.category+' · '+profile.connection_mode+' · '+profile.environment));
+      head.append(icon,names);
+      const fields=profile.fields.filter(f=>f.configured).length;
+      const status=el('span',profile.configured?tr('Fields saved','الحقول محفوظة'):tr('Incomplete draft','مسودة غير مكتملة'),
+        'dynamic-provider-status');
+      head.append(status);
+      card.append(head,
+        el('p',tr('Stored fields: ','الحقول المحفوظة: ')+fields+' / '+profile.fields.length,
+           'dynamic-provider-description'),
+        el('p',tr('Settings only · Automatic checkout is not activated.',
+          'إعدادات الربط فقط · التحصيل الآلي غير مفعل.'),
+          'dynamic-provider-hint'));
+      const actions=el('div','','dynamic-provider-actions');
+      actions.append(button(tr('Edit connection','تعديل بيانات الربط'),()=>editor(profile),'button small'));
+      if(profile.connection_mode==='api'){
+        card.append(el('p',tr('API credentials are saved, but automatic payment needs a verified provider-specific integration.',
+          'تم حفظ بيانات API، لكن الدفع الآلي يتطلب تكاملًا موثقًا خاصًا بالمزوّد.'),'dynamic-provider-hint'));
+      }else{
+        actions.append(button(tr('Configure customer checkout','إعداد الدفع للعملاء'),
+          ()=>publishDialog(profile),'button small'));
+        if(profile.publication?.published){
+          actions.append(button(tr('Disable checkout','إيقاف الدفع'),async()=>{
+            if(typeof window.confirmAction!=='function')return;
+            if(!await window.confirmAction(tr('Disable this payment method for new orders?',
+              'إيقاف وسيلة الدفع للطلبات الجديدة؟')))return;
+            try{
+              await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+'/publish',{method:'DELETE'});
+              await load();
+            }catch(e){detail.append(el('p',e.message));}
+          },'button ghost small'));
+        }
+      }
+      actions.append(button(tr('Delete draft','حذف المسودة'),async()=>{
+        if(typeof window.confirmAction!=='function')return;
+        if(!await window.confirmAction(tr('Delete saved settings for '+profile.label+'? Existing payment records will remain untouched.',
+          'حذف إعدادات '+profile.label+'؟ ستبقى جميع سجلات الدفع الحالية دون تغيير.')))return;
+        try{
+          await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug),{method:'DELETE'});
+          activeSlug='';await load();
+        }catch(error){detail.append(el('p',error.message,'dynamic-provider-feedback'));}
+      },'button ghost small'));
+      card.append(actions);
+      detail.append(card);
+    }
+    picker.input.addEventListener('change',showSelected);
+    showSelected();
+
+  }
+
+
+  async function publishDialog(profile){
+    const popup=el('dialog','','dynamic-provider-dialog dynamic-provider-publish-dialog');
+    popup.setAttribute('aria-modal','true');
+    const heading=el('div','','dynamic-provider-modal-head');
+    heading.append(el('h2',tr('Activate verified-receipt checkout','تفعيل الدفع بمراجعة الإيصال')),
+      button('×',()=>popup.close(),'dynamic-provider-close'));
+    popup.append(heading,el('p',tr(
+      'This offers real receiving details or a hosted link to TEST customers. Payments do not activate subscriptions until an administrator verifies the receipt. Never pay real money when testing.',
+      'تظهر بيانات الاستلام أو رابط الدفع لعملاء TEST. لا تُفعّل الاشتراكات حتى تتحقق الإدارة من الإيصال. لا تدفع أموالًا حقيقية أثناء الاختبار.'),
+      'dynamic-provider-modal-lead'));
+    const form=el('form','','dynamic-provider-form manage-form');
+    const currency=selectInput(tr('Currency','العملة'),[['USD','USD'],['GBP','GBP'],['EUR','EUR'],['YER','YER']],'USD');
+    const notes=el('label',tr('Payment instructions for customers','تعليمات الدفع للعملاء'));
+    const instruction=el('textarea');instruction.required=true;instruction.minLength=10;instruction.maxLength=1000;instruction.rows=4;
+    notes.append(instruction);
+    form.append(currency.wrap,notes);
+    let plan=null;
+    if(profile.connection_mode==='hosted'){
+      const response=await api('/api/plans');
+      const items=Array.isArray(response)?response:(response.plans||[]);
+      const candidates=items.filter(p=>p.active!==false&&p.currency==='USD'&&p.price_cents>0);
+      plan=selectInput(tr('Subscription plan for this link','الخطة المرتبطة بالرابط'),
+        [['',tr('Choose a plan','اختر خطة')],...candidates.map(p=>[String(p.id),p.name])],'');
+      plan.input.required=true;form.append(plan.wrap);
+    }
+    const consent=el('label',tr('I confirmed the account/link details and will verify actual payment before activating any subscription.',
+      'أؤكد صحة حساب الاستلام أو الرابط وسأتحقق من وصول المال قبل تفعيل أي اشتراك.'),'dynamic-provider-consent');
+    const checked=el('input');checked.type='checkbox';checked.required=true;consent.prepend(checked);
+    const actions=el('div','','dynamic-provider-actions');
+    const save=el('button',tr('Enable for TEST','تفعيل في TEST'),'button');save.type='submit';
+    actions.append(save,button(tr('Cancel','إلغاء'),()=>popup.close(),'button ghost small'));
+    const error=el('p','','dynamic-provider-feedback');
+    form.append(consent,error,actions);popup.append(form);document.body.append(popup);
+    popup.addEventListener('close',()=>popup.remove(),{once:true});
+    popup.showModal();
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();save.disabled=true;
+      try{
+        const payload={
+          currency:currency.input.value,
+          instructions:instruction.value.trim(),
+          plan_id:plan?Number(plan.input.value):null,
+          confirmed_receiving_details:true
+        };
+        const result=await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+
+          '/publish',{method:'POST',body:JSON.stringify(payload)});
+        if(!result.published)throw new Error(tr('Checkout was not enabled','لم يتم تفعيل وسيلة الدفع'));
+        popup.close();activeSlug=profile.slug;await load();
+      }catch(e){error.textContent=e.message;save.disabled=false;}
+    });
+  }
+
+  function editor(profile){
+    document.querySelectorAll('dialog.dynamic-provider-dialog').forEach(d=>d.close());
+    const area=el('dialog','','dynamic-provider-dialog dynamic-provider-editor');
+    area.setAttribute('aria-modal','true');
+    area.setAttribute('aria-labelledby','dynamicProviderModalTitle');
+    const header=el('div','','dynamic-provider-modal-head');
+    const titles=el('div');
+    const caption=el('span',tr('PAYMENT CONNECTION','إعداد وسيلة الدفع'),'dynamic-provider-eyebrow');
+    const modalTitle=el('h2',profile?tr('Edit provider settings','تعديل بيانات الشركة'):tr('Add bank or payment service','إضافة بنك أو خدمة دفع'));
+    modalTitle.id='dynamicProviderModalTitle';
+    titles.append(caption,modalTitle);
+    const close=button('×',()=>area.close(),'dynamic-provider-close');
+    close.setAttribute('aria-label',tr('Close without saving','إغلاق دون حفظ'));
+    header.append(titles,close);
+    area.append(header,el('p',tr('Set up any provider. Fields marked Required are mandatory for that provider; secrets remain encrypted. Never enter banking passwords, OTP/2FA codes or card information.',
+        'حدد بيانات أي شركة أو بنك. يمكنك اختيار الحقول المطلوبة، وتبقى المفاتيح السرية مشفّرة. لا تدخل كلمات مرور البنك أو رموز OTP أو بيانات البطاقات.'),'dynamic-provider-modal-lead'));
+    const form=el('form','','dynamic-provider-form manage-form');
+    form.autocomplete='off';
+    let templatePicker=null;
+    if(!profile){
+      const template=selectInput(tr('Optional ready-made example (you can change its company name and fields)','اختر نموذجًا اختياريًا (يمكن تعديل اسم الشركة وكل الحقول)'),
+        providerExamples.map(p=>[p.code,p.name]),'custom');
+      templatePicker=template.input;
+      form.append(template.wrap);
+    }
+    const name=textInput(tr('Provider / bank name','اسم البنك أو خدمة الدفع'),profile?.label||'',100);
+    const slug=textInput(tr('Unique code in English, e.g. bank_uk or my_wallet','رمز مميز بالإنجليزية مثل bank_uk أو my_wallet'),profile?.slug||'',60);
+    slug.input.pattern='[a-z][a-z0-9_-]{1,59}';
+    slug.input.required=true;name.input.required=true;
+    if(profile)slug.input.readOnly=true;
+    const category=selectInput(tr('Provider category','نوع الخدمة'),categories,profile?.category||'bank');
+    const mode=selectInput(tr('How this provider would be used','طريقة استخدام الخدمة'),modes,profile?.connection_mode||'manual');
+    const environment=selectInput(tr('Credential environment','بيئة مفاتيح الربط'),environments,profile?.environment||'test');
+    form.append(name.wrap,slug.wrap,category.wrap,mode.wrap,environment.wrap);
+    form.append(el('h4',tr('Custom connection fields','حقول الربط المخصّصة')));
+    const rows=el('div','','dynamic-provider-fields');form.append(rows);
+    const rowControls=[];
+    function addField(field={}){
+      if(rowControls.filter(r=>r.element.isConnected).length>=30)return;
+      const row=el('div','','dynamic-provider-field');
+      const key=textInput(tr('Field code (English)','رمز الحقل بالإنجليزية'),field.key||'',48);
+      key.input.required=true;key.input.pattern='[a-z][a-z0-9_]{1,47}';
+      const label=textInput(tr('Field label','اسم الحقل'),field.label||'',100);label.input.required=true;
+      const kind=selectInput(tr('Field type','نوع الحقل'),fieldKinds,field.kind||'text');
+      const required=el('label',tr('Required','مطلوب'),'dynamic-provider-check');
+      const requiredInput=el('input');requiredInput.type='checkbox';requiredInput.checked=Boolean(field.required);required.prepend(requiredInput);
+      const valueWrap=el('label',tr('Value / connection credential','القيمة / بيانات الربط'));
+      const value=el('input');value.autocomplete='off';value.maxLength=2048;
+      value.value=(field.kind==='secret')?'':(field.value||'');
+      valueWrap.append(value);
+      const clear=el('label',tr('Erase saved secret','مسح المفتاح المحفوظ'),'dynamic-provider-check');
+      const clearInput=el('input');clearInput.type='checkbox';clear.prepend(clearInput);
+      clearInput.checked=false;
+      const savedSecret=field.kind==='secret'&&field.configured;
+      if(savedSecret)kind.input.disabled=true;
+      function updateKind(){
+        const secret=kind.input.value==='secret';
+        value.type=secret?'password':kind.input.value==='url'?'url':'text';
+        value.placeholder=secret?(savedSecret?tr('Saved securely · blank retains key','المفتاح محفوظ · اتركه فارغًا للاحتفاظ به'):tr('Enter secret, stored encrypted','أدخل المفتاح وسيُحفظ مشفرًا')):'';
+        clear.hidden=!(secret&&savedSecret);
+      }
+      kind.input.addEventListener('change',updateKind);updateKind();
+      const remove=button(tr('Remove field','حذف الحقل'),()=>row.remove(),'button ghost small');
+      row.append(key.wrap,label.wrap,kind.wrap,required,valueWrap,clear,remove);
+      rows.append(row);
+      rowControls.push({element:row,collect:()=>({
+        key:key.input.value.trim(),label:label.input.value.trim(),
+        kind:kind.input.value,required:requiredInput.checked,
+        value:value.value,clear:clearInput.checked
+      })});
+    }
+    for(const field of (profile?.fields||[]))addField(field);
+    if(templatePicker){
+      templatePicker.addEventListener('change',async()=>{
+        const example=providerExamples.find(p=>p.code===templatePicker.value);
+        if(!example)return;
+        const typed=name.input.value.trim()||slug.input.value.trim()||
+          rowControls.some(r=>r.element.isConnected);
+        if(typed){
+          const approved=typeof window.confirmAction==='function'
+            ? await window.confirmAction(tr('Replace the unsaved field draft with this example? Existing saved providers will not change.',
+               'استبدال الحقول غير المحفوظة بهذا النموذج؟ لن تتغير الشركات المحفوظة.'))
+            : false;
+          if(!approved){templatePicker.value='custom';return;}
+        }
+        name.input.value=example.label;
+        slug.input.value=example.slug;
+        category.input.value=example.category;
+        mode.input.value=example.mode;
+        rows.replaceChildren();
+        rowControls.length=0;
+        for(const [key,label,kind] of example.fields){
+          addField({key,label,kind,required:false,value:''});
+        }
+      });
+    }
+    const addActions=el('div','','dynamic-provider-presets');
+    for(const [key,label,kind] of presets){
+      addActions.append(button('+ '+label,()=>{
+        if(rowControls.some(r=>r.element.isConnected&&r.collect().key===key))return;
+        addField({key,label,kind,required:false});
+      },'button ghost small'));
+    }
+    addActions.append(button(tr('+ Custom field','+ حقل آخر'),()=>addField(),'button ghost small'));
+    form.append(addActions);
+    const note=el('p',tr('Draft only: API credentials are encrypted and never shown again; this form does not enable checkout.',
+      'مسودة إعدادات فقط: تُحفظ المفاتيح مشفّرة ولا تُعرض ثانيةً، ولا يُفعّل هذا النموذج التحصيل الآلي.'),'dynamic-provider-hint');
+    const feedback=el('p','','dynamic-provider-feedback');
+    const controls=el('div','','dynamic-provider-actions');
+    const save=el('button',tr('Save encrypted settings','حفظ الإعدادات المشفّرة'),'button');
+    save.type='submit';
+    controls.append(save,button(tr('Cancel','إلغاء'),()=>area.close(),'button ghost small'));
+    form.append(note,controls,feedback);area.append(form);
+    document.body.append(area);
+    area.addEventListener('close',()=>{
+      area.querySelectorAll('input[type="password"]').forEach(input=>{input.value='';});
+      area.remove();
+    },{once:true});
+    area.addEventListener('click',event=>{
+      if(event.target===area)area.close();
+    });
+    area.showModal();
+    (profile?name.input:templatePicker)?.focus();
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();
+      const fields=rowControls.filter(r=>r.element.isConnected).map(r=>r.collect());
+      if(!fields.length){feedback.textContent=tr('Add at least one field','أضف حقلًا واحدًا على الأقل');return;}
+      const body={slug:slug.input.value.trim(),label:name.input.value.trim(),category:category.input.value,
+        connection_mode:mode.input.value,environment:environment.input.value,fields};
+      save.disabled=true;feedback.textContent=tr('Saving encrypted profile…','جارٍ حفظ الإعدادات المشفّرة…');
+      try{
+        const url='/api/admin/payment-gateways/profiles'+(profile?'/'+encodeURIComponent(profile.slug):'');
+        await api(url,{method:profile?'PUT':'POST',body:JSON.stringify(body)});
+        activeSlug=body.slug;
+        area.close();
+        await load();
+      }catch(error){feedback.textContent=error.message;save.disabled=false;}
+    });
+  }
+  billingTab.addEventListener('click',()=>load().catch(()=>{}));
+  if(panel.classList.contains('active'))load().catch(()=>{});
+})();
