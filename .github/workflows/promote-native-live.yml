@@ -1,9 +1,6 @@
 name: LIVE | Promote master
 
 on:
-  push:
-    branches: [master]
-    paths: ['.github/workflows/promote-native-live.yml']
   workflow_dispatch:
     inputs:
       vps_username:
@@ -21,41 +18,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  runtime_audit:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - name: Validate runtime cleanup boundaries
-        run: python3 -m py_compile scripts/cleanup-demo-runtime-contents.py
-      - name: Purge orphan runtime from TEST and LIVE with pre/post checks
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
-        run: |
-          set -euo pipefail
-          : "${VPS_HOST:?Missing host}"
-          : "${VPS_USER:?Missing user}"
-          : "${VPS_SSH_KEY:?Missing SSH key}"
-          : "${VPS_SUDO_PASSWORD:?Missing sudo secret}"
-          port="${VPS_SSH_PORT:-22}"
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
-          for mode in audit apply audit; do
-            echo "RUNTIME_CLEANUP_STAGE=$mode"
-            { printf '%s\n' "$VPS_SUDO_PASSWORD"; cat scripts/cleanup-demo-runtime-contents.py; } |
-              ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-                "IFS= read -r sudo_auth; exec 3<<< \"\$sudo_auth\"; unset sudo_auth; exec \"\$HOME/opencode-gateway/.venv/bin/python\" - $mode"
-          done
-
   deploy:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
