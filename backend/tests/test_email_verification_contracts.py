@@ -71,12 +71,61 @@ def test_missing_smtp_configuration_blocks_delivery(monkeypatch):
     assert exc.value.status_code == 503
 
 
-def test_profile_change_password_is_optional_and_password_is_not_changed():
-    from backend.app.routes.profile_changes import Begin, Confirm
-    request = Begin.model_validate({"email": "new@example.org"})
-    assert request.current_password is None
-    assert request.email == "new@example.org"
-    assert "current_password" not in Confirm.model_fields
+def test_profile_change_requires_current_password_and_no_email_code():
+    from pydantic import ValidationError
+    from backend.app.routes.profile_changes import ProfileUpdate, router
+    with pytest.raises(ValidationError):
+        ProfileUpdate.model_validate({"email": "new@example.org"})
+    value = ProfileUpdate.model_validate({
+        "email": "new@example.org", "current_password": "existing-password"
+    })
+    assert value.current_password == "existing-password"
+    paths = {route.path for route in router.routes}
+    assert "/change/update" in paths
+    assert "/change/request" not in paths
+    assert "/change/confirm" not in paths
+    assert "/change/authorize" not in paths
+
+
+def test_profile_change_correct_password_updates_without_email_or_changing_hash(monkeypatch):
+    from uuid import uuid4
+    from backend.app.routes import profile_changes as pc
+    from types import SimpleNamespace
+    monkeypatch.setattr(pc, "verify_password", lambda candidate, stored:
+                        candidate == "correct password" and stored == "saved-hash")
+    monkeypatch.setattr(pc, "user_payload", lambda user: {
+        "username": user.username, "email": user.email
+    })
+    user = SimpleNamespace(
+        id=uuid4(), username="testuser", email="old@example.org",
+        phone="+967777777777", postal_code="+967", password_hash="saved-hash"
+    )
+    db = Mock()
+    db.scalar.return_value = None
+    result = pc.update_profile(
+        pc.ProfileUpdate(email="new@example.org", current_password="correct password"),
+        user=user, db=db
+    )
+    assert result["email"] == "new@example.org"
+    assert user.password_hash == "saved-hash"
+    db.commit.assert_called_once()
+    assert db.add.call_args.args[0].action == "account.profile_password_authorized_update"
+
+
+def test_profile_change_wrong_password_rejects_without_mutation(monkeypatch):
+    from uuid import uuid4
+    from backend.app.routes import profile_changes as pc
+    from types import SimpleNamespace
+    monkeypatch.setattr(pc, "verify_password", lambda candidate, stored: False)
+    user = SimpleNamespace(id=uuid4(), password_hash="saved-hash", email="old@example.org")
+    db = Mock()
+    with pytest.raises(HTTPException) as exc:
+        pc.update_profile(pc.ProfileUpdate(
+            email="new@example.org", current_password="wrong-password"
+        ), user=user, db=db)
+    assert exc.value.status_code == 403
+    db.commit.assert_not_called()
+    assert user.email == "old@example.org"
 
 
 def test_resend_https_delivery_accepts_id_without_smtp(monkeypatch):
