@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import User
-from ..services import payment_gateway_config, payment_provider_profiles
+from ..services import payment_gateway_config, payment_provider_profiles, payment_profile_publications
 from .dependencies import require_admin
 
 router = APIRouter(prefix="/api/admin/payment-gateways", tags=["admin"])
@@ -164,3 +164,38 @@ def delete_dynamic_payment_profile(
 ):
     _cache_safe(response)
     return payment_provider_profiles.delete_profile(db, slug)
+
+
+class PublishProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    instructions: str = Field(min_length=10, max_length=1000)
+    plan_id: int | None = Field(default=None, ge=1)
+    available_country_codes: list[str] = Field(default_factory=list,max_length=100)
+    confirmed_receiving_details: Literal[True]
+
+
+@router.post("/profiles/{slug}/publish")
+def publish_profile_for_verified_receipt_checkout(
+    slug: str, data: PublishProfileRequest, response: Response,
+    user: User = Depends(require_admin), db: Session = Depends(get_db),
+):
+    _cache_safe(response)
+    # Separate explicit action. Never infer publication from credential storage,
+    # and never activate a plan without a separately verified receipt.
+    return payment_profile_publications.publish(
+        db, slug, user.id,
+        currency=data.currency,
+        instructions=data.instructions,
+        plan_id=data.plan_id,
+        available_country_codes=data.available_country_codes,
+    )
+
+
+@router.delete("/profiles/{slug}/publish")
+def disable_published_profile_for_new_customers(
+    slug: str, response: Response, _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _cache_safe(response)
+    return payment_profile_publications.unpublish(db,slug)
