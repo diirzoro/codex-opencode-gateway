@@ -166,6 +166,7 @@ function renderProfile(user){
 async function savePrefs(){applyPrefs();if(currentUser)try{await api('/api/profile',{method:'PATCH',body:JSON.stringify({preferred_language:lang,preferred_theme:dark?'dark':'light'})})}catch(error){toast(error.message)}}
 $$('#langBtn,.lang-mirror').forEach(el=>el.onclick=()=>{lang=lang==='ar'?'en':'ar';savePrefs()});$$('#themeBtn,.theme-mirror,.workspace-theme').forEach(el=>el.onclick=()=>{dark=!dark;savePrefs()});
 let authViewRevision=0;
+let socialSignupPending=false;
 function setAuthIntent(intent){try{sessionStorage.setItem('og-auth-intent',intent);}catch(error){}}
 function getAuthIntent(){try{return sessionStorage.getItem('og-auth-intent');}catch(error){return null;}}
 document.addEventListener('click',event=>{
@@ -174,7 +175,7 @@ document.addEventListener('click',event=>{
 },true);
 $$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));
 $$('[data-start]').forEach(el=>el.onclick=()=>{if(!currentUser)$('[data-auth-tab="register"]')?.click();page(currentUser?'onboarding':'authPage');});$$('[data-demo]').forEach(el=>el.onclick=()=>page('onboarding'));$$('[data-scroll]').forEach(el=>el.onclick=()=>$('#'+el.dataset.scroll).scrollIntoView({behavior:'smooth'}));
-$$('[data-auth-tab]').forEach(el=>el.onclick=()=>{authViewRevision++;setAuthIntent(el.dataset.authTab);$$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-auth-form]').forEach(f=>f.classList.toggle('active',f.dataset.authForm===el.dataset.authTab))});
+$$('[data-auth-tab]').forEach(el=>el.onclick=()=>{authViewRevision++;socialSignupPending=false;setAuthIntent(el.dataset.authTab);$$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-auth-form]').forEach(f=>f.classList.toggle('active',f.dataset.authForm===el.dataset.authTab))});
 $('#registerCountry').onchange=async()=>{try{await fillSelect('registerRegion',value('registerCountry')?`/api/locations/countries/${value('registerCountry')}/regions`:null,'Optional');await fillSelect('registerCity',null,'Optional')}catch(error){toast(error.message)}};
 $('#registerRegion').onchange=async()=>{try{await fillSelect('registerCity',value('registerRegion')?`/api/locations/regions/${value('registerRegion')}/cities`:null,'Optional')}catch(error){toast(error.message)}};
 /* Signup proof: only a validated code creates a User. */
@@ -309,6 +310,12 @@ $('#registerForm').onsubmit=async event=>{
    showEmailCodeStep({...registered,staged:registered.status==='pending_verification'},value('registerEmail'));return;
   }
   if(submissionRevision!==authViewRevision)return;
+  // Plain email signup MUST yield an OTP challenge, never an active profile.
+  // Even an older or unexpected server response must not skip verification.
+  if(!socialSignupPending){
+   try{if(await recoverPendingRegistrationFor(value('registerEmail'),submissionRevision))return;}catch(_error){}
+   throw new Error(lang==='ar'?'لم يُعَد تحدي التحقق من البريد. لم يكتمل التسجيل؛ تحقق من حالة الخادم.':'Email verification challenge was not returned. Registration is not complete; check the server response.');
+  }
   if(registered.status!=='active')throw new Error(lang==='ar'?'استجابة التسجيل غير مكتملة؛ أعد فتح التحقق أو حاول مجددًا.':'Incomplete registration response; resume verification or retry.');
   const loggedIn=await api('/api/auth/me',{allowAnonymous:true});
   if(!loggedIn||loggedIn.status!=='active')throw new Error(lang==='ar'?'لم يتم إنشاء جلسة دخول؛ لا يمكن تجاوز التحقق من البريد.':'No authenticated session; email verification cannot be bypassed.');
@@ -923,7 +930,7 @@ navigationReady.then(async()=>{
  const result=new URLSearchParams(location.hash.slice(1)).get('social');if(!result)return;
  history.replaceState(null,'',location.pathname+location.search);
  if(result==='register'){
-  try{const pending=await api('/api/auth/social/pending',{allowAnonymous:true});if(pending.pending){await page('authPage');$('[data-auth-tab=register]').click();$('#registerEmail').value=pending.email;$('#registerEmail').readOnly=true;apiMessage('registerMessage',lang==='ar'?'أكمل بيانات الحساب لربط هوية الدخول المتحققة.':'Complete account details to bind your verified sign-in identity.');}}
+  try{const pending=await api('/api/auth/social/pending',{allowAnonymous:true});if(pending.pending&&pending.provider==='google'){await page('authPage');$('[data-auth-tab=register]').click();socialSignupPending=true;$('#registerEmail').value=pending.email;$('#registerEmail').readOnly=true;apiMessage('registerMessage',lang==='ar'?'أكمل بيانات الحساب لربط هوية الدخول المتحققة.':'Complete account details to bind your verified sign-in identity.');}}
   catch(error){apiMessage('loginMessage',error.message,true);}
  }else if(result==='success')toast(lang==='ar'?'تم تسجيل الدخول بنجاح.':'Signed in successfully.');
  else apiMessage('loginMessage',result==='existing'?(lang==='ar'?'ادخل بكلمة المرور الحالية ثم اربط مزوّد الدخول من الحساب.':'Sign in with your existing password, then link the sign-in provider from Account.'):(lang==='ar'?'تعذر التحقق من الدخول أو أُلغي. حاول مجددًا.':'Sign-in could not be verified or was cancelled. Try again.'),true);
@@ -941,7 +948,7 @@ Object.assign(copy.en,{callingCode:'Calling code'});Object.assign(copy.ar,{calli
 const previousAuthPhonePrefs=applyPrefs;applyPrefs=function(){previousAuthPhonePrefs();refreshCallingCodes();};
 function registrationPayload(){
  const number=value('registerPhone').replace(/[\s()-]/g,'');
- return {email:value('registerEmail'),password:$('#registerPassword').value,phone:number.startsWith('+')?number:value('registerPostal')+number,postal_code:value('registerPostal'),country_id:value('registerCountry')?Number(value('registerCountry')):null,region_id:value('registerRegion')?Number(value('registerRegion')):null,city_id:value('registerCity')?Number(value('registerCity')):null,...(value('registerUsername')?{username:value('registerUsername')}:{})};
+ return {email:value('registerEmail'),password:$('#registerPassword').value,phone:number.startsWith('+')?number:value('registerPostal')+number,postal_code:value('registerPostal'),country_id:value('registerCountry')?Number(value('registerCountry')):null,region_id:value('registerRegion')?Number(value('registerRegion')):null,city_id:value('registerCity')?Number(value('registerCity')):null,...(value('registerUsername')?{username:value('registerUsername')}:{}) ,...(socialSignupPending?{social_signup:true}:{})};
 }
 applyPrefs();
 

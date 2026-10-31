@@ -374,3 +374,31 @@ def test_expired_or_completed_draft_cannot_be_recovered(signup):
         db.commit()
     assert confirm(f, messages, first).status_code == 200
     assert f[0].get('/api/auth/registration/pending').json() == {'pending':False}
+
+
+def test_password_signup_ignores_stale_google_signup_cookie(signup):
+    """A stale Google cookie cannot turn password signup into an active account."""
+    f, messages = signup
+    f[0].cookies.set(auth.social_login.SIGNUP_COOKIE, 'stale-invalid-authorization',
+                     path='/api/auth')
+    response = register(f, username='qa_cookie_guard')
+    assert response.status_code == 201, response.text
+    assert response.json()['status'] == 'pending_verification'
+    assert response.json().get('verification_challenge')
+    assert len(messages) == 1
+    with Session(f[2]) as db:
+        assert db.scalar(select(models.User).where(
+            models.User.email == 'owned-fixture@example.org')) is None
+
+
+def test_explicit_google_signup_cannot_skip_oauth_proof(signup):
+    """The explicit social flag still requires a valid Google signup cookie."""
+    f, messages = signup
+    response = f[0].post('/api/auth/register', json={
+        'username': 'qa_social_signup', 'email': 'owned-fixture@example.org',
+        'password': 'Synthetic8!Password', 'phone': '+967777000000',
+        'postal_code': '+967', 'social_signup': True,
+    })
+    assert response.status_code == 400
+    assert 'Google signup authorization is missing' in response.json()['detail']
+    assert messages == []
