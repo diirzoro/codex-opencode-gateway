@@ -632,6 +632,11 @@ window.renderGithubConfirmation=function(root,status,refresh){
   window.planDisplayTerm = planDisplayTerm;
   window.planDisplayPrice = function (plan) { return money(plan.price_cents); };
 
+  function platformCardNote() {
+    return tr('Platform subscription only · AI models/APIs not included · connect your own keys.',
+      'اشتراك المنصة فقط · نماذج وAPI غير مشمولة · أضف مفاتيحك الخاصة.');
+  }
+
   async function renderPricing() {
     var cards = document.getElementById('pricingCards');
     if (!cards) return;
@@ -641,7 +646,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
       var free=textElement('div','','price-card');
       free.append(textElement('b','$0'),textElement('span',tr('Free trial · 50 MB','تجربة مجانية · 50 ميجابايت')),
         textElement('small',tr('One 30-day trial · local + GitHub storage combined','تجربة واحدة لمدة 30 يومًا · المحلي وGitHub بحصة موحدة')),
-        textElement('small',platformOnlyNote()));
+        textElement('small',platformCardNote()));
       cards.append(free);
       var parts = [];
       plans.forEach(function (plan) {
@@ -653,11 +658,18 @@ window.renderGithubConfirmation=function(root,status,refresh){
         card.append(textElement('span', main));
         card.append(textElement('small', sub));
         card.append(textElement('small',tr('Local and GitHub combined · one account quota','المشاريع المحلية وGitHub معًا · حصة واحدة للحساب')));
-        card.append(textElement('small',platformOnlyNote()));
+        card.append(textElement('small',platformCardNote()));
         var choose=textElement('button',tr('Subscribe','اشترك'),'button small');choose.type='button';choose.dataset.planId=plan.id;choose.onclick=async function(){window.pendingCheckoutPlan=plan.id;if(currentUser){await window.openClientView('billing');await window.beginCheckout(plan.id);}else await page('authPage');};card.append(choose);
         cards.append(card);
         parts.push(money(plan.price_cents) + ' · ' + main);
       });
+      var disclaimer=document.getElementById('pricingDisclaimer');
+      if (!disclaimer) {
+        disclaimer=textElement('p','','pricing-disclaimer');
+        disclaimer.id='pricingDisclaimer';
+        cards.after(disclaimer);
+      }
+      disclaimer.textContent=platformOnlyNote();
       var summary = document.getElementById('pricingSummary');
       if (summary && parts.length) summary.textContent = parts.join(' · ');
       if (summary && !parts.length) summary.textContent = tr('No active offers are available right now.', 'لا توجد عروض نشطة حاليًا.');
