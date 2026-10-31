@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-      - name: Validate disk inventory
+      - name: Validate disk inventory and storage boundary map
         run: python3 -m py_compile scripts/audit-demo-file-storage.py
       - name: Inspect TEST and LIVE filesystem without touching project data
         env:
