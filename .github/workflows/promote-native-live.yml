@@ -31,7 +31,7 @@ jobs:
           ref: ${{ github.sha }}
       - name: Validate Native project cleanup script
         run: python3 -m py_compile scripts/purge-demo-project-files.py
-      - name: Read-only audit project files and OpenCode conversations in TEST and LIVE
+      - name: Remove verified demo projects and Native conversations, re-audit TEST and LIVE
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -47,9 +47,12 @@ jobs:
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
-          ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
-            'exec "$HOME/opencode-gateway/.venv/bin/python" - audit' \
-            < scripts/purge-demo-project-files.py
+          for mode in audit apply audit; do
+            echo "PROJECT_PURGE_STAGE=$mode"
+            ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+              "exec \"\$HOME/opencode-gateway/.venv/bin/python\" - $mode" \
+              < scripts/purge-demo-project-files.py
+          done
 
   deploy:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
