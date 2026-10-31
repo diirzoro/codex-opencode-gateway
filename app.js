@@ -927,7 +927,7 @@ applyPrefs();
 
 Object.assign(copy.en,{registrationUsername:'Username',emailCodeTitle:'Verify your email',emailCodeHint:'Enter the 6-digit code. It expires in 1 minute. Account creation follows successful verification.',emailCodeLabel:'Verification code',emailCodeConfirm:'Verify and continue',emailCodeResend:'Resend code',emailCodeLogin:'Back to sign in',emailCodeEdit:'Edit registration details',emailCodeCancel:'Cancel registration'});
 Object.assign(copy.ar,{registrationUsername:'اسم المستخدم',emailCodeTitle:'تفعيل البريد الإلكتروني',emailCodeHint:'أدخل رمز التفعيل المكوّن من 6 أرقام خلال دقيقة واحدة. لا يُنشأ الحساب إلا بعد التحقق.',emailCodeLabel:'رمز التفعيل',emailCodeConfirm:'تفعيل ومتابعة',emailCodeResend:'إعادة إرسال الرمز',emailCodeLogin:'رجوع للدخول',emailCodeEdit:'تعديل بيانات التسجيل',emailCodeCancel:'إلغاء التسجيل'});
-navigationReady.then(()=>{
+navigationReady.then(async()=>{
  if(new URLSearchParams(location.hash.slice(1)).get('email')==='verified'){
   history.replaceState(null,'',location.pathname+location.search);
   if(!currentUser){window.openAuthLogin();apiMessage('loginMessage',lang==='ar'?'تم تفعيل بريدك. ادخل باسم المستخدم أو البريد وكلمة المرور.':'Email verified. Sign in with your username or email and password.');}
