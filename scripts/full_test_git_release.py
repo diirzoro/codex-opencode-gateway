@@ -26,6 +26,17 @@ PROTECTED=("backend/app/services/preview_", "backend/app/routes/preview_", "back
 def run(*argv,timeout=90,cwd=None,env=None):
     return subprocess.run(argv,check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                           timeout=timeout,cwd=cwd,env=env).stdout.decode().strip()
+# Optional existing GitHub production sudo secret, passed only through SSH stdin.
+# It authorizes the same sudo commands as before; it never changes DB credentials.
+SUDO_PASSWORD=None
+def sudo_run(*argv,timeout=90):
+    if SUDO_PASSWORD is None:
+        return run("sudo","-n",*argv,timeout=timeout)
+    result=subprocess.run(["sudo","-S","-p","",*argv],
+        input=(SUDO_PASSWORD+"\n").encode(),check=True,
+        stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
+    return result.stdout.decode().strip()
+
 def git(*argv):return run("git","-C",str(ROOT),*argv)
 def files(revision):
     listing=git("ls-tree","-r","--name-only",revision)
@@ -125,7 +136,7 @@ def rollout(target,mode):
         if mode == "deploy":
             gate = "/usr/local/sbin/opencode-gateway-test-migrate"
             try:
-                run("sudo","-n",gate,"upgrade",timeout=180)
+                sudo_run(gate,"upgrade",timeout=180)
             except subprocess.CalledProcessError as ex:
                 # The root-owned migration gate may capture sensitive stderr.
                 # Never print stderr/stdout or DATABASE_URL/credentials; only
@@ -170,7 +181,7 @@ def rollout(target,mode):
                 raise RuntimeError("TEST database migration gate failed; "
                                    "deployment rolled back. Credentials are never logged.") from None
             print("TEST_MIGRATION_GATE_PASSED",flush=True)
-        run("sudo","-n","/usr/bin/systemctl","restart",GATEWAY)
+        sudo_run("/usr/bin/systemctl","restart",GATEWAY)
         time.sleep(3)
         if not service(GATEWAY):raise RuntimeError("Gateway unhealthy after restart")
         if nativepid!=run("systemctl","show","--value","-p","MainPID",NATIVE):
@@ -194,6 +205,12 @@ def main():
     parser.add_argument("mode",choices=("audit","deploy","rollback"))
     parser.add_argument("sha")
     args=parser.parse_args()
+    global SUDO_PASSWORD
+    if os.environ.get("TEST_SUDO_PASS_STDIN") == "1":
+        # Read once from private stdin; never print, store or forward to DB.
+        SUDO_PASSWORD=sys.stdin.readline().rstrip("\r\n")
+        if not SUDO_PASSWORD:
+            raise RuntimeError("Missing protected sudo authorization")
     requirements()
     verified_commit(args.sha)
     if args.mode=="rollback" and args.sha==active_revision():
