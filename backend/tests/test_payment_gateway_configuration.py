@@ -1,5 +1,8 @@
 """Settings-only tests: no real processor calls, secrets, or payment activation."""
+import os
 import uuid
+
+os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://fixture:fixture@127.0.0.1/fixture")
 
 import pytest
 from fastapi import HTTPException
