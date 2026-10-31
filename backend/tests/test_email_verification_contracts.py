@@ -179,3 +179,48 @@ def test_resend_rejected_sender_never_reveals_api_key(monkeypatch):
     assert exc.value.status_code==503
     assert "HTTP 422" in str(exc.value.detail)
     assert "fixture-do-not-expose" not in str(exc.value.detail)
+
+
+def test_legacy_resend_smtp_settings_use_https_not_smtp(monkeypatch):
+    """Environment configs missing provider field must use Resend API transport."""
+    from email.message import EmailMessage
+    from types import SimpleNamespace
+    from backend.app.services import email_delivery
+    called = []
+    class HTTPS:
+        def __init__(self, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def post(self, url, headers, json):
+            called.append(url)
+            return SimpleNamespace(status_code=200, json=lambda:{"id":"legacy_fixture"})
+    monkeypatch.setattr(email_delivery.httpx, "Client", HTTPS)
+    def no_smtp(*args, **kwargs):
+        raise AssertionError("Do not open SMTP for Resend legacy settings")
+    monkeypatch.setattr(email_delivery.smtplib, "SMTP", no_smtp)
+    config = {"smtp_host":"smtp.resend.com","smtp_port":587,"smtp_from":"noreply@example.org",
+              "smtp_username":"resend","smtp_password":"fixture-key"}
+    assert email_delivery.public_config(config)["transport"] == "https"
+    message = EmailMessage()
+    message["From"]="noreply@example.org";message["To"]="test@example.org"
+    message["Subject"]="Test";message.set_content("Testing delivery transport")
+    email_delivery.send(config,message,error_status=503,timeout=12)
+    assert called == ["https://api.resend.com/emails"]
+
+
+def test_resend_without_key_is_explicitly_unconfigured():
+    from email.message import EmailMessage
+    from backend.app.services import email_delivery
+    config = {"provider":"resend","smtp_host":"smtp.resend.com",
+              "smtp_from":"noreply@example.org","smtp_username":"resend","smtp_password":""}
+    assert not email_delivery.ready(config)
+    msg = EmailMessage()
+    msg["From"]="noreply@example.org";msg["To"]="test@example.org"
+    msg["Subject"]="No send";msg.set_content("No outgoing request")
+    with pytest.raises(HTTPException) as exc:
+        email_delivery.send(config,msg,error_status=503)
+    assert exc.value.status_code == 503
+    assert "Resend sending key" in str(exc.value.detail)
