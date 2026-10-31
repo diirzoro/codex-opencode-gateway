@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# VPS-only GitHub release: LIVE code/schema => TEST Native First architecture.
+# VPS-only GitHub release: deploy reviewed master independently to LIVE.
 # Never overwrite production domain/SSL/DB credentials/workspaces or Native data.
 set -euo pipefail
 umask 077
@@ -22,15 +22,11 @@ APP="$HOME/opencode-gateway"
 RELEASE="$HOME/opencode-gateway-release"
 # Backups and cleanup are intentionally deferred until LIVE acceptance.
 test -f "$APP/.env" && test -f "$RELEASE/backend/app/main.py" && test -x "$APP/.venv/bin/python" || { echo 'LIVE/release files missing' >&2; exit 3; }
-# Verify published frontend files really match the actual TEST working tree.
-TEST_APP="$HOME/opencode-gateway-test"
-test -d "$TEST_APP" || { echo 'TEST deployment root is missing' >&2; exit 5; }
-for file in index.html app.js styles.css dashboards.js enhancements.js management.js native-session-client.js runtime-client.js; do
-  cmp -s "$TEST_APP/$file" "$RELEASE/$file" || { echo "TEST frontend differs from GitHub source: $file" >&2; exit 6; }
-done
-# Also prevent promoting a backend that does not match the tested implementation.
-for file in app/services/native_provider_accounts.py app/services/policy.py app/models/workspace.py; do
-  cmp -s "$TEST_APP/backend/$file" "$RELEASE/backend/$file" || { echo "TEST backend differs from GitHub source: $file" >&2; exit 7; }
+# LIVE is built from the reviewed master release only. Do not compare with,
+# read, or require the TEST deployment root. TEST and LIVE can be deployed
+# independently, and their application revisions are allowed to differ.
+for file in index.html app.js styles.css dashboards.js enhancements.js management.js native-session-client.js runtime-client.js backend/app/main.py; do
+  test -f "$RELEASE/$file" || { echo "Required LIVE release source missing: $file" >&2; exit 6; }
 done
 ss -ltn | grep -F '127.0.0.2:4097' >/dev/null
 ss -ltn | grep -F '127.0.0.1:18097' >/dev/null
