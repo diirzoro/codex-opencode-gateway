@@ -165,8 +165,9 @@ function renderProfile(user){
 }
 async function savePrefs(){applyPrefs();if(currentUser)try{await api('/api/profile',{method:'PATCH',body:JSON.stringify({preferred_language:lang,preferred_theme:dark?'dark':'light'})})}catch(error){toast(error.message)}}
 $$('#langBtn,.lang-mirror').forEach(el=>el.onclick=()=>{lang=lang==='ar'?'en':'ar';savePrefs()});$$('#themeBtn,.theme-mirror,.workspace-theme').forEach(el=>el.onclick=()=>{dark=!dark;savePrefs()});
-$$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));$$('[data-start]').forEach(el=>el.onclick=()=>page(currentUser?'onboarding':'authPage'));$$('[data-demo]').forEach(el=>el.onclick=()=>page('onboarding'));$$('[data-scroll]').forEach(el=>el.onclick=()=>$('#'+el.dataset.scroll).scrollIntoView({behavior:'smooth'}));
-$$('[data-auth-tab]').forEach(el=>el.onclick=()=>{$$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-auth-form]').forEach(f=>f.classList.toggle('active',f.dataset.authForm===el.dataset.authTab))});
+let authViewRevision=0;
+$('[data-go]').forEach(el=>el.onclick=()=>{if(el.dataset.go==='authPage')$('[data-auth-tab="login"]')?.click();page(el.dataset.go)});$$('[data-start]').forEach(el=>el.onclick=()=>page(currentUser?'onboarding':'authPage'));$$('[data-demo]').forEach(el=>el.onclick=()=>page('onboarding'));$$('[data-scroll]').forEach(el=>el.onclick=()=>$('#'+el.dataset.scroll).scrollIntoView({behavior:'smooth'}));
+$('[data-auth-tab]').forEach(el=>el.onclick=()=>{authViewRevision++;$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-auth-form]').forEach(f=>f.classList.toggle('active',f.dataset.authForm===el.dataset.authTab))});
 $('#registerCountry').onchange=async()=>{try{await fillSelect('registerRegion',value('registerCountry')?`/api/locations/countries/${value('registerCountry')}/regions`:null,'Optional');await fillSelect('registerCity',null,'Optional')}catch(error){toast(error.message)}};
 $('#registerRegion').onchange=async()=>{try{await fillSelect('registerCity',value('registerRegion')?`/api/locations/regions/${value('registerRegion')}/cities`:null,'Optional')}catch(error){toast(error.message)}};
 /* Signup proof: only a validated code creates a User. */
@@ -184,7 +185,8 @@ function showEmailCodeStep(result,email){
   staged,expiresAt:result.expiresAt||Date.now()+1000*(result.verification_expires_in??60),
   resendAt:result.resendAt||Date.now()+1000*(result.resend_in??60)};
  try{sessionStorage.setItem('og-email-verification',JSON.stringify(verificationState));}catch{}
- $$('[data-auth-form]').forEach(f=>f.classList.remove('active'));$('#verifyEmailForm').classList.add('active');
+ $('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b.dataset.authTab==='register'));
+ $('[data-auth-form]').forEach(f=>f.classList.remove('active'));$('#verifyEmailForm').classList.add('active');
  $('#verifyEmailDestination').textContent=(lang==='ar'?'أُرسل الرمز إلى ':'Code sent to ')+verificationState.email;
  $('#verifyEmailCode').value='';$('#verifyEmailCode').removeAttribute('aria-invalid');
  apiMessage('verifyEmailMessage','');
@@ -204,9 +206,10 @@ function showEmailCodeStep(result,email){
  tick();$('#verifyEmailCode').focus();
 }
 window.showEmailCodeStep=showEmailCodeStep;
-async function recoverPendingRegistrationFor(email=''){
+async function recoverPendingRegistrationFor(email='',expectedRevision=null){
  // Only the HttpOnly cookie can identify a pending draft; this does not mail.
  const result=await api('/api/auth/registration/pending',{allowAnonymous:true});
+ if(expectedRevision!==null&&expectedRevision!==authViewRevision)return false;
  if(!result?.pending||!result.verification_challenge)return false;
  if(email&&String(result.email||'').trim().toLowerCase()!==String(email).trim().toLowerCase())return false;
  if(currentUser)return false;
@@ -292,6 +295,9 @@ $('#registerForm').onsubmit=async event=>{
   if(['pending_email','pending_verification'].includes(registered.status)){
    showEmailCodeStep({...registered,staged:registered.status==='pending_verification'},value('registerEmail'));return;
   }
+  if(registered.status!=='active')throw new Error(lang==='ar'?'استجابة التسجيل غير مكتملة؛ أعد فتح التحقق أو حاول مجددًا.':'Incomplete registration response; resume verification or retry.');
+  const loggedIn=await api('/api/auth/me',{allowAnonymous:true});
+  if(!loggedIn||loggedIn.status!=='active')throw new Error(lang==='ar'?'لم يتم إنشاء جلسة دخول؛ لا يمكن تجاوز التحقق من البريد.':'No authenticated session; email verification cannot be bypassed.');
   renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));
   $('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');
   if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120);
@@ -937,9 +943,12 @@ navigationReady.then(async()=>{
  if(currentUser)return;
  // Recover the pending, cookie-bound server draft even after the 60s OTP
  // expires, so the user can resend from the code screen instead of re-signing up.
+ // Explicit login/register tab selection always wins over late recovery responses.
+ const recoveryRevision=authViewRevision;
  try{
-  if(!await recoverPendingRegistrationFor())clearEmailCodeState();
+  if(!await recoverPendingRegistrationFor('',recoveryRevision)&&recoveryRevision===authViewRevision)clearEmailCodeState();
  }catch(error){
+  if(recoveryRevision!==authViewRevision)return;
   try{
    const state=JSON.parse(sessionStorage.getItem('og-email-verification')||'null');
    if(state?.challenge&&state.expiresAt>Date.now()){
