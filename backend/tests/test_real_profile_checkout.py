@@ -3,7 +3,7 @@
 Synthetic database and Fernet key; no network, real credentials, payments or LIVE.
 """
 import os
-from uuid import uuid4
+from uuid import uuid4,UUID
 
 os.environ.setdefault("DATABASE_URL","postgresql+psycopg://test:test@127.0.0.1/test")
 
@@ -72,7 +72,7 @@ def test_real_manual_receipt_checkout_publishes_without_api_or_secrets(db):
         instructions="Send an actual transfer and upload a receipt for review.")
     assert published["published"] is True
     assert published["automatic_capture"] is False
-    method=db.get(BillingMethod,published["method_id"])
+    method=db.get(BillingMethod,UUID(published["method_id"]))
     assert method.kind=="bank" and method.user_id is None and method.enabled is True
     from backend.app.services.billing_methods import method_payload
     body=method_payload(method)["details"]
@@ -96,7 +96,7 @@ def test_draft_changes_disable_public_payment_until_admin_republishes(db):
     original=first["method_id"]
     replacement=base.model_copy(update={"label":"Updated bank name"})
     profiles.save_profile(db,actor,replacement,create=False)
-    assert db.get(BillingMethod,original).enabled is False
+    assert db.get(BillingMethod,UUID(original)).enabled is False
     refreshed=publishing.publish(db,"custom_bank",actor,currency="USD",
         instructions="Use updated details, then upload real payment receipt.")
     assert refreshed["method_id"]==original
@@ -118,9 +118,7 @@ def test_api_drafts_cannot_impersonate_verified_payment_provider(db):
 
 def test_incomplete_manual_bank_and_fake_receiving_details_never_publish(db):
     actor=uuid4()
-    profiles.save_profile(db,actor,profile(with_account=False).model_copy(update={"fields":[
-        ProviderField(key="bank_name",label="Bank",value="EXAMPLE_REPLACE")
-    ]}),create=True)
+    profiles.save_profile(db,actor,ProviderProfileDraft(slug="custom_bank",label="Example Bank",category="bank",connection_mode="manual",environment="test",fields=[ProviderField(key="bank_name",label="Bank",value="EXAMPLE_REPLACE")]),create=True)
     with pytest.raises(HTTPException) as exc:
         publishing.publish(db,"custom_bank",actor,currency="USD",
             instructions="Send amount to this missing account and submit receipt.")
