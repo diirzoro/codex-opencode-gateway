@@ -100,6 +100,62 @@ def env_file(path):
     return values
 
 
+def _test_service_encryption_key():
+    """Recover only TEST's original process key; never print or persist it.
+
+    The TEST Gateway systemd service may provide CREDENTIALS_ENCRYPTION_KEY via
+    its protected service environment rather than its application .env file.
+    This reads that exact live process, without modifying either environment.
+    """
+    result = subprocess.run(
+        ["/usr/bin/systemctl", "show", "opencode-gateway-test.service",
+         "--property=MainPID", "--value", "--no-pager"],
+        capture_output=True, text=True, check=False, timeout=10,
+    )
+    if result.returncode != 0:
+        fail("TEST_SERVICE_PID_UNAVAILABLE")
+    pid = result.stdout.strip()
+    if not pid.isdecimal() or int(pid) <= 1:
+        fail("TEST_SERVICE_NOT_RUNNING")
+    proc_env = Path("/proc") / pid / "environ"
+    try:
+        data = proc_env.read_bytes()
+    except PermissionError:
+        global _sudo_authorization
+        if _sudo_authorization is None:
+            try:
+                with os.fdopen(3, "r", encoding="utf-8") as stream:
+                    _sudo_authorization = stream.readline().rstrip("\n")
+            except OSError:
+                fail("TEST_SERVICE_ENV_SUDO_CREDENTIAL_NOT_PROVIDED")
+        if not _sudo_authorization:
+            fail("TEST_SERVICE_ENV_SUDO_CREDENTIAL_EMPTY")
+        try:
+            cmd = subprocess.run(
+                ["sudo", "-S", "-p", "", "/usr/bin/cat", str(proc_env)],
+                input=(_sudo_authorization + "\n").encode("utf-8"),
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                check=False, timeout=12,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            fail("TEST_SERVICE_ENV_PRIVILEGED_READ_UNAVAILABLE")
+        if cmd.returncode != 0:
+            fail("TEST_SERVICE_ENV_PRIVILEGED_READ_REJECTED")
+        data = cmd.stdout
+    except OSError:
+        fail("TEST_SERVICE_ENV_UNREADABLE")
+    matches = [
+        entry.partition(b"=")[2] for entry in data.split(b"\0")
+        if entry.startswith(b"CREDENTIALS_ENCRYPTION_KEY=")
+    ]
+    if len(matches) != 1 or not matches[0]:
+        fail("TEST_SERVICE_ORIGINAL_ENCRYPTION_KEY_MISSING")
+    try:
+        return matches[0].decode("utf-8")
+    except UnicodeDecodeError:
+        fail("TEST_SERVICE_ENCRYPTION_KEY_INVALID_ENCODING")
+
+
 def validated(label, path, domain, database, port):
     values = env_file(path)
     url = make_url(values.get("DATABASE_URL", ""))
@@ -112,7 +168,10 @@ def validated(label, path, domain, database, port):
     if str(values.get("APP_PORT", "")) != str(port):
         fail(label + "_PORT_MISMATCH")
     if not values.get("CREDENTIALS_ENCRYPTION_KEY"):
-        fail(label + "_ENCRYPTION_KEY_MISSING")
+        if label == "TEST":
+            values["CREDENTIALS_ENCRYPTION_KEY"] = _test_service_encryption_key()
+        else:
+            fail(label + "_ENCRYPTION_KEY_MISSING")
     return values, url
 
 
