@@ -1,6 +1,9 @@
 name: LIVE | Promote master
 
 on:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/promote-native-live.yml']
   workflow_dispatch:
     inputs:
       vps_username:
@@ -18,6 +21,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  payment_settings_syntax:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate Stripe and Cryptomus configuration source (no integration or deployment)
+        run: |
+          set -euo pipefail
+          python3 -m py_compile backend/app/services/payment_gateway_config.py backend/app/routes/payment_gateways.py backend/alembic/versions/0031_payment_gateway_settings.py backend/tests/test_payment_gateway_configuration.py backend/app/main.py
+          node --check payment-gateways-ui.js
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          f=Path('backend/alembic/versions/0031_payment_gateway_settings.py')
+          t=ast.parse(f.read_text())
+          m={x.targets[0].id: ast.literal_eval(x.value) for x in t.body if isinstance(x,ast.Assign) and len(x.targets)==1 and isinstance(x.targets[0],ast.Name) and x.targets[0].id in ('revision','down_revision')}
+          assert m=={'revision':'0031_payment_gateway_settings','down_revision':'0030_staged_registration'},m
+          print('PAYMENT_GATEWAY_SYNTAX_AND_MIGRATION_CHAIN=PASS')
+          PY
+
   deploy:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
