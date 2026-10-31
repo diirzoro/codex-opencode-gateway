@@ -48,3 +48,33 @@ def test_sync_env_parser_only_reads_allowlisted_variables(tmp_path):
     assert "OTHER_SECRET" not in values
     with pytest.raises(RuntimeError, match="MISSING_OR_UNSAFE"):
         sync.env_file(tmp_path / "not-found")
+
+
+
+def test_original_test_key_is_read_from_running_service_not_logged(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(sync.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=0, stdout="12345\n"))
+    monkeypatch.setattr(sync.Path, "read_bytes", lambda path:
+                        b"PUBLIC_BASE_URL=ignored\0CREDENTIALS_ENCRYPTION_KEY=fixture-test-secret\0")
+    assert sync._test_service_encryption_key() == "fixture-test-secret"
+
+
+def test_test_env_can_fall_back_to_service_key_but_live_cannot(monkeypatch):
+    values = {
+        "DATABASE_URL": "postgresql+psycopg://fixture:fixture@127.0.0.1/opencode_gateway_test",
+        "PUBLIC_BASE_URL": "https://test.opencode-gateway.codes",
+        "APP_PORT": "8001",
+    }
+    monkeypatch.setattr(sync, "env_file", lambda path: dict(values))
+    monkeypatch.setattr(sync, "_test_service_encryption_key", lambda: "fixture-test-key")
+    test_config, url = sync.validated("TEST", sync.TEST_ENV,
+                                      "https://test.opencode-gateway.codes",
+                                      "opencode_gateway_test", 8001)
+    assert test_config["CREDENTIALS_ENCRYPTION_KEY"] == "fixture-test-key"
+    assert url.database == "opencode_gateway_test"
+    with pytest.raises(RuntimeError, match="LIVE_ENCRYPTION_KEY_MISSING"):
+        sync.validated("LIVE", sync.LIVE_ENV,
+                       "https://test.opencode-gateway.codes",
+                       "opencode_gateway_test", 8001)
