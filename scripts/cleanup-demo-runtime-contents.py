@@ -8,7 +8,42 @@ import sys
 import uuid
 
 from sqlalchemy import create_engine, text
-from cleanup_demo_users_projects import connection_url
+from sqlalchemy.engine import make_url
+import shlex
+import subprocess
+
+_PASS = None
+
+def connection_url(side):
+    global _PASS
+    path=Path('/home/tahir/opencode-gateway-test/.env' if side=='TEST' else '/home/tahir/opencode-gateway/.env')
+    if path.is_symlink() or not path.is_file():raise RuntimeError('ENV_UNSAFE')
+    try:raw=path.read_text()
+    except PermissionError:
+        if _PASS is None:
+            with os.fdopen(3,'r') as f:_PASS=f.readline().rstrip('\n')
+        if not _PASS:raise RuntimeError('SUDO_AUTH_MISSING')
+        p=subprocess.run(['sudo','-S','-p','','/usr/bin/cat',str(path)],input=_PASS+'\n',capture_output=True,text=True,timeout=12)
+        if p.returncode:raise RuntimeError('ENV_READ_FAILED')
+        raw=p.stdout
+    vals={}
+    for line in raw.splitlines():
+        line=line.strip().removeprefix('export ')
+        if not line or line.startswith('#') or '=' not in line:continue
+        k,v=line.split('=',1)
+        if k.strip() in ('DATABASE_URL','APP_PORT','PUBLIC_BASE_URL'):
+            parts=shlex.split(v,comments=True)
+            if len(parts)!=1:raise RuntimeError('INVALID_CONFIG_VALUE')
+            vals[k.strip()]=parts[0]
+    url=make_url(vals.get('DATABASE_URL',''))
+    db='opencode_gateway_test' if side=='TEST' else 'opencode_gateway'
+    port='8001' if side=='TEST' else '8000'
+    host='https://test.opencode-gateway.codes' if side=='TEST' else 'https://opencode-gateway.codes'
+    if url.get_backend_name()!='postgresql' or url.database!=db or url.host not in ('127.0.0.1','localhost','::1'):
+        raise RuntimeError('DATABASE_BOUNDARY')
+    if vals.get('APP_PORT')!=port or vals.get('PUBLIC_BASE_URL','').rstrip('/')!=host:
+        raise RuntimeError('ENVIRONMENT_BOUNDARY')
+    return url
 
 ROOTS={"TEST":Path("/var/lib/opencode-runtime-test"),"LIVE":Path("/var/lib/opencode-runtime")}
 
