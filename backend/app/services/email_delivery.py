@@ -6,6 +6,7 @@ import httpx
 from fastapi import HTTPException
 
 BREVO_URL = 'https://api.brevo.com/v3/smtp/email'
+RESEND_SEND_URL = 'https://api.resend.com/emails'
 DEFAULT_SENDER = 'no-reply@opencode-gateway.codes'
 DEFAULT_NAME = 'OpenCode Gateway'
 DEFAULT_REPLY_TO = 'support@opencode-gateway.codes'
@@ -34,6 +35,38 @@ def send(config, message, *, error_status=502, timeout=15):
     if not ready(config):
         raise HTTPException(503, 'Email delivery is not configured')
     if 'Reply-To' not in message:message['Reply-To']=DEFAULT_REPLY_TO
+    if config.get('provider') == 'resend':
+        # Resend HTTPS API uses the same provider API key as SMTP, but only
+        # requires outbound HTTPS (443), not SMTP 587 which some VPSs block.
+        sender = formataddr((config.get('sender_name') or DEFAULT_NAME, config['smtp_from']))
+        payload = {'from': sender, 'to': [str(message['To'])],
+                   'subject': str(message['Subject']), 'text': message.get_content(),
+                   'reply_to': str(message.get('Reply-To') or DEFAULT_REPLY_TO)}
+        try:
+            with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+                response = client.post(RESEND_SEND_URL, headers={
+                    'Authorization': 'Bearer ' + config['smtp_password'],
+                    'Content-Type': 'application/json',
+                }, json=payload)
+        except httpx.HTTPError:
+            raise HTTPException(error_status,
+                'Resend HTTPS connection failed; delivery is unconfirmed. No automatic retry was made') from None
+        if response.status_code not in (200, 201):
+            category = {
+                401: 'Resend rejected the API key (HTTP 401)',
+                403: 'Resend API key lacks permission or sender domain is unauthorized (HTTP 403)',
+                422: 'Resend rejected the sender or recipient; verify sending domain and sender address (HTTP 422)',
+                429: 'Resend rate limit reached (HTTP 429)',
+            }.get(response.status_code, 'Resend rejected delivery request (HTTP ' + str(response.status_code) + ')')
+            raise HTTPException(error_status, category)
+        try:
+            accepted = bool(response.json().get('id'))
+        except (ValueError, AttributeError, TypeError):
+            accepted = False
+        if not accepted:
+            raise HTTPException(error_status,
+                'Resend did not confirm acceptance; do not resend automatically')
+        return
     if config.get('provider') == 'brevo':
         sender={'email':config['smtp_from'], 'name':config.get('sender_name') or DEFAULT_NAME}
         payload={'sender':sender,'to':[{'email':str(message['To'])}],
