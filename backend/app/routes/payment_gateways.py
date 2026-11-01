@@ -85,6 +85,17 @@ def save_stripe_settings(
     )
 
 
+@router.post("/stripe/verify-sandbox")
+def verify_stripe_sandbox(
+    response: Response, _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Read-only authentication check; never enables customer checkout."""
+    from ..services.stripe_sandbox_probe import verify_sandbox_connection
+    _cache_safe(response)
+    return verify_sandbox_connection(db)
+
+
 @router.put("/cryptomus")
 def save_cryptomus_settings(
     data: CryptomusSettingsDraft, response: Response,
