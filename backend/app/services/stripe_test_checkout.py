@@ -33,14 +33,14 @@ def _stripe_call(db, method, path, data=None):
                              "provider_code": code, "request_reached_stripe": True})
     return payload
 
-def create_diagnostic_checkout(db, origin):
+def create_diagnostic_checkout(db, origin, plan_id=None, user_id=None):
     parsed = urlsplit(origin)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise HTTPException(409, "An HTTPS public base URL is required")
     from ..models import Plan
     from sqlalchemy import select
-    plan = db.scalar(select(Plan).where(Plan.code == "gateway_100", Plan.active.is_(True)))
-    if not plan or plan.price_cents <= 0 or plan.currency.upper() != "USD":
+    plan = db.get(Plan, plan_id) if plan_id is not None else db.scalar(select(Plan).where(Plan.code == "gateway_100", Plan.active.is_(True)))
+    if not plan or not plan.active or plan.code in ("monthly", "two_months", "three_months") or plan.price_cents <= 0 or plan.currency.upper() != "USD":
         raise HTTPException(409, "The active gateway_100 USD plan is required for this diagnostic")
     data = {
         "mode": "payment",
@@ -52,6 +52,8 @@ def create_diagnostic_checkout(db, origin):
         "success_url": origin.rstrip("/") + "/?stripe_diagnostic=return&session_id={CHECKOUT_SESSION_ID}",
         "cancel_url": origin.rstrip("/") + "/?stripe_diagnostic=cancel",
         "metadata[diagnostic]": "true",
+        "metadata[user_id]": str(user_id) if user_id else "",
+        "metadata[plan_id]": str(plan.id),
     }
     payload = _stripe_call(db, "POST", "checkout/sessions", data)
     session_id = payload.get("id", "")
@@ -63,12 +65,14 @@ def create_diagnostic_checkout(db, origin):
             "checkout_url": url, "request_reached_stripe": True,
             "message": "Open the hosted test checkout. This diagnostic never activates a subscription."}
 
-def retrieve_diagnostic_checkout(db, session_id):
+def retrieve_diagnostic_checkout(db, session_id, user_id=None):
     if not re.fullmatch(r"cs_test_[A-Za-z0-9_]{1,150}", session_id):
         raise HTTPException(422, "Invalid test session ID")
     payload = _stripe_call(db, "GET", "checkout/sessions/" + session_id)
     if payload.get("id") != session_id or payload.get("metadata", {}).get("diagnostic") != "true":
         raise HTTPException(404, "Not a diagnostic checkout session")
+    if user_id is not None and payload.get("metadata", {}).get("user_id") != str(user_id):
+        raise HTTPException(404, "Test checkout session not found")
     return {"provider": "stripe", "environment": "test", "request_reached_stripe": True,
             "session_id": session_id, "status": payload.get("status"),
             "payment_status": payload.get("payment_status"),
