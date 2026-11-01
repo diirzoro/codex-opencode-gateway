@@ -137,6 +137,16 @@ def list_dynamic_payment_profiles(
     }
 
 
+@router.get("/method-catalog")
+def unified_payment_method_catalog(
+    response: Response, _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Dynamic and historical methods in one administrative read-only view."""
+    _cache_safe(response)
+    return {"methods": payment_profile_publications.management_catalog(db)}
+
+
 @router.post("/profiles", status_code=201)
 def create_dynamic_payment_profile(
     data: ProviderProfileDraft, response: Response,
