@@ -2173,6 +2173,26 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     dialog.append(rows,select,noteWrap,go,body,textElement('small',tr('Payment for: ','الدفع لحساب: ')+(currentUser||window.reactivationAccount).email),text('p','Accepted payments cannot be cancelled or refunded.','المدفوعات المقبولة غير قابلة للإلغاء أو الاسترداد.','refund-policy'));
     document.body.append(dialog);dialog.onclose=()=>dialog.remove();dialog.showModal();
   }
+  authReady.then(async()=>{
+    const params=new URLSearchParams(location.search);
+    const returned=params.get('stripe_diagnostic');
+    const session=params.get('session_id');
+    if(!returned)return;
+    history.replaceState(null,'',location.pathname+location.hash);
+    if(returned==='cancel'){toast(tr('Stripe test checkout cancelled; no subscription changed.','تم إلغاء اختبار Stripe ولم يتغير الاشتراك.'));return;}
+    if(!session){toast(tr('Stripe session ID missing.','معرّف جلسة Stripe مفقود.'));return;}
+    if(!currentUser&&!window.reactivationAccount){
+      toast(tr('Sign in to check the Stripe test result.','سجّل الدخول لفحص نتيجة دفع Stripe التجريبي.'));
+      return;
+    }
+    try{
+      const r=await api('/api/billing/stripe/test-checkout/'+encodeURIComponent(session));
+      const result=r.payment_status==='paid'?tr('Stripe confirmed TEST payment. No real subscription activated.','أكد Stripe نجاح الدفع التجريبي، ولم يُفعّل اشتراك حقيقي.'):
+        tr('Stripe test status: ','حالة اختبار Stripe: ')+(r.payment_status||r.status||'unknown');
+      toast(result);
+      await loadPaymentOrders();
+    }catch(e){toast(tr('Could not verify Stripe test result: ','تعذر التحقق من Stripe: ')+e.message);}
+  }).catch(()=>{});
   window.beginCheckout=beginCheckout;
   authReady.then(async()=>{const params=new URLSearchParams(location.search);const ret=params.get('payment_return'),cancel=params.get('payment_cancel');if(!ret&&!cancel)return;history.replaceState(null,'',location.pathname+location.hash);if(window.reactivationAccount){await window.loadManagement();await window.openReactivation();}else if(!currentUser){page('authPage');return;}else await window.openClientView('billing');try{await loadPaymentOrders()}catch(error){toast(error.message)}if(cancel){try{await api('/api/billing/orders/'+encodeURIComponent(cancel)+'/cancel',{method:'POST'});await loadPaymentOrders();toast(tr('Unaccepted payment request cancelled.','تم إلغاء طلب الدفع قبل قبوله.'));}catch(error){toast(error.message);}return}try{const order=await api('/api/billing/orders/'+encodeURIComponent(ret));const status=order&&order.status;if(status==='paid')toast(tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));else if(status==='sandbox_paid')toast(tr('Sandbox payment recorded. Real subscription unchanged.','سُجل الدفع التجريبي دون تفعيل اشتراك حقيقي.'));else if(status)toast(tr('Payment is pending verification. Press Confirm PayPal payment in Payment orders.','الدفع بانتظار التحقق. اضغط تأكيد دفع PayPal في طلبات الدفع.'));else toast(tr('Returned from PayPal. Confirm your payment in Payment orders.','عدت من PayPal. أكد الدفع من طلبات الدفع.'))}catch(error){toast(error.message)}}).catch(error=>toast(error.message));
   setInterval(async()=>{if(!currentUser||admin()||!document.querySelector('#workspacePage.active,#workspaceHomePage.active'))return;try{await refreshEntitlement();}catch(error){toast(error.message);}},30000);
