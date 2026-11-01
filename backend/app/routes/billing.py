@@ -15,6 +15,8 @@ from ..models import Plan, Subscription, User, PaymentOrder,BillingMethod,Accoun
 from ..services.storage_policy import PLAN_MB
 from .dependencies import require_user,require_admin,require_billing_user,access_payload
 from ..services import paypal
+
+LEGACY_PLAN_CODES = frozenset(('monthly', 'two_months', 'three_months'))
 from ..services.location_validation import validate_locations
 from ..services.billing_methods import method_payload
 
@@ -56,7 +58,7 @@ def subscription_payload(db, user) -> dict:
         paid_end = paid_end.replace(tzinfo=timezone.utc)
     paid_active = bool(row.status == 'active' and row.plan_id and paid_end and paid_end > now)
     paid_remaining = max(0, ceil((paid_end - now).total_seconds() / 86400)) if paid_end else 0
-    plans = [plan_payload(p) for p in db.scalars(select(Plan).where(Plan.active.is_(True)).order_by(Plan.sort_order, Plan.id))]
+    plans = [plan_payload(p) for p in db.scalars(select(Plan).where(Plan.active.is_(True), ~Plan.code.in_(LEGACY_PLAN_CODES)).order_by(Plan.sort_order, Plan.id))]
     access = access_payload(db, user)
     return {
         "plan": plan_payload(user.plan),
@@ -78,7 +80,7 @@ def get_subscription(user: User = Depends(require_billing_user), db: Session = D
 @router.post("/subscription/select")
 def select_plan(data: SelectPlan, user: User = Depends(require_billing_user), db: Session = Depends(get_db)):
     plan = db.get(Plan, data.plan_id)
-    if plan is None or not plan.active:
+    if plan is None or not plan.active or plan.code in LEGACY_PLAN_CODES:
         raise HTTPException(422, "Unknown or inactive plan")
     # Choosing a renewal must not erase already purchased access. Checkout's
     # PaymentOrder records the purchased plan; activation changes the paid plan.
@@ -188,7 +190,7 @@ def order_payload(row):
 @router.post('/checkout',status_code=201)
 def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     plan=db.get(Plan,data.plan_id);method=db.get(BillingMethod,data.method_id)
-    if not plan or not plan.active: raise HTTPException(422,'Unknown or inactive plan')
+    if not plan or not plan.active or plan.code in LEGACY_PLAN_CODES: raise HTTPException(422,'Unknown, inactive or retired plan')
     if not method or method.user_id is not None or not method.enabled: raise HTTPException(422,'Payment method is unavailable')
     details=method_payload(method)
     if details['details'].get('checkout_mode')=='link' and (not details['details'].get('payment_url') or not details['details'].get('plan_id')):
