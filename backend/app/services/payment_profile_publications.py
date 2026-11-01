@@ -47,6 +47,59 @@ def publication_status(db, slug):
     }
 
 
+def management_catalog(db):
+    """One read-only admin catalogue: all dynamic profiles plus legacy methods.
+
+    Configuration-only API profiles are visible to administrators, never
+    advertised to customers until a supported payment adapter is enabled.
+    Do not disclose credentials or encrypted method details.
+    """
+    dynamic = profiles.list_profiles(db)
+    result = []
+    linked_ids = set()
+    for item in dynamic:
+        publication = item["publication"]
+        linked_id = publication.get("method_id")
+        if linked_id:
+            linked_ids.add(linked_id)
+        result.append({
+            "source": "dynamic",
+            "slug": item["slug"],
+            "label": item["label"],
+            "category": item["category"],
+            "connection_mode": item["connection_mode"],
+            "environment": item["environment"],
+            "configured": item["configured"],
+            "status": "enabled_manual" if publication["published"] else (
+                "configured_unverified" if item["configured"] else "draft"
+            ),
+            "customer_checkout_enabled": bool(publication["published"]),
+            "method_id": linked_id,
+            "automatic_capture": False,
+        })
+    for method in db.scalars(
+        select(BillingMethod).where(BillingMethod.user_id.is_(None))
+    ):
+        if str(method.id) in linked_ids:
+            continue
+        # Historical methods remain visible without duplicating dynamic entries.
+        # Their confidential receiving details must never be serialized here.
+        result.append({
+            "source": "legacy",
+            "slug": None,
+            "label": method.label,
+            "category": method.kind,
+            "connection_mode": "existing",
+            "environment": None,
+            "configured": True,
+            "status": "enabled_existing" if method.enabled else "disabled_existing",
+            "customer_checkout_enabled": bool(method.enabled),
+            "method_id": str(method.id),
+            "automatic_capture": False,
+        })
+    return result
+
+
 def disable_on_edit(db, slug):
     """Unpublish before an admin changes bank details; preserve old orders."""
     method = _linked_method(db, slug, lock=True)
