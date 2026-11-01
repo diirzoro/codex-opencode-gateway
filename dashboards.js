@@ -2132,8 +2132,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         });
         stripeButton.classList.add('checkout-hosted-link');
         stripeButton.disabled=!method.available;
+        stripeHost.style.minHeight='320px';
         body.append(stripeButton,stripeHost);
         if(!method.available)body.append(text('p','Stripe test API credentials must be configured before payment.','يجب ضبط مفاتيح Stripe التجريبية قبل بدء الدفع.','checkout-lead'));
+        else {
+          stripeButton.textContent=tr('Loading secure card form…','جارٍ تحميل نموذج البطاقة الآمن…');
+          stripeButton.click();
+        }
         return;
       }
       const pfield=(labelText,id,type,extra)=>{const wrap=text('label',labelText,labelText);wrap.htmlFor=id;const inp=document.createElement('input');inp.id=id;inp.type=type;inp.required=true;Object.assign(inp,extra||{});wrap.append(inp);body.append(wrap);return inp;};
