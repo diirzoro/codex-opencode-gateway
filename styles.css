@@ -1412,8 +1412,3 @@ body:has(#workspacePage.active) .app-header{display:none!important}
   :root dialog.checkout-dialog .checkout-receipt select {box-sizing:border-box;max-width:100%;min-width:0}
 }
 
-/* Stripe customer-facing totals; merchant processor fees are not customer surcharges. */
-.stripe-price-breakdown{display:grid;gap:.55rem;padding:1rem;border:1px solid var(--border,#d6dbe4);border-radius:14px;background:var(--surface,#f7f9fd);margin:1rem 0;direction:inherit}
-.stripe-price-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
-.stripe-price-total{border-top:1px solid var(--border,#d6dbe4);padding-top:.8rem;font-size:1.12rem}
-.stripe-price-breakdown small{line-height:1.7;opacity:.85}
