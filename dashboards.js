@@ -2103,18 +2103,36 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       for(const [label,value] of [[tr('Plan','الخطة'),plan.name],[tr('Amount','المبلغ'),(plan.price_cents/100).toFixed(2)],[tr('Currency','العملة'),plan.currency]]){dl.append(textElement('dt',label),textElement('dd',String(value)));}
       body.replaceChildren(dl);const phead=textElement('strong',method.label);phead.prepend(payIcon(method.kind));body.prepend(phead);
       if(method.details.checkout_mode==='stripe_test'){
-        body.append(text('p','Your card number, expiry and CVC are entered on the secure Stripe payment page. Billing address is not requested by Gateway.','يُدخل رقم البطاقة وتاريخ الانتهاء ورمز CVC في صفحة Stripe الآمنة. لا يطلب Gateway عنوان الفوترة.','checkout-lead'));
-        const stripeButton=btn('stripeCheckout','Pay with Stripe','الدفع عبر Stripe',async()=>{
+        body.append(text('p','Enter your card details securely in the Stripe form below. No billing address is collected by Gateway.','أدخل بيانات البطاقة بأمان في نموذج Stripe أدناه. لا تجمع المنصة عنوان الفوترة.','checkout-lead'));
+        const stripeHost=document.createElement('div');
+        stripeHost.className='stripe-embedded-checkout';
+        stripeHost.setAttribute('aria-label',tr('Secure Stripe card payment','الدفع الآمن عبر Stripe'));
+        const stripeButton=btn('stripeCheckout','Show secure card form','عرض نموذج البطاقة الآمن',async()=>{
           stripeButton.disabled=true;
           try{
-            const result=await api('/api/billing/stripe/test-checkout',{method:'POST',body:JSON.stringify({plan_id:planId})});
-            if(!result.checkout_url)throw new Error(tr('Stripe did not provide a payment page','لم يوفر Stripe صفحة دفع'));
-            window.location.assign(result.checkout_url);
+            const result=await api('/api/billing/stripe/embedded-test-checkout',{method:'POST',body:JSON.stringify({plan_id:planId})});
+            if(!result.client_secret||!result.publishable_key)throw new Error(tr('Stripe did not provide a payment form','لم يوفر Stripe نموذج الدفع'));
+            if(!window.Stripe){
+              await new Promise((resolve,reject)=>{
+                const script=document.createElement('script');
+                script.src='https://js.stripe.com/v3/';
+                script.async=true;
+                script.onload=resolve;
+                script.onerror=()=>reject(new Error(tr('Could not load the secure Stripe form','تعذر تحميل نموذج Stripe الآمن')));
+                document.head.append(script);
+              });
+            }
+            if(typeof window.Stripe!=='function')throw new Error(tr('Stripe form is unavailable','نموذج Stripe غير متاح'));
+            const stripe=window.Stripe(result.publishable_key);
+            const checkout=await stripe.initEmbeddedCheckout({clientSecret:result.client_secret});
+            if(!stripeHost.isConnected){checkout.destroy();return;}
+            checkout.mount(stripeHost);
+            stripeButton.hidden=true;
           }catch(error){showError(error);stripeButton.disabled=false;}
         });
         stripeButton.classList.add('checkout-hosted-link');
         stripeButton.disabled=!method.available;
-        body.append(stripeButton);
+        body.append(stripeButton,stripeHost);
         if(!method.available)body.append(text('p','Stripe test API credentials must be configured before payment.','يجب ضبط مفاتيح Stripe التجريبية قبل بدء الدفع.','checkout-lead'));
         return;
       }
