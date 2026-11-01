@@ -448,6 +448,19 @@ def stripe_test_checkout_status(
     return retrieve_diagnostic_checkout(db,session_id,user_id=user.id)
 
 
+@router.get('/stripe/status')
+def stripe_status(user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
+    """Safe customer-visible Stripe test readiness, without credentials."""
+    from ..services import payment_gateway_config
+    from ..services import credentials
+    cfg=payment_gateway_config._get(db,'stripe') or {}
+    ready=bool(credentials.available() and cfg.get('mode')=='test'
+        and str(cfg.get('secret_key') or '').startswith('sk_test_')
+        and str(cfg.get('publishable_key') or '').startswith('pk_test_'))
+    return {'provider':'stripe','environment':cfg.get('mode') or 'not_configured',
+            'test_checkout_available':ready,'live_checkout_available':False}
+
+
 @router.get('/paypal/status')
 def paypal_status(user:User=Depends(require_billing_user)):
     return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','sdk_available':bool(paypal.settings.paypal_client_id),'client_id':paypal.settings.paypal_client_id}
