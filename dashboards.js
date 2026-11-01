@@ -2104,6 +2104,10 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       body.replaceChildren(dl);const phead=textElement('strong',method.label);phead.prepend(payIcon(method.kind));body.prepend(phead);
       if(method.details.checkout_mode==='stripe_test'){
         body.append(text('p','Enter your card details securely in the Stripe form below. No billing address is collected by Gateway.','أدخل بيانات البطاقة بأمان في نموذج Stripe أدناه. لا تجمع المنصة عنوان الفوترة.','checkout-lead'));
+        body.append(text('p',
+          'Paid subscriptions are non-refundable after confirmed payment, except where applicable law requires otherwise. Access activates automatically once the payment is verified by the server. Stripe test payments do not activate real subscriptions.',
+          'الاشتراكات المدفوعة غير قابلة للاسترداد بعد تأكيد الدفع، إلا في الحالات التي يفرضها القانون. يُفعّل الاشتراك تلقائيًا بعد تحقق الخادم من الدفع. المدفوعات التجريبية عبر Stripe لا تفعّل اشتراكًا حقيقيًا.',
+          'refund-policy'));
         const stripeHost=document.createElement('div');
         stripeHost.className='stripe-embedded-checkout';
         stripeHost.setAttribute('aria-label',tr('Secure Stripe card payment','الدفع الآمن عبر Stripe'));
