@@ -2098,6 +2098,22 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const dl=document.createElement('dl');dl.className='checkout-details';
       for(const [label,value] of [[tr('Plan','الخطة'),plan.name],[tr('Amount','المبلغ'),(plan.price_cents/100).toFixed(2)],[tr('Currency','العملة'),plan.currency]]){dl.append(textElement('dt',label),textElement('dd',String(value)));}
       body.replaceChildren(dl);const phead=textElement('strong',method.label);phead.prepend(payIcon(method.kind));body.prepend(phead);
+      if(method.details.checkout_mode==='stripe_test'){
+        body.append(text('p','Your card number, expiry and CVC are entered on the secure Stripe payment page. Billing address is not requested by Gateway.','يُدخل رقم البطاقة وتاريخ الانتهاء ورمز CVC في صفحة Stripe الآمنة. لا يطلب Gateway عنوان الفوترة.','checkout-lead'));
+        const stripeButton=btn('stripeCheckout','Pay with Stripe','الدفع عبر Stripe',async()=>{
+          stripeButton.disabled=true;
+          try{
+            const result=await api('/api/billing/stripe/test-checkout',{method:'POST',body:JSON.stringify({plan_id:planId})});
+            if(!result.checkout_url)throw new Error(tr('Stripe did not provide a payment page','لم يوفر Stripe صفحة دفع'));
+            window.location.assign(result.checkout_url);
+          }catch(error){showError(error);stripeButton.disabled=false;}
+        });
+        stripeButton.classList.add('checkout-hosted-link');
+        stripeButton.disabled=!method.available;
+        body.append(stripeButton);
+        if(!method.available)body.append(text('p','Stripe test API credentials must be configured before payment.','يجب ضبط مفاتيح Stripe التجريبية قبل بدء الدفع.','checkout-lead'));
+        return;
+      }
       const pfield=(labelText,id,type,extra)=>{const wrap=text('label',labelText,labelText);wrap.htmlFor=id;const inp=document.createElement('input');inp.id=id;inp.type=type;inp.required=true;Object.assign(inp,extra||{});wrap.append(inp);body.append(wrap);return inp;};
       const payerName=pfield(tr('Your full name','اسمك الكامل'),'payerName','text',{maxLength:150,autocomplete:'name',value:(currentUser||window.reactivationAccount)?.username||''});
       const payerEmail=pfield(tr('Your email','بريدك الإلكتروني'),'payerEmail','email',{maxLength:254,autocomplete:'email',value:(currentUser||window.reactivationAccount)?.email||''});
