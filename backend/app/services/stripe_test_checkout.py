@@ -63,7 +63,7 @@ def create_diagnostic_checkout(db, origin, plan_id=None, user_id=None, embedded=
         "line_items[0][price_data][unit_amount]": str(plan.price_cents),
         "line_items[0][price_data][product_data][name]": "OpenCode Gateway test checkout - no entitlement",
         "line_items[0][quantity]": "1",
-        **({"ui_mode": "embedded", "return_url": origin.rstrip("/") + "/?stripe_diagnostic=return&session_id={CHECKOUT_SESSION_ID}"} if embedded else {"success_url": origin.rstrip("/") + "/?stripe_diagnostic=return&session_id={CHECKOUT_SESSION_ID}", "cancel_url": origin.rstrip("/") + "/?stripe_diagnostic=cancel"}),
+        **({"ui_mode": "embedded_page", "return_url": origin.rstrip("/") + "/?stripe_diagnostic=return&session_id={CHECKOUT_SESSION_ID}"} if embedded else {"success_url": origin.rstrip("/") + "/?stripe_diagnostic=return&session_id={CHECKOUT_SESSION_ID}", "cancel_url": origin.rstrip("/") + "/?stripe_diagnostic=cancel"}),
         "metadata[diagnostic]": "true",
         "metadata[user_id]": str(user_id) if user_id else "",
         "metadata[plan_id]": str(plan.id),
