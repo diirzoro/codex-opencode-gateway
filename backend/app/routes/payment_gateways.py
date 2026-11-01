@@ -96,6 +96,44 @@ def verify_stripe_connection(
     return verify_connection(db)
 
 
+@router.post("/paypal/verify")
+def verify_paypal_connection(
+    response: Response, _: User = Depends(require_admin),
+):
+    """Read-only PayPal OAuth connection probe; no purchase is created."""
+    import httpx
+    from ..services import paypal
+    _cache_safe(response)
+    mode = paypal.settings.paypal_environment
+    if not paypal.configured():
+        raise HTTPException(409, "PayPal merchant API credentials are not configured")
+    base = "https://api-m.sandbox.paypal.com" if mode == "sandbox" else "https://api-m.paypal.com"
+    try:
+        with httpx.Client(timeout=12, follow_redirects=False, trust_env=False) as client:
+            reply = client.post(
+                base + "/v1/oauth2/token",
+                auth=(paypal.settings.paypal_client_id, paypal.settings.paypal_client_secret),
+                data={"grant_type": "client_credentials"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(503, "PayPal is unreachable; verification not completed") from None
+    if reply.status_code in (400, 401, 403):
+        raise HTTPException(422, "PayPal rejected the configured OAuth credentials") from None
+    if reply.status_code != 200:
+        raise HTTPException(502, "PayPal credential verification unavailable") from None
+    try:
+        valid = bool(reply.json().get("access_token"))
+    except ValueError:
+        valid = False
+    if not valid:
+        raise HTTPException(502, "PayPal returned no usable access token")
+    return {
+        "provider": "paypal", "environment": mode,
+        "credential_verified": True, "merchant_payments_verified": False,
+        "message": "OAuth token obtained. Merchant eligibility and checkout capture require separate tests.",
+    }
+
+
 @router.put("/cryptomus")
 def save_cryptomus_settings(
     data: CryptomusSettingsDraft, response: Response,
