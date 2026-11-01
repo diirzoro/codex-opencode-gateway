@@ -2109,6 +2109,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         stripeHost.setAttribute('aria-label',tr('Secure Stripe card payment','الدفع الآمن عبر Stripe'));
         const stripeButton=btn('stripeCheckout','Show secure card form','عرض نموذج البطاقة الآمن',async()=>{
           stripeButton.disabled=true;
+          stripeButton.textContent=tr('Loading secure card form…','جارٍ تحميل نموذج البطاقة الآمن…');
+          body.querySelector('.checkout-error')?.remove();
           try{
             const result=await api('/api/billing/stripe/embedded-test-checkout',{method:'POST',body:JSON.stringify({plan_id:planId})});
             if(!result.client_secret||!result.publishable_key)throw new Error(tr('Stripe did not provide a payment form','لم يوفر Stripe نموذج الدفع'));
@@ -2128,7 +2130,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
             if(!stripeHost.isConnected){checkout.destroy();return;}
             checkout.mount(stripeHost);
             stripeButton.hidden=true;
-          }catch(error){showError(error);stripeButton.disabled=false;}
+          }catch(error){showError(error);stripeButton.disabled=false;stripeButton.textContent=tr('Retry secure card form','إعادة محاولة عرض نموذج البطاقة');}
         });
         stripeButton.classList.add('checkout-hosted-link');
         stripeButton.disabled=!method.available;
