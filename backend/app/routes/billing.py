@@ -451,9 +451,9 @@ def stripe_test_checkout_status(
 @router.get('/stripe/status')
 def stripe_status(user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     """Safe customer-visible Stripe test readiness, without credentials."""
-    from ..services import payment_gateway_config
+    from ..services.stripe_test_checkout import test_credentials
     from ..services import credentials
-    cfg=payment_gateway_config._get(db,'stripe') or {}
+    cfg=test_credentials(db)
     ready=bool(credentials.available() and cfg.get('mode')=='test'
         and str(cfg.get('secret_key') or '').startswith('sk_test_')
         and str(cfg.get('publishable_key') or '').startswith('pk_test_'))
