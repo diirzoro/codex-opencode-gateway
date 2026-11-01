@@ -168,6 +168,22 @@
         }
         tools.append(output);card.append(tools);
       }
+      if (provider === 'cryptomus') {
+        const paypalBox=el('section','','payment-provider-diagnostics');
+        const paypalResult=el('p',tr('PayPal connection has not been checked.','لم يُفحص اتصال PayPal بعد.'));
+        const button=el('button',tr('Verify PayPal OAuth','فحص اتصال PayPal'),'button ghost small');
+        button.type='button';
+        button.onclick=async()=>{
+          button.disabled=true;paypalResult.textContent=tr('Checking PayPal...','جارٍ الاتصال بـ PayPal...');
+          try{
+            const r=await api('/api/admin/payment-gateways/paypal/verify',{method:'POST'});
+            paypalResult.textContent=tr('PayPal OAuth accepted. Checkout capture still requires a Sandbox test.','نجح اتصال PayPal OAuth، ويلزم اختبار الدفع التجريبي.')+' ('+r.environment+')';
+          }catch(e){paypalResult.textContent=tr('PayPal rejected the check: ','فشل اختبار PayPal: ')+e.message;}
+          finally{button.disabled=false;}
+        };
+        paypalBox.append(el('h3','PayPal'),button,paypalResult);
+        card.append(paypalBox);
+      }
       host.append(card);
     }
   }
