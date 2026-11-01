@@ -5,8 +5,20 @@ import httpx
 from fastapi import HTTPException
 from . import payment_gateway_config
 
+def test_credentials(db):
+    """Resolve saved dynamic Stripe test profile first; fall back to legacy settings."""
+    from . import payment_provider_profiles as profiles
+    if profiles.schema_ready(db):
+        row = profiles._one(db, "stripe")
+        if row is not None and row.get("connection_mode") == "api" and row.get("environment") == "test":
+            fields = {item["key"]: item["value"] for item in profiles._decode(row["encrypted_fields"])}
+            return {"mode": "test", "secret_key": fields.get("secret_key", ""),
+                    "publishable_key": fields.get("publishable_key", "")}
+    return payment_gateway_config._get(db, "stripe") or {}
+
+
 def _stripe_call(db, method, path, data=None):
-    config = payment_gateway_config._get(db, "stripe") or {}
+    config = test_credentials(db)
     secret = config.get("secret_key") or ""
     if config.get("mode") != "test" or not secret.startswith("sk_test_"):
         raise HTTPException(409, "Stripe test checkout requires an sk_test_ secret")
