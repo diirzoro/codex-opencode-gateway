@@ -4,6 +4,8 @@
   const billingTab = document.querySelector('#adminNav [data-admin-view="billing"]');
   const billingPanel = document.querySelector('[data-admin-panel="billing"]');
   if (!billingTab || !billingPanel) return;
+  // Legacy Stripe/Cryptomus draft editor retired: use dynamicPaymentProviders only.
+  return;
 
   const host = document.createElement('section');
   host.id = 'adminPaymentGatewaySettings';
