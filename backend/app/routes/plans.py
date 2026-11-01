@@ -8,9 +8,12 @@ from ..services.storage_policy import PLAN_MB
 
 router = APIRouter(prefix="/api/plans", tags=["plans"])
 
+# Deprecated offers remain in the database only for historical orders.
+LEGACY_PLAN_CODES = ("monthly", "two_months", "three_months")
+
 @router.get("")
 def list_plans(db: Session = Depends(get_db)):
-    rows = db.scalars(select(Plan).where(Plan.active.is_(True)).order_by(Plan.sort_order, Plan.id))
+    rows = db.scalars(select(Plan).where(Plan.active.is_(True), Plan.code.notin_(LEGACY_PLAN_CODES)).order_by(Plan.sort_order, Plan.id))
     return [{"id": p.id, "code": p.code, "name": p.name, "price_cents": p.price_cents, "currency": p.currency, "duration_days": p.duration_days,
              "storage_mb": PLAN_MB.get(p.code, 50),
              "includes_ai_api": False,
