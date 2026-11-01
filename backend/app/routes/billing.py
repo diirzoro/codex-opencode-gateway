@@ -193,6 +193,8 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
     if not plan or not plan.active or plan.code in LEGACY_PLAN_CODES: raise HTTPException(422,'Unknown, inactive or retired plan')
     if not method or method.user_id is not None or not method.enabled: raise HTTPException(422,'Payment method is unavailable')
     details=method_payload(method)
+    if details['details'].get('checkout_mode')=='paypal':
+        raise HTTPException(503,'PayPal checkout is temporarily disabled. Please choose Stripe.')
     if details['details'].get('checkout_mode')=='link' and (not details['details'].get('payment_url') or not details['details'].get('plan_id')):
         raise HTTPException(503,'This payment method needs its hosted checkout link and matching plan configured by administration. No payment was made.')
     if details['details'].get('currency')!=plan.currency: raise HTTPException(422,'Payment method currency does not match this plan')

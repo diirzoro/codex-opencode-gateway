@@ -280,6 +280,7 @@ def receiving(plan_id:int|None=Query(default=None,ge=1),include_unavailable:bool
     ranked=[]
     for row in db.scalars(select(BillingMethod).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True))):
         payload=method_payload(row); details=payload['details']; mode=details.get('checkout_mode','manual')
+        if mode=='paypal': continue  # PayPal temporarily disabled for customer checkout; preserve records/config
         allowed_countries=[c.upper() for c in (details.get('available_country_codes') or [])]
         if allowed_countries and (not user_code or user_code not in allowed_countries): continue
         if plan is not None and (details.get('currency')!=plan.currency or details.get('plan_id') not in (None,plan.id)): continue
