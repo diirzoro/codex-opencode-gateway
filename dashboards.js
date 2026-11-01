@@ -2166,7 +2166,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const method=methods.find(m=>m.id===select.value);
       if(!method){toast(tr('Choose a payment method first.','اختر وسيلة الدفع أولاً.'));return;}
       rows.hidden=true;choices.hidden=true;go.hidden=true;noteWrap.hidden=true;
-      if(method.details.checkout_mode==='paypal'||method.details.checkout_mode==='link')renderProviderForm(method);
+      if(['paypal','link','stripe_test'].includes(method.details.checkout_mode))renderProviderForm(method);
       else renderManualForm(method);
     });go.disabled=!methods.length;
     if(!methods.length)dialog.append(text('p','No payment method is configured for this plan yet.','لم تُعدّ وسيلة دفع لهذه الخطة بعد.'));
