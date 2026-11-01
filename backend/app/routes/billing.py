@@ -419,6 +419,35 @@ def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_billing_user),db
     activate_order(db,row,None,capture_id)
     db.commit();return order_payload(row)
 
+class StripeTestCheckoutInput(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    plan_id:int=Field(ge=1)
+
+
+@router.post('/stripe/test-checkout')
+def stripe_test_checkout(
+    data:StripeTestCheckoutInput,
+    user:User=Depends(require_billing_user),
+    db:Session=Depends(get_db),
+):
+    """Stripe-hosted TEST payment; never creates real paid entitlement."""
+    from ..config import settings
+    from ..services.stripe_test_checkout import create_diagnostic_checkout
+    return create_diagnostic_checkout(
+        db,settings.public_base_url,plan_id=data.plan_id,user_id=user.id
+    )
+
+
+@router.get('/stripe/test-checkout/{session_id}')
+def stripe_test_checkout_status(
+    session_id:str,
+    user:User=Depends(require_billing_user),
+    db:Session=Depends(get_db),
+):
+    from ..services.stripe_test_checkout import retrieve_diagnostic_checkout
+    return retrieve_diagnostic_checkout(db,session_id,user_id=user.id)
+
+
 @router.get('/paypal/status')
 def paypal_status(user:User=Depends(require_billing_user)):
     return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','sdk_available':bool(paypal.settings.paypal_client_id),'client_id':paypal.settings.paypal_client_id}
