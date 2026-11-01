@@ -45,7 +45,7 @@ def _stripe_call(db, method, path, data=None):
                              "provider_code": code, "request_reached_stripe": True})
     return payload
 
-def create_diagnostic_checkout(db, origin, plan_id=None, user_id=None):
+def create_diagnostic_checkout(db, origin, plan_id=None, user_id=None, embedded=False):
     parsed = urlsplit(origin)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise HTTPException(409, "An HTTPS public base URL is required")
@@ -61,8 +61,7 @@ def create_diagnostic_checkout(db, origin, plan_id=None, user_id=None):
         "line_items[0][price_data][unit_amount]": str(plan.price_cents),
         "line_items[0][price_data][product_data][name]": "OpenCode Gateway test checkout - no entitlement",
         "line_items[0][quantity]": "1",
-        "success_url": origin.rstrip("/") + "/?stripe_diagnostic=return&session_id={CHECKOUT_SESSION_ID}",
-        "cancel_url": origin.rstrip("/") + "/?stripe_diagnostic=cancel",
+        **({"ui_mode": "embedded", "return_url": origin.rstrip("/") + "/?stripe_diagnostic=return&session_id={CHECKOUT_SESSION_ID}"} if embedded else {"success_url": origin.rstrip("/") + "/?stripe_diagnostic=return&session_id={CHECKOUT_SESSION_ID}", "cancel_url": origin.rstrip("/") + "/?stripe_diagnostic=cancel"}),
         "metadata[diagnostic]": "true",
         "metadata[user_id]": str(user_id) if user_id else "",
         "metadata[plan_id]": str(plan.id),
@@ -71,6 +70,16 @@ def create_diagnostic_checkout(db, origin, plan_id=None, user_id=None):
     session_id = payload.get("id", "")
     url = payload.get("url", "")
     u = urlsplit(url)
+    if embedded:
+        client_secret = payload.get("client_secret", "")
+        publishable_key = test_credentials(db).get("publishable_key", "")
+        if (not re.fullmatch(r"cs_test_[A-Za-z0-9_]+", session_id)
+                or not isinstance(client_secret, str) or not client_secret.startswith("cs_test_")
+                or not publishable_key.startswith("pk_test_")):
+            raise HTTPException(502, "Stripe did not return a usable embedded test checkout")
+        return {"provider": "stripe", "environment": "test", "session_id": session_id,
+                "client_secret": client_secret, "publishable_key": publishable_key,
+                "request_reached_stripe": True, "diagnostic": True}
     if not re.fullmatch(r"cs_test_[A-Za-z0-9_]+", session_id) or u.scheme != "https" or u.hostname not in ("checkout.stripe.com", "checkout.stripe.dev"):
         raise HTTPException(502, "Stripe returned an unexpected Checkout session")
     return {"provider": "stripe", "environment": "test", "session_id": session_id,
