@@ -438,6 +438,20 @@ def stripe_test_checkout(
     )
 
 
+@router.post('/stripe/embedded-test-checkout')
+def stripe_embedded_test_checkout(
+    data:StripeTestCheckoutInput,
+    user:User=Depends(require_billing_user),
+    db:Session=Depends(get_db),
+):
+    """Create a Stripe-hosted embedded TEST payment form; no entitlement changes."""
+    from ..config import settings
+    from ..services.stripe_test_checkout import create_diagnostic_checkout
+    return create_diagnostic_checkout(
+        db,settings.public_base_url,plan_id=data.plan_id,user_id=user.id,embedded=True
+    )
+
+
 @router.get('/stripe/test-checkout/{session_id}')
 def stripe_test_checkout_status(
     session_id:str,
