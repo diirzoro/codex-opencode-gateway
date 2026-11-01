@@ -477,8 +477,13 @@ def admin_reports(_: User = Depends(require_admin), db: Session = Depends(get_db
     }
 
 @router.get("/plans")
-def list_plans(_: User = Depends(require_admin), db: Session = Depends(get_db)):
-    rows = db.scalars(select(Plan).order_by(Plan.sort_order, Plan.id))
+def list_plans(include_retired: bool = False, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    # Keep legacy plan rows for historical subscriptions, but remove them from
+    # the default admin catalogue. Admin can explicitly inspect them if needed.
+    statement = select(Plan)
+    if not include_retired:
+        statement = statement.where(Plan.code.notin_(("monthly", "two_months", "three_months")))
+    rows = db.scalars(statement.order_by(Plan.sort_order, Plan.id))
     return [plan_payload(p) for p in rows]
 
 @router.post("/plans", status_code=201)
