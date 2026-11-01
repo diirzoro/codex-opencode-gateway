@@ -2296,20 +2296,29 @@ window.renderGithubConfirmation=function(root,status,refresh){
         el('p',profile.category+' · '+profile.connection_mode+' · '+profile.environment));
       head.append(icon,names);
       const fields=profile.fields.filter(f=>f.configured).length;
-      const status=el('span',profile.configured?tr('Fields saved','الحقول محفوظة'):tr('Incomplete draft','مسودة غير مكتملة'),
-        'dynamic-provider-status');
+      const isStripe=profile.slug==='stripe'&&profile.connection_mode==='api';
+      const stripeCredentialsReady=isStripe&&profile.environment==='test'&&
+        ['publishable_key','secret_key'].every(key=>profile.fields.some(f=>f.key===key&&f.configured));
+      const saved=profile.configured||stripeCredentialsReady;
+      const status=el('span',stripeCredentialsReady
+        ?tr('Stripe test settings saved','إعدادات Stripe التجريبية محفوظة')
+        :saved?tr('Settings saved','الإعدادات محفوظة')
+        :tr('Incomplete configuration','إعدادات غير مكتملة'),'dynamic-provider-status');
       head.append(status);
       card.append(head,
         el('p',tr('Stored fields: ','الحقول المحفوظة: ')+fields+' / '+profile.fields.length,
-           'dynamic-provider-description'),
-        el('p',tr('Settings only · Automatic checkout is not activated.',
-          'إعدادات الربط فقط · التحصيل الآلي غير مفعل.'),
-          'dynamic-provider-hint'));
+           'dynamic-provider-description'));
+      if(isStripe){
+        card.append(el('p',tr('Stripe test Checkout is connected separately. Subscription activation requires verified payment reconciliation.',
+          'دفع Stripe التجريبي مرتبط بشكل مستقل. تفعيل الاشتراك يتطلب التحقق من الدفع وربطه بالاشتراك.'),'dynamic-provider-hint'));
+      }else{
+        card.append(el('p',tr('Connection settings are saved. Availability for customer payments depends on each provider integration.',
+          'بيانات الربط محفوظة. إتاحة الدفع للعملاء تعتمد على تكامل كل مزوّد.'),'dynamic-provider-hint'));
+      }
       const actions=el('div','','dynamic-provider-actions');
       actions.append(button(tr('Edit connection','تعديل بيانات الربط'),()=>editor(profile),'button small'));
       if(profile.connection_mode==='api'){
-        card.append(el('p',tr('API credentials are saved, but automatic payment needs a verified provider-specific integration.',
-          'تم حفظ بيانات API، لكن الدفع الآلي يتطلب تكاملًا موثقًا خاصًا بالمزوّد.'),'dynamic-provider-hint'));
+        // API provider connection is edited here; checkout capability is managed by its integration.
       }else{
         actions.append(button(tr('Configure customer checkout','إعداد الدفع للعملاء'),
           ()=>publishDialog(profile),'button small'));
@@ -2500,8 +2509,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
     }
     addActions.append(button(tr('+ Custom field','+ حقل آخر'),()=>addField(),'button ghost small'));
     form.append(addActions);
-    const note=el('p',tr('Draft only: API credentials are encrypted and never shown again; this form does not enable checkout.',
-      'مسودة إعدادات فقط: تُحفظ المفاتيح مشفّرة ولا تُعرض ثانيةً، ولا يُفعّل هذا النموذج التحصيل الآلي.'),'dynamic-provider-hint');
+    const note=el('p',tr('Credentials are stored encrypted. Saved secrets stay hidden while you can edit any provider and replace its keys whenever needed.',
+      'تُحفظ بيانات الربط مشفّرة. تبقى المفاتيح السرية مخفية مع إمكانية تعديل أي بنك أو خدمة واستبدال مفاتيحها عند الحاجة.'),'dynamic-provider-hint');
     const feedback=el('p','','dynamic-provider-feedback');
     const controls=el('div','','dynamic-provider-actions');
     const save=el('button',tr('Save encrypted settings','حفظ الإعدادات المشفّرة'),'button');
