@@ -2103,21 +2103,6 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       for(const [label,value] of [[tr('Plan','الخطة'),plan.name],[tr('Amount','المبلغ'),(plan.price_cents/100).toFixed(2)],[tr('Currency','العملة'),plan.currency]]){dl.append(textElement('dt',label),textElement('dd',String(value)));}
       body.replaceChildren(dl);const phead=textElement('strong',method.label);phead.prepend(payIcon(method.kind));body.prepend(phead);
       if(method.details.checkout_mode==='stripe_test'){
-        const formatAmount=cents=>new Intl.NumberFormat(lang==='ar'?'ar':'en',{style:'currency',currency:plan.currency||'USD'}).format(cents/100);
-        const breakdown=document.createElement('section');
-        breakdown.className='stripe-price-breakdown';
-        const priceRow=(label,amount,emphasize=false)=>{
-          const row=document.createElement('div');row.className='stripe-price-row'+(emphasize?' stripe-price-total':'');
-          row.append(textElement('span',label),textElement('strong',amount));breakdown.append(row);
-        };
-        priceRow(tr('Subscription price','سعر الاشتراك'),formatAmount(plan.price_cents));
-        priceRow(tr('Additional Gateway payment fees','رسوم إضافية من المنصة'),formatAmount(0));
-        priceRow(tr('Customer pays','الإجمالي الذي يدفعه العميل'),formatAmount(plan.price_cents),true);
-        breakdown.append(textElement('small',tr(
-          'Stripe processing fees are deducted from the merchant, not added to this checkout total. The actual Stripe fee is available after a completed charge; test payments do not represent a real payout.',
-          'عمولة معالجة Stripe تخصم من التاجر ولا تضاف إلى إجمالي العميل هنا. تظهر العمولة الفعلية بعد اكتمال العملية، والمدفوعات التجريبية لا تمثل تحويلًا ماليًا حقيقيًا.'
-        )));
-        body.append(breakdown);
         body.append(text('p','Enter your card details securely in the Stripe form below. No billing address is collected by Gateway.','أدخل بيانات البطاقة بأمان في نموذج Stripe أدناه. لا تجمع المنصة عنوان الفوترة.','checkout-lead'));
         const stripeHost=document.createElement('div');
         stripeHost.className='stripe-embedded-checkout';
