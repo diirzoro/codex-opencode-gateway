@@ -9,7 +9,8 @@ from . import payment_gateway_config
 
 
 def verify_connection(db):
-    config = payment_gateway_config._get(db, "stripe") or {}
+    from .stripe_test_checkout import test_credentials
+    config = test_credentials(db)
     secret = config.get("secret_key") or ""
     publishable = config.get("publishable_key") or ""
     mode = config.get("mode")
