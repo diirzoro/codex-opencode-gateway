@@ -134,6 +134,27 @@ def verify_paypal_connection(
     }
 
 
+@router.post("/stripe/test-checkout")
+def create_stripe_diagnostic_checkout(
+    response: Response, _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Create a Stripe-hosted TEST checkout. Never grants subscriptions."""
+    from ..services.stripe_test_checkout import create_diagnostic_checkout
+    _cache_safe(response)
+    return create_diagnostic_checkout(db, settings.public_base_url)
+
+
+@router.get("/stripe/test-checkout/{session_id}")
+def check_stripe_diagnostic_checkout(
+    session_id: str, response: Response, _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    from ..services.stripe_test_checkout import retrieve_diagnostic_checkout
+    _cache_safe(response)
+    return retrieve_diagnostic_checkout(db, session_id)
+
+
 @router.put("/cryptomus")
 def save_cryptomus_settings(
     data: CryptomusSettingsDraft, response: Response,
