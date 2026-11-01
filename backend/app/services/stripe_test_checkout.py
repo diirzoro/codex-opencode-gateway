@@ -56,7 +56,6 @@ def create_diagnostic_checkout(db, origin, plan_id=None, user_id=None, embedded=
         raise HTTPException(409, "The active gateway_100 USD plan is required for this diagnostic")
     data = {
         "mode": "payment",
-        "payment_method_types[0]": "card",
         "line_items[0][price_data][currency]": plan.currency.lower(),
         "line_items[0][price_data][unit_amount]": str(plan.price_cents),
         "line_items[0][price_data][product_data][name]": "OpenCode Gateway test checkout - no entitlement",
