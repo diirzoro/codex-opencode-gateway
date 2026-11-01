@@ -86,16 +86,17 @@
     const gotoDynamic=()=>{const target=document.getElementById('dynamicPaymentProviders');if(target){target.scrollIntoView({behavior:'smooth',block:'start'});document.getElementById('dynamicProviderAdd')?.focus();}};
     profilesPanel.append(button(tr('Manage providers in the new form','إدارة الخدمات من النموذج الجديد'),gotoDynamic));
     try{
-      const catalogue=await api('/api/admin/payment-gateways/profiles',{cache:'no-store'});
-      for(const provider of (catalogue.profiles||[])){
-        const published=!!provider.publication?.published;
-        const state=published?tr('Enabled for receipt review','مفعّل بمراجعة الإيصال')
-          :provider.configured?tr('Saved · not active for customer checkout','محفوظ · غير مفعّل للدفع عند العميل')
-          :tr('Incomplete draft','مسودة غير مكتملة');
-        row(profilesPanel,provider.label,provider.category+' · '+provider.connection_mode+' · '+provider.environment+' · '+state);
+      const catalogue=await api('/api/admin/payment-gateways/method-catalog',{cache:'no-store'});
+      for(const provider of (catalogue.methods||[])){
+        const state=provider.status==='enabled_manual'?tr('Enabled · receipt verification','مفعّل · مراجعة الإيصال')
+          :provider.status==='configured_unverified'?tr('Configured · not verified','محفوظ · لم يتم التحقق')
+          :provider.status==='draft'?tr('Incomplete draft','مسودة غير مكتملة')
+          :provider.status==='enabled_existing'?tr('Existing enabled method','وسيلة سابقة مفعّلة')
+          :tr('Existing disabled method','وسيلة سابقة معطلة');
+        row(profilesPanel,provider.label,(provider.category||'other')+' · '+provider.connection_mode+' · '+(provider.environment||'—')+' · '+state);
       }
-      if(!(catalogue.profiles||[]).length)profilesPanel.append(node('p',tr('No dynamic providers saved yet.','لا توجد خدمات ديناميكية محفوظة.')));
-    }catch(error){profilesPanel.append(node('p',tr('Unable to load saved providers: ','تعذر تحميل الخدمات المحفوظة: ')+error.message));}
+      if(!(catalogue.methods||[]).length)profilesPanel.append(node('p',tr('No saved payment methods yet.','لا توجد وسائل دفع محفوظة.')));
+    }catch(error){profilesPanel.append(node('p',tr('Unable to load payment catalogue: ','تعذر تحميل قائمة الدفع: ')+error.message));}
     const editor=section(body,tr('Add or edit method','إضافة وسيلة أو تعديلها'));
     editor.hidden=true; // Legacy modal is retired; existing backend remains for compatibility.
     const f=form(editor,f=>{select(f,tr('Type','النوع'),'kind',[['paypal','PayPal'],['googlepay','Google Pay'],['binance','Binance'],['bank',tr('Bank account','حساب بنكي')],['wallet',tr('Wallet','محفظة')],['other',tr('Other','أخرى')]]);input(f,tr('Label','الاسم'),'label').required=true;select(f,tr('Checkout','طريقة الدفع'),'checkout_mode',[['manual',tr('Bank / wallet transfer','تحويل بنكي / محفظة')],['link',tr('Hosted payment link / PayPal','رابط دفع / PayPal')],['paypal',tr('PayPal API — verified payment','PayPal API — دفع موثّق')]]);input(f,tr('Payment link (HTTPS)','رابط الدفع (HTTPS)'),'payment_url','url');select(f,tr('Plan for this link','الخطة الخاصة بالرابط'),'plan_id',[['',tr('All plans (transfers only)','كل الخطط (التحويل فقط)')],...plans.filter(p=>p.active!==false).map(p=>[String(p.id),p.name+' · '+p.currency+' '+(p.price_cents/100).toFixed(2)])]);select(f,tr('Bank shortcut','اختيار البنك'),'bank_shortcut',[['','—'],['Al-Qutaibi','القطيبي · Al-Qutaibi'],['Al-Kuraimi','الكريمي · Al-Kuraimi']]);for(const [n,en,ar] of [['account_name','Account holder','صاحب الحساب'],['account_reference','Email / account number / wallet / Binance Pay ID','البريد / رقم الحساب / المحفظة / معرّف Binance Pay'],['iban','IBAN (optional)','الآيبان (اختياري)'],['branch','Branch (optional)','الفرع (اختياري)'],['bank_name','Bank name','اسم البنك'],['currency','Currency','العملة'],['network','Wallet network','شبكة المحفظة'],['instructions','Instructions','التعليمات']])input(f,tr(en,ar),n,'text',n==='currency'?'USD':'');select(f,tr('Status','الحالة'),'enabled',[['true',tr('Enabled','مفعّل')],['false',tr('Disabled','معطّل')]]);input(f,tr('Available countries (2-letter codes, comma separated, empty = all countries)','الدول المتاحة (رموز من حرفين مفصولة بفواصل، فارغ = كل الدول)'),'available_country_codes')},tr('Save method','حفظ الوسيلة'),async values=>{values.enabled=values.enabled==='true';values.plan_id=values.plan_id?Number(values.plan_id):null;values.available_country_codes=String(values.available_country_codes||'').split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);delete values.bank_shortcut;if(values.kind!=='bank')values.bank_name='';if(!['wallet','binance'].includes(values.kind))values.network='';if(values.checkout_mode!=='link')values.payment_url='';await api('/api/billing/methods'+(editing?'/'+editing:'')+query,{method:editing?'PUT':'POST',body:JSON.stringify(values)});await open('billing',platform)});
@@ -111,7 +112,7 @@
     const presets=node('div','','manage-actions');editor.append(node('p',tr('Start with an example below. Examples are disabled drafts: replace every example value and configure the provider before enabling.','ابدأ بأحد الأمثلة أدناه. الأمثلة مسودات معطّلة: استبدل القيم وأكمل إعداد المزود قبل التفعيل.')),presets);
     for(const [label,kind,mode,bank] of [['PayPal','paypal','paypal',''],['Google Pay','googlepay','link',''],['Binance','binance','manual',''],['Al-Qutaibi','bank','manual','Al-Qutaibi'],['Al-Kuraimi','bank','manual','Al-Kuraimi']])presets.append(button(tr('Example: '+label,'مثال: '+label),()=>{editing=null;f.reset();const draft={kind,label,checkout_mode:mode,enabled:'false',currency:'USD',bank_name:bank,account_name:'EXAMPLE_REPLACE_ACCOUNT_NAME',account_reference:kind==='googlepay'?'':'EXAMPLE_REPLACE_RECEIVING_ACCOUNT',network:kind==='binance'?'EXAMPLE_REPLACE_ASSET_AND_NETWORK':'',payment_url:mode==='link'?'https://checkout.example.com/your-plan':'',plan_id:'',instructions:tr('EXAMPLE: replace receiver details, specify the accepted currency/asset and exact amount; verify receipt before activation.','مثال: استبدل بيانات المستفيد وحدد العملة والمبلغ، وتحقق من الاستلام قبل التفعيل.')};for(const [name,value] of Object.entries(draft))f.elements[name].value=value;methodFields();f.openDialog();}));
 
-    for(const m of items)row(box,m.label,m.kind+' · '+(m.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل'))+' · '+tr('Existing method — manage new providers above','وسيلة سابقة — إدارة الخدمات الجديدة من القسم أعلاه'));
+    // Combined catalogue above owns the saved-method list; no duplicate rows.
     if(!items.length)box.append(node('p',tr('No saved methods','لا توجد وسائل محفوظة')));
     if(!platform){const receiving=section(body,tr('Platform receiving methods','وسائل الاستلام في المنصة'));for(const m of await api('/api/billing/available-methods'))row(receiving,m.label,Object.values(m.details).filter(Boolean).join(' · '))}
   }
