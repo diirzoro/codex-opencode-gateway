@@ -1812,7 +1812,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     input.value='';window.resizeWorkspaceComposer?.();
     return {
       restore(){
-        optimistic.remove();
+        if(!confirmed)optimistic.remove();
         if(!confirmed&&!restored&&isCurrent()&&composerDraftRevision===revision&&input.value===''){
           input.value=value;restored=true;window.resizeWorkspaceComposer?.();
         }
