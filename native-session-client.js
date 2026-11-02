@@ -3,7 +3,7 @@
   let identity='',configuration=null,configurationPending=null,stream=null;
   const rows=new Map(),snapshots=new Map(),statuses=new Map(),statusEvents=new Map(),statusReads=new Map();
   const permissionReplies=new Set(),submissionsInFlight=new Map(),sendGenerations=new Map();
-  const histories=new Map(),pendingReads=new Map(),discoveryReads=new Map(),selections=new Map(),uncertain=new Map();let epoch=0;
+  const histories=new Map(),pendingReads=new Map(),discoveryReads=new Map(),selections=new Map(),uncertain=new Map(),messageEvents=new Map(),progressTimers=new Map();let epoch=0;
   const owner=()=>String(currentUser?.id||'');
   const label=(en,ar)=>typeof lang!=='undefined'&&lang==='ar'?ar:en;
   const active=()=>configuration?.enabled===true&&identity===owner();
@@ -17,7 +17,7 @@
     if(configuration.enabled)presentationStyle();
     return configuration.enabled;
   }
-  function clear(){epoch++;for(const controller of submissionsInFlight.values())controller.abort();submissionsInFlight.clear();sendGenerations.clear();stream?.close();stream=null;identity='';configuration=null;configurationPending=null;document.getElementById('workspacePage')?.classList.remove('native-mode');permissionReplies.clear();for(const map of [rows,snapshots,statuses,statusEvents,statusReads,histories,pendingReads,discoveryReads,selections,uncertain])map.clear();}
+  function clear(){epoch++;for(const handles of progressTimers.values())for(const handle of handles)clearTimeout(handle);progressTimers.clear();messageEvents.clear();for(const controller of submissionsInFlight.values())controller.abort();submissionsInFlight.clear();sendGenerations.clear();stream?.close();stream=null;identity='';configuration=null;configurationPending=null;document.getElementById('workspacePage')?.classList.remove('native-mode');permissionReplies.clear();for(const map of [rows,snapshots,statuses,statusEvents,statusReads,histories,pendingReads,discoveryReads,selections,uncertain])map.clear();}
   function presentationStyle(){
     if(!document.head||document.getElementById('nativeConversationStyles'))return;
     const style=document.createElement('style');style.id='nativeConversationStyles';style.textContent=`
@@ -159,6 +159,16 @@
     for(const key of ['matches','count'])if(Number.isInteger(metadata[key])&&metadata[key]>=0)result[key]=metadata[key];
     return result;
   }
+  function failureKind(error){
+    const name=String(error?.name||'').toLowerCase();
+    const detail=String(error?.data?.statusCode||error?.data?.status||'');
+    if(name.includes('abort'))return 'cancelled';
+    if(name.includes('auth')||detail==='401'||detail==='403')return 'authentication';
+    if(name.includes('ratelimit')||detail==='429')return 'rate_limit';
+    if(name.includes('modelnotfound')||name.includes('notfound')||detail==='404')return 'model_unavailable';
+    if(name.includes('timeout'))return 'timeout';
+    return 'provider_failed';
+  }
   function display(messages,row){
     if(!Array.isArray(messages))throw Error('Invalid native message snapshot');
     return messages.map(m=>{
@@ -171,7 +181,7 @@
       // file contents). Keep it available to Native, never in the user's bubble.
       // Use the original flag, not text/regex heuristics that could erase a prompt.
       return {id:m.info.id,role:m.info.role,text:parts.filter(p=>p.type==='text'&&!p.ignored&&!(m.info.role==='user'&&p.synthetic===true)).map(p=>p.text||'').join(''),activity,
-        ...(m.info.error?{state:m.info.error.name==='MessageAbortedError'?'cancelled':'failed'}:{}),attachments:parts.filter(p=>p.type==='file').map(p=>({name:typeof p.filename==='string'?p.filename.split(/[\\/]/).at(-1)||'Attachment':'Attachment',mime:p.mime}))};
+        ...(m.info.error?{state:failureKind(m.info.error)==='cancelled'?'cancelled':'failed',error_kind:failureKind(m.info.error)}:{}),attachments:parts.filter(p=>p.type==='file').map(p=>({name:typeof p.filename==='string'?p.filename.split(/[\\/]/).at(-1)||'Attachment':'Attachment',mime:p.mime}))};
     });
   }
   async function route(path,options){
@@ -288,7 +298,14 @@
       // /event may contain updates from other sessions in this Workspace.
       // Only the active, owned Native conversation may update its chat.
       if(/^(message|session|todo)\./.test(e.type)){
-        if(session!==row.runtime_id)return;
+        if(session&&session!==row.runtime_id)return;
+        if(!session){
+          // Some Native part deltas carry messageID but no sessionID.
+          // Accept them only for an already owned message in this session.
+          const messageId=p.part?.messageID||p.messageID||p.info?.id;
+          if(!e.type.startsWith('message.')||!messageId||
+             !histories.get(id)?.messages.some(m=>m.info?.id===messageId))return;
+        }
       }else if(session&&session!==row.runtime_id)return;
       if(e.type==='file.edited'&&relativeFile(p.file,row))filesChanged();
       if(e.type==='message.part.updated'&&p.part?.type==='tool'){
@@ -299,12 +316,17 @@
       if(e.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
       if(e.type==='session.idle')statuses.set(id,'idle');
       if(e.type==='session.error'){
-        statuses.set(id,'failed');
-        const reason=p.error?.data?.message||p.error?.message||p.error?.name;
-        if(typeof reason==='string'&&reason&&current(id,user))
-          $('#runtimeStatus').textContent=label('OpenCode failed: ','تعذر تنفيذ OpenCode: ')+reason.slice(0,400);
+        statuses.set(id,'failed');dirty.messages=true;needsSnapshot=true;
+        // Never expose raw upstream error bodies: they may contain keys or request data.
+        const kind=failureKind(p.error);
+        const message={authentication:label('OpenCode provider authentication failed. Check this account connection.','فشلت مصادقة مزوّد OpenCode. راجع اتصال هذا الحساب.'),
+          rate_limit:label('The model provider rate limit was reached.','وصل مزوّد النموذج إلى حد الطلبات.'),
+          model_unavailable:label('The selected OpenCode model is unavailable.','نموذج OpenCode المحدد غير متاح.'),
+          timeout:label('The model provider timed out.','انتهت مهلة الاتصال بمزوّد النموذج.'),
+          provider_failed:label('OpenCode reported a model/provider failure.','أبلغ OpenCode عن فشل في النموذج أو المزوّد.')};
+        if(current(id,user))$('#runtimeStatus').textContent=message[kind]||message.provider_failed;
       }
-      if(e.type.startsWith('message.')){const state=histories.get(id);if(state){state.journal?.push(e);if(!reduce(state.messages,e))needsSnapshot=true;reconcile(id,state.messages);}else needsSnapshot=true;dirty.messages=true;}
+      if(e.type.startsWith('message.')){messageEvents.set(id,(messageEvents.get(id)||0)+1);const state=histories.get(id);if(state){state.journal?.push(e);if(!reduce(state.messages,e))needsSnapshot=true;reconcile(id,state.messages);}else needsSnapshot=true;dirty.messages=true;}
       if(e.type.startsWith('session.'))dirty.status=true;
       if(/^(permission|question)\./.test(e.type))dirty.controls=true;
       if(e.type.startsWith('todo.'))dirty.todos=true;
@@ -324,6 +346,23 @@
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
   }
   function stop(){stream?.close();stream=null;}
+  function scheduleAcceptedProgress(id){
+    const user=owner(),generation=epoch,seen=messageEvents.get(id)||0;
+    for(const handle of progressTimers.get(id)||[])clearTimeout(handle);
+    // Only fall back to the original Native /message endpoint when SSE is silent.
+    // Never repeat prompt_async and never query another account's conversation.
+    const handles=[2000,9000].map(delay=>setTimeout(async()=>{
+      if(epoch!==generation||!current(id,user)||(messageEvents.get(id)||0)!==seen)return;
+      try{
+        const messages=await history(id,true);
+        if(epoch!==generation||!current(id,user))return;
+        await refreshMessages();
+        if(!messages.some(m=>m.info?.role==='assistant'&&(m.info?.error||m.parts?.some(p=>p.type==='text'&&p.text?.trim()))))
+          $('#runtimeStatus').textContent=label('OpenCode accepted the prompt; awaiting model output.','استقبل OpenCode الرسالة؛ ما زلنا بانتظار رد النموذج.');
+      }catch(error){if(epoch===generation&&current(id,user))$('#runtimeStatus').textContent=error.message;}
+    },delay));
+    progressTimers.set(id,handles);
+  }
   async function forceStop(id){
     const user=owner(),generation=epoch;
     sendGenerations.set(id,(sendGenerations.get(id)||0)+1);
@@ -404,8 +443,9 @@
     uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
     if((statusEvents.get(id)||0)===seenStatus)statuses.set(id,'submitted');
     if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'submitted';
-    // The native acknowledgment is final for submission. Live/reconnect SSE
-    // reconciles execution; a second status read cannot undo the acknowledgment.
+    // The Native receipt is confirmed; only a silent SSE stream needs a
+    // bounded read of existing Native history (never a second submission).
+    scheduleAcceptedProgress(id);
   }
   // Native owns both cancellation and subsequent execution. Never touch another session.
   async function replaceRunningModel(id,providerID,modelID){
