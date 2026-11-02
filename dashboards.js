@@ -552,7 +552,27 @@
     entitlementPending=pending;
     try{await pending;}finally{if(entitlementPending===pending)entitlementPending=null;}
   }
-  const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(id==='workspacePage'&&currentUser&&!admin())initializeWorkspace();await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage','onboarding'].includes(id))refreshEntitlement().then(()=>updateSend()).catch(error=>toast(error.message));if(!admin()&&id==='workspacePage'&&activeWorkspace){refreshChoices().catch(error=>toast(error.message));loadWorkspaceDetails();}if(admin()){if(q('adminPage').classList.contains('active')&&document.querySelector('[data-admin-panel=billing].active'))await loadPaymentOrders(true);return;}if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')loadHome().catch(error=>toast(error.message));if(id==='connectionsPage')loadConnections().catch(error=>toast(error.message));}};
+  // Page navigation may fire repeatedly while the same Native catalogue is loading.
+  // Only suppress duplicate page-triggered reads; explicit provider/account
+  // changes still call refreshChoices normally and can force Native refresh.
+  let pageChoicesWorkspace=null,pageChoicesCheckedAt=0,pageChoicesPending=null;
+  function refreshPageChoices(){
+    const workspaceId=activeWorkspace?.id;
+    if(!workspaceId)return;
+    if(pageChoicesWorkspace!==workspaceId){
+      pageChoicesWorkspace=workspaceId;pageChoicesCheckedAt=0;pageChoicesPending=null;
+    }
+    if(pageChoicesPending)return;
+    if(pageChoicesCheckedAt&&Date.now()-pageChoicesCheckedAt<10000)return;
+    const pending=refreshChoices();
+    pageChoicesPending=pending;
+    pending.then(()=>{
+      if(pageChoicesWorkspace===workspaceId)pageChoicesCheckedAt=Date.now();
+    }).catch(error=>toast(error.message)).finally(()=>{
+      if(pageChoicesPending===pending)pageChoicesPending=null;
+    });
+  }
+  const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(id==='workspacePage'&&currentUser&&!admin())initializeWorkspace();await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage','onboarding'].includes(id))refreshEntitlement().then(()=>updateSend()).catch(error=>toast(error.message));if(!admin()&&id==='workspacePage'&&activeWorkspace){refreshPageChoices();loadWorkspaceDetails();}if(admin()){if(q('adminPage').classList.contains('active')&&document.querySelector('[data-admin-panel=billing].active'))await loadPaymentOrders(true);return;}if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')loadHome().catch(error=>toast(error.message));if(id==='connectionsPage')loadConnections().catch(error=>toast(error.message));}};
   const previousShow=showPage;showPage=function(id){if(id==='adminPage'&&!admin()){toast('Administrator access required');id=currentUser?'workspaceHomePage':'authPage';}if(admin()&&['workspaceHomePage','connectionsPage','workspacePage'].includes(id))id='adminPage';q('sessionSidebar').classList.remove('open');overlay(false);try{if(currentUser)localStorage.setItem('og-page',id);}catch(error){}previousShow(id);syncWorkspacePolling();q('clientWorkspaceHome').classList.toggle('active',['workspaceHomePage','workspacePage'].includes(id));q('clientConnections').classList.toggle('active',id==='connectionsPage');if(['workspaceHomePage','workspacePage','connectionsPage'].includes(id))q('clientNav').querySelectorAll('[data-client-view]').forEach(n=>n.classList.remove('active'));};
   const lazyOpenWorkspace=async function(project,workspace,options={}){
     if(options.navigate===false&&!workspaceInitialized){
