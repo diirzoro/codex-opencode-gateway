@@ -1922,7 +1922,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type}));
         await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});sentAttachments({attachments:nativeFiles});draft.confirm();
         submissionStatus.textContent=tr('Accepted by native OpenCode','قبله OpenCode الأصلي');
-        try{await refreshSessionStatus();await refreshMessages();}
+        try{await Promise.all([refreshSessionStatus(),refreshMessages()]);}
         catch{if(currentUser?.id===owner&&activeWorkspace?.id===workspaceId)submissionStatus.textContent=tr('Accepted by OpenCode. Reconnecting to restore live updates; do not resend.','قبله OpenCode. جارٍ استعادة التحديثات؛ لا تُعد الإرسال.');}
       }catch(error){toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
     }
