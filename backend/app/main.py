@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
 from .routes import workspaces, agent, github, dashboard, plans, billing, management, homepage
 from .services import workspace_cache, customer_lifecycle, preview_access
-from .routes import preview_public, native_sessions, payment_gateways
+from .routes import preview_public, native_sessions, payment_gateways, help
 
 async def retention_maintenance():
     # Retention bookkeeping must not delay the HTML shell or authentication.
@@ -56,6 +56,7 @@ async def provider_maintenance():
 
 @asynccontextmanager
 async def lifespan(app):
+    await asyncio.to_thread(help.initialize)
     cleanup = asyncio.create_task(retention_maintenance())
     provider_sync = None if native_sessions.enabled() else asyncio.create_task(provider_maintenance())
     try:
@@ -84,6 +85,7 @@ app.include_router(billing.router)
 app.include_router(payment_gateways.router)
 app.include_router(management.router)
 app.include_router(homepage.router)
+app.include_router(help.router)
 @app.get("/api/health")
 def health(): return {"status": "ok"}
 frontend = Path(__file__).resolve().parents[2]
