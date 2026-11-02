@@ -242,11 +242,12 @@
       timer=null;if(pending||stream!==source||!current(id,user))return;
       const work=dirty;dirty={messages:false,status:false,controls:false,todos:false};pending=true;
       try{
-        if(work.status)await window.refreshWorkspaceSessionStatus?.();
+        // Status, approvals and todos must never block Native message parts.
+        if(work.status)void Promise.resolve().then(()=>window.refreshWorkspaceSessionStatus?.()).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
         if(stream!==source||!current(id,user))return;
         if(work.messages){if(needsSnapshot){needsSnapshot=false;await history(id,true);}await refreshMessages();lastMessageRead=Date.now();}
-        if(work.controls)await refreshPermissions();
-        if(work.todos)await window.refreshWorkspaceTodos?.(true);
+        if(work.controls)void Promise.resolve().then(()=>refreshPermissions()).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
+        if(work.todos)void Promise.resolve().then(()=>window.refreshWorkspaceTodos?.(true)).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
       }catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
       finally{pending=false;if(stream===source&&current(id,user)&&Object.values(dirty).some(Boolean))schedule();}
     }
@@ -264,7 +265,7 @@
         window.refreshWorkspaceChoices?.('',true).catch(error=>{if(current(id,user))$('#runtimeStatus').textContent=error.message;});
         return;
       }
-      const p=e.properties||{},session=p.sessionID||p.info?.sessionID||p.part?.sessionID||p.info?.id;
+      const p=e.properties||{},session=p.sessionID||p.info?.sessionID||p.part?.sessionID;
       if(session&&session!==row.runtime_id)return;
       if(e.type==='file.edited'&&relativeFile(p.file,row))filesChanged();
       if(e.type==='message.part.updated'&&p.part?.type==='tool'){
@@ -281,11 +282,15 @@
       if(e.type.startsWith('todo.'))dirty.todos=true;
       if(Object.values(dirty).some(Boolean))schedule();
     };
-    source.onopen=async()=>{
+    source.onopen=()=>{
       if(!current(id,user)||stream!==source)return;
-      try{await synchronizeStatus(row,id,()=>current(id,user)&&stream===source);}
-      catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
-      if(current(id,user)&&stream===source){if(opened)filesChanged();needsSnapshot=opened||!histories.has(id);opened=true;dirty={messages:true,status:true,controls:true,todos:true};schedule();}
+      // Open the Native feed immediately; one status read can reconcile later.
+      if(opened)filesChanged();
+      needsSnapshot=opened||!histories.has(id);opened=true;
+      dirty={messages:true,status:false,controls:true,todos:true};schedule();
+      void synchronizeStatus(row,id,()=>current(id,user)&&stream===source)
+        .then(()=>{if(current(id,user)&&stream===source)window.refreshWorkspaceSessionStatus?.();})
+        .catch(error=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;});
     };
     source.onerror=()=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent='Reconnecting to native OpenCode';};
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
