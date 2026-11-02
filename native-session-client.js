@@ -242,11 +242,16 @@
       timer=null;if(pending||stream!==source||!current(id,user))return;
       const work=dirty;dirty={messages:false,status:false,controls:false,todos:false};pending=true;
       try{
-        if(work.status)await window.refreshWorkspaceSessionStatus?.();
+        // Never gate message rendering on a potentially slow Native status read.
+        // Keep all authoritative Native API checks, but run independent reads
+        // concurrently so first response text is not delayed by status/tools.
+        const jobs=[];
+        if(work.status)jobs.push(Promise.resolve().then(()=>window.refreshWorkspaceSessionStatus?.()));
+        if(work.messages)jobs.push((async()=>{if(needsSnapshot){needsSnapshot=false;await history(id,true);}await refreshMessages();lastMessageRead=Date.now();})());
+        if(work.controls)jobs.push(Promise.resolve().then(()=>refreshPermissions()));
+        if(work.todos)jobs.push(Promise.resolve().then(()=>window.refreshWorkspaceTodos?.(true)));
+        await Promise.allSettled(jobs);
         if(stream!==source||!current(id,user))return;
-        if(work.messages){if(needsSnapshot){needsSnapshot=false;await history(id,true);}await refreshMessages();lastMessageRead=Date.now();}
-        if(work.controls)await refreshPermissions();
-        if(work.todos)await window.refreshWorkspaceTodos?.(true);
       }catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
       finally{pending=false;if(stream===source&&current(id,user)&&Object.values(dirty).some(Boolean))schedule();}
     }
@@ -281,11 +286,15 @@
       if(e.type.startsWith('todo.'))dirty.todos=true;
       if(Object.values(dirty).some(Boolean))schedule();
     };
-    source.onopen=async()=>{
+    source.onopen=()=>{
       if(!current(id,user)||stream!==source)return;
-      try{await synchronizeStatus(row,id,()=>current(id,user)&&stream===source);}
-      catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
-      if(current(id,user)&&stream===source){if(opened)filesChanged();needsSnapshot=opened||!histories.has(id);opened=true;dirty={messages:true,status:true,controls:true,todos:true};schedule();}
+      // SSE is ready now: render Native history without waiting for a separate
+      // Native status call. Status synchronization continues independently.
+      if(opened)filesChanged();
+      needsSnapshot=opened||!histories.has(id);opened=true;
+      dirty={messages:true,status:true,controls:true,todos:true};schedule();
+      synchronizeStatus(row,id,()=>current(id,user)&&stream===source)
+        .catch(error=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;});
     };
     source.onerror=()=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent='Reconnecting to native OpenCode';};
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
