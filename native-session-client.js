@@ -314,8 +314,9 @@
       }
       if(['session.status','session.idle','session.error'].includes(e.type))statusEvents.set(id,(statusEvents.get(id)||0)+1);
       if(e.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
-      if(e.type==='session.idle')statuses.set(id,'idle');
+      if(e.type==='session.idle'){statuses.set(id,'idle');clearAcceptedProgress(id);}
       if(e.type==='session.error'){
+        clearAcceptedProgress(id);
         statuses.set(id,'failed');dirty.messages=true;needsSnapshot=true;
         // Never expose raw upstream error bodies: they may contain keys or request data.
         const kind=failureKind(p.error);
@@ -326,7 +327,13 @@
           provider_failed:label('OpenCode reported a model/provider failure.','أبلغ OpenCode عن فشل في النموذج أو المزوّد.')};
         if(current(id,user))$('#runtimeStatus').textContent=message[kind]||message.provider_failed;
       }
-      if(e.type.startsWith('message.')){messageEvents.set(id,(messageEvents.get(id)||0)+1);const state=histories.get(id);if(state){state.journal?.push(e);if(!reduce(state.messages,e))needsSnapshot=true;reconcile(id,state.messages);}else needsSnapshot=true;dirty.messages=true;}
+      if(e.type.startsWith('message.')){
+        // User-echo events are not evidence of assistant output. A missing
+        // assistant reply still gets one bounded Native history reconciliation.
+        const messageId=p.part?.messageID||p.messageID||p.info?.id;
+        const assistant=p.info?.role==='assistant'||histories.get(id)?.messages.some(m=>m.info?.id===messageId&&m.info?.role==='assistant');
+        if(assistant)messageEvents.set(id,(messageEvents.get(id)||0)+1);
+        const state=histories.get(id);if(state){state.journal?.push(e);if(!reduce(state.messages,e))needsSnapshot=true;reconcile(id,state.messages);}else needsSnapshot=true;dirty.messages=true;}
       if(e.type.startsWith('session.'))dirty.status=true;
       if(/^(permission|question)\./.test(e.type))dirty.controls=true;
       if(e.type.startsWith('todo.'))dirty.todos=true;
@@ -346,18 +353,23 @@
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
   }
   function stop(){stream?.close();stream=null;}
-  function scheduleAcceptedProgress(id){
-    const user=owner(),generation=epoch,seen=messageEvents.get(id)||0;
+  function clearAcceptedProgress(id){
     for(const handle of progressTimers.get(id)||[])clearTimeout(handle);
+    progressTimers.delete(id);
+  }
+  function scheduleAcceptedProgress(id){
+    clearAcceptedProgress(id);
+    if(['idle','failed'].includes(statuses.get(id)))return;
+    const user=owner(),generation=epoch,seen=messageEvents.get(id)||0;
     // Only fall back to the original Native /message endpoint when SSE is silent.
     // Never repeat prompt_async and never query another account's conversation.
     const handles=[2000,9000].map(delay=>setTimeout(async()=>{
-      if(epoch!==generation||!current(id,user)||(messageEvents.get(id)||0)!==seen)return;
+      if(epoch!==generation||!current(id,user)||(messageEvents.get(id)||0)!==seen||['idle','failed'].includes(statuses.get(id)))return;
       try{
         const messages=await history(id,true);
         if(epoch!==generation||!current(id,user))return;
         await refreshMessages();
-        if(!messages.some(m=>m.info?.role==='assistant'&&(m.info?.error||m.parts?.some(p=>p.type==='text'&&p.text?.trim()))))
+        if(statuses.get(id)==='submitted'&&!messages.some(m=>m.info?.role==='assistant'&&(m.info?.error||m.parts?.some(p=>p.type==='text'&&p.text?.trim()))))
           $('#runtimeStatus').textContent=label('OpenCode accepted the prompt; awaiting model output.','استقبل OpenCode الرسالة؛ ما زلنا بانتظار رد النموذج.');
       }catch(error){if(epoch===generation&&current(id,user))$('#runtimeStatus').textContent=error.message;}
     },delay));
@@ -365,6 +377,7 @@
   }
   async function forceStop(id){
     const user=owner(),generation=epoch;
+    clearAcceptedProgress(id);
     sendGenerations.set(id,(sendGenerations.get(id)||0)+1);
     submissionsInFlight.get(id)?.abort();
     return coalesce('abort:'+id,async()=>{
@@ -494,6 +507,7 @@
   }
   async function recover(id,{release=false}={}){
     const user=owner(),generation=epoch;
+    clearAcceptedProgress(id);
     const result=await coalesce('recover:'+id,async()=>{
       const row=await context(id);await freshHistory(id);
       await synchronizeStatus(row,id,()=>owner()===user&&epoch===generation);
