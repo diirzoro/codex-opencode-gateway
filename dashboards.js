@@ -522,7 +522,36 @@
     document.querySelectorAll('#workspacePage .new-session,#homeProjects [id^=home-session-],#sessionList .session,#homeSessions [id^=home-recent-]').forEach(n=>n.disabled=!workAccess);
     if(!workAccess){q('sendMessage').disabled=true;q('commitButton').disabled=true;q('pushButton').disabled=true;}
   }
-  async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/profile/access');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();}
+  let entitlementPending=null,entitlementCheckedAt=0,entitlementOwner=null;
+  async function refreshEntitlement({force=false}={}){
+    if(!currentUser||admin())return;
+    const owner=String(currentUser.id);
+    if(entitlementOwner!==owner){
+      entitlementOwner=owner;entitlementCheckedAt=0;entitlementPending=null;
+    }
+    // Single-flight and short-lived UI freshness only. Server authorization
+    // still independently checks every protected operation and access expiry.
+    if(entitlementPending)return entitlementPending;
+    if(!force&&entitlement&&Date.now()-entitlementCheckedAt<12000)return;
+    const pending=(async()=>{
+      const result=await api('/api/profile/access');
+      if(String(currentUser?.id)!==owner)return;
+      entitlement=result;
+      entitlementCheckedAt=Date.now();
+      workAccess=entitlement.access.allowed;
+      if(!workAccess){
+        if(activeSession&&!q('stopAgent').disabled){
+          try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}
+          catch(error){toast(error.message);}
+          q('stopAgent').disabled=true;
+        }
+        stopEvents();
+      }
+      renderEntitlement();
+    })();
+    entitlementPending=pending;
+    try{await pending;}finally{if(entitlementPending===pending)entitlementPending=null;}
+  }
   const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(id==='workspacePage'&&currentUser&&!admin())initializeWorkspace();await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage','onboarding'].includes(id))refreshEntitlement().then(()=>updateSend()).catch(error=>toast(error.message));if(!admin()&&id==='workspacePage'&&activeWorkspace){refreshChoices().catch(error=>toast(error.message));loadWorkspaceDetails();}if(admin()){if(q('adminPage').classList.contains('active')&&document.querySelector('[data-admin-panel=billing].active'))await loadPaymentOrders(true);return;}if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')loadHome().catch(error=>toast(error.message));if(id==='connectionsPage')loadConnections().catch(error=>toast(error.message));}};
   const previousShow=showPage;showPage=function(id){if(id==='adminPage'&&!admin()){toast('Administrator access required');id=currentUser?'workspaceHomePage':'authPage';}if(admin()&&['workspaceHomePage','connectionsPage','workspacePage'].includes(id))id='adminPage';q('sessionSidebar').classList.remove('open');overlay(false);try{if(currentUser)localStorage.setItem('og-page',id);}catch(error){}previousShow(id);syncWorkspacePolling();q('clientWorkspaceHome').classList.toggle('active',['workspaceHomePage','workspacePage'].includes(id));q('clientConnections').classList.toggle('active',id==='connectionsPage');if(['workspaceHomePage','workspacePage','connectionsPage'].includes(id))q('clientNav').querySelectorAll('[data-client-view]').forEach(n=>n.classList.remove('active'));};
   const lazyOpenWorkspace=async function(project,workspace,options={}){
