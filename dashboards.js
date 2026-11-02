@@ -1909,21 +1909,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
-      if(['submitted','waiting_approval'].includes(activeSession?.execution_status)){
-        if(!activeSession?.id)return;
-        try{
-          await window.nativeSession.replaceRunningModel(activeSession.id,provider,model);
-          submissionStatus.textContent=tr('Previous model stopped in this conversation. Submitting to the selected model…','توقف النموذج السابق في هذه المحادثة. جارٍ الإرسال للنموذج المحدد…');
-        }catch(error){toast(error.message);submissionStatus.textContent=error.message;return;}
-      }
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
-      try{await refreshEntitlement();if(!workAccess)return;if(!activeSession)await createSession({checked:true});
+      try{if(!activeSession)await createSession({checked:false});
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
         const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type}));
         await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});sentAttachments({attachments:nativeFiles});draft.confirm();
         submissionStatus.textContent=tr('Accepted by native OpenCode','قبله OpenCode الأصلي');
-        try{await refreshSessionStatus();await refreshMessages();}
-        catch{if(currentUser?.id===owner&&activeWorkspace?.id===workspaceId)submissionStatus.textContent=tr('Accepted by OpenCode. Reconnecting to restore live updates; do not resend.','قبله OpenCode. جارٍ استعادة التحديثات؛ لا تُعد الإرسال.');}
+        // Native SSE handles replies and status; no post-submit polling.
       }catch(error){toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
     }
     if(activeSession&&(['submitted','waiting_approval'].includes(activeSession.execution_status)||queueCount)){
