@@ -1918,6 +1918,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         // Native SSE handles replies and status; no post-submit polling.
       }catch(error){toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
     }
+    // LIVE is Native-only: never silently route a chat to Python's legacy
+    // queue or message execution when the OpenCode transport is unavailable.
+    if(location.hostname==='opencode-gateway.codes'){
+      submissionStatus.textContent=tr('OpenCode Native is unavailable. Nothing was sent.','اتصال OpenCode الأصلي غير متاح. لم تُرسل الرسالة.');
+      toast(submissionStatus.textContent);
+      return;
+    }
     if(activeSession&&(['submitted','waiting_approval'].includes(activeSession.execution_status)||queueCount)){
       await queueFollowup({request_id:crypto.randomUUID(),text:prompt,provider_id:provider,model_id:model,attachments:attachments.filter(a=>!a.cancelled).map(item=>({path:item.path})),response_language:lang,...(selectedAgent?{agent_id:selectedAgent}:{})},owner,activeSession.id);return;
     }
