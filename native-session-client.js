@@ -352,7 +352,7 @@
     source.onerror=()=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent='Reconnecting to native OpenCode';};
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
   }
-  function stop(){stream?.close();stream=null;}
+  function stop(){stream?.close();stream=null;for(const id of [...progressTimers.keys()])clearAcceptedProgress(id);}
   function clearAcceptedProgress(id){
     for(const handle of progressTimers.get(id)||[])clearTimeout(handle);
     progressTimers.delete(id);
