@@ -1963,7 +1963,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         }catch(error){toast(error.message);submissionStatus.textContent=error.message;return;}
       }
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
-      try{await refreshEntitlement();if(!workAccess)return;if(!activeSession)await createSession({checked:true});
+      try{await refreshEntitlement({force:true});if(!workAccess)return;if(!activeSession)await createSession({checked:true});
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
         const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type}));
         await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});sentAttachments({attachments:nativeFiles});draft.confirm();
