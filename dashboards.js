@@ -1797,15 +1797,32 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   function takeComposerDraft(isCurrent){
     const input=q('promptInput'),value=input.value,revision=composerDraftRevision,storageContext=nativeDraftContext;
     let confirmed=false,restored=false;
+    // Show the customer's own message immediately, without waiting for
+    // Python authorization, OpenCode receipt, or refreshed history.
+    // This is local display only: it never claims Native accepted the prompt.
+    const feed=q('agentFeed');
+    const optimistic=document.createElement('div');
+    optimistic.className='native-pending-user-message';
+    optimistic.setAttribute('role','status');
+    optimistic.style.cssText='align-self:flex-end;max-width:88%;padding:10px 14px;margin:8px;border-radius:12px;background:var(--panel2,#eef2ff);color:var(--text,#222);white-space:pre-wrap;overflow-wrap:anywhere';
+    const message=document.createElement('div');message.textContent=value;
+    const marker=document.createElement('small');marker.textContent=tr('Sending…','جارٍ الإرسال…');
+    optimistic.append(message,marker);
+    if(feed){feed.append(optimistic);feed.scrollTop=feed.scrollHeight;}
     input.value='';window.resizeWorkspaceComposer?.();
     return {
       restore(){
+        optimistic.remove();
         if(!confirmed&&!restored&&isCurrent()&&composerDraftRevision===revision&&input.value===''){
           input.value=value;restored=true;window.resizeWorkspaceComposer?.();
         }
       },
       confirm(){
         confirmed=true;
+        marker.textContent=tr('Accepted by OpenCode','تم استلام الرسالة في OpenCode');
+        // The native history/SSE becomes authoritative after acceptance.
+        // A temporary bubble is removed when the history is reconciled.
+        setTimeout(()=>optimistic.remove(),1200);
         if(window.nativeSession?.active()&&storageContext&&storageContext!==nativeDraftContext){try{const stored=JSON.parse(localStorage.getItem(storageContext)||'null');if(stored?.text===value)localStorage.removeItem(storageContext);}catch{}}
         if(restored&&isCurrent()&&composerDraftRevision===revision&&input.value===value){
           input.value='';window.resizeWorkspaceComposer?.();
