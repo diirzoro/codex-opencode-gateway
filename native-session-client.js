@@ -250,7 +250,9 @@
         if(work.messages)jobs.push((async()=>{if(needsSnapshot){needsSnapshot=false;await history(id,true);}await refreshMessages();lastMessageRead=Date.now();})());
         if(work.controls)jobs.push(Promise.resolve().then(()=>refreshPermissions()));
         if(work.todos)jobs.push(Promise.resolve().then(()=>window.refreshWorkspaceTodos?.(true)));
-        await Promise.allSettled(jobs);
+        const results=await Promise.allSettled(jobs);
+        const failure=results.find(result=>result.status==='rejected');
+        if(failure&&stream===source&&current(id,user))$('#runtimeStatus').textContent=failure.reason?.message||'Native update failed';
         if(stream!==source||!current(id,user))return;
       }catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
       finally{pending=false;if(stream===source&&current(id,user)&&Object.values(dirty).some(Boolean))schedule();}
