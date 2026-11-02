@@ -287,7 +287,7 @@
       const p=e.properties||{},session=p.sessionID||p.info?.sessionID||p.part?.sessionID;
       // /event may contain updates from other sessions in this Workspace.
       // Only the active, owned Native conversation may update its chat.
-      if(/^(message|session|todo|permission|question)\./.test(e.type)){
+      if(/^(message|session|todo)\./.test(e.type)){
         if(session!==row.runtime_id)return;
       }else if(session&&session!==row.runtime_id)return;
       if(e.type==='file.edited'&&relativeFile(p.file,row))filesChanged();
