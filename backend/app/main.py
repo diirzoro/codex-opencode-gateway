@@ -56,7 +56,12 @@ async def provider_maintenance():
 
 @asynccontextmanager
 async def lifespan(app):
-    await asyncio.to_thread(help.initialize)
+    try:
+        await asyncio.to_thread(help.initialize)
+    except Exception:
+        # Optional Help storage must never prevent existing registration, login or email from starting.
+        import logging
+        logging.getLogger(__name__).exception("Optional Help initialization unavailable")
     cleanup = asyncio.create_task(retention_maintenance())
     provider_sync = None if native_sessions.enabled() else asyncio.create_task(provider_maintenance())
     try:
