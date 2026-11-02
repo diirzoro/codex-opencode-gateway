@@ -74,9 +74,10 @@
   async function context(id){if(rows.has(id))return rows.get(id);const generation=epoch,user=owner(),value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');return remember(value);}
   const url=(workspace,path)=>'/native-session/'+encodeURIComponent(workspace)+'/'+path;
   async function native(workspace,path,body,{signal,timeout=15000}={}){
-    const controller=new AbortController(),cancel=()=>controller.abort();
-    if(signal?.aborted)controller.abort();else signal?.addEventListener('abort',cancel,{once:true});
-    const timer=setTimeout(cancel,timeout);
+    const controller=new AbortController();
+    const cancel=()=>controller.abort(signal?.reason||new DOMException('OpenCode request was cancelled','AbortError'));
+    if(signal?.aborted)cancel();else signal?.addEventListener('abort',cancel,{once:true});
+    const timer=setTimeout(()=>controller.abort(new DOMException('OpenCode request timed out before acknowledgement','TimeoutError')),timeout);
     try{return await api(url(workspace,path),{...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)}),signal:controller.signal});}
     finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
   }
@@ -232,12 +233,23 @@
   async function start(){
     stop();const id=activeSession?.id,user=owner();if(!id)return;
     const row=await context(id);if(!current(id,user))return;
-    const source=new EventSource(url(row.workspace_id,'event'));stream=source;let timer,fileTimer,pending=false,lastMessageRead=0,opened=false,needsSnapshot=false;const eventIDs=new Set(),changedTools=new Set();
+    const source=new EventSource(url(row.workspace_id,'event'));stream=source;let timer,fileTimer,pending=false,snapshotPending=false,lastMessageRead=0,opened=false,needsSnapshot=false;const eventIDs=new Set(),changedTools=new Set();
     function filesChanged(){clearTimeout(fileTimer);fileTimer=setTimeout(()=>{if(stream===source&&current(id,user))window.refreshNativeFiles?.({workspaceId:row.workspace_id,owner:user});},400);}
     // Coalesce token/part bursts into bounded snapshots. The native SSE
     // transport stays immediate; only expensive full-history reads are paced.
     const MESSAGE_REFRESH_MS=50;
     let dirty={messages:false,status:false,controls:false,todos:false};
+    function reconcileNativeSnapshot(){
+      if(snapshotPending||stream!==source||!current(id,user))return;
+      snapshotPending=true;
+      // An incomplete/out-of-order SSE event is reconciled once from Native.
+      // This never blocks the live message stream or resends a prompt.
+      void history(id,true).then(()=>{
+        if(stream===source&&current(id,user))return refreshMessages();
+      }).catch(error=>{
+        if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;
+      }).finally(()=>{snapshotPending=false;if(stream===source&&current(id,user)&&needsSnapshot){dirty.messages=true;schedule();}});
+    }
     async function flush(){
       timer=null;if(pending||stream!==source||!current(id,user))return;
       const work=dirty;dirty={messages:false,status:false,controls:false,todos:false};pending=true;
@@ -245,7 +257,14 @@
         // Status, approvals and todos must never block Native message parts.
         if(work.status)void Promise.resolve().then(()=>window.refreshWorkspaceSessionStatus?.()).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
         if(stream!==source||!current(id,user))return;
-        if(work.messages){if(needsSnapshot){needsSnapshot=false;await history(id,true);}await refreshMessages();lastMessageRead=Date.now();}
+        if(work.messages){
+          // Render the Native SSE cache first; never gate visible text on a
+          // history fetch. Only incomplete events need one background repair.
+          const incomplete=needsSnapshot,hadHistory=histories.has(id);
+          needsSnapshot=false;
+          await refreshMessages();lastMessageRead=Date.now();
+          if(incomplete&&hadHistory)reconcileNativeSnapshot();
+        }
         if(work.controls)void Promise.resolve().then(()=>refreshPermissions()).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
         if(work.todos)void Promise.resolve().then(()=>window.refreshWorkspaceTodos?.(true)).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
       }catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
@@ -266,7 +285,11 @@
         return;
       }
       const p=e.properties||{},session=p.sessionID||p.info?.sessionID||p.part?.sessionID;
-      if(session&&session!==row.runtime_id)return;
+      // /event may contain updates from other sessions in this Workspace.
+      // Only the active, owned Native conversation may update its chat.
+      if(/^(message|session|todo|permission|question)\./.test(e.type)){
+        if(session!==row.runtime_id)return;
+      }else if(session&&session!==row.runtime_id)return;
       if(e.type==='file.edited'&&relativeFile(p.file,row))filesChanged();
       if(e.type==='message.part.updated'&&p.part?.type==='tool'){
         const activity=toolActivity(p.part,row);if(!['todowrite','todoread'].includes(activity.tool))window.renderWorkspaceEventLine?.('activity',activity);
@@ -275,7 +298,12 @@
       if(['session.status','session.idle','session.error'].includes(e.type))statusEvents.set(id,(statusEvents.get(id)||0)+1);
       if(e.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
       if(e.type==='session.idle')statuses.set(id,'idle');
-      if(e.type==='session.error')statuses.set(id,'failed');
+      if(e.type==='session.error'){
+        statuses.set(id,'failed');
+        const reason=p.error?.data?.message||p.error?.message||p.error?.name;
+        if(typeof reason==='string'&&reason&&current(id,user))
+          $('#runtimeStatus').textContent=label('OpenCode failed: ','تعذر تنفيذ OpenCode: ')+reason.slice(0,400);
+      }
       if(e.type.startsWith('message.')){const state=histories.get(id);if(state){state.journal?.push(e);if(!reduce(state.messages,e))needsSnapshot=true;reconcile(id,state.messages);}else needsSnapshot=true;dirty.messages=true;}
       if(e.type.startsWith('session.'))dirty.status=true;
       if(/^(permission|question)\./.test(e.type))dirty.controls=true;
