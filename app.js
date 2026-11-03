@@ -405,6 +405,35 @@ window.nativeDirectTest=(()=>{
 })();
 
 const api=async(path,options={})=>{
+ // TEST file reads: Python authorizes workspace ownership and path only.
+ // Nginx's X-Accel internal redirect transports the bytes directly from
+ // OpenCode /file and /file/content; no Python file listing or content handler.
+ if(location.hostname==='test.opencode-gateway.codes'){
+   const target=new URL(path,location.origin);
+   const match=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/files(\/content)?$/i);
+   if(match){
+     if((options.method||'GET').toUpperCase()!=='GET')
+       throw Error('TEST files are OpenCode Native read-only through this route');
+     if(!currentUser)throw Error('Sign in before reading a Native workspace');
+     const nativePath=match[2]?'file/content':'file';
+     const requested=target.searchParams.get('path')||'';
+     if(target.searchParams.size>1||requested.length>1000)throw Error('Invalid Native file path');
+     const forwarded='/native-session/'+match[1]+'/'+nativePath+'?path='+encodeURIComponent(requested);
+     const response=await fetch(forwarded,{credentials:'same-origin',cache:'no-store',signal:options.signal});
+     const result=await response.json().catch(()=>({detail:'Invalid OpenCode response'}));
+     if(!response.ok)throw Error(result.detail||'OpenCode file request rejected: '+response.status);
+     if(match[2]){
+       if(typeof result?.content!=='string')throw Error('Invalid OpenCode file content');
+       return {path:requested,content:result.content};
+     }
+     if(!Array.isArray(result))throw Error('Invalid OpenCode file listing');
+     return result.filter(v=>v&&typeof v.path==='string'&&
+         !v.path.startsWith('/')&&!v.path.includes('\\')&&
+         !v.path.split('/').includes('..'))
+       .map(v=>({name:String(v.name||v.path.split('/').at(-1)),path:v.path,
+         type:v.type==='directory'?'directory':'file'}));
+   }
+ }
  if(window.nativeDirectTest?.matches(path))return window.nativeDirectTest.route(path,options);
  if(window.nativeSession&&/^\/api\/(?:sessions(?:\/|\?|$)|workspaces\/[^/]+\/sessions)/.test(path))await window.nativeSession.ready();
  if(window.nativeSession?.active()){const routed=await window.nativeSession.route(path,options);if(routed)return routed.value;}
