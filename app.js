@@ -324,7 +324,7 @@ window.nativeDirectTest=(()=>{
     throw Error('Unsupported direct OpenCode provider action: '+name);
   }
   return {active,url,direct,catalog,agents,visibility,registry,forget,matches,route,
-    providerAllowed,providerVisible,modelAllowed,modelVisible,rootFromFile,defaultDirectory};
+    providerAllowed,providerVisible,modelAllowed,modelVisible,classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 
 const api=async(path,options={})=>{
