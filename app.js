@@ -298,13 +298,16 @@ window.nativeDirectTest=(()=>{
         return {connected:true,persisted:true,verified:true,
           provider_id:p.id,verified_model_id:checked.model_id};
       }catch(error){
-        // Remove ONLY the newly inserted credential on conclusive auth failure.
-        // A timeout/quota issue does not prove the key invalid, so preserve it
-        // unverified rather than destroying a potentially valid credential.
-        if(['invalid_key','access_denied'].includes(error.credentialKind)){
-          await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'}).catch(()=>{});
+        // No unverified key may remain configured after this attempted
+        // connection. The slot was empty before this operation; do not retain
+        // a bogus Connected state on auth, quota, timeout or model failure.
+        try{
+          const undone=await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
+          if(undone!==true)throw Error('OpenCode did not confirm removing the pending key');
+        }catch(rollbackError){
+          error.message+=' تعذّر إلغاء الاعتماد المؤقت من OpenCode؛ افصل المزود قبل المحاولة مرة أخرى.';
         }
-        forget();
+        forget();invalidateProviderMutation(path,'DELETE');
         throw error;
       }
     }
