@@ -318,6 +318,26 @@ jobs:
           # Password travels only over encrypted SSH stdin; never in log or CLI arguments.
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates </dev/null && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && TEST_SUDO_PASS_STDIN=1 python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
+      - name: Enable lightweight OpenCode Native provider route (TEST only)
+        if: steps.confirm.outputs.mode == 'deploy-test'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          bash -n ops/native-direct/enable-config-providers-test.sh
+          port="${PORT:-22}"
+          : "${VPS_SUDO_PASSWORD:?Missing TEST sudo password}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'install -d -m 700 /home/tahir/.native-direct-stage'
+          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            ops/native-direct/enable-config-providers-test.sh \
+            "$USER@$HOST:/home/tahir/.native-direct-stage/enable-config-providers-test.sh"
+          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'read -r password; printf "%s\n" "$password" | sudo -S -p "" bash /home/tahir/.native-direct-stage/enable-config-providers-test.sh'
       - name: Update TEST Native direct client from this exact commit
         if: steps.confirm.outputs.mode == 'deploy-test'
         env:
