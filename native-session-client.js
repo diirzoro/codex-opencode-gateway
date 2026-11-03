@@ -692,11 +692,15 @@
     if(!Array.isArray(providers.all)||!Array.isArray(providers.connected)||!Array.isArray(agents))
       throw Error('Invalid native discovery schema');
     const connected=new Set(providers.connected);
+    // Composer choices come exclusively from account Connections.
+    // The 50-provider limit belongs to the Connections picker, never here.
+    // Do not expose unconnected catalog models as workspace choices.
     const first=directMode
       ?providers.all.filter(p=>connected.has(p.id)&&
           window.nativeDirectTest.providerAllowed(p.id)&&window.nativeDirectTest.providerVisible(p.id))
-        .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id))).slice(0,50)
-      :[...providers.all,...(providers.connected_entries||[])];
+        .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)))
+      :[...providers.all,...(providers.connected_entries||[])]
+        .filter(p=>connected.has(p.id)&&p.allowed!==false&&p.visible!==false);
     return {native:true,loadedAt:Date.now(),workspace_id:String(id),health:{healthy:true},
       version:configuration.version,status:'ready',errors:{},
       agents:agents.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode)),
