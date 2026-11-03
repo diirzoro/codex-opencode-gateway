@@ -6,6 +6,15 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../../app.js'),'utf8');
+const managementSource=fs.readFileSync(path.join(__dirname,'../../management.js'),'utf8');
+assert(!source.includes('يوجد مفتاح لهذا المزود في مخزن OpenCode المشترك. لن يتم استبداله'),
+  'Native connected metadata must never be mistaken for saved API key proof');
+assert(source.includes('value.replace_existing!==true'),
+  'Shared Native PUT must require explicit user confirmation');
+assert(managementSource.includes('replace_existing:Boolean(window.nativeDirectTest?.active())'),
+  'Native key dialog must send the explicit confirmation marker');
+assert(managementSource.includes('p.public_free'),
+  'Free OpenCode models must not display credential deletion actions');
 const gatewaySource=fs.readFileSync(path.join(__dirname,'../../backend/app/main.py'),'utf8');
 // TEST must not import/mount the Python AI queue/agent execution module.
 assert(!gatewaySource.includes('from .routes import workspaces, agent,'),
