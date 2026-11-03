@@ -93,6 +93,21 @@ _CROSS_SITE_EXEMPT = {"/api/github/webhook"}
 
 @app.middleware("http")
 async def browser_boundary(request: Request, call_next):
+    # TEST OpenCode provider operations must never enter Python Gateway.
+    # The browser uses /native-direct/api/* -> Nginx -> OpenCode Native.
+    # Reject every legacy/catch-all account/workspace provider route here,
+    # including if the browser adapter fails to initialize.
+    if native_sessions.deployment() == 'test':
+        path=request.url.path
+        legacy_provider=(
+            path.startswith('/api/opencode/connections')
+            or path.startswith('/api/opencode/catalog/providers')
+            or path == '/api/opencode/catalog/agents'
+            or bool(re.fullmatch(r'/api/workspaces/[0-9a-fA-F-]{36}/providers(?:/.*)?',path))
+        )
+        if legacy_provider:
+            return JSONResponse({'detail':'TEST provider/model/auth services are OpenCode Native-only; Python Gateway route disabled'},
+                                status_code=410,headers={'Cache-Control':'no-store'})
     if preview_access.is_preview_host(request) and (
         request.method not in {'GET','HEAD'} or not request.url.path.startswith('/preview/')):
         return JSONResponse({'detail':'Not found'},status_code=404,
