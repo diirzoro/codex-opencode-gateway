@@ -284,7 +284,7 @@
               });
               f.reset();if(!alive()||!contextCurrent())return;
               if(result.connected!==true||result.persisted!==true||
-                (window.nativeDirectTest?.active()&&result.verified!==true))
+                ((window.nativeDirectTest?.active()||accountOptions?.native===true)&&result.verified!==true))
                 throw new Error(tr('OpenCode did not verify this key with a real model response.',
                   'لم يؤكد OpenCode صلاحية المفتاح من خلال رد نموذج حقيقي.'));
               dlg.close();toast(result.verified===true?tr('OpenCode verified this key with a real model response.','أكد OpenCode صلاحية المفتاح برد حقيقي من النموذج.'):result.verified===false?tr('Credential configured but not verified.','حُفظ المفتاح دون تحقق.'):tr('Provider connection saved.','حُفظ اتصال المزوّد.'));await reload();
