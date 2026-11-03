@@ -85,7 +85,7 @@ def end_upload(db, success):
 
 
 def runtime_idle(row):
-    from . import opencode
+    from . import native_control_bridge as opencode
     # Native uses the persistent shared service. A disabled legacy runtime is
     # never evidence that Native tools have stopped writing these files.
     from ..routes import native_sessions
@@ -172,7 +172,8 @@ def github_copy_is_saved(row):
 
 
 def sweep(*, now=None, workspace_ids=None):
-    from . import opencode, workspaces
+    from . import workspaces
+    from . import native_control_bridge as opencode
     if _policy_started is None and workspace_ids is None:
         initialize()
     now = now or datetime.now(timezone.utc)
