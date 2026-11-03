@@ -268,6 +268,15 @@
           const values=Object.fromEntries(new FormData(f));submitting=true;submit.disabled=methodPicker.disabled=true;f.setAttribute('aria-busy','true');
           try{
             if(keyMethod){
+              // Native 1.19.x uses process-global provider credentials. The
+              // configured/connected flag cannot prove whether an auth key
+              // exists, so ask explicitly before PUT may replace any slot.
+              if(window.nativeDirectTest?.active()){
+                const accepted=await window.confirmAction?.(tr(
+                  'Save this key in the shared OpenCode Native store? It may replace an existing credential for this provider and affect other accounts, including LIVE if they share this Native process. A failed verification removes the attempted Native key.',
+                  'هل تريد حفظ المفتاح في مخزن OpenCode Native المشترك؟ قد يستبدل اعتماد هذا المزود ويؤثر على حسابات أخرى، بما فيها LIVE إذا كانت تستخدم نفس العملية. عند فشل التحقق سيُحذف المفتاح الذي تمت تجربته.'));
+                if(!accepted)return;
+              }
               setFeedback(feedback,tr('Connecting with OpenCode Native…','جارٍ الربط عبر OpenCode Native…'));
               const nativePhase=(stage)=>{
                 if(!currentForm())return;
@@ -281,6 +290,7 @@
               const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{
                 method:'POST',
                 body:JSON.stringify({api_key:values.api_key,model_id:values.model_id||null,method:index,
+                  replace_existing:Boolean(window.nativeDirectTest?.active()),
                   inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))}),
                 ...(window.nativeDirectTest?.active()?{onNativePhase:nativePhase}:{})
               });
