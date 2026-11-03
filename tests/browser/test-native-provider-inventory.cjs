@@ -41,6 +41,7 @@ const calls={configured:0,full:0,agents:0,policy:0,authDelete:0};
 const response=data=>({ok:true,status:200,text:async()=>JSON.stringify(data)});
 const win={nativeSession:{invalidate(){}},workspaceRuntime:{clear(){}},dispatchEvent(){}};
 const provider={id:'demo',name:'Demo',models:{one:{name:'One'}}};
+const external={id:'outside',name:'Other Native auth',models:{own:{name:'Native Model'}}};
 const free={id:'opencode',name:'OpenCode',source:'custom',
   models:{free:{name:'Native Free Model',cost:{input:0,output:0}}}};
 const sandbox={
@@ -53,7 +54,7 @@ const sandbox={
    if(p.endsWith('/provider')){
      calls.full++;
      // Simulates OpenCode's stale /provider.connected after DELETE /auth.
-     return response({all:[provider,free],connected:['demo'],default:{demo:'one',opencode:'free'}});
+     return response({all:[provider,free,external],connected:['demo','outside'],default:{demo:'one',opencode:'free'}});
    }
    if(p.endsWith('/auth/demo')&&options.method==='DELETE'){
      calls.authDelete++;
@@ -78,7 +79,12 @@ vm.runInNewContext(setup+adapterSource,sandbox);
  assert.equal(calls.agents,1);
  assert.equal(calls.policy,1);
  await adapter.catalog();
+ const afterDiscoveryPage=await adapter.route('/api/opencode/catalog/providers/page?limit=50&offset=0');
+ assert.equal(afterDiscoveryPage.connected_items.some(p=>p.id==='outside'),true,
+   'Dashboard can manage Native auth not present in /config/providers');
  const discovered=await adapter.workspaceRegistry();
+ assert.equal(discovered.data.connected.includes('outside'),false,
+   'A global Native auth entry must not auto-join every Workspace');
  assert.equal(discovered.data.connected.includes('demo'),true,
    'Only Native /provider.connected can establish candidate connection');
  const removed=await adapter.route('/api/opencode/connections/demo',{method:'DELETE'});
