@@ -104,6 +104,17 @@ def _account_public_catalog(user, path, db, *, agents=False,full=False):
         return opencode_catalog.public_catalog(path, agents=agents, service=service)
 
 
+@router.get("/opencode/display-policy")
+def account_provider_display_policy(user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Expose only admin display settings; OpenCode remains provider/model registry.
+
+    This control-plane metadata has no credentials or full Native model catalog.
+    """
+    rules=policy.load(db).as_payload()
+    return {key:rules[key] for key in (
+        "allowed_providers","hidden_providers","allowed_models","hidden_models","updated_at")}
+
+
 @router.get("/opencode/catalog/providers")
 def account_provider_catalog(user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Project-independent definitions only; never expose global connected state."""
