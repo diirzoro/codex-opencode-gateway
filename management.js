@@ -237,9 +237,25 @@
         if(keyMethod&&accountOptions?.credential_storage_ready===false){setFeedback(feedback,tr('Provider connection is unavailable: secure credential storage needs administrator repair. Your API key has not been rejected by the provider.','الربط غير متاح: التخزين الآمن للاعتمادات يحتاج إصلاحًا من المدير. لم يرفض المزوّد مفتاح API الخاص بك.'),'error');return;}
         if(keyMethod){
           const key=input(f,tr('API key (server-side only)','مفتاح API (على الخادم فقط)'),'api_key','password');key.required=true;key.autocomplete='new-password';
-          f.append(node('p',accountOptions?.native?tr('OpenCode stores the credential. Verify access with a native conversation; saving does not test a paid model.','يحفظ OpenCode الاعتماد. تحقّق من الوصول بمحادثة أصلية؛ الحفظ لا يختبر نموذجًا مدفوعًا.'):tr('OpenCode validates the key with a real model request. Provider charges may apply.','يتحقق OpenCode من المفتاح بطلب نموذج فعلي؛ قد تُحتسب رسوم لدى المزوّد.'),'provider-note'));
+          if(window.nativeDirectTest?.active()){
+            const choices=(accountOptions?.models||[]).filter(m=>m?.id&&m.allowed!==false&&m.visible!==false);
+            if(choices.length){
+              const model=select(f,tr('Model to verify with (Native request)','النموذج المطلوب التحقق به عبر OpenCode'),'model_id',
+                choices.map(m=>[m.id,m.name||m.id]));
+              model.required=true;
+              const preferred=['deepseek-chat','deepseek-flash','gpt-4.1-mini','gemini-2.5-flash'];
+              model.value=preferred.find(id=>choices.some(m=>m.id===id))||choices[0].id;
+            }else{
+              setFeedback(feedback,tr('No allowed Native model is available for key verification.','لا يوجد نموذج Native مسموح به للتحقق من المفتاح.'),'error');
+              return;
+            }
+            f.append(node('p',tr('The key is held by OpenCode Native. One real model request verifies the key before connection succeeds; provider charges may apply. No test runs on each chat message.',
+              'يحفظ OpenCode Native المفتاح. يتحقق من صلاحيته بطلب نموذج حقيقي واحد عند الربط فقط، وقد تُحتسب رسوم. لا يُعاد الاختبار مع كل رسالة.'),'provider-note'));
+          }else{
+            f.append(node('p',accountOptions?.native?tr('OpenCode stores the credential. Verify access with a native conversation; saving does not test a paid model.','يحفظ OpenCode الاعتماد. تحقّق من الوصول بمحادثة أصلية؛ الحفظ لا يختبر نموذجًا مدفوعًا.'):tr('OpenCode validates the key with a real model request. Provider charges may apply.','يتحقق OpenCode من المفتاح بطلب نموذج فعلي؛ قد تُحتسب رسوم لدى المزوّد.'),'provider-note'));
+          }
         }
-        const submit=node('button',keyMethod?(accountOptions?.native?tr('Connect provider','ربط المزوّد'):tr('Validate and connect','تحقق واربط')):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
+        const submit=node('button',keyMethod?(window.nativeDirectTest?.active()?tr('Verify with Native and connect','تحقّق عبر Native ثم اربط'):(accountOptions?.native?tr('Connect provider','ربط المزوّد'):tr('Validate and connect','تحقق واربط'))):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
         const currentForm=()=>currentDialog()&&view.ready&&methodArea.contains(f);
         f.onsubmit=async event=>{
           event.preventDefault();if(submitting||!currentForm()||!f.reportValidity())return;
@@ -247,9 +263,12 @@
           try{
             if(keyMethod){
               setFeedback(feedback,tr('Saving the credential through OpenCode…','جارٍ حفظ المفتاح عبر OpenCode…'));
-              const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:null,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
+              const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id||null,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
               f.reset();if(!alive()||!contextCurrent())return;
-              if(result.connected!==true||result.persisted!==true)throw new Error(tr('OpenCode connection and credential storage were not confirmed.','لم يتم تأكيد اتصال OpenCode وحفظ المفتاح.'));
+              if(result.connected!==true||result.persisted!==true||
+                (window.nativeDirectTest?.active()&&result.verified!==true))
+                throw new Error(tr('OpenCode did not verify this key with a real model response.',
+                  'لم يؤكد OpenCode صلاحية المفتاح من خلال رد نموذج حقيقي.'));
               dlg.close();toast(result.verified===false?tr('Credential configured. Send a native prompt to verify access.','حُفظ الاعتماد. أرسل طلبًا أصليًا للتحقق من صلاحية الوصول.'):tr('Provider connected.','تم ربط المزوّد.'));await reload();
             }else{
               setFeedback(feedback,tr('Starting OpenCode authorization…','جارٍ بدء تفويض OpenCode…'));
