@@ -351,10 +351,13 @@ window.nativeDirectTest=(()=>{
         :choices.includes(currentCatalog.default?.[p.id])?currentCatalog.default[p.id]:choices[0];
       if(!selected)throw Error('لم يجد OpenCode نموذجًا صالحًا لاختبار مفتاح هذا المزود.');
       options.onNativePhase?.('saving');
-      const inserted=await direct('auth/'+encodeURIComponent(p.id),{method:'PUT',
-        value:{type:'api',key:value.api_key}});
-      if(inserted!==true)throw Error('لم يؤكد OpenCode التخزين المؤقت للمفتاح.');
+      // The Native PUT itself can fail after writing the auth slot (network
+      // disconnect or nonstandard acknowledgement). Include it in rollback.
+      // This slot was checked as empty before we started the transaction.
       try{
+        const inserted=await direct('auth/'+encodeURIComponent(p.id),{method:'PUT',
+          value:{type:'api',key:value.api_key}});
+        if(inserted!==true)throw Error('لم يؤكد OpenCode التخزين المؤقت للمفتاح.');
         options.onNativePhase?.('verifying');
         const checked=await verifyProviderModel(p.id,selected);
         forget();invalidateProviderMutation(path,'POST');
@@ -368,6 +371,9 @@ window.nativeDirectTest=(()=>{
         try{
           const undone=await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
           if(undone!==true)throw Error('OpenCode did not confirm removing the pending key');
+          const afterDelete=await catalog({force:true});
+          if(afterDelete.connected.includes(p.id))
+            throw Error('OpenCode still lists the failed credential as connected');
         }catch(rollbackError){
           error.message+=' تعذّر إلغاء الاعتماد المؤقت من OpenCode؛ افصل المزود قبل المحاولة مرة أخرى.';
         }
