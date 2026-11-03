@@ -10,9 +10,15 @@ const gatewaySource=fs.readFileSync(path.join(__dirname,'../../backend/app/main.
 // TEST must not import/mount the Python AI queue/agent execution module.
 assert(!gatewaySource.includes('from .routes import workspaces, agent,'),
   'Legacy Python agent must not be eagerly imported in TEST');
-assert(gatewaySource.includes("if settings.public_base_url.rstrip('/') != 'https://test.opencode-gateway.codes':")
-  && gatewaySource.includes('    from .routes import agent'),
-  'Legacy Python AI router must be imported only for non-TEST deployments');
+assert(!gatewaySource.includes('from .routes import agent')
+  && !gatewaySource.includes('app.include_router(agent.router)'),
+  'Python AI router must be entirely removed');
+for(const retired of ['backend/app/routes/agent.py','backend/app/services/message_queue.py',
+  'backend/app/services/opencode.py','backend/app/services/opencode_catalog.py',
+  'backend/app/services/account_provider_runtime.py','backend/app/services/session_recovery.py']){
+  assert(!fs.existsSync(path.join(__dirname,'../../',retired)),
+    'Legacy Python AI module still present: '+retired);
+}
 assert(!gatewaySource.includes('native_catalog_maintenance.sweep'),
   'Gateway must not schedule Native catalog refresh in Python');
 assert(!gatewaySource.includes('native_sessions.sweep_expired_native_history'),
