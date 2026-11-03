@@ -355,7 +355,7 @@ jobs:
           : "${VPS_SUDO_PASSWORD:?Missing protected VPS sudo credential}"
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
             -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            'read -r pass; printf "%s\\n" "$pass" | sudo -S -p "" install -m 0644 /home/tahir/.native-direct-stage/app.js /var/www/opencode-native-direct-test/app.js'
+            'read -r pass; printf "%s\n" "$pass" | sudo -S -p "" install -m 0644 /home/tahir/.native-direct-stage/app.js /var/www/opencode-native-direct-test/app.js'
           echo 'TEST Native direct web client updated from the same pinned commit.'
       - name: Verify TEST health after TEST operation
         if: steps.confirm.outputs.mode != 'audit-test' && steps.confirm.outputs.mode != 'native-probe'
