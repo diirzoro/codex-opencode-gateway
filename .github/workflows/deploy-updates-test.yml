@@ -200,6 +200,68 @@ jobs:
             echo "UPSTREAM_CHECK=$endpoint"
             curl -sS -m 12 -o /dev/null -w 'HTTP=%{http_code} CONNECT=%{time_connect} TTFB=%{time_starttransfer}\n' "$endpoint" || true
           done
+          # Native-only project-workspace smoke: do not call Gateway or DB.
+          if command -v jq >/dev/null 2>&1; then
+            worktree="$(find /var/lib/opencode-workspaces-test -mindepth 3 -maxdepth 3 -type d -name repo -print -quit 2>/dev/null || true)"
+            if test -n "$worktree"; then
+              echo NATIVE_PROJECT_ROOT_FOUND=yes
+              uri="$(jq -rn --arg v "$worktree" '$v|@uri')"
+              prefix='https://test.opencode-gateway.codes/native-direct/api/'
+              basic="$(cat /home/tahir/.native-direct-stage/native-access-password)"
+              response="$(mktemp)"
+              session_id=""
+              cleanup(){
+                if test -n "$session_id"; then
+                  curl -sS --max-time 15 --user "native-test:$basic" -X DELETE \
+                    -o /dev/null "$prefix""session/$session_id?directory=$uri" || true
+                fi
+                rm -f "$response"
+              }
+              trap cleanup EXIT
+              http="$(curl -sS --max-time 45 --user "native-test:$basic" \
+                -o "$response" -w '%{http_code}' "$prefix""provider?directory=$uri")" || http=000
+              echo "DIRECT_PROJECT_PROVIDER_HTTP=$http"
+              if test "$http" = 200; then
+                connected="$(jq -r 'if (.connected // []) | index("deepseek") then "yes" else "no" end' "$response")"
+                echo "DIRECT_PROJECT_DEEPSEEK_CONNECTED=$connected"
+                http="$(curl -sS --max-time 45 --user "native-test:$basic" \
+                  -H 'Content-Type: application/json' -X POST -d '{"title":"Native main TEST project smoke"}' \
+                  -o "$response" -w '%{http_code}' "$prefix""session?directory=$uri")" || http=000
+                echo "DIRECT_PROJECT_SESSION_CREATE_HTTP=$http"
+                if test "$http" = 200; then
+                  session_id="$(jq -r '.id // empty' "$response")"
+                  if [[ "$session_id" =~ ^ses_[A-Za-z0-9_-]+$ ]] && test "$connected" = yes; then
+                    body='{"model":{"providerID":"deepseek","modelID":"deepseek-flash"},"parts":[{"type":"text","text":"Reply with OK only, no tools."}]}'
+                    http="$(curl -sS --max-time 35 --user "native-test:$basic" \
+                      -H 'Content-Type: application/json' -X POST -d "$body" \
+                      -o "$response" -w '%{http_code}' \
+                      "$prefix""session/$session_id/prompt_async?directory=$uri")" || http=000
+                    echo "DIRECT_PROJECT_PROMPT_ASYNC_HTTP=$http"
+                    if test "$http" = 204 || test "$http" = 200; then
+                      for attempt in 1 2 3; do
+                        sleep 7
+                        http="$(curl -sS --max-time 35 --user "native-test:$basic" \
+                          -o "$response" -w '%{http_code}' \
+                          "$prefix""session/$session_id/message?directory=$uri")" || http=000
+                        if test "$http" = 200; then
+                          texts="$(jq -r '[.[] | select(.info.role=="assistant") | .parts[]? | select(.type=="text" and (.text | length)>0)]|length' "$response")"
+                          if test "$texts" -gt 0; then
+                            echo "DIRECT_PROJECT_NATIVE_ASSISTANT_REPLY=yes"
+                            break
+                          fi
+                        fi
+                      done
+                      test "$texts" -gt 0 || echo "DIRECT_PROJECT_NATIVE_ASSISTANT_REPLY=not_yet"
+                    fi
+                  fi
+                fi
+              fi
+              cleanup
+              trap - EXIT
+            else
+              echo NATIVE_PROJECT_ROOT_FOUND=no
+            fi
+          fi
           echo NATIVE_TOPOLOGY_FINISHED
           NATIVE_DIAG
       - name: Install Native-only web client on TEST (no Python or database)
