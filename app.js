@@ -52,7 +52,7 @@ window.nativeDirectTest=(()=>{
   const active=()=>location.hostname==='test.opencode-gateway.codes'&&Boolean(currentUser);
   const base='/native-direct/api/';
   const defaultDirectory='/var/lib/opencode-native-test/workspace';
-  let catalogSnapshot=null,catalogAt=0,catalogPending=null;
+  let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,scopeOwner='';
   const url=(path,directory=defaultDirectory)=>base+path.replace(/^\/+/,'')+'?directory='+encodeURIComponent(directory);
   const rootFromFile=file=>{
     if(typeof file!=='string'||!file.startsWith('file:'))return null;
@@ -68,21 +68,78 @@ window.nativeDirectTest=(()=>{
     if(!body)return null;
     try{return JSON.parse(body);}catch{throw Error('Invalid OpenCode Native JSON ('+path+')');}
   };
-  function forget(){catalogSnapshot=null;catalogAt=0;catalogPending=null;window.nativeSession?.invalidate();window.workspaceRuntime?.clear();}
+  function ownerScope(){
+    const user=String(currentUser?.id||'');
+    if(scopeOwner!==user){
+      scopeOwner=user;catalogSnapshot=agentsSnapshot=policySnapshot=null;
+      catalogPending=agentsPending=policyPending=null;
+    }
+    return user;
+  }
+  function forget(){
+    catalogSnapshot=agentsSnapshot=policySnapshot=null;
+    catalogPending=agentsPending=policyPending=null;
+    window.nativeSession?.invalidate();window.workspaceRuntime?.clear();
+  }
   async function catalog({force=false}={}){
-    // One in-memory display snapshot from the actual Native /provider response;
-    // NOT a new model database/cache/refresh engine.
-    if(!force&&catalogSnapshot&&Date.now()-catalogAt<90000)return catalogSnapshot;
+    const user=ownerScope();
+    // Keep only a browser-memory reference to Native's original /provider.
+    // Never build a second persistent catalog or refresh models on every prompt.
+    if(!force&&catalogSnapshot)return catalogSnapshot;
     if(catalogPending)return catalogPending;
     const promise=direct('provider').then(data=>{
       if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid OpenCode Native provider response');
-      catalogSnapshot=data;catalogAt=Date.now();return data;
+      if(ownerScope()!==user)throw Error('Account changed during Native provider discovery');
+      catalogSnapshot=data;return data;
     });
     catalogPending=promise;
     try{return await promise;}finally{if(catalogPending===promise)catalogPending=null;}
   }
+  async function agents({force=false}={}){
+    const user=ownerScope();
+    if(!force&&agentsSnapshot)return agentsSnapshot;
+    if(agentsPending)return agentsPending;
+    const promise=direct('agent').then(rows=>{
+      if(!Array.isArray(rows))throw Error('Invalid OpenCode Native agents');
+      if(ownerScope()!==user)throw Error('Account changed during Native agent discovery');
+      agentsSnapshot=rows;return rows;
+    });
+    agentsPending=promise;
+    try{return await promise;}finally{if(agentsPending===promise)agentsPending=null;}
+  }
+  async function visibility({force=false}={}){
+    const user=ownerScope();
+    if(!force&&policySnapshot)return policySnapshot;
+    if(policyPending)return policyPending;
+    const promise=api('/api/opencode/display-policy').then(data=>{
+      if(!Array.isArray(data?.allowed_providers)||!Array.isArray(data?.hidden_providers)
+        ||!Array.isArray(data?.allowed_models)||!data?.hidden_models)
+        throw Error('Admin provider visibility is not available');
+      if(ownerScope()!==user)throw Error('Account changed during policy discovery');
+      policySnapshot=data;return data;
+    });
+    policyPending=promise;
+    try{return await promise;}finally{if(policyPending===promise)policyPending=null;}
+  }
+  async function registry({force=false}={}){
+    const [data,agentRows,policy]=await Promise.all([catalog({force}),agents({force}),visibility({force})]);
+    return {data,agents:agentRows,policy};
+  }
+  function providerAllowed(pid,policy=policySnapshot){
+    return !!policy&&(!policy.allowed_providers.length||policy.allowed_providers.includes(pid));
+  }
+  function providerVisible(pid,policy=policySnapshot){
+    return !!policy&&!policy.hidden_providers.includes(pid);
+  }
+  function modelAllowed(pid,mid,policy=policySnapshot){
+    return providerAllowed(pid,policy)&&(!policy.allowed_models.length||
+      policy.allowed_models.includes(mid)||policy.allowed_models.includes(pid+'/'+mid));
+  }
+  function modelVisible(pid,mid,policy=policySnapshot){
+    return !!policy&&!(policy.hidden_models[pid]||[]).includes(mid);
+  }
   const idx=(p,data)=>({
-    id:p.id,name:p.name||p.id,visible:true,allowed:true,
+    id:p.id,name:p.name||p.id,visible:providerVisible(p.id),allowed:providerAllowed(p.id),
     connected:data.connected.includes(p.id),auth_status:data.connected.includes(p.id)?'configured':undefined,
     verified:false,model_count:Object.keys(p.models||{}).length,
     default_model:data.default?.[p.id]
@@ -102,8 +159,9 @@ window.nativeDirectTest=(()=>{
   }
   function methods(auth,pid){const list=auth?.[pid];return Array.isArray(list)&&list.length?list:[{type:'api',label:'API key'}];}
   function modelDetails(p,data){
-    return {provider_id:p.id,connected:data.connected.includes(p.id),allowed:true,
-      default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,allowed:true,visible:true}))};
+    return {provider_id:p.id,connected:data.connected.includes(p.id),allowed:providerAllowed(p.id),
+      default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
+        allowed:modelAllowed(p.id,id),visible:modelVisible(p.id,id)}))};
   }
   const matches=(path)=>{
     if(!active())return false;
@@ -113,7 +171,7 @@ window.nativeDirectTest=(()=>{
   async function route(path,options={}){
     const method=(options.method||'GET').toUpperCase();
     const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
-    const data=await catalog();
+    const [data]=await Promise.all([catalog(),visibility()]);
     if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
       const query=parsed.searchParams.get('query')||'',offset=Number(parsed.searchParams.get('offset')||0);
       const limit=Math.min(50,Math.max(1,Number(parsed.searchParams.get('limit')||50)));
@@ -131,15 +189,15 @@ window.nativeDirectTest=(()=>{
       return name.startsWith('/api/workspaces/')?{native:true,providers:[item]}:item;
     }
     if(name==='/api/opencode/catalog/agents'){
-      const agents=await direct('agent');
-      return agents.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode))
+      const agentRows=await agents();
+      return agentRows.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode))
         .map(a=>({id:a.name,name:a.name,mode:a.mode}));
     }
     if(name==='/api/opencode/connections')return data.connected.map(provider_id=>({provider_id,auth_status:'configured',verified:false}));
     const isAccount=segments[0]==='api'&&segments[1]==='opencode'&&segments[2]==='connections';
     const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
     if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
-    if(isWorkspace&&segments.length===4)return data.all.slice(0,50).map(p=>idx(p,data));
+    if(isWorkspace&&segments.length===4)return ordered(data).slice(0,50).map(p=>idx(p,data));
     const providerId=isAccount?segments[3]:segments[4];
     if(!providerId)throw Error('Missing Native provider ID');
     const p=find(data,providerId),tail=segments.slice(isAccount?4:5);
@@ -173,7 +231,8 @@ window.nativeDirectTest=(()=>{
     }
     throw Error('Unsupported direct OpenCode provider action: '+name);
   }
-  return {active,url,direct,catalog,forget,matches,route,rootFromFile,defaultDirectory};
+  return {active,url,direct,catalog,agents,visibility,registry,forget,matches,route,
+    providerAllowed,providerVisible,modelAllowed,modelVisible,rootFromFile,defaultDirectory};
 })();
 
 const api=async(path,options={})=>{
