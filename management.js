@@ -201,7 +201,11 @@
       const discovery=new AbortController(),onAbort=()=>dlg.close();controller.signal.addEventListener('abort',onAbort,{once:true});
       dlg.addEventListener('close',()=>{discovery.abort();controller.signal.removeEventListener('abort',onAbort);for(const input of dlg.querySelectorAll('input[type=password]'))input.value='';view.connecting=false;host.remove();},{once:true});
       const currentDialog=()=>alive()&&contextCurrent()&&dlg.open;
-      body.append(node('p',tr('Credentials are stored on the server. Configuration alone does not verify provider access; test it with a native prompt.','تُحفظ الاعتمادات على الخادم. حفظ الإعداد لا يثبت صلاحية الوصول؛ تحقّق بإرسال طلب أصلي.')));
+      body.append(node('p',window.nativeDirectTest?.active()
+        ?tr('TEST: the key is sent to OpenCode Native, not the Gateway database. Native temporarily saves it, makes one real request to the selected model, and removes it on failed verification. No check is added to ordinary messages.',
+          'TEST: يُرسل المفتاح إلى OpenCode Native وليس قاعدة Gateway. يحفظه Native مؤقتًا ثم يجري اختبارًا حقيقيًا للنموذج المختار، ويحذفه إن فشل التحقق. لا توجد إعادة تحقق عند كل رسالة.')
+        :tr('Credentials are stored on the server. Configuration alone does not verify provider access; test it with a native prompt.',
+          'تُحفظ الاعتمادات على الخادم. حفظ الإعداد لا يثبت صلاحية الوصول؛ تحقّق بإرسال طلب أصلي.')));
       dlg.showModal();setFeedback(feedback,tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
       let choices,accountOptions=null;
       try{
@@ -262,14 +266,28 @@
           const values=Object.fromEntries(new FormData(f));submitting=true;submit.disabled=methodPicker.disabled=true;f.setAttribute('aria-busy','true');
           try{
             if(keyMethod){
-              setFeedback(feedback,tr('Saving the credential through OpenCode…','جارٍ حفظ المفتاح عبر OpenCode…'));
-              const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:values.model_id||null,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
+              setFeedback(feedback,tr('Connecting with OpenCode Native…','جارٍ الربط عبر OpenCode Native…'));
+              const nativePhase=(stage)=>{
+                if(!currentForm())return;
+                if(stage==='saving')setFeedback(feedback,tr('OpenCode Native is temporarily storing the key for verification…',
+                  'يحفظ OpenCode Native المفتاح مؤقتًا لغرض التحقق…'));
+                else if(stage==='verifying')setFeedback(feedback,tr('OpenCode Native is requesting a real response from the selected provider/model. This is NOT yet connected.',
+                  'يجري OpenCode Native طلبًا حقيقيًا إلى المزود والنموذج المختار. لم ينجح الربط بعد.'));
+                else if(stage==='failed')setFeedback(feedback,tr('Verification failed. Reverting the temporary Native key…',
+                  'فشل اختبار المفتاح. جارٍ إلغاء الحفظ المؤقت داخل Native…'),'warning');
+              };
+              const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{
+                method:'POST',
+                body:JSON.stringify({api_key:values.api_key,model_id:values.model_id||null,method:index,
+                  inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))}),
+                ...(window.nativeDirectTest?.active()?{onNativePhase:nativePhase}:{})
+              });
               f.reset();if(!alive()||!contextCurrent())return;
               if(result.connected!==true||result.persisted!==true||
                 (window.nativeDirectTest?.active()&&result.verified!==true))
                 throw new Error(tr('OpenCode did not verify this key with a real model response.',
                   'لم يؤكد OpenCode صلاحية المفتاح من خلال رد نموذج حقيقي.'));
-              dlg.close();toast(result.verified===false?tr('Credential configured. Send a native prompt to verify access.','حُفظ الاعتماد. أرسل طلبًا أصليًا للتحقق من صلاحية الوصول.'):tr('Provider connected.','تم ربط المزوّد.'));await reload();
+              dlg.close();toast(result.verified===true?tr('OpenCode verified this key with a real model response.','أكد OpenCode صلاحية المفتاح برد حقيقي من النموذج.'):result.verified===false?tr('Credential configured but not verified.','حُفظ المفتاح دون تحقق.'):tr('Provider connection saved.','حُفظ اتصال المزوّد.'));await reload();
             }else{
               setFeedback(feedback,tr('Starting OpenCode authorization…','جارٍ بدء تفويض OpenCode…'));
               const authorization=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values,...(reauthorizing?{reauthorize:true}:{})})});
