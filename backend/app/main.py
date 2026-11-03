@@ -67,12 +67,8 @@ app.include_router(auth.router); app.include_router(profile.router); app.include
 app.include_router(native_sessions.router)
 app.include_router(workspaces.router)
 app.include_router(preview_public.router)
-# The legacy Python session/queue/agent execution API is not a TEST router.
-# TEST conversations, messages, tools and SSE are handled by the running
-# OpenCode Native process. Keep legacy source only for the unchanged LIVE build.
-if settings.public_base_url.rstrip('/') != 'https://test.opencode-gateway.codes':
-    from .routes import agent
-    app.include_router(agent.router)
+# AI conversations, execution, tools, approvals and SSE are owned exclusively by
+# the existing OpenCode Native process; there is no Python agent/queue router.
 app.include_router(github.router)
 app.include_router(dashboard.router)
 app.include_router(plans.router)
