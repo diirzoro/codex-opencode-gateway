@@ -190,6 +190,13 @@ jobs:
           echo "NATIVE_JSON_TOOL=$(command -v jq || echo unavailable)"
           code="$(curl -sS -G --max-time 40 --data-urlencode "directory=$directory" -o "$provider_json" -w '%{http_code}' http://127.0.0.1:18097/provider)" || code=000
           echo "NATIVE_PROVIDER_HTTP=$code SIZE=$(wc -c < "$provider_json")"
+          echo "NATIVE_PROVIDER_EXTERNAL_CONNECTIVITY"
+          curl --silent --show-error --max-time 12 --output /dev/null --write-out 'OPEN_CODE_WEBSITE_HTTP=%{http_code} TTFB=%{time_starttransfer}\n' 'https://opencode.ai/' || true
+          curl --silent --show-error --max-time 12 --output /dev/null --write-out 'ZEN_API_HTTP=%{http_code} TTFB=%{time_starttransfer}\n' 'https://opencode.ai/zen/v1/models' || true
+          echo "NATIVE_LOG_DIR_STATUS"
+          if test -d /var/lib/opencode-native-test/data/log; then
+            find /var/lib/opencode-native-test/data/log -maxdepth 1 -type f -name '*.log' -printf 'NATIVE_LOG_FILE_AGE_SECONDS=%T@\n' 2>/dev/null | tail -n 3 || true
+          fi
           # Direct local OpenCode diagnostic, never through Python/Gateway.
           list_json="$(mktemp)"
           status_json="$(mktemp)"
@@ -209,6 +216,7 @@ jobs:
               echo "NATIVE_EXISTING_SESSION_STATUS_HTTP=$state_code"
               if [[ "$state_code" == 200 ]]; then
                 jq -r --arg sid "$latest" '.[$sid] | "NATIVE_TEST_SESSION_STATE=\(.type // "idle_or_unknown") ATTEMPT=\(.attempt // "none") RETRY_CATEGORY=\((.message // "" | tostring) | if test("rate|limit|quota";"i") then "rate_limit" elif test("auth|credential|unauthor";"i") then "authentication" elif test("connect|network|timeout|gateway";"i") then "network" elif test("model|not found";"i") then "model" else "undetermined" end)"' "$status_json"
+                jq -r --arg sid "$latest" '.[$sid] | "NATIVE_STATUS_FIELDS=" + (keys | join(",")) + " RETRY_MESSAGE_LENGTH=" + ((.message // "" | tostring | length)|tostring) + " RETRY_DETAIL_CLASS=" + ((.message // "" | tostring) | if test("429|too many requests";"i") then "rate_limit" elif test("invalid|not found|404";"i") then "not_found" elif test("403|401|unauthorized";"i") then "auth" elif test("fetch|request|socket|connect|ECONN|ENOTFOUND|TLS|DNS|ETIMEDOUT";"i") then "network_error" else "other_or_blank" end)"' "$status_json"
               fi
               reply_code="$(curl -sS --max-time 25 -o "$message_json" -w '%{http_code}' "http://127.0.0.1:18098/session/$latest/message$suffix")" || reply_code=000
               echo "NATIVE_EXISTING_MESSAGE_HTTP=$reply_code"
