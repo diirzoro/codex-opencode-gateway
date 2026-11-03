@@ -172,6 +172,10 @@ jobs:
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" 'bash -s' <<'NATIVE_DIAG'
           set -eu
           echo NATIVE_TOPOLOGY_START
+          root="$(sed -n 's/^WORKSPACE_ROOT=//p' /home/tahir/opencode-gateway-test/.env | tail -n 1)"
+          if test -z "$root"; then root='/home/tahir/opencode-gateway-test/workspaces'; fi
+          printf 'TEST_WORKSPACE_ROOT=%s\n' "$root"
+          if test -d "$root"; then echo TEST_WORKSPACE_ROOT_EXISTS=yes; else echo TEST_WORKSPACE_ROOT_EXISTS=no; fi
           systemctl show opencode-native-test.service -p ActiveState -p MainPID -p User -p WorkingDirectory -p FragmentPath -p PrivateNetwork -p IPAddressDeny -p IPAddressAllow
           command -v opencode || true
           if command -v opencode >/dev/null 2>&1; then opencode --version || true; fi
