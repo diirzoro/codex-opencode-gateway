@@ -40,7 +40,9 @@
     return window.openClientView(client[name]);
   }
   async function nativeCatalog(body,platform=false){
-    if(!platform||!admin())return;
+    // TEST models and provider cache are managed only by OpenCode Native.
+    // Do not expose the legacy Gateway/Python refresh scheduler in TEST.
+    if(location.hostname==='test.opencode-gateway.codes'||!platform||!admin())return;
     const box=section(body,tr('Native catalog maintenance','صيانة فهرس OpenCode'));
     const note=node('p',tr('Uses OpenCode’s own cache refresh. The running service may retain its current model snapshot; conversations are not restarted.','يستخدم تحديث Cache الأصلي في OpenCode. قد تحتفظ الخدمة الجارية بفهرسها الحالي؛ لا تُعاد تشغيل المحادثات.'));box.append(note);
     const state=node('p');state.setAttribute('role','status');box.append(state);
