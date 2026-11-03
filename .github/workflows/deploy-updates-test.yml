@@ -89,6 +89,7 @@ jobs:
           node --check runtime-client.js
           node --check dashboards.js
           node --check management.js
+          node tests/browser/test-native-provider-inventory.cjs
       # QA is opt-in via workflow_dispatch → audit-test.
       # Normal updates pushes deploy immediately after the small source preflight.
       # Failed optional tests never block regular TEST releases.
