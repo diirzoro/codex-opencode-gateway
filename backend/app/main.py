@@ -84,6 +84,25 @@ app.include_router(billing.router)
 app.include_router(payment_gateways.router)
 app.include_router(management.router)
 app.include_router(homepage.router)
+
+# TEST-only route retirement: legacy AI/provider and file-read handlers are
+# not mounted at all. Login, project/workspace ownership, subscriptions,
+# GitHub account linking and administrative control routes remain intact.
+# The TEST UI uses OpenCode Native, with the ownership-only Nginx transport
+# for file reads; source definitions remain for non-TEST deployments.
+if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes':
+    from fastapi.routing import APIRoute
+    def _retired_test_data_route(route):
+        if not isinstance(route,APIRoute):return False
+        path=route.path
+        return (path.startswith('/api/opencode/connections')
+            or path.startswith('/api/opencode/catalog/providers')
+            or path == '/api/opencode/catalog/agents'
+            or path.startswith('/api/workspaces/{workspace_id}/providers')
+            or path in {'/api/workspaces/{workspace_id}/files',
+                        '/api/workspaces/{workspace_id}/files/content'})
+    app.router.routes[:]=[route for route in app.router.routes if not _retired_test_data_route(route)]
+
 @app.get("/api/health")
 def health(): return {"status": "ok"}
 frontend = Path(__file__).resolve().parents[2]
