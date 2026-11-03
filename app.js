@@ -139,43 +139,34 @@ window.nativeDirectTest=(()=>{
     const [data,agentRows,policy]=await Promise.all([catalog({force}),agents({force}),visibility({force})]);
     return {data,agents:agentRows,policy};
   }
-  // OpenCode's official /config/providers returns only configured provider
-  // models. Never fetch or serialize the full /provider discovery catalog when
-  // opening a workspace; the Connections dashboard alone owns that lookup.
+  // The workspace uses only OpenCode Native's lightweight configured-model view.
+  // /provider (full models.dev catalog) belongs exclusively to Connections.
+  // This is an in-memory UI reference, never a Gateway database or AI cache.
   let workspaceSnapshot=null,workspacePending=null;
   async function workspaceRegistry({force=false}={}){
     const user=ownerScope();
     if(!force&&workspaceSnapshot)return workspaceSnapshot;
     if(workspacePending)return workspacePending;
     const configuredOnly=async()=>{
-      try{
-        const value=await direct('config/providers');
-        if(!Array.isArray(value?.providers)||!value?.default||typeof value.default!=='object')
-          throw Error('Invalid OpenCode configured provider response');
-        return {all:value.providers.filter(p=>p&&typeof p.id==='string'),
-          connected:value.providers.filter(p=>p&&typeof p.id==='string').map(p=>p.id),
-          default:value.default};
-      }catch(error){
-        // Support an older Native build/proxy lacking /config/providers.
-        // Fallback remains OpenCode itself; never call a Gateway model cache.
-        if(error.status!==404&&error.status!==405)return Promise.reject(error);
-        return catalog({force});
-      }
+      const value=await direct('config/providers');
+      if(!Array.isArray(value?.providers)||!value?.default||typeof value.default!=='object')
+        throw Error('Invalid OpenCode Native /config/providers response');
+      const all=value.providers.filter(p=>p&&typeof p.id==='string');
+      // Native chooses its usable providers. Only a verified catalog already
+      // loaded by Connections may further narrow the list; do not trigger
+      // another full-catalog network request on workspace entry.
+      const verified=catalogSnapshot?new Set(catalogSnapshot.connected):null;
+      const selected=verified?all.filter(p=>verified.has(p.id)):all;
+      return {all:selected,connected:selected.map(p=>p.id),default:value.default};
     };
-    const promise=Promise.all([configuredOnly(),catalog({force}),agents({force}),visibility({force})])
-      .then(([definitions,nativeConnections,agentRows,policy])=>{
+    const job=Promise.all([configuredOnly(),agents({force}),visibility({force})])
+      .then(([data,agentRows,policy])=>{
         if(ownerScope()!==user)throw Error('Account changed during Native workspace discovery');
-        // /config/providers is a lightweight model definition source, not
-        // authentication proof. Only /provider.connected from OpenCode itself
-        // can establish that a provider is configured.
-        const connected=new Set(nativeConnections.connected);
-        const data={...definitions,all:definitions.all.filter(p=>connected.has(p.id)),
-          connected:definitions.connected.filter(id=>connected.has(id))};
         workspaceSnapshot={data,agents:agentRows,policy};
         return workspaceSnapshot;
       });
-    workspacePending=promise;
-    try{return await promise;}finally{if(workspacePending===promise)workspacePending=null;}
+    workspacePending=job;
+    try{return await job;}finally{if(workspacePending===job)workspacePending=null;}
   }
   function providerAllowed(pid,policy=policySnapshot){
     return !!policy&&(!policy.allowed_providers.length||policy.allowed_providers.includes(pid));
