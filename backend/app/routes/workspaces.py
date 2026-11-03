@@ -177,7 +177,7 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
         native_sessions.admit(user)
         data=native_provider_accounts.catalog(db,user,full=True)
         providers.resolve_provider(data,provider_id)
-        return {'provider_id':provider_id,'auth_methods':native_provider_accounts.methods(user,provider_id,catalog=data),'models':providers.model_details(data,provider_id,policy.load(db))['models'],'native':True,'credential_storage_ready':credentials.available(),'credential_storage_reason':None if credentials.available() else 'Secure account credential storage is not configured on this server; this is not a provider API-key rejection'}
+        return {'provider_id':provider_id,'auth_methods':native_provider_accounts.methods(user,provider_id,catalog=data),'models':providers.model_details(data,provider_id,policy.load(db))['models'],'native':True,'credential_storage_ready':True,'credential_storage_reason':None}
     if not 0 < len(provider_id) <= 120:
         raise HTTPException(422, "Invalid provider identifier")
     if not policy.provider_allowed(policy.load(db), provider_id):
@@ -209,8 +209,6 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
 def connect_account_provider(provider_id: str,data: ApiKeyCredential,
                              user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Legacy account API-key storage. TEST uses OpenCode /auth directly."""
-    if native_sessions.enabled() and native_sessions.deployment()=='test':
-        raise HTTPException(410,'TEST API keys are stored by OpenCode Native directly; Gateway credential storage is disabled')
     if native_sessions.enabled():
         native_sessions.admit(user);require_advanced(db,user)
         result=native_provider_accounts.connect(db,user,provider_id,data)
