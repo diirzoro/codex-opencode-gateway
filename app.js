@@ -426,14 +426,16 @@ window.nativeDirectTest=(()=>{
     if(tail.length===1&&tail[0]==='credentials'&&method==='POST'){
       const value=JSON.parse(options.body||'{}');
       if(typeof value.api_key!=='string'||!value.api_key.trim())throw Error('API key is required');
-      // The native /auth store is process-global in this OpenCode version.
-      // Never silently overwrite a possibly unrelated TEST user's credential.
-      // Credential rotation requires a separately verified, isolated owner slot.
-      const currentCatalog=await catalog({force:true});
-      if(nativeConnections(currentCatalog).includes(p.id)&&!publicFree(p)){
-        const error=new Error('يوجد مفتاح لهذا المزود في مخزن OpenCode المشترك. لن يتم استبداله دون عزل حسابات TEST.');
+      // /provider.connected only reports Native availability; it cannot
+      // prove that a valid API key is saved. A provider may be free, configured
+      // through environment, or be listed in stale Native state.
+      // Do not mistake it for a credential and reject valid new keys.
+      // The form requires explicit consent because Native auth is process-global.
+      if(value.replace_existing!==true){
+        const error=new Error('يتطلب حفظ مفتاح Native المشترك تأكيدًا صريحًا من المستخدم.');
         error.status=409;throw error;
       }
+      const currentCatalog=await catalog({force:true});
       const choices=Object.keys(p.models||{}).filter(mid=>modelAllowed(p.id,mid));
       const selected=typeof value.model_id==='string'&&choices.includes(value.model_id)
         ?value.model_id
