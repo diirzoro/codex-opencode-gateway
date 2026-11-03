@@ -1,6 +1,6 @@
 /* OpenCode 1.x native wire adapter and existing-UI presentation, not an execution engine. */
 (() => {
-  let identity='',configuration=null,configurationPending=null,stream=null;
+  let identity='',configuration=null,configurationPending=null,stream=null,streamId='';
   const rows=new Map(),snapshots=new Map(),statuses=new Map(),statusEvents=new Map(),statusReads=new Map();
   const permissionReplies=new Set(),submissionsInFlight=new Map(),sendGenerations=new Map();
   const histories=new Map(),pendingReads=new Map(),discoveryReads=new Map(),selections=new Map(),uncertain=new Map();let epoch=0;
@@ -17,7 +17,7 @@
     if(configuration.enabled)presentationStyle();
     return configuration.enabled;
   }
-  function clear(){epoch++;for(const controller of submissionsInFlight.values())controller.abort();submissionsInFlight.clear();sendGenerations.clear();stream?.close();stream=null;identity='';configuration=null;configurationPending=null;document.getElementById('workspacePage')?.classList.remove('native-mode');permissionReplies.clear();for(const map of [rows,snapshots,statuses,statusEvents,statusReads,histories,pendingReads,discoveryReads,selections,uncertain])map.clear();}
+  function clear(){epoch++;for(const controller of submissionsInFlight.values())controller.abort();submissionsInFlight.clear();sendGenerations.clear();stream?.close();stream=null;streamId='';identity='';configuration=null;configurationPending=null;document.getElementById('workspacePage')?.classList.remove('native-mode');permissionReplies.clear();for(const map of [rows,snapshots,statuses,statusEvents,statusReads,histories,pendingReads,discoveryReads,selections,uncertain])map.clear();}
   function presentationStyle(){
     if(!document.head||document.getElementById('nativeConversationStyles'))return;
     const style=document.createElement('style');style.id='nativeConversationStyles';style.textContent=`
@@ -232,7 +232,7 @@
   async function start(){
     stop();const id=activeSession?.id,user=owner();if(!id)return;
     const row=await context(id);if(!current(id,user))return;
-    const source=new EventSource(url(row.workspace_id,'event'));stream=source;let timer,fileTimer,pending=false,lastMessageRead=0,opened=false,needsSnapshot=false;const eventIDs=new Set(),changedTools=new Set();
+    const source=new EventSource(url(row.workspace_id,'event'));stream=source;streamId=id;let timer,fileTimer,pending=false,lastMessageRead=0,opened=false,needsSnapshot=false;const eventIDs=new Set(),changedTools=new Set();
     function filesChanged(){clearTimeout(fileTimer);fileTimer=setTimeout(()=>{if(stream===source&&current(id,user))window.refreshNativeFiles?.({workspaceId:row.workspace_id,owner:user});},400);}
     // Coalesce token/part bursts into bounded snapshots. The native SSE
     // transport stays immediate; only expensive full-history reads are paced.
@@ -242,11 +242,17 @@
       timer=null;if(pending||stream!==source||!current(id,user))return;
       const work=dirty;dirty={messages:false,status:false,controls:false,todos:false};pending=true;
       try{
-        if(work.status)await window.refreshWorkspaceSessionStatus?.();
-        if(stream!==source||!current(id,user))return;
-        if(work.messages){if(needsSnapshot){needsSnapshot=false;await history(id,true);}await refreshMessages();lastMessageRead=Date.now();}
-        if(work.controls)await refreshPermissions();
-        if(work.todos)await window.refreshWorkspaceTodos?.(true);
+        // Native SSE text must render before slow history/status requests.
+        if(work.messages){
+          const needsNativeRead=needsSnapshot;needsSnapshot=false;
+          await refreshMessages();lastMessageRead=Date.now();
+          if(needsNativeRead)void history(id,true).then(()=>{
+            if(stream===source&&current(id,user))return refreshMessages();
+          }).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
+        }
+        if(work.status)void Promise.resolve().then(()=>window.refreshWorkspaceSessionStatus?.()).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
+        if(work.controls)void Promise.resolve().then(()=>refreshPermissions()).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
+        if(work.todos)void Promise.resolve().then(()=>window.refreshWorkspaceTodos?.(true)).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
       }catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
       finally{pending=false;if(stream===source&&current(id,user)&&Object.values(dirty).some(Boolean))schedule();}
     }
@@ -264,8 +270,14 @@
         window.refreshWorkspaceChoices?.('',true).catch(error=>{if(current(id,user))$('#runtimeStatus').textContent=error.message;});
         return;
       }
-      const p=e.properties||{},session=p.sessionID||p.info?.sessionID||p.part?.sessionID||p.info?.id;
+      const p=e.properties||{},session=p.sessionID||p.info?.sessionID||p.part?.sessionID;
+      // info.id identifies an individual MESSAGE, not a Native session.
       if(session&&session!==row.runtime_id)return;
+      if(!session&&e.type.startsWith('message.')){
+        const messageID=p.info?.id||p.part?.messageID||p.messageID;
+        if(!histories.get(id)?.messages.some(m=>m.info?.id===messageID))return;
+      }
+      if(!session&&e.type.startsWith('session.'))return;
       if(e.type==='file.edited'&&relativeFile(p.file,row))filesChanged();
       if(e.type==='message.part.updated'&&p.part?.type==='tool'){
         const activity=toolActivity(p.part,row);if(!['todowrite','todoread'].includes(activity.tool))window.renderWorkspaceEventLine?.('activity',activity);
@@ -281,16 +293,17 @@
       if(e.type.startsWith('todo.'))dirty.todos=true;
       if(Object.values(dirty).some(Boolean))schedule();
     };
-    source.onopen=async()=>{
+    source.onopen=()=>{
       if(!current(id,user)||stream!==source)return;
-      try{await synchronizeStatus(row,id,()=>current(id,user)&&stream===source);}
-      catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
-      if(current(id,user)&&stream===source){if(opened)filesChanged();needsSnapshot=opened||!histories.has(id);opened=true;dirty={messages:true,status:true,controls:true,todos:true};schedule();}
+      void synchronizeStatus(row,id,()=>current(id,user)&&stream===source)
+        .catch(error=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;});
+      if(opened)filesChanged();needsSnapshot=opened||!histories.has(id);
+      opened=true;dirty={messages:true,status:true,controls:true,todos:true};schedule();
     };
     source.onerror=()=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent='Reconnecting to native OpenCode';};
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
   }
-  function stop(){stream?.close();stream=null;}
+  function stop(){stream?.close();stream=null;streamId='';}
   async function forceStop(id){
     const user=owner(),generation=epoch;
     sendGenerations.set(id,(sendGenerations.get(id)||0)+1);
@@ -323,6 +336,7 @@
     const row=await context(id);
     if(blocked(id))throw Error(label('Recover this conversation before sending. Your draft is preserved.','استعد هذه المحادثة قبل الإرسال. مسودتك محفوظة.'));
     const user=owner(),sendEpoch=epoch,sendGeneration=sendGenerations.get(id)||0,seenStatus=statusEvents.get(id)||0;select(id,{providerID,modelID,agent,variant});
+    if(streamId!==id)await start();
     const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
     const messageID='msg_'+((BigInt(Date.now())*4096n)&0xffffffffffffn).toString(16).padStart(12,'0')+Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');
     const parts=[{type:'text',text},...files.map(f=>({type:'file',mime:f.mime||({'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','pdf':'application/pdf'}[f.path.split('.').at(-1)]||'application/octet-stream'),url:row.file_base+f.path.split('/').map(encodeURIComponent).join('/'),filename:f.path.split('/').at(-1)}))];
