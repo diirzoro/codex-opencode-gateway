@@ -148,7 +148,15 @@ window.nativeDirectTest=(()=>{
     if(!force&&workspaceSnapshot)return workspaceSnapshot;
     if(workspacePending)return workspacePending;
     const configuredOnly=async()=>{
-      const value=await direct('config/providers');
+      let value;
+      try{value=await direct('config/providers');}
+      catch(error){
+        // Older TEST Nginx transport might not yet expose the lightweight
+        // OpenCode endpoint. Do not break workspace opening: use the Native
+        // full catalog once, reusing the in-memory snapshot across workspaces.
+        if(error.status!==404&&error.status!==405)return Promise.reject(error);
+        return catalog({force});
+      }
       if(!Array.isArray(value?.providers)||!value?.default||typeof value.default!=='object')
         throw Error('Invalid OpenCode Native /config/providers response');
       const all=value.providers.filter(p=>p&&typeof p.id==='string');
