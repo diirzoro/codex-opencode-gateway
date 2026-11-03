@@ -4,7 +4,6 @@ on:
     branches: [updates]
     paths-ignore:
       - 'docs/**'
-      - 'assets/native-direct/**'
       - 'ops/native-direct/**'
   workflow_dispatch:
     inputs:
@@ -336,6 +335,28 @@ jobs:
           # Password travels only over encrypted SSH stdin; never in log or CLI arguments.
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates </dev/null && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && TEST_SUDO_PASS_STDIN=1 python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
+      - name: Update TEST Native direct client from this exact commit
+        if: steps.confirm.outputs.mode == 'deploy-test'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          node --check assets/native-direct/app.js
+          port="${PORT:-22}"
+          # Static OpenCode Native UI is outside the Gateway Git worktree.
+          # Deploy it explicitly, never silently leave the old verifier live.
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'test -d /var/www/opencode-native-direct-test && install -d -m 700 /home/tahir/.native-direct-stage'
+          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            assets/native-direct/app.js "$USER@$HOST:/home/tahir/.native-direct-stage/app.js"
+          : "${VPS_SUDO_PASSWORD:?Missing protected VPS sudo credential}"
+          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'read -r pass; printf "%s\\n" "$pass" | sudo -S -p "" install -m 0644 /home/tahir/.native-direct-stage/app.js /var/www/opencode-native-direct-test/app.js'
+          echo 'TEST Native direct web client updated from the same pinned commit.'
       - name: Verify TEST health after TEST operation
         if: steps.confirm.outputs.mode != 'audit-test' && steps.confirm.outputs.mode != 'native-probe'
         run: |
