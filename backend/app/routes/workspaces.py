@@ -210,9 +210,12 @@ def connect_account_provider(provider_id: str,data: ApiKeyCredential,
                              user: User=Depends(require_user),db: Session=Depends(get_db)):
     """Legacy account API-key storage. TEST uses OpenCode /auth directly."""
     if native_sessions.enabled():
-        native_sessions.admit(user);require_advanced(db,user)
-        result=native_provider_accounts.connect(db,user,provider_id,data)
-        require_advanced(db,user,start=True);db.commit();return result
+        # Fail closed: OpenCode PUT /auth only proves storage, not that the key
+        # is valid. TEST's direct Native flow must perform the real model
+        # round-trip and roll back a failed key before exposing "connected".
+        # Never save or mark verified:false credentials through this fallback.
+        native_sessions.admit(user)
+        raise HTTPException(409,'API key verification must complete through OpenCode Native before connecting; unverified credential was not saved')
     user_provider_credentials.require_schema(db)
     require_advanced(db,user)
     if not 0 < len(provider_id) <= 120:
