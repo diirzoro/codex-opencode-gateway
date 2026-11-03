@@ -43,7 +43,7 @@ function invalidateProviderMutation(path,method='GET'){
  }
 }
 window.addEventListener('storage',event=>{
- if(currentUser&&event.key==='og-native-provider-revision:'+currentUser.id){window.workspaceRuntime?.clear();window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser.id}}));}
+ if(currentUser&&event.key==='og-native-provider-revision:'+currentUser.id){window.nativeDirectTest?.forget();window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser.id}}));}
 });
 
 /* TEST Native provider adapter: Native is the only model/credential registry.
@@ -53,7 +53,7 @@ window.nativeDirectTest=(()=>{
   const active=()=>testHost()&&Boolean(currentUser);
   const base='/native-direct/api/';
   const defaultDirectory='/var/lib/opencode-native-test/workspace';
-  let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,scopeOwner='';
+  let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
   const url=(path,directory=defaultDirectory)=>base+path.replace(/^\/+/,'')+'?directory='+encodeURIComponent(directory);
   const rootFromFile=file=>{
     if(typeof file!=='string'||!file.startsWith('file:'))return null;
@@ -85,14 +85,14 @@ window.nativeDirectTest=(()=>{
   function ownerScope(){
     const user=String(currentUser?.id||'');
     if(scopeOwner!==user){
-      scopeOwner=user;catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=null;
-      catalogPending=agentsPending=policyPending=workspacePending=null;
+      scopeOwner=user;catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
+      catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
     }
     return user;
   }
   function forget(){
-    catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=null;
-    catalogPending=agentsPending=policyPending=workspacePending=null;
+    catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
+    catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
     window.nativeSession?.invalidate();window.workspaceRuntime?.clear();
   }
   async function catalog({force=false}={}){
@@ -139,35 +139,44 @@ window.nativeDirectTest=(()=>{
     const [data,agentRows,policy]=await Promise.all([catalog({force}),agents({force}),visibility({force})]);
     return {data,agents:agentRows,policy};
   }
-  // The workspace uses only OpenCode Native's lightweight configured-model view.
-  // /provider (full models.dev catalog) belongs exclusively to Connections.
-  // This is an in-memory UI reference, never a Gateway database or AI cache.
-  let workspaceSnapshot=null,workspacePending=null;
-  async function workspaceRegistry({force=false}={}){
+  // One owner-scoped browser-memory snapshot of Native's configured providers.
+  // Dashboard and Workspace share it; no second DB, file cache or Python AI.
+  // The first request reads OpenCode Native; provider mutations call forget().
+  async function configuredProviders({force=false}={}){
     const user=ownerScope();
-    if(!force&&workspaceSnapshot)return workspaceSnapshot;
-    if(workspacePending)return workspacePending;
-    const configuredOnly=async()=>{
+    if(!force&&configuredSnapshot)return configuredSnapshot;
+    if(configuredPending)return configuredPending;
+    const job=(async()=>{
       let value;
       try{value=await direct('config/providers');}
       catch(error){
-        // Older TEST Nginx transport might not yet expose the lightweight
-        // OpenCode endpoint. Do not break workspace opening: use the Native
-        // full catalog once, reusing the in-memory snapshot across workspaces.
-        if(error.status!==404&&error.status!==405)return Promise.reject(error);
+        // The fallback is still OpenCode Native, never a Gateway provider DB.
+        // Keep old TEST transports usable until the lightweight route exists.
+        if(error.status!==404&&error.status!==405)throw error;
         return catalog({force});
       }
       if(!Array.isArray(value?.providers)||!value?.default||typeof value.default!=='object')
         throw Error('Invalid OpenCode Native /config/providers response');
       const all=value.providers.filter(p=>p&&typeof p.id==='string');
-      // Native chooses its usable providers. Only a verified catalog already
-      // loaded by Connections may further narrow the list; do not trigger
-      // another full-catalog network request on workspace entry.
+      if(ownerScope()!==user)throw Error('Account changed during Native provider loading');
       const verified=catalogSnapshot?new Set(catalogSnapshot.connected):null;
       const selected=verified?all.filter(p=>verified.has(p.id)):all;
-      return {all:selected,connected:selected.map(p=>p.id),default:value.default};
-    };
-    const job=Promise.all([configuredOnly(),agents({force}),visibility({force})])
+      const result={all:selected,connected:selected.map(p=>p.id),default:value.default};
+      configuredSnapshot=result;
+      return result;
+    })();
+    configuredPending=job;
+    try{return await job;}finally{if(configuredPending===job)configuredPending=null;}
+  }
+  // Workspace never downloads the full catalog just to open a conversation.
+  // Provider/model visibility is Gateway *control-plane* metadata only; Native
+  // remains the sole source of AI model definitions, keys and execution.
+  let workspaceSnapshot=null,workspacePending=null;
+  async function workspaceRegistry({force=false}={}){
+    const user=ownerScope();
+    if(!force&&workspaceSnapshot)return workspaceSnapshot;
+    if(workspacePending)return workspacePending;
+    const job=Promise.all([configuredProviders({force}),agents({force}),visibility({force})])
       .then(([data,agentRows,policy])=>{
         if(ownerScope()!==user)throw Error('Account changed during Native workspace discovery');
         workspaceSnapshot={data,agents:agentRows,policy};
@@ -351,19 +360,12 @@ window.nativeDirectTest=(()=>{
     if(name==='/api/opencode/catalog/providers/page' &&
        !parsed.searchParams.get('query') &&
        Number(parsed.searchParams.get('offset')||0)===0){
-      const [inventory,policy]=await Promise.all([direct('config/providers').catch(error=>{
-        if(error.status===404||error.status===405)return null;
-        throw error;
-      }),visibility()]);
-      if(inventory&&Array.isArray(inventory.providers)){
-        const connected=inventory.providers.filter(p=>p&&typeof p.id==='string');
-        const nativeData={all:connected,connected:connected.map(p=>p.id),
-          default:inventory.default||{}};
-        const items=connected.slice(0,50).map(p=>idx(p,nativeData));
-        return {items,connected_items:connected.map(p=>idx(p,nativeData)),
-          total:connected.length,offset:0,limit:50,
-          next_offset:connected.length>50?50:null,native_configured_only:true};
-      }
+      const [nativeData]=await Promise.all([configuredProviders(),visibility()]);
+      const connected=nativeData.all;
+      const items=connected.slice(0,50).map(p=>idx(p,nativeData));
+      return {items,connected_items:connected.map(p=>idx(p,nativeData)),
+        total:connected.length,offset:0,limit:50,
+        next_offset:connected.length>50?50:null,native_configured_only:true};
     }
     const [data]=await Promise.all([catalog(),visibility()]);
     if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
@@ -460,7 +462,7 @@ window.nativeDirectTest=(()=>{
     }
     throw Error('Unsupported direct OpenCode provider action: '+name);
   }
-  return {active,url,direct,catalog,agents,visibility,registry,workspaceRegistry,forget,matches,route,
+  return {active,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,matches,route,
     providerAllowed,providerVisible,modelAllowed,modelVisible,classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 
