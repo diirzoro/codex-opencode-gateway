@@ -6,7 +6,7 @@ const root='/native-direct/api/';
 const directory='/var/lib/opencode-native-test/workspace';
 const address=name=>root+name+'?directory='+encodeURIComponent(directory);
 const feedback=(id,value,bad=false)=>{const node=byId(id);node.textContent=value;node.classList.toggle('error',bad)};
-let snapshot=null,currentSession='',events=null,parts=new Map();
+let snapshot=null,currentSession='',events=null,parts=new Map(),nativeFailureSeen=false;
 async function native(name,method='GET',value){
  const request={method,credentials:'same-origin',cache:'no-store'};
  if(value!==undefined){request.headers={'Content-Type':'application/json'};request.body=JSON.stringify(value);}
@@ -119,7 +119,7 @@ async function showHistory(id){
  const replies=items.filter(m=>m.info?.role==='assistant');
  const text=replies.flatMap(m=>(m.parts||[]).filter(p=>p.type==='text').map(p=>p.text||'')).join('\n');
  if(text)byId('answer').textContent=text;
- if(replies.some(m=>m.info?.error))feedback('chatStatus',failure(replies.find(m=>m.info?.error).info.error),true);
+ if(replies.some(m=>m.info?.error)){nativeFailureSeen=true;feedback('chatStatus',failure(replies.find(m=>m.info?.error).info.error),true);}
 }
 function onEvent(event){
  let item;try{item=JSON.parse(event.data)}catch{return}
@@ -133,18 +133,18 @@ function onEvent(event){
   parts.set(p.partID,(parts.get(p.partID)||'')+(p.delta||''));
   byId('answer').textContent=[...parts.values()].join('\n');
  }
- if(item.type==='session.status'&&p.status?.type==='retry')feedback('chatStatus',failure({message:p.status.message}),true);
- if(item.type==='session.error')feedback('chatStatus',failure(p.error),true);
+ if(item.type==='session.status'&&p.status?.type==='retry'){nativeFailureSeen=true;feedback('chatStatus',failure({message:p.status.message}),true);}
+ if(item.type==='session.error'){nativeFailureSeen=true;feedback('chatStatus',failure(p.error),true);}
  if(item.type==='session.idle'){
   byId('stop').disabled=true;
-  feedback('chatStatus','انتهى OpenCode من معالجة الرسالة.');
+  if(!nativeFailureSeen)feedback('chatStatus','انتهى OpenCode من معالجة الرسالة.');
   showHistory(currentSession).catch(()=>{});
  }
 }
 async function send(){
  const providerID=byId('provider').value,modelID=byId('model').value,txt=byId('prompt').value.trim();
  if(!providerID||!modelID||!txt)return;
- byId('send').disabled=true;byId('answer').textContent='';parts.clear();
+ byId('send').disabled=true;byId('answer').textContent='';parts.clear();nativeFailureSeen=false;
  try{
   const session=await native('session','POST',{title:'Native direct TEST'});
   if(!session?.id)throw Error('فشل إنشاء جلسة Native');
