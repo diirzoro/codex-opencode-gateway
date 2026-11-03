@@ -345,6 +345,26 @@ window.nativeDirectTest=(()=>{
       invalidateProviderMutation(path,'DELETE');
       return null;
     }
+    // Dashboard first paint: show existing Native-configured providers without
+    // downloading the entire ~7 MB discovery catalog. Searching or choosing an
+    // unconfigured provider still uses the authoritative OpenCode /provider.
+    if(name==='/api/opencode/catalog/providers/page' &&
+       !parsed.searchParams.get('query') &&
+       Number(parsed.searchParams.get('offset')||0)===0){
+      const [inventory,policy]=await Promise.all([direct('config/providers').catch(error=>{
+        if(error.status===404||error.status===405)return null;
+        throw error;
+      }),visibility()]);
+      if(inventory&&Array.isArray(inventory.providers)){
+        const connected=inventory.providers.filter(p=>p&&typeof p.id==='string');
+        const nativeData={all:connected,connected:connected.map(p=>p.id),
+          default:inventory.default||{}};
+        const items=connected.slice(0,50).map(p=>idx(p,nativeData));
+        return {items,connected_items:connected.map(p=>idx(p,nativeData)),
+          total:connected.length,offset:0,limit:50,
+          next_offset:connected.length>50?50:null,native_configured_only:true};
+      }
+    }
     const [data]=await Promise.all([catalog(),visibility()]);
     if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
       const query=parsed.searchParams.get('query')||'',offset=Number(parsed.searchParams.get('offset')||0);
