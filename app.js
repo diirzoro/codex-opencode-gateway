@@ -54,6 +54,7 @@ window.nativeDirectTest=(()=>{
   const base='/native-direct/api/';
   const defaultDirectory='/var/lib/opencode-native-test/workspace';
   let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
+  let deletedAuthSlots=new Set();
   const url=(path,directory=defaultDirectory)=>base+path.replace(/^\/+/,'')+'?directory='+encodeURIComponent(directory);
   const rootFromFile=file=>{
     if(typeof file!=='string'||!file.startsWith('file:'))return null;
@@ -85,7 +86,7 @@ window.nativeDirectTest=(()=>{
   function ownerScope(){
     const user=String(currentUser?.id||'');
     if(scopeOwner!==user){
-      scopeOwner=user;catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
+      scopeOwner=user;deletedAuthSlots=new Set();catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
       catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
     }
     return user;
@@ -104,10 +105,21 @@ window.nativeDirectTest=(()=>{
     const promise=direct('provider').then(data=>{
       if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid OpenCode Native provider response');
       if(ownerScope()!==user)throw Error('Account changed during Native provider discovery');
-      catalogSnapshot=data;return data;
+      catalogSnapshot=data;configuredSnapshot=workspaceSnapshot=null;
+      window.dispatchEvent(new CustomEvent('native-provider-inventory-updated',{detail:{owner:user}}));
+      return data;
     });
     catalogPending=promise;
     try{return await promise;}finally{if(catalogPending===promise)catalogPending=null;}
+  }
+  // OpenCode's own public/free provider is usable without a user API key.
+  // This is determined only from Native model metadata, never hardcoded model IDs.
+  function publicFree(p){
+    return p?.id==='opencode'&&Object.values(p.models||{}).some(m=>
+      m?.cost?.input===0&&m?.cost?.output===0);
+  }
+  function nativeConnections(data){
+    return (data.connected||[]).filter(id=>!deletedAuthSlots.has(id));
   }
   async function agents({force=false}={}){
     const user=ownerScope();
@@ -159,9 +171,14 @@ window.nativeDirectTest=(()=>{
         throw Error('Invalid OpenCode Native /config/providers response');
       const all=value.providers.filter(p=>p&&typeof p.id==='string');
       if(ownerScope()!==user)throw Error('Account changed during Native provider loading');
-      const verified=catalogSnapshot?new Set(catalogSnapshot.connected):null;
-      const selected=verified?all.filter(p=>verified.has(p.id)):all;
-      const result={all:selected,connected:selected.map(p=>p.id),default:value.default};
+      // /config/providers lists configured model definitions, NOT proof that a
+      // secret exists. /provider.connected is authoritative for candidate
+      // connections, and its stale cache after DELETE is masked per session.
+      // Public zero-cost OpenCode models remain usable without an API key.
+      const candidates=catalogSnapshot?new Set(nativeConnections(catalogSnapshot)):new Set();
+      const usable=all.filter(p=>publicFree(p)||candidates.has(p.id));
+      const result={all:usable,connected:usable.map(p=>p.id),default:value.default,
+        public_free:usable.filter(publicFree).map(p=>p.id)};
       configuredSnapshot=result;
       return result;
     })();
@@ -200,7 +217,8 @@ window.nativeDirectTest=(()=>{
   }
   const idx=(p,data)=>({
     id:p.id,name:p.name||p.id,visible:providerVisible(p.id),allowed:providerAllowed(p.id),
-    connected:data.connected.includes(p.id),auth_status:data.connected.includes(p.id)?'configured':undefined,
+    connected:data.connected.includes(p.id),public_free:publicFree(p),
+    auth_status:publicFree(p)?'free_native':data.connected.includes(p.id)?'configured':undefined,
     verified:false,model_count:Object.keys(p.models||{}).length,
     default_model:data.default?.[p.id]
   });
@@ -222,6 +240,11 @@ window.nativeDirectTest=(()=>{
     return {provider_id:p.id,connected:data.connected.includes(p.id),allowed:providerAllowed(p.id),
       default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
         allowed:modelAllowed(p.id,id),visible:modelVisible(p.id,id)}))};
+  }
+  function configuredListing(){
+    // First paint is lightweight. Do not claim credentials exist just because
+    // Native listed a model definition in /config/providers.
+    return configuredProviders().then(data=>data);
   }
   // Credential acceptance and provider authentication are different outcomes.
   // Verify through a real model request in the EXISTING OpenCode Native process.
@@ -334,25 +357,17 @@ window.nativeDirectTest=(()=>{
       const providerId=decodeURIComponent(directDelete[1]);
       if(!/^[a-z0-9][a-z0-9._-]{0,119}$/i.test(providerId))
         throw Error('Invalid OpenCode provider ID for credential deletion');
-      const before=await catalog({force:true});
-      if(!before.connected.includes(providerId))
-        throw Error('OpenCode no longer lists this provider as configured. Refresh the Connections page.');
+      // Do not require /provider.connected before or after deletion: the
+      // built-in OpenCode provider can be usable without credentials, and the
+      // Native 1.19.x provider-state cache can remain stale after /auth DELETE.
+      // Native's DELETE response, not a catalog entry, acknowledges removal.
       const result=await direct('auth/'+encodeURIComponent(providerId),{method:'DELETE'});
-      if(result!==true)throw Error('OpenCode did not confirm deleting the credential');
-      // Never claim success from DELETE status alone. Read the actual Native
-      // store again, without relying on the cached provider inventory.
-      let after=await catalog({force:true});
-      if(after.connected.includes(providerId)){
-        // A very short extra read allows a Native storage update to settle;
-        // it must not mask a deletion failure or change another provider.
-        await new Promise(resolve=>setTimeout(resolve,350));
-        after=await catalog({force:true});
-      }
-      if(after.connected.includes(providerId))
-        throw Error('OpenCode still reports this key as configured. Deletion is NOT confirmed.');
+      if(result!==true)throw Error('OpenCode did not acknowledge removal of this credential');
+      deletedAuthSlots.add(providerId);
       forget();
       invalidateProviderMutation(path,'DELETE');
-      return null;
+      return {native_acknowledged:true,credential_deleted:true,
+        provider_may_remain_available:true};
     }
     // Dashboard first paint: show existing Native-configured providers without
     // downloading the entire ~7 MB discovery catalog. Searching or choosing an
@@ -360,7 +375,9 @@ window.nativeDirectTest=(()=>{
     if(name==='/api/opencode/catalog/providers/page' &&
        !parsed.searchParams.get('query') &&
        Number(parsed.searchParams.get('offset')||0)===0){
-      const [nativeData]=await Promise.all([configuredProviders(),visibility()]);
+      const [nativeData]=await Promise.all([configuredListing(),visibility()]);
+      // List only Native-usable providers. The free OpenCode provider is shown
+      // separately from credential inventory by the public_free flag.
       const connected=nativeData.all;
       const items=connected.slice(0,50).map(p=>idx(p,nativeData));
       return {items,connected_items:connected.map(p=>idx(p,nativeData)),
@@ -384,7 +401,8 @@ window.nativeDirectTest=(()=>{
       const item=idx(p,data);
       return name.startsWith('/api/workspaces/')?{native:true,providers:[item]}:item;
     }
-    if(name==='/api/opencode/connections')return data.connected.map(provider_id=>({provider_id,auth_status:'configured',verified:false}));
+    if(name==='/api/opencode/connections')return nativeConnections(data).map(provider_id=>({
+      provider_id,auth_status:'configured',verified:false}));
     const isAccount=segments[0]==='api'&&segments[1]==='opencode'&&segments[2]==='connections';
     const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
     if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
@@ -412,7 +430,7 @@ window.nativeDirectTest=(()=>{
       // Never silently overwrite a possibly unrelated TEST user's credential.
       // Credential rotation requires a separately verified, isolated owner slot.
       const currentCatalog=await catalog({force:true});
-      if(currentCatalog.connected.includes(p.id)){
+      if(nativeConnections(currentCatalog).includes(p.id)&&!publicFree(p)){
         const error=new Error('يوجد مفتاح لهذا المزود في مخزن OpenCode المشترك. لن يتم استبداله دون عزل حسابات TEST.');
         error.status=409;throw error;
       }
@@ -431,6 +449,7 @@ window.nativeDirectTest=(()=>{
         if(inserted!==true)throw Error('لم يؤكد OpenCode التخزين المؤقت للمفتاح.');
         options.onNativePhase?.('verifying');
         const checked=await verifyProviderModel(p.id,selected);
+        deletedAuthSlots.delete(p.id);
         forget();invalidateProviderMutation(path,'POST');
         return {connected:true,persisted:true,verified:true,
           provider_id:p.id,verified_model_id:checked.model_id};
@@ -442,9 +461,9 @@ window.nativeDirectTest=(()=>{
         try{
           const undone=await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
           if(undone!==true)throw Error('OpenCode did not confirm removing the pending key');
-          const afterDelete=await catalog({force:true});
-          if(afterDelete.connected.includes(p.id))
-            throw Error('OpenCode still lists the failed credential as connected');
+          deletedAuthSlots.add(p.id);
+          // Native 1.19.x may cache /provider.connected after deleting auth.
+          // Do not call a stale catalog proof that the key still exists.
         }catch(rollbackError){
           error.message+=' تعذّر إلغاء الاعتماد المؤقت من OpenCode؛ افصل المزود قبل المحاولة مرة أخرى.';
         }
