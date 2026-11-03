@@ -285,11 +285,18 @@ window.nativeDirectTest=(()=>{
     const isAccount=segments[0]==='api'&&segments[1]==='opencode'&&segments[2]==='connections';
     const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
     if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
-    if(isWorkspace&&segments.length===4)return ordered(data).slice(0,50).map(p=>idx(p,data));
+    if(isWorkspace&&segments.length===4)
+      return ordered(data).filter(p=>data.connected.includes(p.id)&&providerAllowed(p.id)&&providerVisible(p.id))
+        .map(p=>idx(p,data));
     const providerId=isAccount?segments[3]:segments[4];
     if(!providerId)throw Error('Missing Native provider ID');
     const p=find(data,providerId),tail=segments.slice(isAccount?4:5);
-    if(tail.length===1&&tail[0]==='models')return modelDetails(p,data);
+    if(tail.length===1&&tail[0]==='models'){
+      // Workspaces select models from the account's manually connected providers.
+      // Never turn a full Native catalogue lookup into an unconnected model picker.
+      const item=modelDetails(p,data);
+      return isWorkspace&&!item.connected?{...item,models:[]}:item;
+    }
     if(tail.length===1&&tail[0]==='options'){
       const auth=await direct('provider/auth');
       return {provider_id:p.id,auth_methods:methods(auth,p.id),models:modelDetails(p,data).models,
