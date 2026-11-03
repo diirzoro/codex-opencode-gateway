@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import ExecutionEvent, Project, ProviderCredential, User, UserProviderCredential, Workspace, WorkspaceSession
-from ..services import credentials, github, opencode, opencode_catalog, policy, providers, runtime_snapshot, preview, session_lifecycle
+from ..services import credentials, github, opencode_catalog, policy, providers, runtime_snapshot, preview, session_lifecycle
+from ..services import native_control_bridge as opencode
 from ..services import workspaces as manager
 from ..services import user_provider_credentials
 from ..services import account_provider_sync
