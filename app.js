@@ -60,9 +60,22 @@ window.nativeDirectTest=(()=>{
     try{return decodeURIComponent(new URL(file).pathname).replace(/\/+$/,'');}catch{return null;}
   };
   const direct=async(path,{method='GET',value,signal,directory=defaultDirectory}={})=>{
-    const options={method,cache:'no-store',credentials:'same-origin',signal};
+    // Timebox each Native control request. The larger verification deadline
+    // cannot stop a single fetch stuck at Nginx/upstream otherwise.
+    const timeout=method==='GET'?18000:30000;
+    const deadline=AbortSignal.timeout(timeout);
+    const effectiveSignal=signal?AbortSignal.any([signal,deadline]):deadline;
+    const options={method,cache:'no-store',credentials:'same-origin',signal:effectiveSignal};
     if(value!==undefined){options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(value);}
-    const response=await fetch(url(path,directory),options);
+    let response;
+    try{response=await fetch(url(path,directory),options);}
+    catch(error){
+      if(deadline.aborted){
+        const e=new Error('OpenCode Native did not respond within '+Math.round(timeout/1000)+' seconds ('+path+')');
+        e.status=504;throw e;
+      }
+      throw error;
+    }
     if(!response.ok){const e=new Error('OpenCode Native HTTP '+response.status+' ('+path+')');e.status=response.status;throw e;}
     if(response.status===204)return null;
     const body=await response.text();
