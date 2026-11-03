@@ -320,16 +320,19 @@
       methodPicker.onchange=renderMethod;renderMethod();methodPicker.focus();
     };
     function renderSelected(p){
-      const state=window.nativeDirectTest?.active()&&p.connected
-        ?tr('Shared Native key · verification and ownership unknown','مفتاح Native مشترك · لم تُثبت صلاحيته أو ملكيته')
+      const state=window.nativeDirectTest?.active()&&p.public_free
+        ?tr('OpenCode Native free models · no key required','نماذج OpenCode المجانية · لا تحتاج إلى مفتاح')
+        :window.nativeDirectTest?.active()&&p.connected
+        ?tr('Available in Native · credential not verified','متاح في Native · لم يُثبت وجود مفتاح صالح')
         :p.auth_status==='reauthorization_required'?tr('Authorization required','يلزم إعادة التفويض'):
         p.auth_status==='refresh_required'?tr('Token expired · refresh or reauthorize','انتهى التوكن · جدّد أو أعد التفويض'):p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
       const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
       status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String(p.model_count??p.models?.length??0)+' '+tr('models','نموذج')));
       if(!view.ready){status.append(node('span',tr('Refreshing workspace state…','جارٍ تحديث حالة مساحة العمل…')));return;}
       const act=node('div','','manage-actions');
-      if(p.connected)act.append(button(
-        window.nativeDirectTest?.active()?tr('Delete unverified Native key','حذف المفتاح غير المتحقق'):tr('Disconnect / delete key','فصل / حذف المفتاح'),
+      if(p.public_free)act.append(node('span',tr('Available directly through OpenCode Native','متاح مباشرة عبر OpenCode Native')));
+      else if(p.connected)act.append(button(
+        window.nativeDirectTest?.active()?tr('Remove stored Native credential','إزالة اعتماد Native المحفوظ'):tr('Disconnect / delete key','فصل / حذف المفتاح'),
         ()=>disconnect(p)));
       else if(p.allowed!==false)act.append(button(tr('Connect','ربط'),()=>openAuthDialog(p)));
       else act.append(node('span',tr('Restricted by platform policy','مقيّد بسياسة المنصة')));
@@ -338,7 +341,7 @@
     }
     let disconnectingProvider='';
     async function disconnect(p){
-      if(!alive()||!contextCurrent()||!view.ready||disconnectingProvider)return;
+      if(!alive()||!contextCurrent()||!view.ready||disconnectingProvider||p.public_free)return;
       // /auth in OpenCode 1.19.4 is process-global, not per user.
       // This explicit confirmation is mandatory even if the slot is legacy.
       if(window.nativeDirectTest?.active()){
@@ -356,14 +359,16 @@
       try{
         // app.js maps this URL exclusively to Native DELETE /auth and a fresh
         // Native GET /provider; no Python credential handler is involved.
-        await api(destination,{method:'DELETE'});
+        const result=await api(destination,{method:'DELETE'});
+        if(window.nativeDirectTest?.active()&&result?.native_acknowledged!==true)
+          throw new Error(tr('OpenCode did not acknowledge credential deletion.','لم يؤكد OpenCode طلب حذف الاعتماد.'));
         if(!alive()||!contextCurrent())return;
         const original=[...snapshot.providers];
         const previousSearch=[...searchRows];
         snapshot={...snapshot,providers:original.map(row=>row.id===p.id?{...row,connected:false,verified:false,auth_status:undefined}:row)};
         searchRows=previousSearch.map(row=>row.id===p.id?{...row,connected:false,verified:false,auth_status:undefined}:row);
         if(selectedProviderId===p.id)renderSelected({...p,connected:false,verified:false,auth_status:undefined});
-        toast(tr('OpenCode confirmed this provider key was deleted.','أكد OpenCode حذف مفتاح هذا المزود.'));
+        toast(tr('OpenCode acknowledged the credential deletion. The provider may still appear because its models are built in or its catalog is cached.','أكد OpenCode طلب حذف الاعتماد. قد يبقى المزود ظاهرًا لأن نماذجه مدمجة أو لأن فهرسه مخبأ.'));
         await reload();
       }catch(error){
         if(alive()&&contextCurrent()){
@@ -379,24 +384,28 @@
     }
     function renderConnected(){
       connectedBox.replaceChildren(node('h2',window.nativeDirectTest?.active()
-        ?tr('Shared OpenCode keys — NOT verified connections','مفاتيح OpenCode المشتركة — ليست اتصالات متحققة')
+        ?tr('Available through OpenCode Native','المزوّدات المتاحة عبر OpenCode Native')
         :tr('Connected providers','المزوّدات المتصلة')));
       if(window.nativeDirectTest?.active())connectedBox.append(node('p',tr(
-        'These are legacy/shared OpenCode auth slots, not verified account connections. They must be explicitly removed in OpenCode before adding a replacement key. Removing a slot may affect other TEST users.',
-        'هذه مفاتيح سابقة في مخزن OpenCode المشترك، وليست اتصالات موثقة لحسابك. يجب حذف المفتاح القديم من OpenCode قبل ربط مفتاح بديل، وقد يؤثر حذفه على مستخدمي TEST الآخرين.')));
+        'The list comes from OpenCode Native, not a Gateway model database. A configured provider does not prove a saved or working API key. Free OpenCode models require no manual key. Deleting a shared credential can affect other accounts.',
+        'تأتي القائمة من OpenCode Native وليس من قاعدة نماذج Gateway. ظهور مزود مهيأ لا يثبت وجود مفتاح API أو عمله. نماذج OpenCode المجانية لا تحتاج إلى مفتاح يدوي. حذف اعتماد مشترك قد يؤثر على حسابات أخرى.')));
       const selected=(snapshot?.providers||[]).find(p=>p.id===selectedProviderId);
       if(selected)renderSelected(selected);
-      const rows=(snapshot?.providers||[]).filter(p=>p.connected);
+      const rows=(snapshot?.providers||[]).filter(p=>p.connected||p.public_free);
       if(!rows.length){connectedBox.append(node('p',tr('No connected providers.','لا توجد مزوّدات متصلة.')));return;}
       for(const p of rows){
-        const item=node('div','','manage-actions');item.append(node('strong',p.name||p.id),node('span',window.nativeDirectTest?.active()
-          ?tr('Shared key · not verified for this account','مفتاح مشترك · غير متحقق لهذا الحساب')
+        const item=node('div','','manage-actions');item.append(node('strong',p.name||p.id),node('span',p.public_free
+          ?tr('Free models in Native · no API key','نماذج مجانية في Native · بلا مفتاح API'):window.nativeDirectTest?.active()
+          ?tr('Native provider · API key unverified','مزود Native · مفتاح API غير متحقق')
           :p.verified===true?tr('Tested','تم اختباره'):tr('Configured · not tested','مهيأ · لم يُختبر')));
         if(p.allowed===false)item.append(node('span',tr('Restricted','مقيّد')));
-        const remove=button(window.nativeDirectTest?.active()
-          ?tr('Delete key via OpenCode','حذف المفتاح عبر OpenCode')
-          :tr('Disconnect / delete key','فصل / حذف المفتاح'),()=>disconnect(p));
-        remove.disabled=!view.ready;item.append(remove);connectedBox.append(item);
+        if(!p.public_free){
+          const remove=button(window.nativeDirectTest?.active()
+            ?tr('Remove Native credential','إزالة اعتماد Native')
+            :tr('Disconnect / delete key','فصل / حذف المفتاح'),()=>disconnect(p));
+          remove.disabled=!view.ready;item.append(remove);
+        }
+        connectedBox.append(item);
       }
     }
     const renderOptions=()=>{
@@ -405,7 +414,7 @@
       const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
       const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>(query||p.visible!==false)&&(!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query))).slice(0,50);
       for(const p of rows){
-        const state=p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
+        const state=p.public_free?tr('Free Native models','نماذج Native مجانية'):p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
         const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
         const o=previous.get(p.id)||node('button','','provider-combo-option');previous.delete(p.id);o.dataset.providerId=p.id;o.textContent=(p.name||p.id)+' · '+state+restriction;o.type='button';
         o.onclick=()=>{
@@ -455,6 +464,10 @@
     });customButton.disabled=true;box.append(customButton);
     async function refresh(force=false){
       if(!alive())return;
+      if(force&&window.nativeDirectTest?.active()){
+        view.nativeCatalogRequested=false;
+        window.nativeDirectTest.forget();
+      }
       if(!workspaceId){
         view.ready=false;
         message(tr('Loading account providers…','جارٍ تحميل مزوّدات الحساب…'));
@@ -466,6 +479,15 @@
           renderOptions();renderConnected();
           message(tr('OpenCode providers ready','مزوّدو OpenCode جاهزون')+' · '+catalog.total);
           const selected=snapshot.providers.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
+          // Fast first paint uses /config/providers, then one authoritative
+          // /provider check in the background. No fake Connected state and no
+          // full catalog download on every Workspace opening.
+          if(window.nativeDirectTest?.active()&&!view.nativeCatalogRequested){
+            view.nativeCatalogRequested=true;
+            window.nativeDirectTest.catalog().then(()=>{
+              if(alive()&&!workspaceId)refresh(false).catch(()=>{});
+            }).catch(error=>{if(alive())message(error.message,true);});
+          }
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
       }
