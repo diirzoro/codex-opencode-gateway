@@ -6,8 +6,6 @@ This is a development compatibility limit, not a tenant credential sandbox.
 No engines, polling jobs, copied auth files, or alternate AI requests live here.
 """
 import hashlib
-import json
-import hmac
 import os
 from urllib.parse import quote
 
@@ -16,7 +14,7 @@ from sqlalchemy import select, text
 
 from ..config import settings
 from ..models import AccountAudit
-from . import credentials, policy, providers, user_provider_credentials
+from . import policy, providers, user_provider_credentials
 
 
 def root(user):
@@ -69,18 +67,11 @@ def claim(db,user,provider_id,directory,*,catalog=None,proposed_key=None):
     live=catalog if catalog is not None else request('GET','/provider',directory)
     entry=next((p for p in live.get('all',[]) if p.get('id')==provider_id),{})
     if provider_id in live.get('connected',[]) and not public_free(entry):
-        # A legacy encrypted account key may establish ownership only when it
-        # actually matches the native credential. No copying/decryption fallback.
-        saved=user_provider_credentials.find(db,user.id,provider_id)
-        try:
-            secret=json.loads(credentials.decrypt(saved.ciphertext)) if saved else {}
-            matches=secret.get('type')=='api' and isinstance(entry.get('key'),str) and hmac.compare_digest(secret.get('key',''),entry['key'])
-        except Exception:matches=False
-        # An exact match to the Native-held key also proves ownership of a
-        # legacy unassigned slot without replacing that shared credential.
-        if not matches and isinstance(proposed_key,str) and isinstance(entry.get('key'),str):
-            matches=hmac.compare_digest(proposed_key,entry['key'])
-        if not matches:raise HTTPException(409,'Native provider has a pre-existing unassigned connection; it was preserved')
+        # A process-global Native credential cannot be reassigned to another
+        # account. Never read, copy, compare or silently delete a legacy key.
+        # A TEST-only migration must first prove that the Native auth store is
+        # separate from LIVE before explicitly revoking unassigned credentials.
+        raise HTTPException(409,'Existing unassigned Native credential must be revoked after TEST auth isolation')
     db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action=action(provider_id)))
     db.flush()
 
@@ -159,31 +150,39 @@ def methods(user,provider_id,*,catalog=None):
 
 
 def connect(db,user,provider_id,data):
+    """Install an API key in OpenCode only; Gateway never persists its value."""
+    require_isolated_auth()
     directory=root(user);rules=policy.load(db)
     if not policy.provider_allowed(rules,provider_id):raise HTTPException(403,'Provider disabled by policy')
-    user_provider_credentials.require_schema(db)
-    if not credentials.available():raise HTTPException(503,'Existing credential encryption key is required')
     native_catalog=request('GET','/provider',directory)
     choices=methods(user,provider_id,catalog=native_catalog)
     index=data.method if data.method is not None else next((i for i,m in enumerate(choices) if m.get('type')=='api'),None)
     if index is None or index>=len(choices) or choices[index].get('type')!='api':raise HTTPException(422,'Select a native API-key method')
-    claim(db,user,provider_id,directory,catalog=native_catalog,proposed_key=data.api_key)
-    # Never overwrite an existing saved key, including old encrypted credentials.
-    saved=user_provider_credentials.find(db,user.id,provider_id)
-    if saved:
-        try:secret=json.loads(credentials.decrypt(saved.ciphertext))
-        except Exception:raise HTTPException(409,'Saved credentials could not be matched; they were preserved') from None
-        if secret.get('type')!='api' or not hmac.compare_digest(secret.get('key',''),data.api_key):raise HTTPException(409,'Saved credentials already exist; they were preserved')
-        if request('PUT','/auth/'+quote(provider_id,safe=''),directory,{'type':'api','key':data.api_key,'metadata':data.inputs or {}}) is not True:raise HTTPException(502,'Native credential configuration was not confirmed')
-        db.commit();return {'connected':True,'persisted':True,'provider_id':provider_id,'verified':False}
+    claim(db,user,provider_id,directory,catalog=native_catalog)
     value={'type':'api','key':data.api_key,'metadata':data.inputs or {}}
-    user_provider_credentials.save_encrypted(db,user.id,provider_id,credentials.encrypt(json.dumps(value)),data.api_key[-4:])
-    if request('PUT','/auth/'+quote(provider_id,safe=''),directory,value) is not True:raise HTTPException(502,'Native credential configuration was not confirmed')
+    if request('PUT','/auth/'+quote(provider_id,safe=''),directory,value) is not True:
+        raise HTTPException(502,'OpenCode did not confirm API-key installation')
     db.commit()
-    return {'connected':True,'persisted':True,'provider_id':provider_id,'verified':False,'connection_test':'Submit a native prompt to verify provider access'}
+    # Installation is not proof that the provider accepted the credential.
+    return {'connected':True,'persisted':True,'storage':'opencode-native',
+            'provider_id':provider_id,'verified':False,
+            'connection_test':'Run a real Native model request to verify API access'}
+
+
+def require_isolated_auth():
+    """Refuse shared-process TEST auth writes until isolated Native is deployed.
+
+    The operator must set this only after verifying separate TEST service
+    HOME/XDG state, runtime endpoint and no shared LIVE auth files. A UI
+    directory query parameter does not isolate OpenCode's process-global auth.
+    """
+    from ..routes.native_sessions import deployment
+    if deployment()=='test' and os.getenv('OPENCODE_NATIVE_AUTH_ISOLATED','').lower() not in ('1','true','yes'):
+        raise HTTPException(503,'TEST Native authentication store is not verified isolated from LIVE; refusing key mutation')
 
 
 def oauth_authorize(db,user,provider_id,data):
+    require_isolated_auth()
     directory=root(user)
     if not policy.provider_allowed(policy.load(db),provider_id):raise HTTPException(403,'Provider disabled by policy')
     choices=methods(user,provider_id)
@@ -196,6 +195,7 @@ def oauth_authorize(db,user,provider_id,data):
 
 
 def oauth_callback(db,user,provider_id,data):
+    require_isolated_auth()
     lock(db,provider_id)
     if not owned(db,user,provider_id):raise HTTPException(403,'Native OAuth does not belong to this account')
     result=request('POST','/provider/'+quote(provider_id,safe='')+'/oauth/callback',root(user),{'method':data.method,**({'code':data.code} if data.code else {})})
@@ -205,8 +205,10 @@ def oauth_callback(db,user,provider_id,data):
 
 
 def disconnect(db,user,provider_id):
+    require_isolated_auth()
     lock(db,provider_id)
     if not owned(db,user,provider_id):raise HTTPException(403,'Native provider does not belong to this account')
     if request('DELETE','/auth/'+quote(provider_id,safe=''),root(user)) is not True:raise HTTPException(502,'Native credential revocation was not confirmed')
+    # Cleanup legacy Gateway ciphertext only after Native confirms deletion.
     user_provider_credentials.delete_owned(db,user.id,provider_id)
     db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action=action(provider_id)+':off'));db.commit()
