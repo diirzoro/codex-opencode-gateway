@@ -83,13 +83,47 @@
   function remember(row){const saved=selection(row.id);if(saved)row={...row,model:{providerID:saved.providerID,id:saved.modelID,variant:saved.variant},agent:saved.agent};rows.set(row.id,row);return row;}
   async function context(id){
     if(rows.has(id))return rows.get(id);
+    const generation=epoch,user=owner();
     if(window.nativeDirectTest?.active()){
-      const workspaces=await api('/api/workspaces');
-      await Promise.all(workspaces.map(w=>directSessionRows(w.id)));
-      if(rows.has(id))return rows.get(id);
-      throw Error('Native session is not in this account workspace');
+      // A session is opened only by the user's currently selected workspace.
+      // Do not enumerate or probe every project in the account.
+      const selected=activeSession?.id===id&&activeSession.workspace_id===activeWorkspace?.id
+        ?activeSession:null;
+      if(selected?.runtime_id){
+        if(generation!==epoch||user!==owner())throw Error('Authenticated account changed');
+        return remember(selected);
+      }
+      const workspace=activeWorkspace?.id;
+      if(!workspace)throw Error(label('Select your project before opening a Native conversation.',
+        'اختر مشروعك أولًا لفتح محادثة OpenCode.'));
+      const currentRows=await directSessionRows(workspace);
+      const found=currentRows.find(row=>row.id===id||row.runtime_id===id);
+      if(found)return found;
+      // Old Gateway UUIDs need a one-time owner-scoped ID translation.
+      // Python returns metadata only; prompts, history, SSE and model
+      // execution always use the original OpenCode Native endpoint.
+      let legacy;
+      try{legacy=await api('/api/native-test/sessions/'+encodeURIComponent(id),{
+        signal:AbortSignal.timeout(12000)
+      });}catch(error){
+        throw Error(label('This older conversation is not available in the selected project. Open a Native conversation from its project list.',
+          'المحادثة القديمة غير متاحة في المشروع المحدد. افتحها من قائمة محادثات المشروع.'));
+      }
+      if(generation!==epoch||user!==owner()||legacy.workspace_id!==workspace||!legacy.runtime_id)
+        throw Error(label('The selected conversation belongs to a different project.',
+          'المحادثة المحددة تخص مشروعًا آخر.'));
+      const nativeRow=currentRows.find(row=>row.runtime_id===legacy.runtime_id);
+      if(!nativeRow)throw Error(label('The Native conversation is no longer present in this project.',
+        'المحادثة لم تعد موجودة في OpenCode لهذا المشروع.'));
+      const ids=directSessionIds(workspace);
+      delete ids.map[legacy.runtime_id];
+      ids.map[legacy.runtime_id]=id;
+      try{localStorage.setItem(ids.key,JSON.stringify(ids.map));}catch{}
+      rows.delete(nativeRow.id);
+      return remember({...nativeRow,...legacy,id,workspace_id:workspace,
+        runtime_id:legacy.runtime_id,native:true});
     }
-    const generation=epoch,user=owner(),value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});
+    const value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});
     if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');
     return remember(value);
   }
