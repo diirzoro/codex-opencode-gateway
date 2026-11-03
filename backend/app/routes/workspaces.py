@@ -208,7 +208,9 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
 @router.post("/opencode/connections/{provider_id}/credentials")
 def connect_account_provider(provider_id: str,data: ApiKeyCredential,
                              user: User=Depends(require_user),db: Session=Depends(get_db)):
-    """Validate a key without any project and store one credential per account."""
+    """Legacy account API-key storage. TEST uses OpenCode /auth directly."""
+    if native_sessions.enabled() and native_sessions.deployment()=='test':
+        raise HTTPException(410,'TEST API keys are stored by OpenCode Native directly; Gateway credential storage is disabled')
     if native_sessions.enabled():
         native_sessions.admit(user);require_advanced(db,user)
         result=native_provider_accounts.connect(db,user,provider_id,data)
