@@ -190,30 +190,59 @@ jobs:
           echo "NATIVE_JSON_TOOL=$(command -v jq || echo unavailable)"
           code="$(curl -sS -G --max-time 40 --data-urlencode "directory=$directory" -o "$provider_json" -w '%{http_code}' http://127.0.0.1:18097/provider)" || code=000
           echo "NATIVE_PROVIDER_HTTP=$code SIZE=$(wc -c < "$provider_json")"
-          # Follow up the previously created Native-only session without
-          # sending another prompt or touching Gateway/PostgreSQL.
+          # Direct local OpenCode diagnostic, never through Python/Gateway.
           list_json="$(mktemp)"
-          trap 'rm -f "$provider_json" "$session_json" "$message_json" "$event_markers" "$list_json"' EXIT
+          status_json="$(mktemp)"
+          trap 'rm -f "$provider_json" "$session_json" "$message_json" "$event_markers" "$list_json" "$status_json"' EXIT
           suffix='?directory=/var/lib/opencode-native-test/workspace'
+          if [[ "$code" == 200 ]] && command -v jq >/dev/null 2>&1; then
+            echo "NATIVE_FREE_MODELS_BEGIN"
+            jq -r '.all[]? | select(.id=="opencode") | .models | to_entries[]? | select(.value.cost.input==0 and .value.cost.output==0) | .key' "$provider_json" | head -n 12
+            echo "NATIVE_FREE_MODELS_END"
+          fi
           list_code="$(curl -sS --max-time 20 -o "$list_json" -w '%{http_code}' "http://127.0.0.1:18098/session$suffix")" || list_code=000
           echo "NATIVE_RECENT_SESSIONS_HTTP=$list_code"
           if [[ "$list_code" == 200 ]] && command -v jq >/dev/null 2>&1; then
             latest="$(jq -r '[.[] | select(.title=="Native transport direct smoke TEST")] | sort_by(.time.created) | last | .id // empty' "$list_json")"
             if [[ "$latest" =~ ^ses_[A-Za-z0-9_-]+$ ]]; then
-              status_json="$(mktemp)"
-              trap 'rm -f "$provider_json" "$session_json" "$message_json" "$event_markers" "$list_json" "$status_json"' EXIT
               state_code="$(curl -sS --max-time 15 -o "$status_json" -w '%{http_code}' "http://127.0.0.1:18098/session/status$suffix")" || state_code=000
               echo "NATIVE_EXISTING_SESSION_STATUS_HTTP=$state_code"
               if [[ "$state_code" == 200 ]]; then
-                jq -r --arg sid "$latest" '.[$sid].type // "idle_or_unknown" | "NATIVE_TEST_SESSION_STATE="+.' "$status_json"
+                jq -r --arg sid "$latest" '.[$sid] | "NATIVE_TEST_SESSION_STATE=\(.type // "idle_or_unknown") ATTEMPT=\(.attempt // "none") RETRY_CATEGORY=\((.message // "" | tostring) | if test("rate|limit|quota";"i") then "rate_limit" elif test("auth|credential|unauthor";"i") then "authentication" elif test("connect|network|timeout|gateway";"i") then "network" elif test("model|not found";"i") then "model" else "undetermined" end)"' "$status_json"
               fi
               reply_code="$(curl -sS --max-time 25 -o "$message_json" -w '%{http_code}' "http://127.0.0.1:18098/session/$latest/message$suffix")" || reply_code=000
               echo "NATIVE_EXISTING_MESSAGE_HTTP=$reply_code"
               if [[ "$reply_code" == 200 ]]; then
                 jq -r '[.[] | select(.info.role=="assistant")] | "ASSISTANT_TURNS=\(length) TEXT_LENGTHS=\([.[].parts[]? | select(.type=="text") | (.text | length)] | join(",")) PART_TYPES=\([.[].parts[]?.type] | unique | join(",")) ERROR_NAMES=\([.[].info.error?.name // empty] | join(","))"' "$message_json"
               fi
-            else
-              echo "NATIVE_PREVIOUS_SMOKE_SESSION_NOT_FOUND"
+            fi
+          fi
+          if [[ "$code" == 200 ]] && command -v jq >/dev/null 2>&1; then
+            other_model="$(jq -r '.all[]? | select(.id=="opencode") | .models | to_entries[]? | select(.value.cost.input==0 and .value.cost.output==0) | .key' "$provider_json" | grep -v '^big-pickle$' | head -n 1)"
+            if [[ -n "$other_model" ]]; then
+              echo "NATIVE_ALTERNATIVE_FREE_MODEL=$other_model"
+              session_code="$(curl -sS --max-time 18 -X POST -H 'Content-Type: application/json' \
+                -d '{"title":"Native alternative free model TEST"}' -o "$session_json" -w '%{http_code}' \
+                "http://127.0.0.1:18098/session$suffix")" || session_code=000
+              echo "NATIVE_ALTERNATIVE_SESSION_HTTP=$session_code"
+              if [[ "$session_code" == 200 ]]; then
+                alt_sid="$(jq -r '.id // empty' "$session_json")"
+                if [[ "$alt_sid" =~ ^ses_[A-Za-z0-9_-]+$ ]]; then
+                  body="$(jq -nc --arg model "$other_model" '{model:{providerID:"opencode",modelID:$model},parts:[{type:"text",text:"Reply with the word PING only. Do not call tools."}]}')"
+                  sent_code="$(curl -sS --max-time 20 -X POST -H 'Content-Type: application/json' --data "$body" -o /dev/null -w '%{http_code}' "http://127.0.0.1:18098/session/$alt_sid/prompt_async$suffix")" || sent_code=000
+                  echo "NATIVE_ALTERNATIVE_PROMPT_HTTP=$sent_code"
+                  sleep 16
+                  alt_code="$(curl -sS --max-time 18 -o "$message_json" -w '%{http_code}' "http://127.0.0.1:18098/session/$alt_sid/message$suffix")" || alt_code=000
+                  echo "NATIVE_ALTERNATIVE_HISTORY_HTTP=$alt_code"
+                  if [[ "$alt_code" == 200 ]]; then
+                    jq -r '[.[] | select(.info.role=="assistant")] | "NATIVE_ALT_ASSISTANT_MESSAGES=\(length) TEXT_PARTS=\([.[].parts[]? | select(.type=="text" and (.text|length)>0)] | length) ERRORS=\([.[] | select(.info.error!=null)] | length)"' "$message_json"
+                  fi
+                  alt_state="$(curl -sS --max-time 15 -o "$status_json" -w '%{http_code}' "http://127.0.0.1:18098/session/status$suffix")" || alt_state=000
+                  if [[ "$alt_state" == 200 ]]; then
+                    jq -r --arg sid "$alt_sid" '.[$sid].type // "idle_or_unknown" | "NATIVE_ALT_STATE="+.' "$status_json"
+                  fi
+                fi
+              fi
             fi
           fi
           echo "NATIVE_DIRECT_PROBE_END"
