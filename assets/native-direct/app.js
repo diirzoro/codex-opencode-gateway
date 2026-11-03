@@ -53,29 +53,38 @@ function failure(value){
 }
 async function verify(provider,model){
  let sid='',success=false;
+ const challenge='NATIVE-VERIFY-'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase();
  try{
   const session=await native('session','POST',{title:'TEST API credential verification'});
   sid=session?.id||'';
   if(!/^ses_[A-Za-z0-9_-]+$/.test(sid))throw Error('لم تُنشأ جلسة تحقق في OpenCode.');
-  await native('session/'+encodeURIComponent(sid)+'/prompt_async','POST',{
-   model:{providerID:provider,modelID:model},parts:[{type:'text',text:'Reply exactly VERIFIED, no tools.'}]
+  const receipt=await native('session/'+encodeURIComponent(sid)+'/prompt_async','POST',{
+   model:{providerID:provider,modelID:model},
+   parts:[{type:'text',text:'Return exactly this code, with no other text: '+challenge}]
   });
+  if(receipt!==null&&receipt!==true&&receipt!==undefined)
+   throw Error('لم يؤكد OpenCode استلام طلب التحقق.');
   const until=Date.now()+65000;
   while(Date.now()<until){
-   await new Promise(resolve=>setTimeout(resolve,2500));
+   await new Promise(resolve=>setTimeout(resolve,1800));
    const messages=await native('session/'+encodeURIComponent(sid)+'/message');
-   for(const m of messages||[]){
+   if(!Array.isArray(messages))throw Error('سجل التحقق من OpenCode غير صالح.');
+   for(const m of messages){
     if(m?.info?.role!=='assistant')continue;
-    if(m.info?.error)throw Error(failure(m.info.error));
-    if((m.parts||[]).some(p=>p.type==='text'&&String(p.text||'').trim())){
-     success=true;return;
-    }
+    if(m.info.error)throw Error(failure(m.info.error));
+    if(m.info.providerID!==provider||m.info.modelID!==model)
+     throw Error('أجاب نموذج أو مزود مختلف؛ لم يُقبل التحقق.');
+    const answer=(m.parts||[]).filter(p=>p.type==='text').map(p=>p.text||'').join('').trim();
+    if(!answer)continue;
+    if(!m.info.time?.completed&&!m.info.finish)continue;
+    if(answer!==challenge)throw Error('رد النموذج لا يطابق رمز التحقق؛ لم يُقبل المفتاح.');
+    success=true;return true;
    }
    const status=await native('session/status');
    if(status?.[sid]?.type==='retry'&&status[sid].message)
     throw Error(failure({message:status[sid].message}));
   }
-  throw Error('لم يصل رد للتحقق خلال المهلة؛ لا يتم قبول مفتاح غير مختبر.');
+  throw Error('لم يصل رد تحقق صحيح خلال المهلة؛ لا يتم قبول مفتاح غير مختبر.');
  }finally{
   if(sid){
    if(!success)await native('session/'+encodeURIComponent(sid)+'/abort','POST',{}).catch(()=>{});
@@ -95,11 +104,13 @@ async function connect(){
    throw Error('المزود متصل مسبقًا في مخزن OpenCode المشترك؛ لن نستبدل مفتاحًا قد يخص حسابًا آخر.');
   if(!current.all?.find(p=>p.id===provider)?.models?.[model])
    throw Error('النموذج المختار غير موجود في كتالوج Native.');
-  const accepted=await native('auth/'+encodeURIComponent(provider),'PUT',{type:'api',key:secret});
-  if(accepted!==true)throw Error('لم يؤكد OpenCode Native تخزين المفتاح.');
+  // Track the empty Native slot before PUT. If PUT fails after writing,
+  // the failure path must still revoke the provisional credential.
   stored=true;
+  const accepted=await native('auth/'+encodeURIComponent(provider),'PUT',{type:'api',key:secret});
+  if(accepted!==true)throw Error('لم يؤكد OpenCode Native تخزين المفتاح المؤقت.');
   feedback('connectStatus','تم التخزين المؤقت داخل Native. جارٍ إرسال طلب حقيقي للتحقق...');
-  await verify(provider,model);
+  if(await verify(provider,model)!==true)throw Error('لم يؤكد OpenCode نجاح التحقق الحقيقي.');
   stored=false;
   byId('apiKey').value='';
   feedback('connectStatus','تم التحقق بنجاح: OpenCode Native استقبل جوابًا من '+provider+'/'+model+'. المفتاح في مخزن Native وليس Gateway.');
@@ -109,6 +120,8 @@ async function connect(){
    try{
     const removed=await native('auth/'+encodeURIComponent(provider),'DELETE');
     if(removed!==true)throw Error('revocation not confirmed');
+    const after=await native('provider');
+    if(after?.connected?.includes(provider))throw Error('Failed Native credential still present');
    }catch{error.message+=' تعذّر حذف المفتاح المؤقت من Native؛ افصل المزود قبل إعادة المحاولة.'}
   }
   feedback('connectStatus',error.message,true);
