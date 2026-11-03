@@ -90,7 +90,8 @@ if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes'
     def _retired_test_data_route(route):
         if not isinstance(route,APIRoute):return False
         path=route.path
-        return (path.startswith('/api/opencode/connections')
+        return (path.startswith('/api/admin/native/catalog-maintenance')
+            or path.startswith('/api/opencode/connections')
             or path.startswith('/api/opencode/catalog/providers')
             or path == '/api/opencode/catalog/agents'
             or path.startswith('/api/workspaces/{workspace_id}/providers')
