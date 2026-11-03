@@ -45,7 +45,139 @@ function invalidateProviderMutation(path,method='GET'){
 window.addEventListener('storage',event=>{
  if(currentUser&&event.key==='og-native-provider-revision:'+currentUser.id){window.workspaceRuntime?.clear();window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser.id}}));}
 });
+
+/* TEST Native provider adapter: Native is the only model/credential registry.
+   No Python provider routes, database credentials, or second disk catalog. */
+window.nativeDirectTest=(()=>{
+  const active=()=>location.hostname==='test.opencode-gateway.codes'&&Boolean(currentUser);
+  const base='/native-direct/api/';
+  const defaultDirectory='/var/lib/opencode-native-test/workspace';
+  let catalogSnapshot=null,catalogAt=0,catalogPending=null;
+  const url=(path,directory=defaultDirectory)=>base+path.replace(/^\/+/,'')+'?directory='+encodeURIComponent(directory);
+  const rootFromFile=file=>{
+    if(typeof file!=='string'||!file.startsWith('file:'))return null;
+    try{return decodeURIComponent(new URL(file).pathname).replace(/\/+$/,'');}catch{return null;}
+  };
+  const direct=async(path,{method='GET',value,signal,directory=defaultDirectory}={})=>{
+    const options={method,cache:'no-store',credentials:'same-origin',signal};
+    if(value!==undefined){options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(value);}
+    const response=await fetch(url(path,directory),options);
+    if(!response.ok){const e=new Error('OpenCode Native HTTP '+response.status+' ('+path+')');e.status=response.status;throw e;}
+    if(response.status===204)return null;
+    const body=await response.text();
+    if(!body)return null;
+    try{return JSON.parse(body);}catch{throw Error('Invalid OpenCode Native JSON ('+path+')');}
+  };
+  function forget(){catalogSnapshot=null;catalogAt=0;catalogPending=null;window.nativeSession?.invalidate();window.workspaceRuntime?.clear();}
+  async function catalog({force=false}={}){
+    // One in-memory display snapshot from the actual Native /provider response;
+    // NOT a new model database/cache/refresh engine.
+    if(!force&&catalogSnapshot&&Date.now()-catalogAt<90000)return catalogSnapshot;
+    if(catalogPending)return catalogPending;
+    const promise=direct('provider').then(data=>{
+      if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid OpenCode Native provider response');
+      catalogSnapshot=data;catalogAt=Date.now();return data;
+    });
+    catalogPending=promise;
+    try{return await promise;}finally{if(catalogPending===promise)catalogPending=null;}
+  }
+  const idx=(p,data)=>({
+    id:p.id,name:p.name||p.id,visible:true,allowed:true,
+    connected:data.connected.includes(p.id),auth_status:data.connected.includes(p.id)?'configured':undefined,
+    verified:false,model_count:Object.keys(p.models||{}).length,
+    default_model:data.default?.[p.id]
+  });
+  function ordered(data,query=''){
+    const q=query.trim().toLowerCase();
+    return data.all.filter(p=>!q||p.id.toLowerCase().includes(q)||(p.name||'').toLowerCase().includes(q))
+      .sort((a,b)=>Number(data.connected.includes(b.id))-Number(data.connected.includes(a.id))
+        ||Number(['deepseek','openai','anthropic','google','opencode'].includes(b.id))-Number(['deepseek','openai','anthropic','google','opencode'].includes(a.id))
+        ||(a.name||a.id).localeCompare(b.name||b.id));
+  }
+  function find(data,pid){
+    const q=decodeURIComponent(pid).trim().toLowerCase();
+    const p=data.all.find(p=>p.id.toLowerCase()===q)||data.all.find(p=>(p.name||'').toLowerCase()===q);
+    if(!p){const e=new Error('Provider not found in OpenCode Native: '+pid);e.status=404;throw e;}
+    return p;
+  }
+  function methods(auth,pid){const list=auth?.[pid];return Array.isArray(list)&&list.length?list:[{type:'api',label:'API key'}];}
+  function modelDetails(p,data){
+    return {provider_id:p.id,connected:data.connected.includes(p.id),allowed:true,
+      default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,allowed:true,visible:true}))};
+  }
+  const matches=(path)=>{
+    if(!active())return false;
+    if(/^\/api\/opencode\/(?:connections(?:\/|$)|catalog\/providers(?:\/|$)|catalog\/agents(?:$|\?))/.test(path))return true;
+    return /^\/api\/workspaces\/[^/]+\/providers(?:\/|$|\?)/.test(path);
+  };
+  async function route(path,options={}){
+    const method=(options.method||'GET').toUpperCase();
+    const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
+    const data=await catalog();
+    if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
+      const query=parsed.searchParams.get('query')||'',offset=Number(parsed.searchParams.get('offset')||0);
+      const limit=Math.min(50,Math.max(1,Number(parsed.searchParams.get('limit')||50)));
+      const list=ordered(data,query),items=list.slice(offset,offset+limit).map(p=>idx(p,data));
+      return name.endsWith('/page')?{items,connected_items:data.all.filter(p=>data.connected.includes(p.id)).map(p=>idx(p,data)),total:list.length,offset,limit,next_offset:offset+limit<list.length?offset+limit:null}:items;
+    }
+    if(name.endsWith('/catalog/providers/search')||name.endsWith('/providers/search')){
+      const query=parsed.searchParams.get('query')||'';
+      const items=ordered(data,query).slice(0,50).map(p=>idx(p,data));
+      return name.startsWith('/api/workspaces/')?{native:true,providers:items}:items;
+    }
+    if(name.endsWith('/catalog/providers/resolve')||name.endsWith('/providers/resolve')){
+      const p=find(data,parsed.searchParams.get('name')||'');
+      const item=idx(p,data);
+      return name.startsWith('/api/workspaces/')?{native:true,providers:[item]}:item;
+    }
+    if(name==='/api/opencode/catalog/agents'){
+      const agents=await direct('agent');
+      return agents.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode))
+        .map(a=>({id:a.name,name:a.name,mode:a.mode}));
+    }
+    if(name==='/api/opencode/connections')return data.connected.map(provider_id=>({provider_id,auth_status:'configured',verified:false}));
+    const isAccount=segments[0]==='api'&&segments[1]==='opencode'&&segments[2]==='connections';
+    const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
+    if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
+    if(isWorkspace&&segments.length===4)return data.all.slice(0,50).map(p=>idx(p,data));
+    const providerId=isAccount?segments[3]:segments[4];
+    if(!providerId)throw Error('Missing Native provider ID');
+    const p=find(data,providerId),tail=segments.slice(isAccount?4:5);
+    if(tail.length===1&&tail[0]==='models')return modelDetails(p,data);
+    if(tail.length===1&&tail[0]==='options'){
+      const auth=await direct('provider/auth');
+      return {provider_id:p.id,auth_methods:methods(auth,p.id),models:modelDetails(p,data).models,
+        native:true,credential_storage_ready:true};
+    }
+    if(tail.length===1&&tail[0]==='credentials'&&method==='POST'){
+      const value=JSON.parse(options.body||'{}');
+      if(typeof value.api_key!=='string'||!value.api_key.trim())throw Error('API key is required');
+      const result=await direct('auth/'+encodeURIComponent(p.id),{method:'PUT',
+        value:{type:'api',key:value.api_key,metadata:value.inputs||{}}});
+      if(result!==true)throw Error('OpenCode did not confirm storing this provider key');
+      forget();invalidateProviderMutation(path,'POST');
+      return {connected:true,persisted:true,provider_id:p.id,verified:false};
+    }
+    if(!tail.length&&method==='DELETE'){
+      const result=await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
+      if(result!==true)throw Error('OpenCode did not confirm removing this provider key');
+      forget();invalidateProviderMutation(path,'DELETE');return null;
+    }
+    if(tail[0]==='oauth'&&method==='POST'){
+      const request=JSON.parse(options.body||'{}');
+      const operation=tail[1]==='authorize'?'authorize':tail[1]==='callback'?'callback':null;
+      if(!operation)throw Error('Unsupported Native OAuth operation');
+      const result=await direct('provider/'+encodeURIComponent(p.id)+'/oauth/'+operation,{method:'POST',value:request});
+      if(operation==='callback'){forget();invalidateProviderMutation(path,'POST');}
+      return result;
+    }
+    throw Error('Unsupported direct OpenCode provider action: '+name);
+  }
+  return {active,url,direct,catalog,forget,matches,route,rootFromFile,defaultDirectory};
+})();
+
 const api=async(path,options={})=>{
+ if(window.nativeDirectTest?.matches(path))return window.nativeDirectTest.route(path,options);
  if(window.nativeSession&&/^\/api\/(?:sessions(?:\/|\?|$)|workspaces\/[^/]+\/sessions)/.test(path))await window.nativeSession.ready();
  if(window.nativeSession?.active()){const routed=await window.nativeSession.route(path,options);if(routed)return routed.value;}
  const revision=authenticationRevision,controller=new AbortController();authenticatedRequests.add(controller);
