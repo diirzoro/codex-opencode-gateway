@@ -237,6 +237,13 @@ window.nativeDirectTest=(()=>{
   async function route(path,options={}){
     const method=(options.method||'GET').toUpperCase();
     const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
+    // Agent discovery is its own Native endpoint: opening the agent selector
+    // must not download and parse the ~7 MB model/provider catalog.
+    if(name==='/api/opencode/catalog/agents'){
+      const agentRows=await agents();
+      return agentRows.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode))
+        .map(a=>({id:a.name,name:a.name,mode:a.mode}));
+    }
     const [data]=await Promise.all([catalog(),visibility()]);
     if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
       const query=parsed.searchParams.get('query')||'',offset=Number(parsed.searchParams.get('offset')||0);
@@ -253,11 +260,6 @@ window.nativeDirectTest=(()=>{
       const p=find(data,parsed.searchParams.get('name')||'');
       const item=idx(p,data);
       return name.startsWith('/api/workspaces/')?{native:true,providers:[item]}:item;
-    }
-    if(name==='/api/opencode/catalog/agents'){
-      const agentRows=await agents();
-      return agentRows.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode))
-        .map(a=>({id:a.name,name:a.name,mode:a.mode}));
     }
     if(name==='/api/opencode/connections')return data.connected.map(provider_id=>({provider_id,auth_status:'configured',verified:false}));
     const isAccount=segments[0]==='api'&&segments[1]==='opencode'&&segments[2]==='connections';
