@@ -314,6 +314,14 @@
     }
     async function disconnect(p){
       if(!alive()||!contextCurrent()||!view.ready)return;
+      // In current OpenCode 1.19.4, /auth slots are process-global, not owned
+      // per directory. A disconnect removes the shared Native provider slot.
+      if(window.nativeDirectTest?.active()){
+        const ok=await window.confirmAction?.(tr(
+          'This is a shared OpenCode Native credential slot. Removing it can disconnect other TEST accounts. Continue?',
+          'هذا الاعتماد موجود في مخزن OpenCode Native المشترك. حذفه قد يفصل حسابات TEST أخرى. هل تريد المتابعة؟'));
+        if(!ok)return;
+      }
       await api(workspaceId?base+encodeURIComponent(p.id):
         '/api/opencode/connections/'+encodeURIComponent(p.id),{method:'DELETE'});
       if(!alive()||!contextCurrent())return;
@@ -325,7 +333,12 @@
       toast(tr('Provider disconnected. Its saved key was deleted.','فُصل المزوّد وحُذف مفتاحه المحفوظ.'));await reload();
     }
     function renderConnected(){
-      connectedBox.replaceChildren(node('h2',tr('Connected providers','المزوّدات المتصلة')));
+      connectedBox.replaceChildren(node('h2',window.nativeDirectTest?.active()
+        ?tr('Credentials present in Native (not account-verified)','اعتمادات موجودة في Native (لم تُثبت ملكيتها للحساب)')
+        :tr('Connected providers','المزوّدات المتصلة')));
+      if(window.nativeDirectTest?.active())connectedBox.append(node('p',tr(
+        'OpenCode reports credentials configured in its shared process. This does not establish key validity, account ownership, or a successful model connection.',
+        'يبلغ OpenCode عن اعتمادات في عمليته المشتركة؛ هذه ليست شهادة بصحة المفتاح أو ملكية حسابك له أو نجاح اتصال النموذج.')));
       const selected=(snapshot?.providers||[]).find(p=>p.id===selectedProviderId);
       if(selected)renderSelected(selected);
       const rows=(snapshot?.providers||[]).filter(p=>p.connected);
