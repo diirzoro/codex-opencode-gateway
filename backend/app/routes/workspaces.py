@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import ExecutionEvent, Project, ProviderCredential, User, UserProviderCredential, Workspace, WorkspaceSession
-from ..services import credentials, github, opencode_catalog, policy, providers, runtime_snapshot, preview, session_lifecycle
+from ..services import credentials, github, policy, providers, runtime_snapshot, preview, session_lifecycle
 from ..services import native_control_bridge as opencode
 from ..services import workspaces as manager
 from ..services import user_provider_credentials
@@ -100,9 +100,7 @@ def _account_public_catalog(user, path, db, *, agents=False,full=False):
         native_sessions.admit(user)
         if not agents:return native_provider_accounts.catalog(db,user,full=full)
         return [{k:r[k] for k in ('name','mode','hidden') if k in r} for r in native_sessions.metadata('GET','/agent',native_provider_accounts.root(user)) if isinstance(r,dict)]
-    account, service = opencode.for_account(user.id, db=db)
-    with opencode.workspace_lock(account), service.state_lock:
-        return opencode_catalog.public_catalog(path, agents=agents, service=service)
+    raise HTTPException(410,"Legacy Python catalog removed; use OpenCode Native discovery")
 
 
 @router.get("/opencode/display-policy")
