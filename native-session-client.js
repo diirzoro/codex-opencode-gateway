@@ -685,7 +685,7 @@
     const directMode=window.nativeDirectTest?.active();
     // The connection dashboard owns one shared account inventory, backed by
     // OpenCode's actual Native catalog. Opening a project must not reload it.
-    const inventory=directMode?await window.nativeDirectTest.registry():null;
+    const inventory=directMode?await window.nativeDirectTest.workspaceRegistry():null;
     const [providers,agents]=directMode
       ?[inventory.data,inventory.agents]
       :await Promise.all([native(id,'provider'),native(id,'agent')]);
