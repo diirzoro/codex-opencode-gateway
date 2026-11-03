@@ -657,22 +657,34 @@
   }
   async function loadDiscovery(id){
     const directMode=window.nativeDirectTest?.active();
-    const [providers,agents]=await Promise.all([
-      directMode?window.nativeDirectTest.catalog():native(id,'provider'),
-      native(id,'agent')
-    ]);
-    if(!Array.isArray(providers.all)||!Array.isArray(providers.connected)||!Array.isArray(agents))throw Error('Invalid native discovery schema');
-    const source=directMode
-      ?[...providers.all].sort((a,b)=>
-        Number(providers.connected.includes(b.id))-Number(providers.connected.includes(a.id))
-        ||Number(['deepseek','openai','anthropic','google','opencode'].includes(b.id))-Number(['deepseek','openai','anthropic','google','opencode'].includes(a.id))
-        ||String(a.id).localeCompare(String(b.id)))
+    // The connection dashboard owns one shared account inventory, backed by
+    // OpenCode's actual Native catalog. Opening a project must not reload it.
+    const inventory=directMode?await window.nativeDirectTest.registry():null;
+    const [providers,agents]=directMode
+      ?[inventory.data,inventory.agents]
+      :await Promise.all([native(id,'provider'),native(id,'agent')]);
+    if(!Array.isArray(providers.all)||!Array.isArray(providers.connected)||!Array.isArray(agents))
+      throw Error('Invalid native discovery schema');
+    const connected=new Set(providers.connected);
+    const first=directMode
+      ?providers.all.filter(p=>connected.has(p.id)&&
+          window.nativeDirectTest.providerAllowed(p.id)&&window.nativeDirectTest.providerVisible(p.id))
+        .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id))).slice(0,50)
       :[...providers.all,...(providers.connected_entries||[])];
-    const first=directMode?source.slice(0,50):source;
-    const result={native:true,loadedAt:Date.now(),workspace_id:String(id),health:{healthy:true},version:configuration.version,status:'ready',errors:{},agents,default_agent:null,
-      generation:'native-test',revision:'live',policy_revision:'native',providers:first.map(p=>({...p,...providers.gateway_auth_status?.[p.id],connected:providers.connected.includes(p.id),allowed:true,
-        default_model:providers.default?.[p.id],models:Object.entries(p.models||{}).map(([mid,m])=>({...m,id:mid,allowed:true}))}))};
-    return result;
+    return {native:true,loadedAt:Date.now(),workspace_id:String(id),health:{healthy:true},
+      version:configuration.version,status:'ready',errors:{},
+      agents:agents.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode)),
+      default_agent:null,generation:'native-test',revision:'native-account',
+      policy_revision:directMode?String(inventory.policy.updated_at||'admin'):'native',
+      providers:first.map(p=>({
+        ...p,...providers.gateway_auth_status?.[p.id],connected:connected.has(p.id),
+        allowed:directMode?window.nativeDirectTest.providerAllowed(p.id):true,
+        visible:directMode?window.nativeDirectTest.providerVisible(p.id):true,
+        default_model:providers.default?.[p.id],
+        models:Object.entries(p.models||{}).filter(([mid])=>!directMode||
+            window.nativeDirectTest.modelAllowed(p.id,mid)&&window.nativeDirectTest.modelVisible(p.id,mid))
+          .map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
+      }))};
   }
   window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
