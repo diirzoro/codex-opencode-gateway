@@ -150,23 +150,16 @@ def methods(user,provider_id,*,catalog=None):
 
 
 def connect(db,user,provider_id,data):
-    """Install an API key in OpenCode only; Gateway never persists its value."""
-    require_isolated_auth()
-    directory=root(user);rules=policy.load(db)
-    if not policy.provider_allowed(rules,provider_id):raise HTTPException(403,'Provider disabled by policy')
-    native_catalog=request('GET','/provider',directory)
-    choices=methods(user,provider_id,catalog=native_catalog)
-    index=data.method if data.method is not None else next((i for i,m in enumerate(choices) if m.get('type')=='api'),None)
-    if index is None or index>=len(choices) or choices[index].get('type')!='api':raise HTTPException(422,'Select a native API-key method')
-    claim(db,user,provider_id,directory,catalog=native_catalog)
-    value={'type':'api','key':data.api_key,'metadata':data.inputs or {}}
-    if request('PUT','/auth/'+quote(provider_id,safe=''),directory,value) is not True:
-        raise HTTPException(502,'OpenCode did not confirm API-key installation')
-    db.commit()
-    # Installation is not proof that the provider accepted the credential.
-    return {'connected':True,'persisted':True,'storage':'opencode-native',
-            'provider_id':provider_id,'verified':False,
-            'connection_test':'Run a real Native model request to verify API access'}
+    """Do not accept a write-only auth PUT as API-key verification.
+
+    TEST key connections must complete a real OpenCode Native model round-trip
+    with rollback on failure. A caller must not bypass that Native-only flow by
+    invoking this legacy Gateway service directly.
+    """
+    raise HTTPException(
+        409,
+        'Unverified Native credential storage is disabled; connect and verify through OpenCode Native',
+    )
 
 
 def require_isolated_auth():
