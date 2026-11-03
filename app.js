@@ -133,13 +133,24 @@ window.nativeDirectTest=(()=>{
     const user=ownerScope();
     if(!force&&workspaceSnapshot)return workspaceSnapshot;
     if(workspacePending)return workspacePending;
-    const promise=Promise.all([direct('config/providers'),agents({force}),visibility({force})])
-      .then(([configured,agentRows,policy])=>{
-        if(!Array.isArray(configured?.providers)||!configured?.default||typeof configured.default!=='object')
+    const configuredOnly=async()=>{
+      try{
+        const value=await direct('config/providers');
+        if(!Array.isArray(value?.providers)||!value?.default||typeof value.default!=='object')
           throw Error('Invalid OpenCode configured provider response');
+        return {all:value.providers.filter(p=>p&&typeof p.id==='string'),
+          connected:value.providers.filter(p=>p&&typeof p.id==='string').map(p=>p.id),
+          default:value.default};
+      }catch(error){
+        // Support an older Native build/proxy lacking /config/providers.
+        // Fallback remains OpenCode itself; never call a Gateway model cache.
+        if(error.status!==404&&error.status!==405)return Promise.reject(error);
+        return catalog({force});
+      }
+    };
+    const promise=Promise.all([configuredOnly(),agents({force}),visibility({force})])
+      .then(([data,agentRows,policy])=>{
         if(ownerScope()!==user)throw Error('Account changed during Native workspace discovery');
-        const rows=configured.providers.filter(p=>p&&typeof p.id==='string');
-        const data={all:rows,connected:rows.map(p=>p.id),default:configured.default};
         workspaceSnapshot={data,agents:agentRows,policy};
         return workspaceSnapshot;
       });
