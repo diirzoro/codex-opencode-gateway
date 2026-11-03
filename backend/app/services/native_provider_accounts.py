@@ -47,7 +47,7 @@ def owned(db,user,provider_id):
     record=binding(db,provider_id)
     # Preserve the prior pilot's existing native connections. This retired flag
     # is legacy ownership attribution only, never an admission restriction.
-    if record is None:return str(user.id)==os.getenv('OPENCODE_NATIVE_TEST_OWNER_ID','')
+    if record is None:return False
     return bool(record.action==action(provider_id) and record.subject_id==user.id)
 
 
@@ -101,7 +101,7 @@ def catalog(db,user,directory=None,*,full=False):
         owners[record.action.removesuffix(':off')]=None if record.action.endswith(':off') else record.subject_id
     def account_owned(entry):
         key=action(entry['id'])
-        return owners.get(key)==user.id or (key not in owners and str(user.id)==os.getenv('OPENCODE_NATIVE_TEST_OWNER_ID','') and not public_free(entry))
+        return owners.get(key)==user.id
     def usable(entry):
         return entry['id'] in data.get('connected',[]) and (account_owned(entry) or public_free(entry)) and policy.provider_allowed(rules,entry['id'])
     # Curate presentation only. Manual name/ID lookup needs the complete Native
