@@ -376,11 +376,19 @@ window.nativeDirectTest=(()=>{
        !parsed.searchParams.get('query') &&
        Number(parsed.searchParams.get('offset')||0)===0){
       const [nativeData]=await Promise.all([configuredListing(),visibility()]);
-      // List only Native-usable providers. The free OpenCode provider is shown
-      // separately from credential inventory by the public_free flag.
-      const connected=nativeData.all;
-      const items=connected.slice(0,50).map(p=>idx(p,nativeData));
-      return {items,connected_items:connected.map(p=>idx(p,nativeData)),
+      // Show the fast /config/providers view first. After the ONE optional
+      // background /provider check, include Native connected candidates that
+      // are absent from /config/providers (e.g. an older OpenAI/Google auth).
+      // These extra entries are for credential management in Connections only;
+      // they are NOT automatically injected into Workspace model choices.
+      const configuredIds=new Set(nativeData.all.map(p=>p.id));
+      const otherNative=catalogSnapshot?catalogSnapshot.all.filter(p=>
+        nativeConnections(catalogSnapshot).includes(p.id)&&!configuredIds.has(p.id)):[];
+      const connected=[...nativeData.all,...otherNative];
+      const listData={...nativeData,connected:[...new Set([...nativeData.connected,...otherNative.map(p=>p.id)])],
+        default:{...(catalogSnapshot?.default||{}),...nativeData.default}};
+      const items=connected.slice(0,50).map(p=>idx(p,listData));
+      return {items,connected_items:connected.map(p=>idx(p,listData)),
         total:connected.length,offset:0,limit:50,
         next_offset:connected.length>50?50:null,native_configured_only:true};
     }
