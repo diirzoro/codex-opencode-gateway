@@ -190,44 +190,30 @@ jobs:
           echo "NATIVE_JSON_TOOL=$(command -v jq || echo unavailable)"
           code="$(curl -sS -G --max-time 40 --data-urlencode "directory=$directory" -o "$provider_json" -w '%{http_code}' http://127.0.0.1:18097/provider)" || code=000
           echo "NATIVE_PROVIDER_HTTP=$code SIZE=$(wc -c < "$provider_json")"
-          if [[ "$code" == 200 ]] && command -v jq >/dev/null 2>&1; then
-            free_model="$(jq -r '.all[]? | select(.id=="opencode") | .models | to_entries[]? | select(.value.cost.input==0 and .value.cost.output==0) | .key' "$provider_json" | head -n 1)"
-            echo "NATIVE_FREE_MODEL=$free_model"
-            if [[ -n "$free_model" ]]; then
-              resource="http://127.0.0.1:18098"
-              suffix='?directory=/var/lib/opencode-native-test/workspace'
-              sess_code="$(curl -sS --max-time 20 -X POST -H 'Content-Type: application/json' \
-                -d '{"title":"Native transport direct smoke TEST"}' -o "$session_json" \
-                -w '%{http_code}' "$resource/session$suffix")" || sess_code=000
-              echo "NATIVE_CREATE_SESSION_HTTP=$sess_code"
-              if [[ "$sess_code" == 200 || "$sess_code" == 201 ]]; then
-                sid="$(jq -r '.id // empty' "$session_json")"
-                if [[ "$sid" =~ ^ses_[A-Za-z0-9_-]+$ ]]; then
-                  # Only count events belonging to our own new session.
-                  (curl -sSN --max-time 25 "$resource/event$suffix" |
-                    awk -v sid="$sid" 'index($0,sid)>0 {print "OWN_EVENT"; fflush()}'
-                  ) >"$event_markers" 2>/dev/null &
-                  event_pid=$!
-                  sleep 2
-                  prompt="$(jq -nc --arg model "$free_model" \
-                    '{model:{providerID:"opencode",modelID:$model},parts:[{type:"text",text:"Reply exactly NATIVE_OK. No tools."}]}')"
-                  prompt_code="$(curl -sS --max-time 25 -X POST -H 'Content-Type: application/json' \
-                    --data "$prompt" -o /dev/null -w '%{http_code}' \
-                    "$resource/session/$sid/prompt_async$suffix")" || prompt_code=000
-                  echo "NATIVE_PROMPT_ASYNC_HTTP=$prompt_code"
-                  sleep 12
-                  history_code="$(curl -sS --max-time 20 -o "$message_json" \
-                    -w '%{http_code}' "$resource/session/$sid/message$suffix")" || history_code=000
-                  echo "NATIVE_MESSAGE_HISTORY_HTTP=$history_code"
-                  if [[ "$history_code" == 200 ]]; then
-                    jq -r '[.[] | select(.info.role=="assistant")] | "NATIVE_ASSISTANT_MESSAGES=\(length) ASSISTANT_TEXT_PARTS=\([.[].parts[]? | select(.type=="text" and (.text|length)>0)] | length) ASSISTANT_ERRORS=\([.[] | select(.info.error!=null)] | length)"' "$message_json"
-                  fi
-                  echo "NATIVE_OWN_SSE_EVENTS=$(wc -l < "$event_markers")"
-                  kill "$event_pid" 2>/dev/null || true
-                else
-                  echo "NATIVE_SESSION_ID_INVALID"
-                fi
+          # Follow up the previously created Native-only session without
+          # sending another prompt or touching Gateway/PostgreSQL.
+          list_json="$(mktemp)"
+          trap 'rm -f "$provider_json" "$session_json" "$message_json" "$event_markers" "$list_json"' EXIT
+          suffix='?directory=/var/lib/opencode-native-test/workspace'
+          list_code="$(curl -sS --max-time 20 -o "$list_json" -w '%{http_code}' "http://127.0.0.1:18098/session$suffix")" || list_code=000
+          echo "NATIVE_RECENT_SESSIONS_HTTP=$list_code"
+          if [[ "$list_code" == 200 ]] && command -v jq >/dev/null 2>&1; then
+            latest="$(jq -r '[.[] | select(.title=="Native transport direct smoke TEST")] | sort_by(.time.created) | last | .id // empty' "$list_json")"
+            if [[ "$latest" =~ ^ses_[A-Za-z0-9_-]+$ ]]; then
+              status_json="$(mktemp)"
+              trap 'rm -f "$provider_json" "$session_json" "$message_json" "$event_markers" "$list_json" "$status_json"' EXIT
+              state_code="$(curl -sS --max-time 15 -o "$status_json" -w '%{http_code}' "http://127.0.0.1:18098/session/status$suffix")" || state_code=000
+              echo "NATIVE_EXISTING_SESSION_STATUS_HTTP=$state_code"
+              if [[ "$state_code" == 200 ]]; then
+                jq -r --arg sid "$latest" '.[$sid].type // "idle_or_unknown" | "NATIVE_TEST_SESSION_STATE="+.' "$status_json"
               fi
+              reply_code="$(curl -sS --max-time 25 -o "$message_json" -w '%{http_code}' "http://127.0.0.1:18098/session/$latest/message$suffix")" || reply_code=000
+              echo "NATIVE_EXISTING_MESSAGE_HTTP=$reply_code"
+              if [[ "$reply_code" == 200 ]]; then
+                jq -r '[.[] | select(.info.role=="assistant")] | "ASSISTANT_TURNS=\(length) TEXT_LENGTHS=\([.[].parts[]? | select(.type=="text") | (.text | length)] | join(",")) PART_TYPES=\([.[].parts[]?.type] | unique | join(",")) ERROR_NAMES=\([.[].info.error?.name // empty] | join(","))"' "$message_json"
+              fi
+            else
+              echo "NATIVE_PREVIOUS_SMOKE_SESSION_NOT_FOUND"
             fi
           fi
           echo "NATIVE_DIRECT_PROBE_END"
