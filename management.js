@@ -334,25 +334,46 @@
       if(!workspaceId&&p.auth_type==='oauth'&&p.allowed!==false)act.append(button(tr('Reauthorize','إعادة التفويض'),()=>openAuthDialog({...p,reauthorize:true})));
       status.append(act);
     }
+    let disconnectingProvider='';
     async function disconnect(p){
-      if(!alive()||!contextCurrent()||!view.ready)return;
-      // In current OpenCode 1.19.4, /auth slots are process-global, not owned
-      // per directory. A disconnect removes the shared Native provider slot.
+      if(!alive()||!contextCurrent()||!view.ready||disconnectingProvider)return;
+      // /auth in OpenCode 1.19.4 is process-global, not per user.
+      // This explicit confirmation is mandatory even if the slot is legacy.
       if(window.nativeDirectTest?.active()){
         const ok=await window.confirmAction?.(tr(
-          'This is a shared OpenCode Native credential slot. Removing it can disconnect other TEST accounts. Continue?',
-          'هذا الاعتماد موجود في مخزن OpenCode Native المشترك. حذفه قد يفصل حسابات TEST أخرى. هل تريد المتابعة؟'));
+          'Delete the shared OpenCode Native key for '+(p.name||p.id)+'? This may disconnect other TEST accounts. It will only be reported successful after OpenCode confirms it is gone.',
+          'هل تريد حذف مفتاح '+(p.name||p.id)+' من مخزن OpenCode Native المشترك؟ قد يؤدي ذلك إلى فصل حسابات TEST أخرى. لن نعلن النجاح حتى يؤكد OpenCode زواله.'));
         if(!ok)return;
       }
-      await api(workspaceId?base+encodeURIComponent(p.id):
-        '/api/opencode/connections/'+encodeURIComponent(p.id),{method:'DELETE'});
-      if(!alive()||!contextCurrent())return;
-      view.ready=false;
-      snapshot={...snapshot,providers:snapshot.providers.map(row=>row.id===p.id?{...row,connected:false}:row)};
-      searchRows=searchRows.map(row=>row.id===p.id?{...row,connected:false}:row);
-      renderConnected();renderOptions();
-      if(selectedProviderId===p.id)renderSelected({...p,connected:false});
-      toast(tr('Provider disconnected. Its saved key was deleted.','فُصل المزوّد وحُذف مفتاحه المحفوظ.'));await reload();
+      disconnectingProvider=p.id;
+      const destination=workspaceId?base+encodeURIComponent(p.id):
+        '/api/opencode/connections/'+encodeURIComponent(p.id);
+      view.ready=false;renderConnected();renderOptions();
+      message(tr('Deleting key through OpenCode Native and confirming removal…',
+        'جارٍ حذف المفتاح عبر OpenCode Native والتأكد من زواله…'));
+      try{
+        // app.js maps this URL exclusively to Native DELETE /auth and a fresh
+        // Native GET /provider; no Python credential handler is involved.
+        await api(destination,{method:'DELETE'});
+        if(!alive()||!contextCurrent())return;
+        const original=[...snapshot.providers];
+        const previousSearch=[...searchRows];
+        snapshot={...snapshot,providers:original.map(row=>row.id===p.id?{...row,connected:false,verified:false,auth_status:undefined}:row)};
+        searchRows=previousSearch.map(row=>row.id===p.id?{...row,connected:false,verified:false,auth_status:undefined}:row);
+        if(selectedProviderId===p.id)renderSelected({...p,connected:false,verified:false,auth_status:undefined});
+        toast(tr('OpenCode confirmed this provider key was deleted.','أكد OpenCode حذف مفتاح هذا المزود.'));
+        await reload();
+      }catch(error){
+        if(alive()&&contextCurrent()){
+          message(error.message||tr('OpenCode deletion was not confirmed.','لم يؤكد OpenCode حذف المفتاح.'),true);
+          // Never optimistically clear a provider after an ambiguous failure.
+          // Re-read Native to display the current state without claiming success.
+          await refresh(true).catch(()=>{});
+        }
+      }finally{
+        disconnectingProvider='';
+        if(alive()&&contextCurrent()){view.ready=true;renderConnected();renderOptions();}
+      }
     }
     function renderConnected(){
       connectedBox.replaceChildren(node('h2',window.nativeDirectTest?.active()
