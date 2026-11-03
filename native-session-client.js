@@ -11,7 +11,17 @@
   async function ready(){
     const user=owner();if(!user)return false;
     if(identity!==user){clear();identity=user;}
-    if(!configuration){const generation=epoch;configurationPending??=api('/api/native-test/state');let value;try{value=await configurationPending;}catch(error){if(generation===epoch)configurationPending=null;throw error;}if(generation!==epoch||user!==owner())throw Error('Authenticated account changed');configuration=value;configurationPending=null;}
+    if(!configuration){
+      if(window.nativeDirectTest?.active()){
+        // TEST Native execution is independent from Gateway model state.
+        configuration={enabled:true,mode:'native-direct-test',version:'native'};
+      }else{
+        const generation=epoch;configurationPending??=api('/api/native-test/state');let value;
+        try{value=await configurationPending;}catch(error){if(generation===epoch)configurationPending=null;throw error;}
+        if(generation!==epoch||user!==owner())throw Error('Authenticated account changed');
+        configuration=value;configurationPending=null;
+      }
+    }
     if(owner()!==user)throw Error('Authenticated account changed');
     document.getElementById('workspacePage')?.classList.toggle('native-mode',configuration.enabled===true);
     if(configuration.enabled)presentationStyle();
@@ -72,13 +82,29 @@
   function select(id,value){if(!id)return;selections.set(id,value);try{localStorage.setItem(storageKey('selection',id),JSON.stringify(value));}catch{}const row=rows.get(id);if(row){row.model={providerID:value.providerID,id:value.modelID,variant:value.variant};row.agent=value.agent;}}
   function remember(row){const saved=selection(row.id);if(saved)row={...row,model:{providerID:saved.providerID,id:saved.modelID,variant:saved.variant},agent:saved.agent};rows.set(row.id,row);return row;}
   async function context(id){if(rows.has(id))return rows.get(id);const generation=epoch,user=owner(),value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');return remember(value);}
-  const url=(workspace,path)=>'/native-session/'+encodeURIComponent(workspace)+'/'+path;
-  async function native(workspace,path,body,{signal,timeout=15000}={}){
+  // Native executes and streams directly through the TEST Nginx endpoint.
+  // Workspace session metadata remains in the existing application DB;
+  // no Python code processes the prompt or response body.
+  function nativeRoot(workspace){
+    const record=[...rows.values()].find(row=>String(row.workspace_id)===String(workspace));
+    return window.nativeDirectTest?.rootFromFile(record?.file_base)
+      ||window.nativeDirectTest?.defaultDirectory;
+  }
+  const url=(workspace,path)=>window.nativeDirectTest?.active()
+    ?window.nativeDirectTest.url(path,nativeRoot(workspace))
+    :'/native-session/'+encodeURIComponent(workspace)+'/'+path;
+  async function native(workspace,path,body,{signal,timeout=30000}={}){
     const controller=new AbortController(),cancel=()=>controller.abort();
     if(signal?.aborted)controller.abort();else signal?.addEventListener('abort',cancel,{once:true});
     const timer=setTimeout(cancel,timeout);
-    try{return await api(url(workspace,path),{...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)}),signal:controller.signal});}
-    finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
+    try{
+      if(window.nativeDirectTest?.active())
+        return await window.nativeDirectTest.direct(path,{
+          method:body===undefined?'GET':'POST',value:body,
+          directory:nativeRoot(workspace),signal:controller.signal
+        });
+      return await api(url(workspace,path),{...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)}),signal:controller.signal});
+    }finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
   }
   async function sessionRequest(id,suffix,body){const row=await context(id);return native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+(suffix?'/'+suffix:''),body);}
   async function coalesce(key,read){
@@ -499,13 +525,25 @@
     try{return await job;}finally{if(discoveryReads.get(id)===job)discoveryReads.delete(id);}
   }
   async function loadDiscovery(id){
-    const [providers,agents]=await Promise.all(['provider','agent'].map(path=>native(id,path)));
+    const directMode=window.nativeDirectTest?.active();
+    const [providers,agents]=await Promise.all([
+      directMode?window.nativeDirectTest.catalog():native(id,'provider'),
+      native(id,'agent')
+    ]);
     if(!Array.isArray(providers.all)||!Array.isArray(providers.connected)||!Array.isArray(agents))throw Error('Invalid native discovery schema');
+    const source=directMode
+      ?[...providers.all].sort((a,b)=>
+        Number(providers.connected.includes(b.id))-Number(providers.connected.includes(a.id))
+        ||Number(['deepseek','openai','anthropic','google','opencode'].includes(b.id))-Number(['deepseek','openai','anthropic','google','opencode'].includes(a.id))
+        ||String(a.id).localeCompare(String(b.id)))
+      :[...providers.all,...(providers.connected_entries||[])];
+    const first=directMode?source.slice(0,50):source;
     const result={native:true,loadedAt:Date.now(),workspace_id:String(id),health:{healthy:true},version:configuration.version,status:'ready',errors:{},agents,default_agent:null,
-      generation:'native-test',revision:'live',policy_revision:'native',providers:[...providers.all,...(providers.connected_entries||[])].map(p=>({...p,...providers.gateway_auth_status?.[p.id],connected:providers.connected.includes(p.id),allowed:true,
-        default_model:providers.default?.[p.id],models:Object.values(p.models||{}).map(m=>({...m,allowed:true}))}))};
+      generation:'native-test',revision:'live',policy_revision:'native',providers:first.map(p=>({...p,...providers.gateway_auth_status?.[p.id],connected:providers.connected.includes(p.id),allowed:true,
+        default_model:providers.default?.[p.id],models:Object.entries(p.models||{}).map(([mid,m])=>({...m,id:mid,allowed:true}))}))};
     return result;
   }
   window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
+  window.addEventListener('account-provider-changed',()=>{snapshots.clear();discoveryReads.clear();});
 })();
