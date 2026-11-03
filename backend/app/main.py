@@ -101,7 +101,20 @@ if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes'
             or path == '/api/opencode/catalog/agents'
             or path.startswith('/api/workspaces/{workspace_id}/providers')
             or path in {'/api/workspaces/{workspace_id}/files',
-                        '/api/workspaces/{workspace_id}/files/content'})
+                        '/api/workspaces/{workspace_id}/files/content',
+                        '/api/workspaces/{workspace_id}/runtime',
+                        '/api/workspaces/{workspace_id}/runtime/state',
+                        '/api/workspaces/{workspace_id}/runtime/agents',
+                        '/api/workspaces/{workspace_id}/agents'}
+            or path.startswith('/api/sessions/{session_id}/messages')
+            or path.startswith('/api/sessions/{session_id}/queue')
+            or path.startswith('/api/sessions/{session_id}/submissions')
+            or path in {'/api/sessions/{session_id}/stop',
+                        '/api/sessions/{session_id}/events',
+                        '/api/sessions/{session_id}/todos',
+                        '/api/sessions/{session_id}/diff'}
+            or path.startswith('/api/sessions/{session_id}/questions')
+            or path.startswith('/api/sessions/{session_id}/permissions'))
     app.router.routes[:]=[route for route in app.router.routes if not _retired_test_data_route(route)]
 
 @app.get("/api/health")
