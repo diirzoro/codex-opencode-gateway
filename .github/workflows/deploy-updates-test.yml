@@ -289,6 +289,7 @@ jobs:
           VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
         run: |
           set -euo pipefail
+          node --check assets/native-direct/app.js
           port="${PORT:-22}"
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST"             'install -d -m 700 /home/tahir/.native-direct-stage'
           scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes             assets/native-direct/index.html assets/native-direct/app.js assets/native-direct/style.css             ops/native-direct/nginx.conf ops/native-direct/install.sh             "$USER@$HOST:/home/tahir/.native-direct-stage/"
