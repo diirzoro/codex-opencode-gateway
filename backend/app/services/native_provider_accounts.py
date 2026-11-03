@@ -60,13 +60,13 @@ def lock(db,provider_id):
         db.execute(text('SELECT pg_advisory_xact_lock(:key)'),{'key':number})
 
 
-def claim(db,user,provider_id,directory):
+def claim(db,user,provider_id,directory,*,catalog=None,proposed_key=None):
     lock(db,provider_id)
     if owned(db,user,provider_id):return
     record=binding(db,provider_id)
     if record and record.action==action(provider_id):
         raise HTTPException(409,'This native provider slot belongs to another TEST account; its credential was preserved')
-    live=request('GET','/provider',directory)
+    live=catalog if catalog is not None else request('GET','/provider',directory)
     entry=next((p for p in live.get('all',[]) if p.get('id')==provider_id),{})
     if provider_id in live.get('connected',[]) and not public_free(entry):
         # A legacy encrypted account key may establish ownership only when it
@@ -76,6 +76,10 @@ def claim(db,user,provider_id,directory):
             secret=json.loads(credentials.decrypt(saved.ciphertext)) if saved else {}
             matches=secret.get('type')=='api' and isinstance(entry.get('key'),str) and hmac.compare_digest(secret.get('key',''),entry['key'])
         except Exception:matches=False
+        # An exact match to the Native-held key also proves ownership of a
+        # legacy unassigned slot without replacing that shared credential.
+        if not matches and isinstance(proposed_key,str) and isinstance(entry.get('key'),str):
+            matches=hmac.compare_digest(proposed_key,entry['key'])
         if not matches:raise HTTPException(409,'Native provider has a pre-existing unassigned connection; it was preserved')
     db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action=action(provider_id)))
     db.flush()
@@ -140,9 +144,11 @@ def require_model(db,user,directory,provider_id,model_id):
     elif not owned(db,user,provider_id):raise HTTPException(403,'This native provider credential does not belong to your account')
 
 
-def methods(user,provider_id):
+def methods(user,provider_id,*,catalog=None):
     directory=root(user)
-    entry=providers.resolve_provider(request('GET','/provider',directory),provider_id)
+    # The caller may supply the same original Native catalog it already read.
+    # Do not fetch and deserialize the 7 MB Native provider snapshot twice.
+    entry=providers.resolve_provider(catalog if catalog is not None else request('GET','/provider',directory),provider_id)
     if entry['id']!=provider_id:raise HTTPException(422,'Use the original Native provider ID')
     data=request('GET','/provider/auth',directory)
     if not isinstance(data,dict):raise HTTPException(502,'Invalid native authentication metadata')
@@ -157,10 +163,11 @@ def connect(db,user,provider_id,data):
     if not policy.provider_allowed(rules,provider_id):raise HTTPException(403,'Provider disabled by policy')
     user_provider_credentials.require_schema(db)
     if not credentials.available():raise HTTPException(503,'Existing credential encryption key is required')
-    choices=methods(user,provider_id)
+    native_catalog=request('GET','/provider',directory)
+    choices=methods(user,provider_id,catalog=native_catalog)
     index=data.method if data.method is not None else next((i for i,m in enumerate(choices) if m.get('type')=='api'),None)
     if index is None or index>=len(choices) or choices[index].get('type')!='api':raise HTTPException(422,'Select a native API-key method')
-    claim(db,user,provider_id,directory)
+    claim(db,user,provider_id,directory,catalog=native_catalog,proposed_key=data.api_key)
     # Never overwrite an existing saved key, including old encrypted credentials.
     saved=user_provider_credentials.find(db,user.id,provider_id)
     if saved:
