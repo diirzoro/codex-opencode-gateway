@@ -71,14 +71,14 @@ window.nativeDirectTest=(()=>{
   function ownerScope(){
     const user=String(currentUser?.id||'');
     if(scopeOwner!==user){
-      scopeOwner=user;catalogSnapshot=agentsSnapshot=policySnapshot=null;
-      catalogPending=agentsPending=policyPending=null;
+      scopeOwner=user;catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=null;
+      catalogPending=agentsPending=policyPending=workspacePending=null;
     }
     return user;
   }
   function forget(){
-    catalogSnapshot=agentsSnapshot=policySnapshot=null;
-    catalogPending=agentsPending=policyPending=null;
+    catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=null;
+    catalogPending=agentsPending=policyPending=workspacePending=null;
     window.nativeSession?.invalidate();window.workspaceRuntime?.clear();
   }
   async function catalog({force=false}={}){
@@ -124,6 +124,27 @@ window.nativeDirectTest=(()=>{
   async function registry({force=false}={}){
     const [data,agentRows,policy]=await Promise.all([catalog({force}),agents({force}),visibility({force})]);
     return {data,agents:agentRows,policy};
+  }
+  // OpenCode's official /config/providers returns only configured provider
+  // models. Never fetch or serialize the full /provider discovery catalog when
+  // opening a workspace; the Connections dashboard alone owns that lookup.
+  let workspaceSnapshot=null,workspacePending=null;
+  async function workspaceRegistry({force=false}={}){
+    const user=ownerScope();
+    if(!force&&workspaceSnapshot)return workspaceSnapshot;
+    if(workspacePending)return workspacePending;
+    const promise=Promise.all([direct('config/providers'),agents({force}),visibility({force})])
+      .then(([configured,agentRows,policy])=>{
+        if(!Array.isArray(configured?.providers)||!configured?.default||typeof configured.default!=='object')
+          throw Error('Invalid OpenCode configured provider response');
+        if(ownerScope()!==user)throw Error('Account changed during Native workspace discovery');
+        const rows=configured.providers.filter(p=>p&&typeof p.id==='string');
+        const data={all:rows,connected:rows.map(p=>p.id),default:configured.default};
+        workspaceSnapshot={data,agents:agentRows,policy};
+        return workspaceSnapshot;
+      });
+    workspacePending=promise;
+    try{return await promise;}finally{if(workspacePending===promise)workspacePending=null;}
   }
   function providerAllowed(pid,policy=policySnapshot){
     return !!policy&&(!policy.allowed_providers.length||policy.allowed_providers.includes(pid));
@@ -358,7 +379,7 @@ window.nativeDirectTest=(()=>{
     }
     throw Error('Unsupported direct OpenCode provider action: '+name);
   }
-  return {active,url,direct,catalog,agents,visibility,registry,forget,matches,route,
+  return {active,url,direct,catalog,agents,visibility,registry,workspaceRegistry,forget,matches,route,
     providerAllowed,providerVisible,modelAllowed,modelVisible,classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 
