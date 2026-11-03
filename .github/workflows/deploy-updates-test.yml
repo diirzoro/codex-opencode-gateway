@@ -291,7 +291,7 @@ jobs:
           set -euo pipefail
           port="${PORT:-22}"
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST"             'install -d -m 700 /home/tahir/.native-direct-stage'
-          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes             assets/native-direct/index.html ops/native-direct/nginx.conf             ops/native-direct/htpasswd ops/native-direct/install.sh             "$USER@$HOST:/home/tahir/.native-direct-stage/"
+          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes             assets/native-direct/index.html assets/native-direct/app.js assets/native-direct/style.css             ops/native-direct/nginx.conf ops/native-direct/install.sh             "$USER@$HOST:/home/tahir/.native-direct-stage/"
           : "${VPS_SUDO_PASSWORD:?Missing VPS sudo credential}"
           printf '%s\n' "$VPS_SUDO_PASSWORD" |
             ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST"             '/bin/bash /home/tahir/.native-direct-stage/install.sh'
