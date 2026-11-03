@@ -418,6 +418,7 @@
       const delay=dirty.messages?Math.max(0,MESSAGE_REFRESH_MS-(Date.now()-lastMessageRead)):80;
       timer=setTimeout(flush,delay);
     }
+    const credentialAlerts=new Set();
     source.onmessage=event=>{
       if(stream!==source||!current(id,user))return;
       let e;try{e=JSON.parse(event.data);}catch{return;}
@@ -439,6 +440,29 @@
       if(e.type==='message.part.updated'&&p.part?.type==='tool'){
         const activity=toolActivity(p.part,row);if(!['todowrite','todoread'].includes(activity.tool))window.renderWorkspaceEventLine?.('activity',activity);
         if(activity.status==='completed'&&activity.files.some(f=>f.operation!=='inspected')&&!changedTools.has(activity.id)){changedTools.add(activity.id);filesChanged();}
+      }
+      // Native accepts prompt_async before the provider attempts authentication.
+      // Surface the actual provider failure classification even when no text is
+      // generated; never expose raw exception bodies that could contain keys.
+      const nativeIssue=e.type==='session.error'?p.error:
+        e.type==='session.status'&&p.status?.type==='retry'
+          ?{name:'RetryError',message:p.status.message}:
+        e.type==='message.updated'&&p.info?.role==='assistant'?p.info.error:null;
+      if(nativeIssue){
+        const failure=window.nativeDirectTest?.classifyError(nativeIssue);
+        const readable=failure?.message||label(
+          'OpenCode reported an error from the selected provider.',
+          'أبلغ OpenCode عن خطأ من مزود النموذج.');
+        const token=String(failure?.kind||'unknown')+':'+String(p.info?.id||p.messageID||'current');
+        const state=document.getElementById('runtimeStatus');
+        if(state)state.textContent=readable;
+        const submission=document.getElementById('submissionStatus');
+        if(submission)submission.textContent=readable;
+        if(!credentialAlerts.has(token)){
+          credentialAlerts.add(token);
+          if(credentialAlerts.size>20)credentialAlerts.delete(credentialAlerts.values().next().value);
+          toast(readable);
+        }
       }
       if(['session.status','session.idle','session.error'].includes(e.type))statusEvents.set(id,(statusEvents.get(id)||0)+1);
       if(e.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
