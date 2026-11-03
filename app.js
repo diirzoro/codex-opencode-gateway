@@ -49,7 +49,8 @@ window.addEventListener('storage',event=>{
 /* TEST Native provider adapter: Native is the only model/credential registry.
    No Python provider routes, database credentials, or second disk catalog. */
 window.nativeDirectTest=(()=>{
-  const active=()=>location.hostname==='test.opencode-gateway.codes'&&Boolean(currentUser);
+  const testHost=()=>location.hostname==='test.opencode-gateway.codes';
+  const active=()=>testHost()&&Boolean(currentUser);
   const base='/native-direct/api/';
   const defaultDirectory='/var/lib/opencode-native-test/workspace';
   let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,scopeOwner='';
@@ -282,11 +283,14 @@ window.nativeDirectTest=(()=>{
     }
   }
   const matches=(path)=>{
-    if(!active())return false;
+    // TEST provider operations are Native-only even before auth is ready.
+    // They MUST NOT fall back to Python if the user session/direct link fails.
+    if(!testHost())return false;
     if(/^\/api\/opencode\/(?:connections(?:\/|$)|catalog\/providers(?:\/|$)|catalog\/agents(?:$|\?))/.test(path))return true;
     return /^\/api\/workspaces\/[^/]+\/providers(?:\/|$|\?)/.test(path);
   };
   async function route(path,options={}){
+    if(!active())throw Error('TEST OpenCode Native connection requires sign-in; Gateway provider fallback is disabled');
     const method=(options.method||'GET').toUpperCase();
     const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
     // Agent discovery is its own Native endpoint: opening the agent selector
