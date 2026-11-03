@@ -32,7 +32,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   test:
-    if: github.ref == 'refs/heads/updates' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    # Do not silently skip this job on a mismatched event/ref.
+    # Fail explicitly at the first step before any TEST server access.
     runs-on: ubuntu-latest
     environment: test
     timeout-minutes: 20
@@ -50,9 +51,11 @@ jobs:
             if [[ "$COMMIT_MESSAGE" == 'ci(test): inspect direct Native transport' ]]; then mode=native-probe; fi
             if [[ "$COMMIT_MESSAGE" == 'native(test): install direct OpenCode chat' ]]; then mode=native-install; fi
           fi
+          echo "TEST workflow trigger: event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA"
+          [[ "$GITHUB_EVENT_NAME" == push || "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || { echo "Unsupported TEST trigger"; exit 1; }
+          [[ "$GITHUB_REF" == "refs/heads/updates" ]] || { echo "Ref is not updates: $GITHUB_REF"; exit 1; }
           [[ "$mode" == "audit-test" || "$mode" == "deploy-test" || "$mode" == "rollback-test" || "$mode" == "native-probe" || "$mode" == "native-install" ]]
           printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
-          [[ "$GITHUB_REF" == "refs/heads/updates" ]]
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
