@@ -33,20 +33,10 @@ async def retention_maintenance():
                 # Jobs log sanitized IDs/categories; never print operational data.
                 import logging
                 logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
-        if native_sessions.enabled():
-            try:
-                from .services import native_catalog_maintenance
-                await asyncio.to_thread(native_catalog_maintenance.sweep)
-            except Exception:
-                import logging
-                logging.getLogger(__name__).warning('Native catalog maintenance unavailable; existing catalog and conversations preserved')
-            try:
-                # OpenCode Native DELETE owns actual history deletion; no
-                # parallel session engine or message-store cleanup is created.
-                await asyncio.to_thread(native_sessions.sweep_expired_native_history)
-            except Exception:
-                import logging
-                logging.getLogger(__name__).warning('Native 24-hour history retention could not complete; data preserved')
+        # Never run AI catalog refresh or session-history deletion from Python
+        # when OpenCode Native is the execution/storage owner. Native retains
+        # and manages its own source-of-truth cache, conversations and history.
+        # Existing account, project and upload housekeeping above remains.
 
 async def provider_maintenance():
     from .services import account_provider_sync
