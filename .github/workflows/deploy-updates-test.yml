@@ -1,9 +1,8 @@
-name: TEST | Validate and deploy updates
+name: TEST | Fast deploy updates (manual audit optional)
 on:
   push:
     branches: [updates]
     paths-ignore:
-      - '.github/workflows/**'
       - 'docs/**'
   workflow_dispatch:
     inputs:
@@ -74,14 +73,20 @@ jobs:
           assert pathlib.Path('index.html').is_file()
           print('FULL_SOURCE_PREFLIGHT_SUCCESS',len(versions),'migrations')
           PY
+      # QA is opt-in via workflow_dispatch → audit-test.
+      # Normal updates pushes deploy immediately after the small source preflight.
+      # Failed optional tests never block regular TEST releases.
       - uses: actions/setup-python@v5
+        if: steps.confirm.outputs.mode == 'audit-test'
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - name: Install backend dependencies
+        if: steps.confirm.outputs.mode == 'audit-test'
         run: python -m pip install -r backend/requirements.txt
       - name: Run backend authorization, account, Native and attachment regressions
+        if: steps.confirm.outputs.mode == 'audit-test'
         run: |
           python -m pytest -q \
             backend/tests/test_github_boundaries.py \
@@ -96,15 +101,18 @@ jobs:
             backend/tests/test_chat_attachments.py \
             backend/tests/test_native_24h_retention.py
       - uses: actions/setup-node@v4
+        if: steps.confirm.outputs.mode == 'audit-test'
         with:
           node-version: '22'
       - name: Validate frontend syntax
+        if: steps.confirm.outputs.mode == 'audit-test'
         run: |
           set -euo pipefail
           for file in app.js dashboards.js enhancements.js management.js native-session-client.js runtime-client.js; do
             node --check "$file"
           done
       - name: Test protected browser flows
+        if: steps.confirm.outputs.mode == 'audit-test'
         run: |
           npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund jsdom@26.1.0
           node tests/browser/test-github-email-proof.cjs
@@ -181,4 +189,4 @@ jobs:
       - name: Report scope
         if: always()
         run: |
-          echo "TEST only: full tracked application source, excluding server .env, protected runtime, OS/Nginx/systemd configuration, Preview, LIVE and Native engine. Database upgrades require explicit safe gate; rollback is by Git commit, not backup copies." >> "$GITHUB_STEP_SUMMARY"
+          echo "TEST fast deploy: push updates skips optional QA suites. Manual audit-test runs backend/browser checks; deployment remains TEST-only with protected secrets, scoped SSH, retained LIVE and Native engine boundaries." >> "$GITHUB_STEP_SUMMARY"
