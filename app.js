@@ -433,7 +433,11 @@ const api=async(path,options={})=>{
    };
    if(git&&git[2]==='status'){
      const [changes,vcs]=await Promise.all([
-       nativeGitRead(git[1],'file/status'),nativeGitRead(git[1],'vcs')]);
+       nativeGitRead(git[1],'file/status'),
+       nativeGitRead(git[1],'vcs').catch(error=>{
+         if(error.message.includes('404'))return {};
+         throw error;
+       })]);
      if(!Array.isArray(changes))throw Error('Invalid OpenCode file status');
      return {changes:changes.filter(x=>x&&typeof x.path==='string')
        .map(x=>({path:x.path,status:x.status||'modified'})),
