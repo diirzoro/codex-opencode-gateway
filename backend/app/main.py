@@ -114,7 +114,13 @@ if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes'
                         '/api/sessions/{session_id}/todos',
                         '/api/sessions/{session_id}/diff'}
             or path.startswith('/api/sessions/{session_id}/questions')
-            or path.startswith('/api/sessions/{session_id}/permissions'))
+            or path.startswith('/api/sessions/{session_id}/permissions')
+            or path in {'/api/workspaces/{workspace_id}/git/status',
+                        '/api/workspaces/{workspace_id}/git/commit',
+                        '/api/workspaces/{workspace_id}/git/push',
+                        '/api/workspaces/{workspace_id}/git/sync',
+                        '/api/workspaces/{workspace_id}/diff',
+                        '/api/projects/{project_id}/publish'})
     app.router.routes[:]=[route for route in app.router.routes if not _retired_test_data_route(route)]
 
 @app.get("/api/health")
