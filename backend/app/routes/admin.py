@@ -12,7 +12,8 @@ from ..database import get_db
 from ..models import GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, ProviderCredential, Subscription, User, Workspace, WorkspaceSession
 from ..services.storage_policy import PLAN_MB
 from ..models.platform import get_policy
-from ..services import opencode, github
+from ..services import github
+from ..services import native_control_bridge as opencode
 from ..services.accounts import user_payload
 from .dependencies import require_admin
 
