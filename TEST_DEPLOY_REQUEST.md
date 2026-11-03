@@ -1,5 +1,5 @@
 # TEST deployment request
 
-Requested on 2026-11-03 for the latest `updates` branch.
+Requested 2026-11-03 to deploy the latest `updates` branch with the Native-only route changes to TEST.
 
-This file is a source-control marker only; the TEST workflow deploys on a push to `updates`. No changes to LIVE or database are requested.
+This is a deployment trigger only. GitHub Actions `deploy-updates-test.yml` is configured to deploy on push to updates. Do not modify LIVE.
