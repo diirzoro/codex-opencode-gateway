@@ -409,6 +409,10 @@ def _authorize_native(workspace_id,resource,request,user,db,raw):
     if write and request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
     workspace,root,_,_=context(db,user,workspace_id)
     discovery=request.method=='GET' and resource in {'provider','agent'}
+    if discovery and deployment()=='test':
+        # TEST discovery must use /native-direct/api/ -> Nginx -> OpenCode;
+        # never let the session Gateway deserialize provider/model data.
+        raise HTTPException(410,'TEST Native discovery is direct-only; Gateway discovery is disabled')
     if discovery:
         # Provider definitions contain an optional plaintext key and options.
         # This is management metadata, not an AI response. Never transport it
