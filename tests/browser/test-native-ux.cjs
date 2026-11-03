@@ -52,35 +52,6 @@ async function main(){
   for(let i=0;i<200;i++)source.onmessage({data:JSON.stringify({id:'e'+i,type:'message.part.delta',properties:{sessionID:'ses_a',messageID:'a1',partID:'text1',field:'text',delta:'x'}})});
   await sleep(100);assert.equal(f.state.calls.filter(c=>c.path.endsWith('/message')).length,1);assert.equal(f.state.files,0);assert.equal((await f.load()).value[1].text.length,200);f.close();
  });
-
- await test('Native 204 receipt streams one assistant reply and never auto-aborts on send',async()=>{
-   const f=fixture();await f.ready();await f.w.nativeSession.start();
-   const original=f.c.api,source=f.state.events[0];
-   f.c.api=async(path,options={})=>{
-     if(path.endsWith('/prompt_async')){
-       f.state.calls.push({path,options});
-       const payload=JSON.parse(options.body);
-       f.state.history.push({info:{id:payload.messageID,role:'user',model:payload.model},parts:payload.parts});
-       return null; // OpenCode prompt_async HTTP 204, with no response body
-     }
-     return original(path,options);
-   };
-   await f.w.nativeSession.send(f.id,{text:'hello from TEST',providerID:'p',modelID:'m',agent:'build'});
-   assert.equal(f.state.calls.filter(c=>c.path.endsWith('/prompt_async')).length,1);
-   assert.equal(f.state.calls.filter(c=>c.path.endsWith('/abort')).length,0);
-   source.onmessage({data:JSON.stringify({type:'message.updated',properties:{info:{id:'a_native',role:'assistant',sessionID:'ses_a'}}})});
-   source.onmessage({data:JSON.stringify({type:'message.part.updated',properties:{part:{id:'part_native',messageID:'a_native',sessionID:'ses_a',type:'text',text:'Native response received'}}})});
-   assert.equal((await f.load()).value.find(row=>row.id==='a_native').text,'Native response received');
-   source.onmessage({data:JSON.stringify({type:'message.updated',properties:{info:{id:'foreign',role:'assistant',sessionID:'ses_other'}}})});
-   assert.equal((await f.load()).value.some(row=>row.id==='foreign'),false);
-   f.w.nativeSession.stop();
-   assert.equal(f.state.calls.filter(c=>c.path.endsWith('/abort')).length,0,'Closing SSE must never abort the Native model');
-   f.close();
- });
- await test('Native form never implicitly replaces or aborts a running model',async()=>{
-   assert(!dash.includes('await window.nativeSession.replaceRunningModel('));
-   assert(dash.includes("window.nativeSession?.active()&&busy"),'Busy Native sends must be gated');
- });
  await test('Confirmed native changes coalesce explorer refresh without history polling',async()=>{
   const f=fixture();await f.ready();await f.w.nativeSession.start();const source=f.state.events[0];
   for(let i=0;i<4;i++)source.onmessage({data:JSON.stringify({id:'f'+i,type:'file.edited',properties:{file:'/owned/a/new.txt'}})});

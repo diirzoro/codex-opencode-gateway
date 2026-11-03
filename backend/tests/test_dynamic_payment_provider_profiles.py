@@ -175,20 +175,5 @@ def test_profile_validation_admin_only_and_no_payment_capture_routes():
         ("PUT","/api/admin/payment-gateways/profiles/{slug}"),
         ("DELETE","/api/admin/payment-gateways/profiles/{slug}"),
     ]:assert (path,method) in routes
-    # Two existing admin-only Stripe sandbox diagnostics are intentionally
-    # present. They do not capture payments or activate subscriptions.
-    # The previous blanket "checkout" assertion rejected those safe routes,
-    # preventing the entire unrelated Native TEST release from deploying.
-    diagnostics={
-        ("/api/admin/payment-gateways/stripe/test-checkout","POST"),
-        ("/api/admin/payment-gateways/stripe/test-checkout/{session_id}","GET"),
-    }
-    assert diagnostics <= routes
-    assert not any(
-        ("checkout" in path and (path,method) not in diagnostics)
-        or any(term in path for term in ("webhook","capture","payout"))
-        for path,method in routes
-    )
-    for route in router.routes:
-        if any((route.path,method) in diagnostics for method in route.methods):
-            assert any(dep.call is require_admin for dep in route.dependant.dependencies)
+    assert not any("checkout" in path or "webhook" in path or "capture" in path
+                   or "payout" in path for path,_ in routes)

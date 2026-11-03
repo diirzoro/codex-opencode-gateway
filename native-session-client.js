@@ -221,238 +221,160 @@
     if(tail==='queue'||tail.startsWith('submissions/'))throw Error('This native version has no Gateway queue or submission receipt. Check native history before resending.');
     throw Error('This history action is not migrated to native TEST yet; conversation data was preserved.');
   }
-
-  // Native is the sole executor. These are session-scoped browser projections,
-  // not a separate queue, model registry or backend state machine.
-  let streamSession=null;
-  const receiptChecks=new Map(),receivedAssistant=new Map();
-  function clearReceiptChecks(id){
-    for(const handle of receiptChecks.get(id)||[])clearTimeout(handle);
-    receiptChecks.delete(id);
-  }
-  function safeNativeError(error){
-    const name=String(error?.name||'').toLowerCase(),code=Number(error?.data?.statusCode||error?.data?.status);
-    if(name.includes('abort'))return label('OpenCode was stopped.','تم إيقاف OpenCode.');
-    if(code===401||code===403||name.includes('auth'))return label('OpenCode provider authentication failed.','فشل توثيق مزوّد OpenCode.');
-    if(code===429||name.includes('rate'))return label('Provider rate limit reached.','تم بلوغ حد طلبات المزوّد.');
-    if(code===404||name.includes('notfound'))return label('Selected model is unavailable.','النموذج المحدد غير متاح.');
-    return label('OpenCode reported an execution/provider error.','أبلغ OpenCode عن خطأ تنفيذ أو مزوّد.');
-  }
   async function synchronizeStatus(row,id,valid=()=>true){
-    const generation=epoch,user=owner(),revision=statusEvents.get(id)||0;
-    const result=await coalesce('status:'+row.workspace_id,()=>native(row.workspace_id,'session/status'));
-    if(!result||typeof result!=='object'||Array.isArray(result))throw Error('Invalid native session status');
-    if(generation!==epoch||user!==owner()||(statusEvents.get(id)||0)!==revision||!valid())return;
-    statuses.set(id,result[row.runtime_id]?.type&&result[row.runtime_id].type!=='idle'?'submitted':'idle');
+    const generation=epoch,user=owner(),seen=statusEvents.get(id)||0,sequence=(statusReads.get(id)||0)+1;
+    statusReads.set(id,sequence);
+    const live=await coalesce('status:'+row.workspace_id,()=>native(row.workspace_id,'session/status'));
+    if(!live||typeof live!=='object'||Array.isArray(live))throw Error('Invalid native session status');
+    if(epoch!==generation||owner()!==user||statusReads.get(id)!==sequence||(statusEvents.get(id)||0)!==seen||!valid())return;
+    statuses.set(id,live[row.runtime_id]?.type&&live[row.runtime_id].type!=='idle'?'submitted':'idle');
   }
   async function start(){
-    stop();
-    const id=activeSession?.id,user=owner();if(!id||!active())return;
-    const row=await context(id);
-    if(!current(id,user))return;
-    const source=new EventSource(url(row.workspace_id,'event'));stream=source;streamSession=id;
-    let renderTimer=null,repairTimer=null,fileTimer=null,opened=false,needsRepair=false;
-    let lastRendered=0;const eventIds=new Set(),changedTools=new Set();
-    const valid=()=>stream===source&&current(id,user);
-    function showError(error){
-      if(valid())$('#runtimeStatus').textContent=error?.message||label('Native connection failed.','تعذر اتصال OpenCode.');
+    stop();const id=activeSession?.id,user=owner();if(!id)return;
+    const row=await context(id);if(!current(id,user))return;
+    const source=new EventSource(url(row.workspace_id,'event'));stream=source;let timer,fileTimer,pending=false,lastMessageRead=0,opened=false,needsSnapshot=false;const eventIDs=new Set(),changedTools=new Set();
+    function filesChanged(){clearTimeout(fileTimer);fileTimer=setTimeout(()=>{if(stream===source&&current(id,user))window.refreshNativeFiles?.({workspaceId:row.workspace_id,owner:user});},400);}
+    // Coalesce token/part bursts into bounded snapshots. The native SSE
+    // transport stays immediate; only expensive full-history reads are paced.
+    const MESSAGE_REFRESH_MS=50;
+    let dirty={messages:false,status:false,controls:false,todos:false};
+    async function flush(){
+      timer=null;if(pending||stream!==source||!current(id,user))return;
+      const work=dirty;dirty={messages:false,status:false,controls:false,todos:false};pending=true;
+      try{
+        if(work.status)await window.refreshWorkspaceSessionStatus?.();
+        if(stream!==source||!current(id,user))return;
+        if(work.messages){if(needsSnapshot){needsSnapshot=false;await history(id,true);}await refreshMessages();lastMessageRead=Date.now();}
+        if(work.controls)await refreshPermissions();
+        if(work.todos)await window.refreshWorkspaceTodos?.(true);
+      }catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
+      finally{pending=false;if(stream===source&&current(id,user)&&Object.values(dirty).some(Boolean))schedule();}
     }
-    function scheduleRender(){
-      if(renderTimer)return;
-      renderTimer=setTimeout(async()=>{
-        renderTimer=null;if(!valid())return;
-        try{await refreshMessages();lastRendered=Date.now();}
-        catch(error){showError(error);}
-      },Math.max(0,50-(Date.now()-lastRendered)));
-    }
-    function scheduleRepair(){
-      if(!needsRepair||repairTimer)return;
-      repairTimer=setTimeout(async()=>{
-        repairTimer=null;if(!valid()||!needsRepair)return;
-        needsRepair=false;
-        try{await history(id,true);if(valid())scheduleRender();}
-        catch(error){showError(error);}
-      },500);
-    }
-    function refreshFiles(){
-      clearTimeout(fileTimer);
-      fileTimer=setTimeout(()=>{if(valid())window.refreshNativeFiles?.({workspaceId:row.workspace_id,owner:user});},400);
-    }
-    function refreshSide(which){
-      if(!valid())return;
-      const work=which==='status'?window.refreshWorkspaceSessionStatus?.()
-        :which==='controls'?refreshPermissions()
-        :window.refreshWorkspaceTodos?.(true);
-      Promise.resolve(work).catch(showError);
+    function schedule(){
+      if(pending||timer)return;
+      const delay=dirty.messages?Math.max(0,MESSAGE_REFRESH_MS-(Date.now()-lastMessageRead)):80;
+      timer=setTimeout(flush,delay);
     }
     source.onmessage=event=>{
-      if(!valid())return;
-      let nativeEvent;try{nativeEvent=JSON.parse(event.data);}catch{return;}
-      if(!nativeEvent||typeof nativeEvent.type!=='string')return;
-      if(nativeEvent.id){
-        if(eventIds.has(nativeEvent.id))return;
-        eventIds.add(nativeEvent.id);
-        if(eventIds.size>2000)eventIds.delete(eventIds.values().next().value);
-      }
-      if(['models-dev.refreshed','catalog.updated'].includes(nativeEvent.type)){
-        snapshots.clear();
-        window.refreshWorkspaceChoices?.('',true).catch(showError);
+      if(stream!==source||!current(id,user))return;
+      let e;try{e=JSON.parse(event.data);}catch{return;}
+      if(e.id){if(eventIDs.has(e.id))return;eventIDs.add(e.id);if(eventIDs.size>2000)eventIDs.delete(eventIDs.values().next().value);}
+      if(e.type==='models-dev.refreshed'||e.type==='catalog.updated'){
+        snapshots.clear();window.workspaceRuntime?.clear();
+        window.refreshWorkspaceChoices?.('',true).catch(error=>{if(current(id,user))$('#runtimeStatus').textContent=error.message;});
         return;
       }
-      const p=nativeEvent.properties||{};
-      // Native /event can carry updates for multiple sessions in a workspace.
-      // Only an owned session may update this chat; do not use p.info.id as a session ID.
-      const nativeSession=p.sessionID||p.info?.sessionID||p.part?.sessionID;
-      if(nativeSession&&nativeSession!==row.runtime_id)return;
-      if(!nativeSession&&/^(session|todo)\./.test(nativeEvent.type))return;
-      if(!nativeSession&&nativeEvent.type.startsWith('message.')){
-        const messageId=p.messageID||p.part?.messageID||p.info?.id;
-        if(!histories.get(id)?.messages.some(m=>m.info?.id===messageId))return;
+      const p=e.properties||{},session=p.sessionID||p.info?.sessionID||p.part?.sessionID||p.info?.id;
+      if(session&&session!==row.runtime_id)return;
+      if(e.type==='file.edited'&&relativeFile(p.file,row))filesChanged();
+      if(e.type==='message.part.updated'&&p.part?.type==='tool'){
+        const activity=toolActivity(p.part,row);if(!['todowrite','todoread'].includes(activity.tool))window.renderWorkspaceEventLine?.('activity',activity);
+        if(activity.status==='completed'&&activity.files.some(f=>f.operation!=='inspected')&&!changedTools.has(activity.id)){changedTools.add(activity.id);filesChanged();}
       }
-      if(nativeEvent.type==='file.edited'&&relativeFile(p.file,row))refreshFiles();
-      if(nativeEvent.type==='message.part.updated'&&p.part?.type==='tool'){
-        const item=toolActivity(p.part,row);
-        if(!['todowrite','todoread'].includes(item.tool))window.renderWorkspaceEventLine?.('activity',item);
-        if(item.status==='completed'&&item.files.some(f=>f.operation!=='inspected')&&!changedTools.has(item.id)){
-          changedTools.add(item.id);refreshFiles();
-        }
-      }
-      if(['session.status','session.idle','session.error'].includes(nativeEvent.type)){
-        statusEvents.set(id,(statusEvents.get(id)||0)+1);
-        if(nativeEvent.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
-        if(nativeEvent.type==='session.idle'){statuses.set(id,'idle');clearReceiptChecks(id);}
-        if(nativeEvent.type==='session.error'){
-          statuses.set(id,'failed');clearReceiptChecks(id);
-          $('#runtimeStatus').textContent=safeNativeError(p.error);
-          needsRepair=true;scheduleRepair();
-        }
-        refreshSide('status');
-      }
-      if(nativeEvent.type.startsWith('message.')){
-        const state=histories.get(id);
-        if(state){
-          state.journal?.push(nativeEvent);
-          if(!reduce(state.messages,nativeEvent))needsRepair=true;
-          reconcile(id,state.messages);
-          // A user echo alone cannot count as assistant output.
-          const messageId=p.messageID||p.part?.messageID||p.info?.id;
-          const assistant=p.info?.role==='assistant'||state.messages.some(m=>m.info?.id===messageId&&m.info?.role==='assistant');
-          if(assistant)receivedAssistant.set(id,(receivedAssistant.get(id)||0)+1);
-          scheduleRender();scheduleRepair();
-        }else{needsRepair=true;scheduleRepair();}
-      }
-      if(/^(permission|question)\./.test(nativeEvent.type))refreshSide('controls');
-      if(nativeEvent.type.startsWith('todo.'))refreshSide('todos');
+      if(['session.status','session.idle','session.error'].includes(e.type))statusEvents.set(id,(statusEvents.get(id)||0)+1);
+      if(e.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
+      if(e.type==='session.idle')statuses.set(id,'idle');
+      if(e.type==='session.error')statuses.set(id,'failed');
+      if(e.type.startsWith('message.')){const state=histories.get(id);if(state){state.journal?.push(e);if(!reduce(state.messages,e))needsSnapshot=true;reconcile(id,state.messages);}else needsSnapshot=true;dirty.messages=true;}
+      if(e.type.startsWith('session.'))dirty.status=true;
+      if(/^(permission|question)\./.test(e.type))dirty.controls=true;
+      if(e.type.startsWith('todo.'))dirty.todos=true;
+      if(Object.values(dirty).some(Boolean))schedule();
     };
-    source.onopen=()=>{
-      if(!valid())return;
-      // Listen first. History is a recovery/snapshot operation, never a
-      // prerequisite for streaming tokens from Native.
-      const reconnect=opened;opened=true;
-      if(reconnect)refreshFiles();
-      if(reconnect||!histories.has(id)){
-        void history(id,true).then(()=>{if(valid())scheduleRender();}).catch(showError);
-      }else scheduleRender();
-      void synchronizeStatus(row,id,valid).then(()=>{if(valid())refreshSide('status');}).catch(showError);
-      refreshSide('controls');refreshSide('todos');
+    source.onopen=async()=>{
+      if(!current(id,user)||stream!==source)return;
+      try{await synchronizeStatus(row,id,()=>current(id,user)&&stream===source);}
+      catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
+      if(current(id,user)&&stream===source){if(opened)filesChanged();needsSnapshot=opened||!histories.has(id);opened=true;dirty={messages:true,status:true,controls:true,todos:true};schedule();}
     };
-    source.onerror=()=>{if(valid())$('#runtimeStatus').textContent=label('Reconnecting to OpenCode...','إعادة الاتصال بـ OpenCode...');};
-    const close=source.close.bind(source);
-    source.close=()=>{clearTimeout(renderTimer);clearTimeout(repairTimer);clearTimeout(fileTimer);close();};
+    source.onerror=()=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent='Reconnecting to native OpenCode';};
+    const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
   }
-  // Closing a page / switching chats only closes SSE; it NEVER aborts execution.
-  function stop(){
-    stream?.close();stream=null;streamSession=null;
-    for(const id of [...receiptChecks.keys()])clearReceiptChecks(id);
-  }
-  function verifyAccepted(id,pending,assistantCounter){
-    clearReceiptChecks(id);
-    const user=owner(),generation=epoch;
-    const timers=[2500,10000].map(delay=>setTimeout(async()=>{
-      if(generation!==epoch||!current(id,user)||['idle','failed'].includes(statuses.get(id)))return;
-      if((receivedAssistant.get(id)||0)>assistantCounter)return;
-      try{
-        const list=await freshHistory(id);
-        if(generation!==epoch||!current(id,user))return;
-        await refreshMessages();
-        const index=list.findIndex(m=>m.info?.id===pending.messageID);
-        const reply=index<0?[]:list.slice(index+1);
-        const hasAssistant=reply.some(m=>m.info?.role==='assistant'&&(m.info?.error||m.parts?.some(p=>p.type==='text'&&p.text?.trim())));
-        if(!hasAssistant&&statuses.get(id)==='submitted')
-          $('#runtimeStatus').textContent=label('OpenCode accepted the prompt; waiting for model output.','استقبل OpenCode الرسالة؛ بانتظار رد النموذج.');
-      }catch(error){if(current(id,user))$('#runtimeStatus').textContent=error.message;}
-    },delay));
-    receiptChecks.set(id,timers);
-  }
+  function stop(){stream?.close();stream=null;}
   async function forceStop(id){
-    // Only explicit UI Stop/Cancel enters this function. Recover never does.
     const user=owner(),generation=epoch;
+    sendGenerations.set(id,(sendGenerations.get(id)||0)+1);
+    submissionsInFlight.get(id)?.abort();
     return coalesce('abort:'+id,async()=>{
-      clearReceiptChecks(id);
-      sendGenerations.set(id,(sendGenerations.get(id)||0)+1);
-      submissionsInFlight.get(id)?.abort();
       const row=await context(id);
       if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
+      // Abort immediately via the EXISTING OpenCode Native session endpoint.
+      // A file-read/history request must never precede or gate cancellation.
       await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/abort',{}, {timeout:8000});
+      let stopped=false;
+      // Native abort may acknowledge while a running read/model is winding
+      // down. Poll authoritative Native status; don't invent local idle.
       for(let attempt=0;attempt<10;attempt++){
+        if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
         const live=await native(row.workspace_id,'session/status',undefined,{timeout:8000});
         if(!live||typeof live!=='object'||Array.isArray(live))throw Error('Native session status is unavailable');
-        if(!live[row.runtime_id]||live[row.runtime_id].type==='idle'){
-          statuses.set(id,'idle');
-          uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
-          if(current(id,user))activeSession.execution_status='idle';
-          return {status:'idle'};
-        }
+        const state=live[row.runtime_id];
+        if(state===undefined||state?.type==='idle'){stopped=true;break;}
         if(attempt!==9)await new Promise(resolve=>setTimeout(resolve,850));
       }
-      throw Error(label('Native did not confirm Stop; your draft is preserved.','لم يؤكد OpenCode الإيقاف، والمسودة محفوظة.'));
+      if(!stopped)throw Error(label('Native has not confirmed Stop yet. Keep your draft and retry Stop or Recover; no history was deleted.','لم يؤكد OpenCode التوقف بعد. احتفظ بالمسودة وحاول الإيقاف أو الاستعادة مجددًا؛ لم يُحذف سجل المحادثة.'));
+      if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
+      uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
+      statuses.set(id,'idle');if(current(id,user))activeSession.execution_status='idle';
+      return {status:'idle'};
     });
   }
   async function send(id,{text,providerID,modelID,agent,variant,files=[]}){
     const row=await context(id);
-    if(blocked(id))throw Error(label('Recover the previous uncertain Native receipt first.','استعد استلام الرسالة السابق غير المؤكد أولًا.'));
-    if(!providerID||!modelID)throw Error(label('Select a connected provider and model.','حدد مزودًا متصلًا ونموذجًا.'));
-    const user=owner(),generation=epoch,sendVersion=sendGenerations.get(id)||0,seenStatus=statusEvents.get(id)||0;
-    const assistantCounter=receivedAssistant.get(id)||0;
-    select(id,{providerID,modelID,agent,variant});
-    // The SSE listener must exist before prompt_async. No POST /prompt is retried.
-    if(streamSession!==id)await start();
-    const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);
-    const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+    if(blocked(id))throw Error(label('Recover this conversation before sending. Your draft is preserved.','استعد هذه المحادثة قبل الإرسال. مسودتك محفوظة.'));
+    const user=owner(),sendEpoch=epoch,sendGeneration=sendGenerations.get(id)||0,seenStatus=statusEvents.get(id)||0;select(id,{providerID,modelID,agent,variant});
+    const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
     const messageID='msg_'+((BigInt(Date.now())*4096n)&0xffffffffffffn).toString(16).padStart(12,'0')+Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');
-    const parts=[{type:'text',text},...files.map(f=>({
-      type:'file',mime:f.mime||({'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','pdf':'application/pdf'}[f.path.split('.').at(-1)]||'application/octet-stream'),
-      url:row.file_base+f.path.split('/').map(encodeURIComponent).join('/'),filename:f.path.split('/').at(-1)
-    }))];
-    const pending={messageID,text,files,providerID,modelID,agent,variant};
-    uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}
-    const controller=new AbortController();submissionsInFlight.set(id,controller);
-    try{
-      await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',
-        {messageID,model:{providerID,modelID},...(variant?{variant}:{}),...(agent?{agent}:{}),parts},
-        {signal:controller.signal,timeout:30000});
-    }catch(error){
-      if(owner()!==user||epoch!==generation||(sendGenerations.get(id)||0)!==sendVersion)
-        throw Error(label('Submission interrupted by Stop.','تم إيقاف الإرسال.'));
+    const parts=[{type:'text',text},...files.map(f=>({type:'file',mime:f.mime||({'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','pdf':'application/pdf'}[f.path.split('.').at(-1)]||'application/octet-stream'),url:row.file_base+f.path.split('/').map(encodeURIComponent).join('/'),filename:f.path.split('/').at(-1)}))];
+    const pending={messageID,text,files,providerID,modelID,agent,variant};uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}
+    const submissionController=new AbortController();submissionsInFlight.set(id,submissionController);
+    try{await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
+      messageID,model:{providerID,modelID},...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,timeout:30000});}
+    catch(error){
+      // A user-initiated Stop/attachment cancellation MUST release the
+      // original submission immediately. A message-history GET can itself
+      // remain blocked on an interrupted image read; do not await it here.
+      // forceStop owns the subsequent Native abort + idle verification and
+      // only that path clears the pending message receipt.
+      if(submissionController.signal.aborted&&
+         (sendGenerations.get(id)||0)!==sendGeneration&&
+         owner()===user&&epoch===sendEpoch)
+        throw Error(label('Submission interrupted by Stop. The session can resume after Native confirms idle.',
+                          'قوطع إرسال المرفق بالإلغاء. يمكن متابعة المحادثة بعد أن يؤكد OpenCode التوقف.'));
+      // The HTTP response can fail after Native accepted an async prompt.
+      // Resolve the exact Native message ID against authoritative history
+      // before reporting uncertainty. Never send the prompt a second time.
       let confirmed=Boolean(pending.accepted);
-      if(!confirmed&&!error.nativeNotForwarded){
-        try{const messages=await freshHistory(id);confirmed=Boolean(pending.accepted)||messages.some(m=>m.info?.id===messageID);}catch{}
+      if(!confirmed&&!error.nativeNotForwarded&&owner()===user&&epoch===sendEpoch){
+        try{
+          const messages=await freshHistory(id);
+          confirmed=Boolean(pending.accepted)||messages.some(message=>message.info?.id===messageID);
+        }catch(_historyError){
+          // Keep the original transport error and uncertain receipt.
+        }
       }
+      if(epoch!==sendEpoch||owner()!==user)throw Error('Authenticated account changed');
+      if((sendGenerations.get(id)||0)!==sendGeneration)throw Error(label('Submission interrupted by Stop. Review history before sending again.','قوطع الطلب بالإيقاف. راجع السجل قبل الإرسال مجددًا.'));
       if(!confirmed){
         if(error.nativeNotForwarded){
           uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
-          error.message=label('Gateway rejected the prompt before forwarding. Draft saved. ','رفض Gateway الطلب قبل تمريره. المسودة محفوظة. ')+(error.status||'');
-        }else error.message=label('OpenCode receipt uncertain. Your draft is saved; use Recover.','استلام OpenCode غير مؤكد. المسودة محفوظة؛ استخدم الاسترجاع.');
+          error.message=label('Gateway rejected the request before sending it to OpenCode. Draft preserved.','رفض Gateway الطلب قبل إرساله إلى OpenCode. المسودة محفوظة.')+' (HTTP '+error.status+') '+error.message;
+        }else if(owner()===user&&(!error.status||error.status===408||error.status>=500))
+          error.message=label('OpenCode receipt could not be confirmed. Your draft is saved; check session status.','تعذر تأكيد استلام OpenCode للطلب. المسودة محفوظة؛ تحقق من حالة الجلسة.')+(error.status?' (HTTP '+error.status+')':'');
+        else if(owner()===user){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}
         throw error;
       }
-    }finally{if(submissionsInFlight.get(id)===controller)submissionsInFlight.delete(id);}
-    if(owner()!==user||epoch!==generation||(sendGenerations.get(id)||0)!==sendVersion)return;
+    }finally{if(submissionsInFlight.get(id)===submissionController)submissionsInFlight.delete(id);}
+
+    if(owner()!==user||epoch!==sendEpoch||(sendGenerations.get(id)||0)!==sendGeneration)return;
     noteAttachmentDelivery(id,pending);
     uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
     if((statusEvents.get(id)||0)===seenStatus)statuses.set(id,'submitted');
     if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'submitted';
-    if(statuses.get(id)==='submitted')verifyAccepted(id,pending,assistantCounter);
+    // The native acknowledgment is final for submission. Live/reconnect SSE
+    // reconciles execution; a second status read cannot undo the acknowledgment.
   }
+  // Native owns both cancellation and subsequent execution. Never touch another session.
   async function replaceRunningModel(id,providerID,modelID){
     const row=await context(id),messages=await history(id,true);
     const last=[...messages].reverse().find(m=>m.info?.role==='user'&&m.info?.model);
