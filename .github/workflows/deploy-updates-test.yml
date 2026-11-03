@@ -80,6 +80,14 @@ jobs:
           assert pathlib.Path('index.html').is_file()
           print('FULL_SOURCE_PREFLIGHT_SUCCESS',len(versions),'migrations')
           PY
+      - name: Validate TEST Native browser code before every deployment
+        run: |
+          set -euo pipefail
+          node --check app.js
+          node --check native-session-client.js
+          node --check runtime-client.js
+          node --check dashboards.js
+          node --check management.js
       # QA is opt-in via workflow_dispatch → audit-test.
       # Normal updates pushes deploy immediately after the small source preflight.
       # Failed optional tests never block regular TEST releases.
