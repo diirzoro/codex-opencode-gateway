@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCode Native • Direct TEST</title>
+<link rel="stylesheet" href="/native-direct/style.css">
+<script src="/native-direct/app.js" defer></script>
+</head>
+<body>
+<main>
+<header><h1>OpenCode Native <small>TEST مباشر</small></h1><p>الربط والمحادثة عبر Nginx إلى OpenCode Native مباشرة، دون Python Gateway أو قاعدة بياناته.</p></header>
+<section class="panel">
+<h2>الاتصال بالمزوّد</h2>
+<p class="hint">المصدر: كاش وفهرس OpenCode الأصلي. تُعرض أول 50 مزودًا فقط؛ لا يوجد كاش آخر.</p>
+<div class="fields">
+<label>المزوّد <select id="provider" aria-label="Provider"><option value="deepseek">DeepSeek</option></select></label>
+<label>مفتاح DeepSeek API <input id="apiKey" type="password" autocomplete="new-password" placeholder="أدخل المفتاح هنا فقط" /></label>
+</div>
+<div class="actions"><button id="connect">ربط مباشرة بـ OpenCode</button><button class="secondary" id="refresh">قراءة كتالوج OpenCode</button></div>
+<p class="hint">الربط يستبدل اعتماد DeepSeek في مخزن Native المختار على TEST؛ لا يحفظ نسخة داخل قاعدة بيانات Gateway.</p>
+<div id="connectStatus" role="status" class="status">جاهز للربط</div>
+</section>
+<section class="panel">
+<h2>اختبار المحادثة الأصلية</h2>
+<div class="fields">
+<label>النموذج <select id="model"><option value="deepseek-chat">deepseek-chat</option><option value="deepseek-reasoner">deepseek-reasoner</option></select></label>
+</div>
+<label>الرسالة <textarea id="prompt" rows="3">Say hello in Arabic in one sentence.</textarea></label>
+<div class="actions"><button id="send">إرسال عبر Native</button><button id="stop" class="secondary" disabled>إيقاف</button></div>
+<div id="chatStatus" role="status" class="status">لم تُرسل رسالة.</div>
+<div class="answer" id="answer" aria-live="polite"></div>
+</section>
+<footer>هذه صفحة TEST مستقلة. لا تستخدم مسارات API التابعة لـPython Gateway.</footer>
+</main>
+</body>
+</html>
