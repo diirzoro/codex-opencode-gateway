@@ -114,7 +114,10 @@ def account_provider_catalog(user: User=Depends(require_user),db: Session=Depend
 def account_provider_page(offset: int=Query(default=0,ge=0),limit: int=Query(default=50,ge=1,le=50),
                           query: str=Query(default='',max_length=200),
                           user: User=Depends(require_user),db: Session=Depends(get_db)):
-    data=_account_catalog_state(db,user,_account_public_catalog(user,"/provider",db,full=True))
+    # The default account picker needs only the first 50 Native providers
+    # plus connected entries. Keep full Native lookup for searches and pages.
+    data=_account_catalog_state(db,user,_account_public_catalog(user,"/provider",db,
+        full=bool(offset or query.strip())))
     return providers.catalog_page(data,policy.load(db),offset=offset,limit=limit,query=query)
 
 
@@ -163,7 +166,7 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
         native_sessions.admit(user)
         data=native_provider_accounts.catalog(db,user,full=True)
         providers.resolve_provider(data,provider_id)
-        return {'provider_id':provider_id,'auth_methods':native_provider_accounts.methods(user,provider_id),'models':providers.model_details(data,provider_id,policy.load(db))['models'],'native':True,'credential_storage_ready':credentials.available(),'credential_storage_reason':None if credentials.available() else 'Secure account credential storage is not configured on this server; this is not a provider API-key rejection'}
+        return {'provider_id':provider_id,'auth_methods':native_provider_accounts.methods(user,provider_id,catalog=data),'models':providers.model_details(data,provider_id,policy.load(db))['models'],'native':True,'credential_storage_ready':credentials.available(),'credential_storage_reason':None if credentials.available() else 'Secure account credential storage is not configured on this server; this is not a provider API-key rejection'}
     if not 0 < len(provider_id) <= 120:
         raise HTTPException(422, "Invalid provider identifier")
     if not policy.provider_allowed(policy.load(db), provider_id):
