@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/native-provider-proof-test.yml'
       - 'ops/native-direct/audit-native-provider-state-test.sh'
+      - 'ops/native-direct/verify-native-free-chat-test.sh'
   workflow_dispatch:
 permissions:
   contents: read
@@ -45,3 +46,15 @@ jobs:
           if test -z "$port"; then port=22; fi
           ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" 'bash -s' \
             < ops/native-direct/audit-native-provider-state-test.sh
+      - name: Run a single real OpenCode free-model Native prompt and clean session
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.VPS_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          bash -n ops/native-direct/verify-native-free-chat-test.sh
+          port="$PORT"
+          if test -z "$port"; then port=22; fi
+          ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" 'bash -s' \
+            < ops/native-direct/verify-native-free-chat-test.sh
