@@ -149,9 +149,15 @@ window.nativeDirectTest=(()=>{
         return catalog({force});
       }
     };
-    const promise=Promise.all([configuredOnly(),agents({force}),visibility({force})])
-      .then(([data,agentRows,policy])=>{
+    const promise=Promise.all([configuredOnly(),catalog({force}),agents({force}),visibility({force})])
+      .then(([definitions,nativeConnections,agentRows,policy])=>{
         if(ownerScope()!==user)throw Error('Account changed during Native workspace discovery');
+        // /config/providers is a lightweight model definition source, not
+        // authentication proof. Only /provider.connected from OpenCode itself
+        // can establish that a provider is configured.
+        const connected=new Set(nativeConnections.connected);
+        const data={...definitions,all:definitions.all.filter(p=>connected.has(p.id)),
+          connected:definitions.connected.filter(id=>connected.has(id))};
         workspaceSnapshot={data,agents:agentRows,policy};
         return workspaceSnapshot;
       });
