@@ -1436,7 +1436,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     manualModel.hidden=!window.nativeSession?.active();
     recoveryAction.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
     cancelAttachment.hidden=!activeSession||!window.nativeSession?.pendingAttachment(activeSession.id);
-    q('sendMessage').disabled=sending||queuing||nativeBusy||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
+    q('sendMessage').disabled=sending||queuing||nativeBusy||(window.nativeSession?.active()&&busy)||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
     newSessionButton.disabled=newTask.disabled=!workAccess||(!window.nativeSession?.active()&&busy)||sending||Boolean(sessionCreating)||Boolean(pendingSubmission);
@@ -1909,12 +1909,10 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
+      // A new prompt never cancels a running Native model. Stop is explicit.
       if(['submitted','waiting_approval'].includes(activeSession?.execution_status)){
-        if(!activeSession?.id)return;
-        try{
-          await window.nativeSession.replaceRunningModel(activeSession.id,provider,model);
-          submissionStatus.textContent=tr('Previous model stopped in this conversation. Submitting to the selected model…','توقف النموذج السابق في هذه المحادثة. جارٍ الإرسال للنموذج المحدد…');
-        }catch(error){toast(error.message);submissionStatus.textContent=error.message;return;}
+        submissionStatus.textContent=tr('OpenCode is processing this conversation. Wait or press Stop.','OpenCode يعالج هذه المحادثة. انتظر أو اضغط إيقاف صراحة.');
+        return;
       }
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
       try{await refreshEntitlement();if(!workAccess)return;if(!activeSession)await createSession({checked:true});
@@ -1922,8 +1920,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type}));
         await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});sentAttachments({attachments:nativeFiles});draft.confirm();
         submissionStatus.textContent=tr('Accepted by native OpenCode','قبله OpenCode الأصلي');
-        try{await refreshSessionStatus();await refreshMessages();}
-        catch{if(currentUser?.id===owner&&activeWorkspace?.id===workspaceId)submissionStatus.textContent=tr('Accepted by OpenCode. Reconnecting to restore live updates; do not resend.','قبله OpenCode. جارٍ استعادة التحديثات؛ لا تُعد الإرسال.');}
+        // OpenCode SSE owns reply presentation. No blocking Gateway history
+        // or status request after the Native prompt receipt.
       }catch(error){toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
     }
     if(activeSession&&(['submitted','waiting_approval'].includes(activeSession.execution_status)||queueCount)){
