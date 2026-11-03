@@ -38,10 +38,15 @@ perl -MJSON::PP -e '
     next unless ref($map) eq "HASH";
     $models+=scalar keys %$map;
     next unless ($p->{id}//"") eq "opencode";
-    for my $m (values %$map){
+    for my $model_id (sort keys %$map){
+      my $m=$map->{$model_id};
       next unless ref($m) eq "HASH" && ref($m->{cost}) eq "HASH";
-      $free++ if defined($m->{cost}{input}) && defined($m->{cost}{output})
-        && $m->{cost}{input}==0 && $m->{cost}{output}==0;
+      if(defined($m->{cost}{input}) && defined($m->{cost}{output})
+        && $m->{cost}{input}==0 && $m->{cost}{output}==0){
+        $free++;
+        print "NATIVE_FREE_MODEL_ID=opencode/$model_id\n"
+          if $model_id =~ /^[a-zA-Z0-9._+\/-]{1,100}$/;
+      }
     }
   }
   print "NATIVE_DISCOVERY_PROVIDERS=",scalar(@all),"\n";
@@ -69,6 +74,12 @@ perl -MJSON::PP -e '
     next unless $id =~ /^[a-zA-Z0-9_.-]{1,80}$/;
     my $models=ref($p->{models}) eq "HASH" ? scalar(keys %{$p->{models}}) : 0;
     print "NATIVE_CONFIGURED_ID=$id MODELS=$models\n";
+    if($id eq "deepseek" && ref($p->{models}) eq "HASH"){
+      for my $mid (sort keys %{$p->{models}}){
+        print "NATIVE_CONFIGURED_MODEL_ID=deepseek/$mid\n"
+          if $mid =~ /^[a-zA-Z0-9._+\/-]{1,100}$/;
+      }
+    }
   }
   print "NOTE_CONFIGURED_IS_NOT_STORED_KEY=yes\n";
 ' "$temp/configured.json"
