@@ -104,7 +104,11 @@ def service_context():
             if directory.exists():
                 actual=directory.stat();inside=(process/'root'/str(directory).lstrip('/')).stat()
                 if (actual.st_dev,actual.st_ino)!=(inside.st_dev,inside.st_ino):raise ValueError()
-        environment.update(PATH=os.defpath,OPENCODE_DISABLE_MODELS_FETCH='true',OPENCODE_DISABLE_AUTOUPDATE='true',OPENCODE_DISABLE_PROJECT_CONFIG='true')
+        # The long-running Native service should use its existing local models cache.
+        # The *explicit* scheduled `models --refresh` CLI is the sole exception:
+        # allow that OpenCode command to fetch models.dev so the refresh is real.
+        # No Gateway HTTP fetches or parallel provider catalog are introduced.
+        environment.update(PATH=os.defpath,OPENCODE_DISABLE_MODELS_FETCH='false',OPENCODE_DISABLE_AUTOUPDATE='true',OPENCODE_DISABLE_PROJECT_CONFIG='true')
         # Recheck PID start identity; a recycled PID cannot select another context.
         identity=process.joinpath('stat').read_text().rsplit(')',1)[1].split()[19]
         return {'pid':pid,'identity':identity,'binary':str(executable),'environment':environment,'autostart':fields.get('UnitFileState','unknown'),'recovery':fields.get('Restart','unknown')}
