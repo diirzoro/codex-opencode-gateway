@@ -416,6 +416,41 @@ const api=async(path,options={})=>{
  // OpenCode /file and /file/content; no Python file listing or content handler.
  if(location.hostname==='test.opencode-gateway.codes'){
    const target=new URL(path,location.origin);
+   const git=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/git\/(status|commit|push|sync)$/i);
+   const projectPublish=/^\/api\/projects\/[0-9a-f-]{36}\/publish$/i.test(target.pathname);
+   if(projectPublish||(git&&git[2]!=='status')){
+     // Native OpenCode has no unrestricted Git publish endpoint. Never
+     // silently fall back to Python subprocess for code execution or push.
+     throw Error('TEST code changes and publishing must run through authorized OpenCode tools; legacy Python Git execution is disabled');
+   }
+   const nativeGitRead=async(workspace,resource)=>{
+     if(!currentUser)throw Error('Sign in before using Native VCS');
+     const response=await fetch('/native-session/'+workspace+'/'+resource,{
+       credentials:'same-origin',cache:'no-store',signal:options.signal});
+     const body=await response.json().catch(()=>({detail:'Invalid OpenCode response'}));
+     if(!response.ok)throw Error(body.detail||'OpenCode VCS request failed: '+response.status);
+     return body;
+   };
+   if(git&&git[2]==='status'){
+     const [changes,vcs]=await Promise.all([
+       nativeGitRead(git[1],'file/status'),nativeGitRead(git[1],'vcs')]);
+     if(!Array.isArray(changes))throw Error('Invalid OpenCode file status');
+     return {changes:changes.filter(x=>x&&typeof x.path==='string')
+       .map(x=>({path:x.path,status:x.status||'modified'})),
+       clean:changes.length===0,branch:vcs?.branch||activeProject?.branch||null,
+       repository:activeProject?.repository||null,remote_branch:activeProject?.branch||null,
+       github_access:false,push_available:false,source:'opencode-native'};
+   }
+   const workspaceDiff=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/diff$/i);
+   if(workspaceDiff){
+     if(!currentUser||!activeSession||activeSession.workspace_id!==workspaceDiff[1])
+       return {diff:''};
+     const items=await api('/api/sessions/'+activeSession.id+'/diff');
+     const name=target.searchParams.get('path')||'';
+     if(!Array.isArray(items))throw Error('Invalid OpenCode session diff');
+     const found=items.find(x=>x.file===name||x.path===name);
+     return {diff:typeof found?.patch==='string'?found.patch:''};
+   }
    const match=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/files(\/content)?$/i);
    if(match){
      if((options.method||'GET').toUpperCase()!=='GET')
