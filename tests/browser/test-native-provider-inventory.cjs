@@ -6,6 +6,17 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../../app.js'),'utf8');
+const gatewaySource=fs.readFileSync(path.join(__dirname,'../../backend/app/main.py'),'utf8');
+// TEST must not import/mount the Python AI queue/agent execution module.
+assert(!gatewaySource.includes('from .routes import workspaces, agent,'),
+  'Legacy Python agent must not be eagerly imported in TEST');
+assert(gatewaySource.includes("if settings.public_base_url.rstrip('/') != 'https://test.opencode-gateway.codes':\\n    from .routes import agent".replace('\\n','\\n')),
+  'Legacy Python AI router must be imported only for non-TEST deployments');
+assert(!gatewaySource.includes('native_catalog_maintenance.sweep'),
+  'Gateway must not schedule Native catalog refresh in Python');
+assert(!gatewaySource.includes('native_sessions.sweep_expired_native_history'),
+  'Gateway must not schedule native-history deletion in Python');
+
 const start=source.indexOf('window.nativeDirectTest=(()=>{');
 const end=source.indexOf('\n\nconst api=async(',start);
 assert(start>=0&&end>start,'Native adapter boundaries changed');
