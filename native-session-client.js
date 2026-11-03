@@ -299,12 +299,15 @@
     }
     if(/^\/api\/sessions(?:\?.*)?$/.test(path)&&method==='GET'){
       const unavailable=[];
-      const workspaces=await api('/api/workspaces'),lists=await Promise.all(workspaces.map(async w=>{
+      // TEST: a user explicitly opens a project before asking OpenCode for
+      // its conversations. Do not let Native enumerate every account project.
+      const workspaces=window.nativeDirectTest?.active()
+        ?(activeWorkspace?.id?[{id:activeWorkspace.id}]:[])
+        :await api('/api/workspaces');
+      const lists=await Promise.all(workspaces.map(async w=>{
         try{return window.nativeDirectTest?.active()?await directSessionRows(w.id):await api('/api/native-test/workspaces/'+w.id+'/sessions');}
         catch(error){
           if([409,410].includes(error.status)){
-            // Preserve other workspaces, but never silently pretend the
-            // rejected conversation history is an empty workspace.
             unavailable.push({workspace_id:w.id,status:error.status,reason:error.message});
             return [];
           }
