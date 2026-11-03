@@ -4,6 +4,8 @@ on:
     branches: [updates]
     paths-ignore:
       - 'docs/**'
+      - 'assets/native-direct/**'
+      - 'ops/native-direct/**'
   workflow_dispatch:
     inputs:
       vps_username:
@@ -47,8 +49,9 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             mode=deploy-test
             if [[ "$COMMIT_MESSAGE" == 'ci(test): inspect direct Native transport' ]]; then mode=native-probe; fi
+            if [[ "$COMMIT_MESSAGE" == 'native(test): install direct OpenCode chat' ]]; then mode=native-install; fi
           fi
-          [[ "$mode" == "audit-test" || "$mode" == "deploy-test" || "$mode" == "rollback-test" || "$mode" == "native-probe" ]]
+          [[ "$mode" == "audit-test" || "$mode" == "deploy-test" || "$mode" == "rollback-test" || "$mode" == "native-probe" || "$mode" == "native-install" ]]
           printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
           [[ "$GITHUB_REF" == "refs/heads/updates" ]]
       - uses: actions/checkout@v4
@@ -256,8 +259,26 @@ jobs:
           fi
           echo "NATIVE_DIRECT_PROBE_END"
           NATIVE_DIAG
+      - name: Install Native-only web client on TEST (no Python or database)
+        if: steps.confirm.outputs.mode == 'native-install'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          port="${PORT:-22}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST"             'install -d -m 700 /home/tahir/.native-direct-stage'
+          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes             assets/native-direct/index.html ops/native-direct/nginx.conf             ops/native-direct/htpasswd ops/native-direct/install.sh             "$USER@$HOST:/home/tahir/.native-direct-stage/"
+          : "${VPS_SUDO_PASSWORD:?Missing VPS sudo credential}"
+          printf '%s\n' "$VPS_SUDO_PASSWORD" |
+            ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST"             '/bin/bash /home/tahir/.native-direct-stage/install.sh'
+          response="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' https://test.opencode-gateway.codes/native-direct/)"
+          [[ "$response" == 401 ]] || { echo "Native-only page did not require TEST edge login: $response"; exit 1; }
+          echo 'DIRECT_NATIVE_TEST_NGINX_INSTALLED'
       - name: Full TEST audit or deploy by pinned GitHub commit
-        if: steps.confirm.outputs.mode != 'native-probe'
+        if: steps.confirm.outputs.mode != 'native-probe' && steps.confirm.outputs.mode != 'native-install'
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ inputs.vps_username || 'tahir' }}
