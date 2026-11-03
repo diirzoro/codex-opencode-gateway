@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
-from .routes import workspaces, agent, github, dashboard, plans, billing, management, homepage
+from .routes import workspaces, github, dashboard, plans, billing, management, homepage
 from .services import workspace_cache, customer_lifecycle, preview_access
 from .routes import preview_public, native_sessions, payment_gateways
 from .config import settings
@@ -71,6 +71,7 @@ app.include_router(preview_public.router)
 # TEST conversations, messages, tools and SSE are handled by the running
 # OpenCode Native process. Keep legacy source only for the unchanged LIVE build.
 if settings.public_base_url.rstrip('/') != 'https://test.opencode-gateway.codes':
+    from .routes import agent
     app.include_router(agent.router)
 app.include_router(github.router)
 app.include_router(dashboard.router)
