@@ -30,7 +30,11 @@
 ## تغييرات المصدر على updates بتاريخ 3 نوفمبر
 - تعديل `app.js`: تحميل Workspace عبر `/config/providers` دون تنزيل `/provider` الكبير؛ fallback إلى Native `/provider` مرة واحدة فقط إن لم يعرض Nginx المسار الخفيف؛ Dashboard يعرض المزودين المهيّئين من Native بسرعة قبل بحث الفهرس الكامل.
 - `native-session-client.js` يستخدم `prompt_async` وقراءة رسائل Native وSSE بالفعل، ولكن التحقق النهائي من مسارات Nginx المتاحة وتشغيل المحادثات والمزودين ما زال مطلوبًا.
-- **غير مكتمل**: التحقق من مرور `/config/providers` على Nginx الفعلي؛ إزالة اعتماد سياسة إظهار النماذج على `/api/opencode/display-policy` الخاصة بـGateway دون فقد ضوابط ملكية المستخدم؛ التحقق من إدارة الاعتمادات المتعددة في مخزن Native المشترك؛ نجاح نشر GitHub Actions ونتائج اختبار TEST من حسابين.
+- **تم التحقق عبر GitHub Actions**: نشر مسار `/config/providers` في Nginx TEST إلى `18098 -> 127.0.0.2:4097`، واختبارات بناء الواجهة والـpreflight نجحت. هذا لا يثبت بحد ذاته تجربة ربط مزود حقيقي أو SSE من حساب عميل.
+- **تحسين لاحق**: Dashboard وWorkspace يستخدمان قراءة واحدة مشتركة في ذاكرة الواجهة لـ`/config/providers`؛ اختبار `tests/browser/test-native-provider-inventory.cjs` أصبح شرط نشر TEST.
+- **تنظيف التنفيذ على TEST**: تم فك تركيب `agent.router` الخاص بالمحادثات والطوابير القديمة في Python، وتعطيل مهمة Python المجدولة لتحديث كتالوج Native وحذف محادثاته، وإخفاء أدوات تحديث كتالوج Native المكتوبة في Python وفك تركيب API الخاص بها. هذه تغييرات فرع `updates`؛ مخازن Native لم تُمس.
+- **باقٍ قبل الدمج**: تجربة متصفح فعلية للمزود والمفتاح والنموذج و`prompt_async` وSSE والأدوات وإيقاف المحادثة، والتحقق من عزل المفاتيح بين حسابين، ومراجعة مسارات `/api/opencode/display-policy` بصفتها إعداد تحكم إداري لا مصدرًا لنماذج AI، وتنظيف ملفات Python القديمة عند نقل LIVE من مسارها القديم.
+- **لم يُحذف من المصدر بعد**: `backend/app/services/opencode.py` و`providers.py` و`opencode_catalog.py` و`message_queue.py` ومجموعة legacy الأخرى؛ تعتمد عليها شيفرة LIVE/اختبارات قديمة، وحذفها من الفرع المشترك دون فصل الاعتمادات قد يكسر نشر `master`.
 - تغييرات GitHub في `updates` لا تثبت وحدها أن الكود نُشر أو أن LIVE تغيّر.
 
 ## قيود حرجة
