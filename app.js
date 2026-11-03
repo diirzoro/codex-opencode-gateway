@@ -306,6 +306,33 @@ window.nativeDirectTest=(()=>{
       return agentRows.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode))
         .map(a=>({id:a.name,name:a.name,mode:a.mode}));
     }
+    // Disconnect uses only the OpenCode Native /auth and /provider endpoints.
+    // Do not block it on policy, models, agents, or the 7 MB catalog presentation.
+    const directDelete=/^\/api\/(?:opencode\/connections|workspaces\/[^/]+\/providers)\/([^/]+)$/.exec(name);
+    if(method==='DELETE'&&directDelete){
+      const providerId=decodeURIComponent(directDelete[1]);
+      if(!/^[a-z0-9][a-z0-9._-]{0,119}$/i.test(providerId))
+        throw Error('Invalid OpenCode provider ID for credential deletion');
+      const before=await catalog({force:true});
+      if(!before.connected.includes(providerId))
+        throw Error('OpenCode no longer lists this provider as configured. Refresh the Connections page.');
+      const result=await direct('auth/'+encodeURIComponent(providerId),{method:'DELETE'});
+      if(result!==true)throw Error('OpenCode did not confirm deleting the credential');
+      // Never claim success from DELETE status alone. Read the actual Native
+      // store again, without relying on the cached provider inventory.
+      let after=await catalog({force:true});
+      if(after.connected.includes(providerId)){
+        // A very short extra read allows a Native storage update to settle;
+        // it must not mask a deletion failure or change another provider.
+        await new Promise(resolve=>setTimeout(resolve,350));
+        after=await catalog({force:true});
+      }
+      if(after.connected.includes(providerId))
+        throw Error('OpenCode still reports this key as configured. Deletion is NOT confirmed.');
+      forget();
+      invalidateProviderMutation(path,'DELETE');
+      return null;
+    }
     const [data]=await Promise.all([catalog(),visibility()]);
     if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
       const query=parsed.searchParams.get('query')||'',offset=Number(parsed.searchParams.get('offset')||0);
@@ -390,11 +417,6 @@ window.nativeDirectTest=(()=>{
         forget();invalidateProviderMutation(path,'DELETE');
         throw error;
       }
-    }
-    if(!tail.length&&method==='DELETE'){
-      const result=await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
-      if(result!==true)throw Error('OpenCode did not confirm removing this provider key');
-      forget();invalidateProviderMutation(path,'DELETE');return null;
     }
     if(tail[0]==='oauth'&&method==='POST'){
       const request=JSON.parse(options.body||'{}');
