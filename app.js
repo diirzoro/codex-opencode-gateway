@@ -183,32 +183,48 @@ window.nativeDirectTest=(()=>{
     return {kind:'provider_error',message:'أعاد OpenCode خطأ من المزود. تحقق من صلاحية المفتاح وحالة النموذج.'};
   }
   async function verifyProviderModel(pid,modelID){
+    // A new, unpredictable challenge proves the selected Native model really
+    // responded. Generic text or an error message must NEVER verify a key.
     const directory=defaultDirectory;
+    const challenge='NATIVE-VERIFY-'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase();
     let sid='',completed=false;
     try{
       const session=await direct('session',{method:'POST',directory,
-        value:{title:'TEST credential verification · '+pid}});
+        value:{title:'Native credential verification · '+pid}});
       if(!/^ses_[A-Za-z0-9_-]+$/.test(session?.id||''))
-        throw Error('لم يؤكد OpenCode إنشاء جلسة اختبار الاعتماد.');
+        throw Error('لم يؤكد OpenCode إنشاء جلسة التحقق.');
       sid=session.id;
-      await direct('session/'+encodeURIComponent(sid)+'/prompt_async',{
+      const receipt=await direct('session/'+encodeURIComponent(sid)+'/prompt_async',{
         method:'POST',directory,value:{
-          model:{providerID:pid,modelID},parts:[{type:'text',text:'Reply with exactly VERIFIED. No tools.'}]
+          model:{providerID:pid,modelID},
+          parts:[{type:'text',text:'Return only the following verification code, exactly as written, with no extra text: '+challenge}]
         }});
+      if(receipt!==null&&receipt!==true&&receipt!==undefined)
+        throw Error('لم يؤكد OpenCode قبول رسالة التحقق.');
       const deadline=Date.now()+65000;
-      let failure=null;
+      let failure=null,unexpectedAnswer=false;
       while(Date.now()<deadline){
-        await new Promise(resolve=>setTimeout(resolve,2500));
+        await new Promise(resolve=>setTimeout(resolve,1800));
         const messages=await direct('session/'+encodeURIComponent(sid)+'/message',{directory});
-        if(!Array.isArray(messages))throw Error('OpenCode returned an invalid verification transcript.');
+        if(!Array.isArray(messages))throw Error('أعاد OpenCode سجل تحقق غير صالح.');
         const assistant=messages.filter(row=>row?.info?.role==='assistant');
         for(const message of assistant){
-          if(message.info?.error){failure=nativeFailure(message.info.error);break;}
-          const value=(message.parts||[]).filter(part=>part?.type==='text').map(part=>part.text||'').join('');
-          if(value.trim()){
+          const info=message.info;
+          if(info?.error){failure=nativeFailure(info.error);break;}
+          if(info?.providerID!==pid||info?.modelID!==modelID){
+            // A fallback/foreign/default model is not proof of the requested key.
+            failure={kind:'wrong_model',message:'رد نموذج مختلف عن المزود أو النموذج المحدد. لم يتم توثيق هذا المفتاح.'};
+            break;
+          }
+          const answer=(message.parts||[]).filter(part=>part?.type==='text')
+            .map(part=>part.text||'').join('').trim();
+          if(!answer)continue;
+          if(!info?.time?.completed&&!info?.finish)continue;
+          if(answer===challenge){
             completed=true;
             return {verified:true,provider_id:pid,model_id:modelID};
           }
+          unexpectedAnswer=true;
         }
         if(failure)break;
         const states=await direct('session/status',{directory});
@@ -217,8 +233,12 @@ window.nativeDirectTest=(()=>{
           const problem=nativeFailure({name:'RetryError',message:state.message});
           if(problem.kind!=='provider_error'){failure=problem;break;}
         }
+        if(unexpectedAnswer&&(state===undefined||state?.type==='idle')){
+          failure={kind:'unexpected_response',message:'استجاب OpenCode، لكن النموذج لم يُرجع رمز التحقق الصحيح. لم يتم توثيق المفتاح.'};
+          break;
+        }
       }
-      const error=new Error(failure?.message||'لم يكتمل اختبار Native خلال المهلة. لا يُعتبر المفتاح مُتحققًا.');
+      const error=new Error(failure?.message||'انتهت مهلة اختبار النموذج الحقيقي؛ لم يتم قبول اتصال غير متحقق.');
       error.credentialKind=failure?.kind||'not_verified';
       throw error;
     }finally{
@@ -291,15 +311,18 @@ window.nativeDirectTest=(()=>{
         ?value.model_id
         :choices.includes(currentCatalog.default?.[p.id])?currentCatalog.default[p.id]:choices[0];
       if(!selected)throw Error('لم يجد OpenCode نموذجًا صالحًا لاختبار مفتاح هذا المزود.');
+      options.onNativePhase?.('saving');
       const inserted=await direct('auth/'+encodeURIComponent(p.id),{method:'PUT',
         value:{type:'api',key:value.api_key}});
-      if(inserted!==true)throw Error('لم يؤكد OpenCode تخزين المفتاح.');
+      if(inserted!==true)throw Error('لم يؤكد OpenCode التخزين المؤقت للمفتاح.');
       try{
+        options.onNativePhase?.('verifying');
         const checked=await verifyProviderModel(p.id,selected);
         forget();invalidateProviderMutation(path,'POST');
         return {connected:true,persisted:true,verified:true,
           provider_id:p.id,verified_model_id:checked.model_id};
       }catch(error){
+        options.onNativePhase?.('failed');
         // No unverified key may remain configured after this attempted
         // connection. The slot was empty before this operation; do not retain
         // a bogus Connected state on auth, quota, timeout or model failure.
