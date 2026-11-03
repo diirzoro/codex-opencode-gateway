@@ -47,3 +47,13 @@
 3. Workspace يقرأ المتاح من Native دون استدعاء الفهرس الكامل لكل فتح.
 4. إرسال رسالة عبر Native، SSE، history، stop، tools، وفتح Workspace مختلف، ثم اختبار حساب آخر.
 5. CI ونشر TEST ناجحان، ومطابقة Nginx الواقع للكود؛ بعد ذلك فقط مراجعة دمج `master`/LIVE.
+
+## تحديث تنفيذ 3 نوفمبر 2026 — حذف محرك Python القديم من المصدر
+
+- **حُذفت فعليًا من فرع `updates`** الملفات: `backend/app/routes/agent.py`، `backend/app/services/message_queue.py`، `backend/app/services/opencode.py`، `backend/app/services/opencode_catalog.py`، `backend/app/services/account_provider_runtime.py`، `backend/app/services/session_recovery.py`.
+- **أُزيل** تركيب `agent.router` نهائيًا من `backend/app/main.py`. لا يوجد مسار Python لتوليد ردود أو تشغيل queue في النسخة المحدثة؛ لا تحتفظ جلسات AI في PostgreSQL بوظيفة المحرك.
+- **أضيف ملف `backend/app/services/native_control_bridge.py` فقط لقفل تغييرات ملفات المشاريع وإبقاء دورة حياة Gateway دون محرك AI**. لا ينشئ عمليات أو قاعدة بيانات أو cache، وتعيد واجهاته القديمة HTTP 410 بدل تشغيل نسخ OpenCode إضافية.
+- **لم يتغير `master` أو عملية LIVE الجارية**؛ لكن عند نقل فرع `updates` إلى `master` مستقبلًا ستكون واجهات Python القديمة غير متاحة، ويجب إثبات تكامل Native في LIVE قبل الدمج.
+- **التحقق**: نجحت GitHub Actions TEST على commit `39667647afd064f8c71c5dd77e26c5a3a063587d`، بما فيه فحوص مصدر TEST، واختبار عدم بقاء ملفات AI الستة، والنشر وصحة `/api/health`. لا يعتبر هذا بديلًا عن اختبار اتصال مفتاح فعلي، عزل حسابين، أو اكتمال محادثة Native مع SSE.
+- **المتبقي**: إزالة تعليمات ومسارات الاعتماد القديمة الموجودة داخل وحدات إدارة Gateway التي لا تزال تحتوي شيفرة Legacy غير مركبة في TEST، والتحقق من كل استدعاءات Dashboard/Workspace، واختبار مستخدمين مستقلين قبل LIVE.
+
