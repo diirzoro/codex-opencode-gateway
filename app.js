@@ -163,6 +163,72 @@ window.nativeDirectTest=(()=>{
       default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
         allowed:modelAllowed(p.id,id),visible:modelVisible(p.id,id)}))};
   }
+  // Credential acceptance and provider authentication are different outcomes.
+  // Verify through a real model request in the EXISTING OpenCode Native process.
+  // Only Native /auth stores keys; never send them to Python or PostgreSQL.
+  function nativeFailure(value){
+    const raw=[value?.name,value?.message,value?.data?.message,value?.data?.statusCode,
+      value?.data?.code,value?.status,value?.error?.message]
+      .filter(v=>v!==undefined&&v!==null).join(' ').slice(0,3000);
+    if(/(?:401|unauthoriz|invalid.{0,40}(?:api.?key|token|credential)|incorrect.{0,30}key|authentication.?error|api.?key.{0,30}(?:invalid|incorrect|missing))/i.test(raw))
+      return {kind:'invalid_key',message:'رفض المزود مفتاح API (401 أو بيانات اعتماد غير صحيحة).'};
+    if(/(?:403|forbidden|access.denied|permission.denied)/i.test(raw))
+      return {kind:'access_denied',message:'رفض المزود صلاحية هذا المفتاح (403).'};
+    if(/(?:429|quota|rate.limit|free usage exceeded|insufficient|billing|credits|balance)/i.test(raw))
+      return {kind:'quota',message:'طلب OpenCode رُفض بسبب الرصيد أو حدود استخدام المزود.'};
+    if(/(?:model.{0,40}(?:not.found|unavailable|not supported)|invalid.model|(?:404).{0,30}model)/i.test(raw))
+      return {kind:'model_unavailable',message:'الموديل المختار غير متاح لدى المزود.'};
+    if(/(?:timeout|timed.out|network|connect|econn|enotfound|fetch.failed)/i.test(raw))
+      return {kind:'network',message:'تعذر اتصال OpenCode بمزود النموذج.'};
+    return {kind:'provider_error',message:'أعاد OpenCode خطأ من المزود. تحقق من صلاحية المفتاح وحالة النموذج.'};
+  }
+  async function verifyProviderModel(pid,modelID){
+    const directory=defaultDirectory;
+    let sid='',completed=false;
+    try{
+      const session=await direct('session',{method:'POST',directory,
+        value:{title:'TEST credential verification · '+pid}});
+      if(!/^ses_[A-Za-z0-9_-]+$/.test(session?.id||''))
+        throw Error('لم يؤكد OpenCode إنشاء جلسة اختبار الاعتماد.');
+      sid=session.id;
+      await direct('session/'+encodeURIComponent(sid)+'/prompt_async',{
+        method:'POST',directory,value:{
+          model:{providerID:pid,modelID},parts:[{type:'text',text:'Reply with exactly VERIFIED. No tools.'}]
+        }});
+      const deadline=Date.now()+65000;
+      let failure=null;
+      while(Date.now()<deadline){
+        await new Promise(resolve=>setTimeout(resolve,2500));
+        const messages=await direct('session/'+encodeURIComponent(sid)+'/message',{directory});
+        if(!Array.isArray(messages))throw Error('OpenCode returned an invalid verification transcript.');
+        const assistant=messages.filter(row=>row?.info?.role==='assistant');
+        for(const message of assistant){
+          if(message.info?.error){failure=nativeFailure(message.info.error);break;}
+          const value=(message.parts||[]).filter(part=>part?.type==='text').map(part=>part.text||'').join('');
+          if(value.trim()){
+            completed=true;
+            return {verified:true,provider_id:pid,model_id:modelID};
+          }
+        }
+        if(failure)break;
+        const states=await direct('session/status',{directory});
+        const state=states?.[sid];
+        if(state?.type==='retry'){
+          const problem=nativeFailure({name:'RetryError',message:state.message});
+          if(problem.kind!=='provider_error'){failure=problem;break;}
+        }
+      }
+      const error=new Error(failure?.message||'لم يكتمل اختبار Native خلال المهلة. لا يُعتبر المفتاح مُتحققًا.');
+      error.credentialKind=failure?.kind||'not_verified';
+      throw error;
+    }finally{
+      if(sid){
+        if(!completed)await direct('session/'+encodeURIComponent(sid)+'/abort',{
+          method:'POST',value:{},directory}).catch(()=>{});
+        await direct('session/'+encodeURIComponent(sid),{method:'DELETE',directory}).catch(()=>{});
+      }
+    }
+  }
   const matches=(path)=>{
     if(!active())return false;
     if(/^\/api\/opencode\/(?:connections(?:\/|$)|catalog\/providers(?:\/|$)|catalog\/agents(?:$|\?))/.test(path))return true;
@@ -210,11 +276,37 @@ window.nativeDirectTest=(()=>{
     if(tail.length===1&&tail[0]==='credentials'&&method==='POST'){
       const value=JSON.parse(options.body||'{}');
       if(typeof value.api_key!=='string'||!value.api_key.trim())throw Error('API key is required');
-      const result=await direct('auth/'+encodeURIComponent(p.id),{method:'PUT',
-        value:{type:'api',key:value.api_key,metadata:value.inputs||{}}});
-      if(result!==true)throw Error('OpenCode did not confirm storing this provider key');
-      forget();invalidateProviderMutation(path,'POST');
-      return {connected:true,persisted:true,provider_id:p.id,verified:false};
+      // The native /auth store is process-global in this OpenCode version.
+      // Never silently overwrite a possibly unrelated TEST user's credential.
+      // Credential rotation requires a separately verified, isolated owner slot.
+      const currentCatalog=await catalog({force:true});
+      if(currentCatalog.connected.includes(p.id)){
+        const error=new Error('يوجد مفتاح لهذا المزود في مخزن OpenCode المشترك. لن يتم استبداله دون عزل حسابات TEST.');
+        error.status=409;throw error;
+      }
+      const choices=Object.keys(p.models||{}).filter(mid=>modelAllowed(p.id,mid));
+      const selected=typeof value.model_id==='string'&&choices.includes(value.model_id)
+        ?value.model_id
+        :choices.includes(currentCatalog.default?.[p.id])?currentCatalog.default[p.id]:choices[0];
+      if(!selected)throw Error('لم يجد OpenCode نموذجًا صالحًا لاختبار مفتاح هذا المزود.');
+      const inserted=await direct('auth/'+encodeURIComponent(p.id),{method:'PUT',
+        value:{type:'api',key:value.api_key}});
+      if(inserted!==true)throw Error('لم يؤكد OpenCode تخزين المفتاح.');
+      try{
+        const checked=await verifyProviderModel(p.id,selected);
+        forget();invalidateProviderMutation(path,'POST');
+        return {connected:true,persisted:true,verified:true,
+          provider_id:p.id,verified_model_id:checked.model_id};
+      }catch(error){
+        // Remove ONLY the newly inserted credential on conclusive auth failure.
+        // A timeout/quota issue does not prove the key invalid, so preserve it
+        // unverified rather than destroying a potentially valid credential.
+        if(['invalid_key','access_denied'].includes(error.credentialKind)){
+          await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'}).catch(()=>{});
+        }
+        forget();
+        throw error;
+      }
     }
     if(!tail.length&&method==='DELETE'){
       const result=await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
