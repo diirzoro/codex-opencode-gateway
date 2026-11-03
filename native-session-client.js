@@ -81,12 +81,66 @@
   function selection(id){if(!selections.has(id)){try{selections.set(id,JSON.parse(localStorage.getItem(storageKey('selection',id))||'null'));}catch{}}return selections.get(id);}
   function select(id,value){if(!id)return;selections.set(id,value);try{localStorage.setItem(storageKey('selection',id),JSON.stringify(value));}catch{}const row=rows.get(id);if(row){row.model={providerID:value.providerID,id:value.modelID,variant:value.variant};row.agent=value.agent;}}
   function remember(row){const saved=selection(row.id);if(saved)row={...row,model:{providerID:saved.providerID,id:saved.modelID,variant:saved.variant},agent:saved.agent};rows.set(row.id,row);return row;}
-  async function context(id){if(rows.has(id))return rows.get(id);const generation=epoch,user=owner(),value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');return remember(value);}
+  async function context(id){
+    if(rows.has(id))return rows.get(id);
+    if(window.nativeDirectTest?.active()){
+      const workspaces=await api('/api/workspaces');
+      await Promise.all(workspaces.map(w=>directSessionRows(w.id)));
+      if(rows.has(id))return rows.get(id);
+      throw Error('Native session is not in this account workspace');
+    }
+    const generation=epoch,user=owner(),value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});
+    if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');
+    return remember(value);
+  }
+  function directWorkspaceRoot(workspace){
+    if(!/^[0-9a-f-]{36}$/i.test(String(workspace))||!/^[0-9a-f-]{36}$/i.test(owner()))
+      throw Error('Invalid TEST workspace identity');
+    return '/var/lib/opencode-workspaces-test/'+owner()+'/'+workspace+'/repo';
+  }
+  function directSessionIds(workspace){
+    const key='og-test-native-sessions:'+owner()+':'+workspace;
+    let map={};
+    try{map=JSON.parse(localStorage.getItem(key)||'{}')||{};}catch{}
+    if(typeof map!=='object'||Array.isArray(map))map={};
+    return {key,map};
+  }
+  function directSessionRow(workspace,live){
+    const root=directWorkspaceRoot(workspace);
+    const ids=directSessionIds(workspace);
+    if(!ids.map[live.id]){
+      ids.map[live.id]=crypto.randomUUID();
+      try{localStorage.setItem(ids.key,JSON.stringify(ids.map));}catch{}
+    }
+    const id=ids.map[live.id];
+    const row={id,workspace_id:workspace,runtime_id:live.id,
+      title:live.title||'OpenCode Native session',status:'idle',lifecycle:'active',
+      native:true,file_base:'file://'+root+'/',tool_access:{project_manager:true,shell_authorized:false,shell_enabled:false}};
+    const previous=rows.get(id);
+    return remember({...row,...(previous?{status:previous.status,lifecycle:previous.lifecycle}:{} )});
+  }
+  async function directSessionRows(workspace){
+    const root=directWorkspaceRoot(workspace);
+    const list=await window.nativeDirectTest.direct('session',{directory:root});
+    if(!Array.isArray(list))throw Error('OpenCode Native session list unavailable');
+    return list.filter(row=>row?.id&&row.directory===root).map(row=>directSessionRow(workspace,row));
+  }
+  async function directCreateSession(workspace,options={}){
+    const root=directWorkspaceRoot(workspace);
+    const body=JSON.parse(options.body||'{}');
+    const session=await window.nativeDirectTest.direct('session',{
+      method:'POST',directory:root,value:{title:body.title||'New session'}
+    });
+    if(!session?.id||session.directory!==root)throw Error('OpenCode returned an invalid workspace session');
+    return directSessionRow(workspace,session);
+  }
   // Native executes and streams directly through the TEST Nginx endpoint.
   // Workspace session metadata remains in the existing application DB;
   // no Python code processes the prompt or response body.
   function nativeRoot(workspace){
     const record=[...rows.values()].find(row=>String(row.workspace_id)===String(workspace));
+    if(window.nativeDirectTest?.active())return window.nativeDirectTest.rootFromFile(record?.file_base)
+      ||directWorkspaceRoot(workspace);
     return window.nativeDirectTest?.rootFromFile(record?.file_base)
       ||window.nativeDirectTest?.defaultDirectory;
   }
@@ -202,11 +256,17 @@
   async function route(path,options){
     if(!active())return null;
     const method=options.method||'GET';let match=path.match(/^\/api\/workspaces\/([^/]+)\/sessions(?:\?.*)?$/);
-    if(match){const result=await api('/api/native-test/workspaces/'+match[1]+'/sessions',options);if(Array.isArray(result))result.forEach(remember);else remember(result);return {value:result};}
+    if(match){
+      const result=window.nativeDirectTest?.active()
+        ?(method==='POST'?await directCreateSession(match[1],options):await directSessionRows(match[1]))
+        :await api('/api/native-test/workspaces/'+match[1]+'/sessions',options);
+      if(Array.isArray(result))result.forEach(remember);else remember(result);
+      return {value:result};
+    }
     if(/^\/api\/sessions(?:\?.*)?$/.test(path)&&method==='GET'){
       const unavailable=[];
       const workspaces=await api('/api/workspaces'),lists=await Promise.all(workspaces.map(async w=>{
-        try{return await api('/api/native-test/workspaces/'+w.id+'/sessions');}
+        try{return window.nativeDirectTest?.active()?await directSessionRows(w.id):await api('/api/native-test/workspaces/'+w.id+'/sessions');}
         catch(error){
           if([409,410].includes(error.status)){
             // Preserve other workspaces, but never silently pretend the
@@ -227,9 +287,43 @@
     }
     match=path.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/(.*?))?(?:\?.*)?$/);if(!match)return null;
     const id=match[1],tail=match[2]||'',row=await context(id),user=owner();
-    if(!tail&&method==='PATCH'){const value=await api('/api/native-test/sessions/'+id,options);remember({...row,...value});return {value};}
-    if((!tail&&method==='DELETE')||['close','archive','restore','reopen'].includes(tail))return {value:await api('/api/native-test/sessions/'+id+'/visibility/'+(tail||'delete'),{method:'POST'})};
-    if(!tail||tail==='open'){const fresh=tail==='open'?remember(await api('/api/native-test/sessions/'+encodeURIComponent(id))):rows.get(id);return {value:{...fresh,status:statuses.get(id)||'idle',execution_status:statuses.get(id)||'idle'}};}
+    if(!tail&&method==='PATCH'){
+      if(window.nativeDirectTest?.active()){
+        const payload=JSON.parse(options.body||'{}');
+        const changed=await window.nativeDirectTest.direct('session/'+encodeURIComponent(row.runtime_id),{
+          method:'PATCH',directory:directWorkspaceRoot(row.workspace_id),value:{title:payload.title}
+        });
+        const value=remember({...row,title:changed?.title||payload.title});
+        return {value};
+      }
+      const value=await api('/api/native-test/sessions/'+id,options);remember({...row,...value});return {value};
+    }
+    if((!tail&&method==='DELETE')||['close','archive','restore','reopen'].includes(tail)){
+      if(window.nativeDirectTest?.active()){
+        const act=tail||'delete';
+        if(act==='delete'){
+          const result=await window.nativeDirectTest.direct('session/'+encodeURIComponent(row.runtime_id),{
+            method:'DELETE',directory:directWorkspaceRoot(row.workspace_id)
+          });
+          if(result!==true)throw Error('OpenCode did not confirm session deletion');
+          rows.delete(id);histories.delete(id);
+          const ids=directSessionIds(row.workspace_id);
+          delete ids.map[row.runtime_id];
+          try{localStorage.setItem(ids.key,JSON.stringify(ids.map));}catch{}
+          return {value:{...row,lifecycle:'deleted'}};
+        }
+        const lifecycle=({close:'closed',archive:'archived',restore:'closed',reopen:'active'})[act];
+        const value=remember({...row,lifecycle});
+        return {value};
+      }
+      return {value:await api('/api/native-test/sessions/'+id+'/visibility/'+(tail||'delete'),{method:'POST'})};
+    }
+    if(!tail||tail==='open'){
+      const fresh=tail==='open'
+        ?(window.nativeDirectTest?.active()?row:remember(await api('/api/native-test/sessions/'+encodeURIComponent(id))))
+        :rows.get(id);
+      return {value:{...fresh,status:statuses.get(id)||'idle',execution_status:statuses.get(id)||'idle'}};
+    }
     if(tail==='messages'&&method==='GET')return {value:display(await history(id),row)};
     if(tail==='todos')return {value:{supported:true,items:await coalesce('todos:'+id,()=>sessionRequest(id,'todo'))}};
     if(tail==='diff')return {value:await sessionRequest(id,'diff')};
