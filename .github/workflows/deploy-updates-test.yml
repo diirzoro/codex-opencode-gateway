@@ -354,11 +354,11 @@ jobs:
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             'test -d /var/www/opencode-native-direct-test && install -d -m 700 /home/tahir/.native-direct-stage'
           scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            assets/native-direct/app.js "$USER@$HOST:/home/tahir/.native-direct-stage/app.js"
+            assets/native-direct/index.html assets/native-direct/app.js "$USER@$HOST:/home/tahir/.native-direct-stage/"
           : "${VPS_SUDO_PASSWORD:?Missing protected VPS sudo credential}"
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
             -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            'read -r pass; printf "%s\n" "$pass" | sudo -S -p "" install -m 0644 /home/tahir/.native-direct-stage/app.js /var/www/opencode-native-direct-test/app.js'
+            'read -r pass; printf "%s\n" "$pass" | sudo -S -p "" sh -c "install -m 0644 /home/tahir/.native-direct-stage/app.js /var/www/opencode-native-direct-test/app.js && install -m 0644 /home/tahir/.native-direct-stage/index.html /var/www/opencode-native-direct-test/index.html"'
           echo 'TEST Native direct web client updated from the same pinned commit.'
       - name: Verify TEST health after TEST operation
         if: steps.confirm.outputs.mode != 'audit-test' && steps.confirm.outputs.mode != 'native-probe'
