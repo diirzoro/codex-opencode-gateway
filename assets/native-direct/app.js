@@ -28,7 +28,7 @@ async function catalog(){
   sel.replaceChildren(...list.slice(0,50).map(v=>new Option(v.name||v.id,v.id)));
   sel.value=list.some(v=>v.id===value)?value:'deepseek';
   refreshModels();
-  feedback('connectStatus','قراءة Native ناجحة. أول 50 مزودًا. DeepSeek: '+(next.connected?.includes('deepseek')?'متصل':'غير متصل'));
+  feedback('connectStatus','قراءة Native ناجحة. أول 50 مزودًا. DeepSeek: '+(next.connected?.includes('deepseek')?'اعتماد موجود في Native (لا يثبت صلاحيته)':'لا يوجد اعتماد'));
  }catch(error){feedback('connectStatus',error.message,true)}
 }
 function refreshModels(){
@@ -50,82 +50,6 @@ function failure(value){
  if(/model.{0,30}(not.found|unavailable|not.supported)|invalid.model/i.test(raw))
   return 'النموذج غير متاح في حساب هذا المزود.';
  return 'فشل اختبار المفتاح في OpenCode Native. لا يعني التخزين نجاح المصادقة.';
-}
-async function verify(provider,model){
- let sid='',success=false;
- const challenge='NATIVE-VERIFY-'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase();
- try{
-  const session=await native('session','POST',{title:'TEST API credential verification'});
-  sid=session?.id||'';
-  if(!/^ses_[A-Za-z0-9_-]+$/.test(sid))throw Error('لم تُنشأ جلسة تحقق في OpenCode.');
-  const receipt=await native('session/'+encodeURIComponent(sid)+'/prompt_async','POST',{
-   model:{providerID:provider,modelID:model},
-   parts:[{type:'text',text:'Return exactly this code, with no other text: '+challenge}]
-  });
-  if(receipt!==null&&receipt!==true&&receipt!==undefined)
-   throw Error('لم يؤكد OpenCode استلام طلب التحقق.');
-  const until=Date.now()+65000;
-  while(Date.now()<until){
-   await new Promise(resolve=>setTimeout(resolve,1800));
-   const messages=await native('session/'+encodeURIComponent(sid)+'/message');
-   if(!Array.isArray(messages))throw Error('سجل التحقق من OpenCode غير صالح.');
-   for(const m of messages){
-    if(m?.info?.role!=='assistant')continue;
-    if(m.info.error)throw Error(failure(m.info.error));
-    if(m.info.providerID!==provider||m.info.modelID!==model)
-     throw Error('أجاب نموذج أو مزود مختلف؛ لم يُقبل التحقق.');
-    const answer=(m.parts||[]).filter(p=>p.type==='text').map(p=>p.text||'').join('').trim();
-    if(!answer)continue;
-    if(!m.info.time?.completed&&!m.info.finish)continue;
-    if(answer!==challenge)throw Error('رد النموذج لا يطابق رمز التحقق؛ لم يُقبل المفتاح.');
-    success=true;return true;
-   }
-   const status=await native('session/status');
-   if(status?.[sid]?.type==='retry'&&status[sid].message)
-    throw Error(failure({message:status[sid].message}));
-  }
-  throw Error('لم يصل رد تحقق صحيح خلال المهلة؛ لا يتم قبول مفتاح غير مختبر.');
- }finally{
-  if(sid){
-   if(!success)await native('session/'+encodeURIComponent(sid)+'/abort','POST',{}).catch(()=>{});
-   await native('session/'+encodeURIComponent(sid),'DELETE').catch(()=>{});
-  }
- }
-}
-async function connect(){
- const provider=byId('provider').value,secret=byId('apiKey').value.trim(),model=byId('model').value;
- if(!provider||!secret||!model){feedback('connectStatus','حدد المزوّد والنموذج ثم أدخل مفتاح API.',true);return}
- const button=byId('connect');button.disabled=true;
- feedback('connectStatus','جارٍ فحص اتصال المزود من OpenCode Native...');
- let stored=false;
- try{
-  const current=await native('provider');
-  if(current.connected?.includes(provider))
-   throw Error('المزود متصل مسبقًا في مخزن OpenCode المشترك؛ لن نستبدل مفتاحًا قد يخص حسابًا آخر.');
-  if(!current.all?.find(p=>p.id===provider)?.models?.[model])
-   throw Error('النموذج المختار غير موجود في كتالوج Native.');
-  // Track the empty Native slot before PUT. If PUT fails after writing,
-  // the failure path must still revoke the provisional credential.
-  stored=true;
-  const accepted=await native('auth/'+encodeURIComponent(provider),'PUT',{type:'api',key:secret});
-  if(accepted!==true)throw Error('لم يؤكد OpenCode Native تخزين المفتاح المؤقت.');
-  feedback('connectStatus','تم التخزين المؤقت داخل Native. جارٍ إرسال طلب حقيقي للتحقق...');
-  if(await verify(provider,model)!==true)throw Error('لم يؤكد OpenCode نجاح التحقق الحقيقي.');
-  stored=false;
-  byId('apiKey').value='';
-  feedback('connectStatus','تم التحقق بنجاح: OpenCode Native استقبل جوابًا من '+provider+'/'+model+'. المفتاح في مخزن Native وليس Gateway.');
-  await catalog();
- }catch(error){
-  if(stored){
-   try{
-    const removed=await native('auth/'+encodeURIComponent(provider),'DELETE');
-    if(removed!==true)throw Error('revocation not confirmed');
-    const after=await native('provider');
-    if(after?.connected?.includes(provider))throw Error('Failed Native credential still present');
-   }catch{error.message+=' تعذّر حذف المفتاح المؤقت من Native؛ افصل المزود قبل إعادة المحاولة.'}
-  }
-  feedback('connectStatus',error.message,true);
- }finally{button.disabled=false}
 }
 async function showHistory(id){
  const items=await native('session/'+encodeURIComponent(id)+'/message');
@@ -181,7 +105,6 @@ async function stop(){
  finally{byId('stop').disabled=true}
 }
 byId('provider').addEventListener('change',refreshModels);
-byId('connect').addEventListener('click',connect);
 byId('refresh').addEventListener('click',catalog);
 byId('send').addEventListener('click',send);
 byId('stop').addEventListener('click',stop);
