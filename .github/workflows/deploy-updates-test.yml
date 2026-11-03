@@ -40,11 +40,15 @@ jobs:
         id: confirm
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
           mode="$(printf '%s' "$CONFIRMATION" | tr -d '[:space:]')"
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then mode=deploy-test; fi
-          [[ "$mode" == "audit-test" || "$mode" == "deploy-test" || "$mode" == "rollback-test" ]]
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            mode=deploy-test
+            if [[ "$COMMIT_MESSAGE" == 'ci(test): inspect direct Native transport' ]]; then mode=native-probe; fi
+          fi
+          [[ "$mode" == "audit-test" || "$mode" == "deploy-test" || "$mode" == "rollback-test" || "$mode" == "native-probe" ]]
           printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
           [[ "$GITHUB_REF" == "refs/heads/updates" ]]
       - uses: actions/checkout@v4
@@ -152,7 +156,33 @@ jobs:
           port="${PORT:-22}"
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             'test "$HOME" = /home/tahir && test -d /home/tahir/opencode-gateway-test/.git && test -f /home/tahir/opencode-gateway-test/.env && systemctl is-active --quiet opencode-gateway-test.service && systemctl is-active --quiet opencode-native-test.service'
+      - name: Inspect TEST Native locally without Gateway or database
+        if: steps.confirm.outputs.mode == 'native-probe'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${PORT:-22}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" 'bash -s' <<'NATIVE_DIAG'
+          set -e
+          echo "NATIVE_DIRECT_PROBE_START"
+          systemctl show opencode-native-test.service -p ActiveState -p MainPID
+          for endpoint in 'http://127.0.0.2:4097/global/health' 'http://127.0.0.2:4097/provider' 'http://127.0.0.1:18097/provider' 'http://127.0.0.1:18098/session/status'; do
+            echo "PROBE=${endpoint}"
+            curl --silent --show-error --max-time 6 --output /dev/null --write-out 'STATUS=%{http_code} TTFB=%{time_starttransfer} TOTAL=%{time_total}\n' "$endpoint" || true
+          done
+          for config in /etc/nginx/sites-enabled/*; do
+            if test -f "$config" && grep -q 'test.opencode-gateway.codes' "$config"; then
+              echo "TEST_NGINX_FILE=${config}"
+              grep -E '^[[:space:]]*(server_name|location|proxy_pass)[[:space:]]' "$config" | head -n 35 || true
+            fi
+          done
+          echo "NATIVE_DIRECT_PROBE_END"
+          NATIVE_DIAG
       - name: Full TEST audit or deploy by pinned GitHub commit
+        if: steps.confirm.outputs.mode != 'native-probe'
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ inputs.vps_username || 'tahir' }}
@@ -181,7 +211,7 @@ jobs:
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates </dev/null && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && TEST_SUDO_PASS_STDIN=1 python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
       - name: Verify TEST health after TEST operation
-        if: steps.confirm.outputs.mode != 'audit-test'
+        if: steps.confirm.outputs.mode != 'audit-test' && steps.confirm.outputs.mode != 'native-probe'
         run: |
           set -euo pipefail
           curl -fsS --retry 6 --retry-delay 2 https://test.opencode-gateway.codes/api/health
