@@ -1,4 +1,16 @@
 # OpenCode Gateway — المذكرة التنفيذية الوحيدة (Native-first / Functionality-first)
+
+## القرار النهائي المُصحَّح من المالك — OpenCode مستقل تمامًا عن Python (ناسخ لكل استثناء سابق)
+**هذا حكم معماري إلزامي لا يحتمل تأويلًا.** كل صياغة سابقة في هذا الملف تجيز تحقق Python من Native أو proxy/bridge أو `X-Accel-Redirect` عبر Python أو `require_model` عند كل Prompt هي **وصف تاريخي للخلل وليست إذنًا باستمراره**. لا تُصنّف المعمارية PASS حتى تزال تلك التدخلات فعليًا. أي تقرير يقول «Python لا تنفذ inference، إذن متوافقة» غير كافٍ ويُرفض.
+
+- **OpenCode Native وحده** يتولى جميع وظائفه بلا استثناء: المزودين والاتصال واعتمادات API/OAuth، النماذج والكتالوج وتحديثه وإعداداته، الوكلاء، المحادثات والجلسات والرسائل والتاريخ، Prompt والردود، SSE والتوقف وإعادة الاتصال، Tools وTodo وPermissions وQuestions، عمليات الملفات والمرفقات الخاصة بـOpenCode، أخطاء النماذج والتحقق من سلامتها وكل مسارات Native API.
+- **Python Gateway ممنوع من أي تدخل في وظائف OpenCode**: لا قراءة `/provider` أو `/agent` أو Session metadata للتفويض التشغيلي، ولا `require_model`، ولا `_authorize_native` أثناء طلبات Native، ولا `native_sessions.py` كمرحلة لازمة لكل طلب، ولا `X-Accel-Redirect` تصدره Python في مسار التنفيذ، ولا صيانة فهرس Native عبر `subprocess` داخل Python، ولا تنفيذ proxy أو إعادة بث أو طابور أو قاعدة محادثات/فهرس AI موازية. لا توظف Python للتحقق من صحة Model/Provider/Agent/Session/Prompt أو تنفيذ أي Native tool.
+- **Python Gateway الإداري فقط**: Login/Register/Recovery/Email Verification، حسابات المستخدمين، إدارة المشاريع وبيانات Workspace الإدارية، صلاحيات المنصة وملكية الملفات الإدارية، GitHub الإداري، Billing/Plans/Storage Quotas. لا علاقة له بإعدادات OpenCode أو مفاتيحه أو سير عمله.
+- **المسارات منفصلة تمامًا:** `Browser → Nginx → OpenCode Native → Nginx → Browser` لخدمات OpenCode، و`Browser → Nginx → Python Gateway → PostgreSQL` للإدارة. Nginx ليس محرك AI، ويجب ألا يوجه طلب Native إلى Python أولًا. يمكن إعداد سياسة وصول آمنة على حافة التوجيه لا تستدعي Python لكل عملية Native.
+- **حماية العملاء شرط ملزم:** لا يُسمح بأن يؤدي إزالة Python إلى فتح Native أو مخزن المفاتيح أو جلسات مستخدم لغير صاحبه. يجب إثبات تفويض/عزل حقيقيين ومستقلين عن Python في مسار الطلب قبل أي إتاحة متعددة المستخدمين؛ إذا تعذر ذلك لا يُكشف Native للشبكة العامة وتبقى تلك المرحلة BLOCKED. لا تُلغَ مصادقة المنصة الإدارية.
+- **حالة التنفيذ:** فصل Python عن Native لم يكتمل بمجرد غياب inference أو StreamingResponse؛ الأجزاء القديمة `require_model` و`_authorize_native` وPython-issued `X-Accel-Redirect` و`native_catalog_maintenance.py` تمثل **مخالفات المطلوب إصلاحها** لا استثناءات مقبولة. تقرير Playwright الأخير أثبت Refresh في Connections فقط، وNative Model Not Found ما زال FAIL، وعودة الصفحة بعد 401 تحتاج إصلاحًا. لا تخلط حالة PASS للاختبار مع تطبيق المعمارية الجديدة.
+- **تنفيذ الإصلاحات على Windows LOCAL فقط** دون نشر أو رفع كود، وداخل **هذه المذكرة الواحدة فقط** تُسجل الأعمال المنجزة والمتبقية؛ لا تُنشأ مذكرة أخرى. حافظ على Native الأصلي وحسابات العملاء والمفاتيح؛ لا تستبدل المحرك أو تنشئ نسخًا لكل مشروع.
+
 **تحديث معماري وتوثيقي: 4 نوفمبر 2026** | **مصدر واحد بنفس المحتوى على `updates` و`master`؛ التنفيذ العملي LOCAL فقط، ولا يوجد نشر LIVE** | **المرجع التنفيذي:** [المهمة #47](https://github.com/diirzoro/codex-opencode-gateway/issues/47)
 
 ## أحدث تدقيق LOCAL — Python/Native وحدود المطابقة (تقرير DeepSeek، 4 نوفمبر 2026)
