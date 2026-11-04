@@ -22,6 +22,11 @@ assert(!nativeSessionSource.includes('window.nativeDirectTest?.active()'),
   'Workspace must not call the Basic-auth-protected Native direct session endpoint');
 assert(nativeSessionSource.includes("'/native-session/'+encodeURIComponent(workspace)+'/'+path"),
   'Workspace messages and SSE must retain the existing X-Accel Native route');
+const nativeGatewaySource=fs.readFileSync(path.join(__dirname,'../../backend/app/routes/native_sessions.py'),'utf8');
+assert(!nativeGatewaySource.includes("TEST Native discovery is direct-only; Gateway discovery is disabled"),
+  'Workspace model discovery must not return 410 to the authorized Native transport');
+assert(nativeGatewaySource.includes("response=await run_in_threadpool(authorize_native"),
+  'Native session transport must authorize owner before X-Accel forwarding');
 const gatewaySource=fs.readFileSync(path.join(__dirname,'../../backend/app/main.py'),'utf8');
 // TEST must not import/mount the Python AI queue/agent execution module.
 assert(!gatewaySource.includes('from .routes import workspaces, agent,'),
