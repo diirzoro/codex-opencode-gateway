@@ -15,6 +15,13 @@ assert(managementSource.includes('replace_existing:Boolean(window.nativeDirectTe
   'Native key dialog must send the explicit confirmation marker');
 assert(managementSource.includes('p.public_free'),
   'Free OpenCode models must not display credential deletion actions');
+const nativeSessionSource=fs.readFileSync(path.join(__dirname,'../../native-session-client.js'),'utf8');
+assert(nativeSessionSource.includes('const directSessionTransport=()=>false'),
+  'Workspace Native session transport must use authenticated Gateway ownership routing');
+assert(!nativeSessionSource.includes('window.nativeDirectTest?.active()'),
+  'Workspace must not call the Basic-auth-protected Native direct session endpoint');
+assert(nativeSessionSource.includes("'/native-session/'+encodeURIComponent(workspace)+'/'+path"),
+  'Workspace messages and SSE must retain the existing X-Accel Native route');
 const gatewaySource=fs.readFileSync(path.join(__dirname,'../../backend/app/main.py'),'utf8');
 // TEST must not import/mount the Python AI queue/agent execution module.
 assert(!gatewaySource.includes('from .routes import workspaces, agent,'),
