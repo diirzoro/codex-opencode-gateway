@@ -5,6 +5,10 @@
   const permissionReplies=new Set(),submissionsInFlight=new Map(),sendGenerations=new Map();
   const histories=new Map(),pendingReads=new Map(),discoveryReads=new Map(),selections=new Map(),uncertain=new Map();let epoch=0;
   const owner=()=>String(currentUser?.id||'');
+  // Native TEST uses Gateway's EXISTING authenticated ownership transport.
+  // No separate Nginx Basic login. Gateway authorizes only; Nginx/Native own
+  // messages, session operations and SSE; do not use the shared /native-direct/api.
+  const directSessionTransport=()=>false;
   const label=(en,ar)=>typeof lang!=='undefined'&&lang==='ar'?ar:en;
   const active=()=>configuration?.enabled===true&&identity===owner();
   const current=(id,user)=>activeSession?.id===id&&owner()===user;
@@ -12,7 +16,7 @@
     const user=owner();if(!user)return false;
     if(identity!==user){clear();identity=user;}
     if(!configuration){
-      if(window.nativeDirectTest?.active()){
+      if(directSessionTransport()){
         // TEST Native execution is independent from Gateway model state.
         configuration={enabled:true,mode:'native-direct-test',version:'native'};
       }else{
@@ -84,7 +88,7 @@
   async function context(id){
     if(rows.has(id))return rows.get(id);
     const generation=epoch,user=owner();
-    if(window.nativeDirectTest?.active()){
+    if(directSessionTransport()){
       // A session is opened only by the user's currently selected workspace.
       // Do not enumerate or probe every project in the account.
       const selected=activeSession?.id===id&&activeSession.workspace_id===activeWorkspace?.id
@@ -173,12 +177,12 @@
   // no Python code processes the prompt or response body.
   function nativeRoot(workspace){
     const record=[...rows.values()].find(row=>String(row.workspace_id)===String(workspace));
-    if(window.nativeDirectTest?.active())return window.nativeDirectTest.rootFromFile(record?.file_base)
+    if(directSessionTransport())return window.nativeDirectTest.rootFromFile(record?.file_base)
       ||directWorkspaceRoot(workspace);
     return window.nativeDirectTest?.rootFromFile(record?.file_base)
       ||window.nativeDirectTest?.defaultDirectory;
   }
-  const url=(workspace,path)=>window.nativeDirectTest?.active()
+  const url=(workspace,path)=>directSessionTransport()
     ?window.nativeDirectTest.url(path,nativeRoot(workspace))
     :'/native-session/'+encodeURIComponent(workspace)+'/'+path;
   async function native(workspace,path,body,{signal,timeout=30000}={}){
@@ -186,7 +190,7 @@
     if(signal?.aborted)controller.abort();else signal?.addEventListener('abort',cancel,{once:true});
     const timer=setTimeout(cancel,timeout);
     try{
-      if(window.nativeDirectTest?.active())
+      if(directSessionTransport())
         return await window.nativeDirectTest.direct(path,{
           method:body===undefined?'GET':'POST',value:body,
           directory:nativeRoot(workspace),signal:controller.signal
@@ -291,7 +295,7 @@
     if(!active())return null;
     const method=options.method||'GET';let match=path.match(/^\/api\/workspaces\/([^/]+)\/sessions(?:\?.*)?$/);
     if(match){
-      const result=window.nativeDirectTest?.active()
+      const result=directSessionTransport()
         ?(method==='POST'?await directCreateSession(match[1],options):await directSessionRows(match[1]))
         :await api('/api/native-test/workspaces/'+match[1]+'/sessions',options);
       if(Array.isArray(result))result.forEach(remember);else remember(result);
@@ -301,11 +305,11 @@
       const unavailable=[];
       // TEST: a user explicitly opens a project before asking OpenCode for
       // its conversations. Do not let Native enumerate every account project.
-      const workspaces=window.nativeDirectTest?.active()
+      const workspaces=directSessionTransport()
         ?(activeWorkspace?.id?[{id:activeWorkspace.id}]:[])
         :await api('/api/workspaces');
       const lists=await Promise.all(workspaces.map(async w=>{
-        try{return window.nativeDirectTest?.active()?await directSessionRows(w.id):await api('/api/native-test/workspaces/'+w.id+'/sessions');}
+        try{return directSessionTransport()?await directSessionRows(w.id):await api('/api/native-test/workspaces/'+w.id+'/sessions');}
         catch(error){
           if([409,410].includes(error.status)){
             unavailable.push({workspace_id:w.id,status:error.status,reason:error.message});
@@ -325,7 +329,7 @@
     match=path.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/(.*?))?(?:\?.*)?$/);if(!match)return null;
     const id=match[1],tail=match[2]||'',row=await context(id),user=owner();
     if(!tail&&method==='PATCH'){
-      if(window.nativeDirectTest?.active()){
+      if(directSessionTransport()){
         const payload=JSON.parse(options.body||'{}');
         const changed=await window.nativeDirectTest.direct('session/'+encodeURIComponent(row.runtime_id),{
           method:'PATCH',directory:directWorkspaceRoot(row.workspace_id),value:{title:payload.title}
@@ -336,7 +340,7 @@
       const value=await api('/api/native-test/sessions/'+id,options);remember({...row,...value});return {value};
     }
     if((!tail&&method==='DELETE')||['close','archive','restore','reopen'].includes(tail)){
-      if(window.nativeDirectTest?.active()){
+      if(directSessionTransport()){
         const act=tail||'delete';
         if(act==='delete'){
           const result=await window.nativeDirectTest.direct('session/'+encodeURIComponent(row.runtime_id),{
@@ -357,7 +361,7 @@
     }
     if(!tail||tail==='open'){
       const fresh=tail==='open'
-        ?(window.nativeDirectTest?.active()?row:remember(await api('/api/native-test/sessions/'+encodeURIComponent(id))))
+        ?(directSessionTransport()?row:remember(await api('/api/native-test/sessions/'+encodeURIComponent(id))))
         :rows.get(id);
       return {value:{...fresh,status:statuses.get(id)||'idle',execution_status:statuses.get(id)||'idle'}};
     }
@@ -661,8 +665,8 @@
         if(paths.length){const list=document.createElement('ul');for(const path of paths){const li=document.createElement('li');li.textContent=path;li.dir='auto';list.append(li);}card.append(list);}
         // Native direct TEST keeps permission replies in OpenCode: once/reject only.
         // Gateway's legacy persistent remember endpoint is not a Native feature.
-        const rememberFile=!window.nativeDirectTest?.active()&&['read','edit','write','apply_patch'].includes(permission)&&paths.length>0;
-        const note=document.createElement('small');note.textContent=rememberFile?label('Allow once, or remember these files for later prompts in this conversation. The current run may still ask.','اسمح مرة، أو تذكّر هذه الملفات للرسائل القادمة في هذه المحادثة. قد يظل التشغيل الحالي يطلب الموافقة.'):window.nativeDirectTest?.active()?label('This Native permission request only.','طلب الإذن هذا داخل OpenCode فقط.'):label('This request only. Gateway verifies ownership and policy.','لهذا الطلب فقط. تتحقق البوابة من الملكية والسياسة.');card.append(note);
+        const rememberFile=!directSessionTransport()&&['read','edit','write','apply_patch'].includes(permission)&&paths.length>0;
+        const note=document.createElement('small');note.textContent=rememberFile?label('Allow once, or remember these files for later prompts in this conversation. The current run may still ask.','اسمح مرة، أو تذكّر هذه الملفات للرسائل القادمة في هذه المحادثة. قد يظل التشغيل الحالي يطلب الموافقة.'):directSessionTransport()?label('This Native permission request only.','طلب الإذن هذا داخل OpenCode فقط.'):label('This request only. Gateway verifies ownership and policy.','لهذا الطلب فقط. تتحقق البوابة من الملكية والسياسة.');card.append(note);
         const controls=document.createElement('div');controls.className='chat-approval-actions';
         for(const [text,reply] of [[label('Allow once','السماح مرة واحدة'),'once'],...(rememberFile?[[label('Remember these files','تذكّر هذه الملفات'),'remember']]:[]),[label('Reject','رفض'),'reject']]){const button=document.createElement('button');button.textContent=text;button.type='button';button.dataset.reply=reply;
           button.disabled=permissionReplies.has(actionKey)||reply==='once'&&!names[permission];
@@ -682,7 +686,7 @@
     try{return await job;}finally{if(discoveryReads.get(id)===job)discoveryReads.delete(id);}
   }
   async function loadDiscovery(id){
-    const directMode=window.nativeDirectTest?.active();
+    const directMode=directSessionTransport();
     // The connection dashboard owns one shared account inventory, backed by
     // OpenCode's actual Native catalog. Opening a project must not reload it.
     const inventory=directMode?await window.nativeDirectTest.workspaceRegistry():null;
