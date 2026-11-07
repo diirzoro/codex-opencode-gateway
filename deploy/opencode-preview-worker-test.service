@@ -1,0 +1,27 @@
+# Test-only Preview worker. Do not install in Live.
+# Provision an unprivileged preview-worker account with access only to its
+# dedicated Docker daemon / narrowly scoped worker provisioner before enabling.
+[Unit]
+Description=OpenCode Test Preview Worker
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=preview-worker
+Group=preview-worker
+WorkingDirectory=/home/tahir/opencode-gateway-test/backend
+Environment=PYTHONPATH=/home/tahir/opencode-gateway-test/backend
+EnvironmentFile=/etc/opencode-preview-worker-test.env
+ExecStart=/home/tahir/opencode-gateway-test/.venv/bin/python -m app.services.preview_worker_server
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/preview-worker
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
