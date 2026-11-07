@@ -1,23 +1,37 @@
 /* OpenCode 1.x native wire adapter and existing-UI presentation, not an execution engine. */
 (() => {
-  let identity='',configuration=null,configurationPending=null,stream=null;
+  let identity='',configuration=null,configurationPending=null,stream=null,streamId='';
   const rows=new Map(),snapshots=new Map(),statuses=new Map(),statusEvents=new Map(),statusReads=new Map();
   const permissionReplies=new Set(),submissionsInFlight=new Map(),sendGenerations=new Map();
-  const histories=new Map(),pendingReads=new Map(),discoveryReads=new Map(),selections=new Map(),uncertain=new Map(),messageEvents=new Map(),progressTimers=new Map();let epoch=0;
+  const histories=new Map(),pendingReads=new Map(),discoveryReads=new Map(),selections=new Map(),uncertain=new Map();let epoch=0;
   const owner=()=>String(currentUser?.id||'');
+  // Native TEST uses Gateway's EXISTING authenticated ownership transport.
+  // No separate Nginx Basic login. Gateway authorizes only; Nginx/Native own
+  // messages, session operations and SSE; do not use the shared /native-direct/api.
+  const directSessionTransport=()=>false;
   const label=(en,ar)=>typeof lang!=='undefined'&&lang==='ar'?ar:en;
   const active=()=>configuration?.enabled===true&&identity===owner();
   const current=(id,user)=>activeSession?.id===id&&owner()===user;
   async function ready(){
     const user=owner();if(!user)return false;
     if(identity!==user){clear();identity=user;}
-    if(!configuration){const generation=epoch;configurationPending??=api('/api/native-test/state');let value;try{value=await configurationPending;}catch(error){if(generation===epoch)configurationPending=null;throw error;}if(generation!==epoch||user!==owner())throw Error('Authenticated account changed');configuration=value;configurationPending=null;}
+    if(!configuration){
+      if(directSessionTransport()){
+        // TEST Native execution is independent from Gateway model state.
+        configuration={enabled:true,mode:'native-direct-test',version:'native'};
+      }else{
+        const generation=epoch;configurationPending??=api('/api/native-test/state');let value;
+        try{value=await configurationPending;}catch(error){if(generation===epoch)configurationPending=null;throw error;}
+        if(generation!==epoch||user!==owner())throw Error('Authenticated account changed');
+        configuration=value;configurationPending=null;
+      }
+    }
     if(owner()!==user)throw Error('Authenticated account changed');
     document.getElementById('workspacePage')?.classList.toggle('native-mode',configuration.enabled===true);
     if(configuration.enabled)presentationStyle();
     return configuration.enabled;
   }
-  function clear(){epoch++;for(const handles of progressTimers.values())for(const handle of handles)clearTimeout(handle);progressTimers.clear();messageEvents.clear();for(const controller of submissionsInFlight.values())controller.abort();submissionsInFlight.clear();sendGenerations.clear();stream?.close();stream=null;identity='';configuration=null;configurationPending=null;document.getElementById('workspacePage')?.classList.remove('native-mode');permissionReplies.clear();for(const map of [rows,snapshots,statuses,statusEvents,statusReads,histories,pendingReads,discoveryReads,selections,uncertain])map.clear();}
+  function clear(){epoch++;for(const controller of submissionsInFlight.values())controller.abort();submissionsInFlight.clear();sendGenerations.clear();stream?.close();stream=null;streamId='';identity='';configuration=null;configurationPending=null;document.getElementById('workspacePage')?.classList.remove('native-mode');permissionReplies.clear();for(const map of [rows,snapshots,statuses,statusEvents,statusReads,histories,pendingReads,discoveryReads,selections,uncertain])map.clear();}
   function presentationStyle(){
     if(!document.head||document.getElementById('nativeConversationStyles'))return;
     const style=document.createElement('style');style.id='nativeConversationStyles';style.textContent=`
@@ -71,15 +85,118 @@
   function selection(id){if(!selections.has(id)){try{selections.set(id,JSON.parse(localStorage.getItem(storageKey('selection',id))||'null'));}catch{}}return selections.get(id);}
   function select(id,value){if(!id)return;selections.set(id,value);try{localStorage.setItem(storageKey('selection',id),JSON.stringify(value));}catch{}const row=rows.get(id);if(row){row.model={providerID:value.providerID,id:value.modelID,variant:value.variant};row.agent=value.agent;}}
   function remember(row){const saved=selection(row.id);if(saved)row={...row,model:{providerID:saved.providerID,id:saved.modelID,variant:saved.variant},agent:saved.agent};rows.set(row.id,row);return row;}
-  async function context(id){if(rows.has(id))return rows.get(id);const generation=epoch,user=owner(),value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');return remember(value);}
-  const url=(workspace,path)=>'/native-session/'+encodeURIComponent(workspace)+'/'+path;
-  async function native(workspace,path,body,{signal,timeout=15000}={}){
-    const controller=new AbortController();
-    const cancel=()=>controller.abort(signal?.reason||new DOMException('OpenCode request was cancelled','AbortError'));
-    if(signal?.aborted)cancel();else signal?.addEventListener('abort',cancel,{once:true});
-    const timer=setTimeout(()=>controller.abort(new DOMException('OpenCode request timed out before acknowledgement','TimeoutError')),timeout);
-    try{return await api(url(workspace,path),{...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)}),signal:controller.signal});}
-    finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
+  async function context(id){
+    if(rows.has(id))return rows.get(id);
+    const generation=epoch,user=owner();
+    if(directSessionTransport()){
+      // A session is opened only by the user's currently selected workspace.
+      // Do not enumerate or probe every project in the account.
+      const selected=activeSession?.id===id&&activeSession.workspace_id===activeWorkspace?.id
+        ?activeSession:null;
+      if(selected?.runtime_id){
+        if(generation!==epoch||user!==owner())throw Error('Authenticated account changed');
+        return remember(selected);
+      }
+      const workspace=activeWorkspace?.id;
+      if(!workspace)throw Error(label('Select your project before opening a Native conversation.',
+        'اختر مشروعك أولًا لفتح محادثة OpenCode.'));
+      const currentRows=await directSessionRows(workspace);
+      const found=currentRows.find(row=>row.id===id||row.runtime_id===id);
+      if(found)return found;
+      // Old Gateway UUIDs need a one-time owner-scoped ID translation.
+      // Python returns metadata only; prompts, history, SSE and model
+      // execution always use the original OpenCode Native endpoint.
+      let legacy;
+      try{legacy=await api('/api/native-test/sessions/'+encodeURIComponent(id),{
+        signal:AbortSignal.timeout(12000)
+      });}catch(error){
+        throw Error(label('This older conversation is not available in the selected project. Open a Native conversation from its project list.',
+          'المحادثة القديمة غير متاحة في المشروع المحدد. افتحها من قائمة محادثات المشروع.'));
+      }
+      if(generation!==epoch||user!==owner()||legacy.workspace_id!==workspace||!legacy.runtime_id)
+        throw Error(label('The selected conversation belongs to a different project.',
+          'المحادثة المحددة تخص مشروعًا آخر.'));
+      const nativeRow=currentRows.find(row=>row.runtime_id===legacy.runtime_id);
+      if(!nativeRow)throw Error(label('The Native conversation is no longer present in this project.',
+        'المحادثة لم تعد موجودة في OpenCode لهذا المشروع.'));
+      const ids=directSessionIds(workspace);
+      delete ids.map[legacy.runtime_id];
+      ids.map[legacy.runtime_id]=id;
+      try{localStorage.setItem(ids.key,JSON.stringify(ids.map));}catch{}
+      rows.delete(nativeRow.id);
+      return remember({...nativeRow,...legacy,id,workspace_id:workspace,
+        runtime_id:legacy.runtime_id,native:true});
+    }
+    const value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});
+    if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');
+    return remember(value);
+  }
+  function directWorkspaceRoot(workspace){
+    if(!/^[0-9a-f-]{36}$/i.test(String(workspace))||!/^[0-9a-f-]{36}$/i.test(owner()))
+      throw Error('Invalid TEST workspace identity');
+    return '/var/lib/opencode-workspaces-test/'+owner()+'/'+workspace+'/repo';
+  }
+  function directSessionIds(workspace){
+    const key='og-test-native-sessions:'+owner()+':'+workspace;
+    let map={};
+    try{map=JSON.parse(localStorage.getItem(key)||'{}')||{};}catch{}
+    if(typeof map!=='object'||Array.isArray(map))map={};
+    return {key,map};
+  }
+  function directSessionRow(workspace,live){
+    const root=directWorkspaceRoot(workspace);
+    const ids=directSessionIds(workspace);
+    if(!ids.map[live.id]){
+      ids.map[live.id]=crypto.randomUUID();
+      try{localStorage.setItem(ids.key,JSON.stringify(ids.map));}catch{}
+    }
+    const id=ids.map[live.id];
+    const row={id,workspace_id:workspace,runtime_id:live.id,
+      title:live.title||'OpenCode Native session',status:'idle',lifecycle:'active',
+      native:true,file_base:'file://'+root+'/',tool_access:{project_manager:true,shell_authorized:false,shell_enabled:false}};
+    const previous=rows.get(id);
+    return remember({...row,...(previous?{status:previous.status,lifecycle:previous.lifecycle}:{} )});
+  }
+  async function directSessionRows(workspace){
+    const root=directWorkspaceRoot(workspace);
+    const list=await window.nativeDirectTest.direct('session',{directory:root});
+    if(!Array.isArray(list))throw Error('OpenCode Native session list unavailable');
+    return list.filter(row=>row?.id&&row.directory===root).map(row=>directSessionRow(workspace,row));
+  }
+  async function directCreateSession(workspace,options={}){
+    const root=directWorkspaceRoot(workspace);
+    const body=JSON.parse(options.body||'{}');
+    const session=await window.nativeDirectTest.direct('session',{
+      method:'POST',directory:root,value:{title:body.title||'New session'}
+    });
+    if(!session?.id||session.directory!==root)throw Error('OpenCode returned an invalid workspace session');
+    return directSessionRow(workspace,session);
+  }
+  // Native executes and streams directly through the TEST Nginx endpoint.
+  // Workspace session metadata remains in the existing application DB;
+  // no Python code processes the prompt or response body.
+  function nativeRoot(workspace){
+    const record=[...rows.values()].find(row=>String(row.workspace_id)===String(workspace));
+    if(directSessionTransport())return window.nativeDirectTest.rootFromFile(record?.file_base)
+      ||directWorkspaceRoot(workspace);
+    return window.nativeDirectTest?.rootFromFile(record?.file_base)
+      ||window.nativeDirectTest?.defaultDirectory;
+  }
+  const url=(workspace,path)=>directSessionTransport()
+    ?window.nativeDirectTest.url(path,nativeRoot(workspace))
+    :'/native-session/'+encodeURIComponent(workspace)+'/'+path;
+  async function native(workspace,path,body,{signal,timeout=30000}={}){
+    const controller=new AbortController(),cancel=()=>controller.abort();
+    if(signal?.aborted)controller.abort();else signal?.addEventListener('abort',cancel,{once:true});
+    const timer=setTimeout(cancel,timeout);
+    try{
+      if(directSessionTransport())
+        return await window.nativeDirectTest.direct(path,{
+          method:body===undefined?'GET':'POST',value:body,
+          directory:nativeRoot(workspace),signal:controller.signal
+        });
+      return await api(url(workspace,path),{...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)}),signal:controller.signal});
+    }finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
   }
   async function sessionRequest(id,suffix,body){const row=await context(id);return native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+(suffix?'/'+suffix:''),body);}
   async function coalesce(key,read){
@@ -159,16 +276,6 @@
     for(const key of ['matches','count'])if(Number.isInteger(metadata[key])&&metadata[key]>=0)result[key]=metadata[key];
     return result;
   }
-  function failureKind(error){
-    const name=String(error?.name||'').toLowerCase();
-    const detail=String(error?.data?.statusCode||error?.data?.status||'');
-    if(name.includes('abort'))return 'cancelled';
-    if(name.includes('auth')||detail==='401'||detail==='403')return 'authentication';
-    if(name.includes('ratelimit')||detail==='429')return 'rate_limit';
-    if(name.includes('modelnotfound')||name.includes('notfound')||detail==='404')return 'model_unavailable';
-    if(name.includes('timeout'))return 'timeout';
-    return 'provider_failed';
-  }
   function display(messages,row){
     if(!Array.isArray(messages))throw Error('Invalid native message snapshot');
     return messages.map(m=>{
@@ -181,21 +288,30 @@
       // file contents). Keep it available to Native, never in the user's bubble.
       // Use the original flag, not text/regex heuristics that could erase a prompt.
       return {id:m.info.id,role:m.info.role,text:parts.filter(p=>p.type==='text'&&!p.ignored&&!(m.info.role==='user'&&p.synthetic===true)).map(p=>p.text||'').join(''),activity,
-        ...(m.info.error?{state:failureKind(m.info.error)==='cancelled'?'cancelled':'failed',error_kind:failureKind(m.info.error)}:{}),attachments:parts.filter(p=>p.type==='file').map(p=>({name:typeof p.filename==='string'?p.filename.split(/[\\/]/).at(-1)||'Attachment':'Attachment',mime:p.mime}))};
+        ...(m.info.error?{state:m.info.error.name==='MessageAbortedError'?'cancelled':'failed'}:{}),attachments:parts.filter(p=>p.type==='file').map(p=>({name:typeof p.filename==='string'?p.filename.split(/[\\/]/).at(-1)||'Attachment':'Attachment',mime:p.mime}))};
     });
   }
   async function route(path,options){
     if(!active())return null;
     const method=options.method||'GET';let match=path.match(/^\/api\/workspaces\/([^/]+)\/sessions(?:\?.*)?$/);
-    if(match){const result=await api('/api/native-test/workspaces/'+match[1]+'/sessions',options);if(Array.isArray(result))result.forEach(remember);else remember(result);return {value:result};}
+    if(match){
+      const result=directSessionTransport()
+        ?(method==='POST'?await directCreateSession(match[1],options):await directSessionRows(match[1]))
+        :await api('/api/native-test/workspaces/'+match[1]+'/sessions',options);
+      if(Array.isArray(result))result.forEach(remember);else remember(result);
+      return {value:result};
+    }
     if(/^\/api\/sessions(?:\?.*)?$/.test(path)&&method==='GET'){
       const unavailable=[];
-      const workspaces=await api('/api/workspaces'),lists=await Promise.all(workspaces.map(async w=>{
-        try{return await api('/api/native-test/workspaces/'+w.id+'/sessions');}
+      // TEST: a user explicitly opens a project before asking OpenCode for
+      // its conversations. Do not let Native enumerate every account project.
+      const workspaces=directSessionTransport()
+        ?(activeWorkspace?.id?[{id:activeWorkspace.id}]:[])
+        :await api('/api/workspaces');
+      const lists=await Promise.all(workspaces.map(async w=>{
+        try{return directSessionTransport()?await directSessionRows(w.id):await api('/api/native-test/workspaces/'+w.id+'/sessions');}
         catch(error){
           if([409,410].includes(error.status)){
-            // Preserve other workspaces, but never silently pretend the
-            // rejected conversation history is an empty workspace.
             unavailable.push({workspace_id:w.id,status:error.status,reason:error.message});
             return [];
           }
@@ -212,9 +328,43 @@
     }
     match=path.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/(.*?))?(?:\?.*)?$/);if(!match)return null;
     const id=match[1],tail=match[2]||'',row=await context(id),user=owner();
-    if(!tail&&method==='PATCH'){const value=await api('/api/native-test/sessions/'+id,options);remember({...row,...value});return {value};}
-    if((!tail&&method==='DELETE')||['close','archive','restore','reopen'].includes(tail))return {value:await api('/api/native-test/sessions/'+id+'/visibility/'+(tail||'delete'),{method:'POST'})};
-    if(!tail||tail==='open'){const fresh=tail==='open'?remember(await api('/api/native-test/sessions/'+encodeURIComponent(id))):rows.get(id);return {value:{...fresh,status:statuses.get(id)||'idle',execution_status:statuses.get(id)||'idle'}};}
+    if(!tail&&method==='PATCH'){
+      if(directSessionTransport()){
+        const payload=JSON.parse(options.body||'{}');
+        const changed=await window.nativeDirectTest.direct('session/'+encodeURIComponent(row.runtime_id),{
+          method:'PATCH',directory:directWorkspaceRoot(row.workspace_id),value:{title:payload.title}
+        });
+        const value=remember({...row,title:changed?.title||payload.title});
+        return {value};
+      }
+      const value=await api('/api/native-test/sessions/'+id,options);remember({...row,...value});return {value};
+    }
+    if((!tail&&method==='DELETE')||['close','archive','restore','reopen'].includes(tail)){
+      if(directSessionTransport()){
+        const act=tail||'delete';
+        if(act==='delete'){
+          const result=await window.nativeDirectTest.direct('session/'+encodeURIComponent(row.runtime_id),{
+            method:'DELETE',directory:directWorkspaceRoot(row.workspace_id)
+          });
+          if(result!==true)throw Error('OpenCode did not confirm session deletion');
+          rows.delete(id);histories.delete(id);
+          const ids=directSessionIds(row.workspace_id);
+          delete ids.map[row.runtime_id];
+          try{localStorage.setItem(ids.key,JSON.stringify(ids.map));}catch{}
+          return {value:{...row,lifecycle:'deleted'}};
+        }
+        const lifecycle=({close:'closed',archive:'archived',restore:'closed',reopen:'active'})[act];
+        const value=remember({...row,lifecycle});
+        return {value};
+      }
+      return {value:await api('/api/native-test/sessions/'+id+'/visibility/'+(tail||'delete'),{method:'POST'})};
+    }
+    if(!tail||tail==='open'){
+      const fresh=tail==='open'
+        ?(directSessionTransport()?row:remember(await api('/api/native-test/sessions/'+encodeURIComponent(id))))
+        :rows.get(id);
+      return {value:{...fresh,status:statuses.get(id)||'idle',execution_status:statuses.get(id)||'idle'}};
+    }
     if(tail==='messages'&&method==='GET')return {value:display(await history(id),row)};
     if(tail==='todos')return {value:{supported:true,items:await coalesce('todos:'+id,()=>sessionRequest(id,'todo'))}};
     if(tail==='diff')return {value:await sessionRequest(id,'diff')};
@@ -243,38 +393,25 @@
   async function start(){
     stop();const id=activeSession?.id,user=owner();if(!id)return;
     const row=await context(id);if(!current(id,user))return;
-    const source=new EventSource(url(row.workspace_id,'event'));stream=source;let timer,fileTimer,pending=false,snapshotPending=false,lastMessageRead=0,opened=false,needsSnapshot=false;const eventIDs=new Set(),changedTools=new Set();
+    const source=new EventSource(url(row.workspace_id,'event'));stream=source;streamId=id;let timer,fileTimer,pending=false,lastMessageRead=0,opened=false,needsSnapshot=false;const eventIDs=new Set(),changedTools=new Set();
     function filesChanged(){clearTimeout(fileTimer);fileTimer=setTimeout(()=>{if(stream===source&&current(id,user))window.refreshNativeFiles?.({workspaceId:row.workspace_id,owner:user});},400);}
     // Coalesce token/part bursts into bounded snapshots. The native SSE
     // transport stays immediate; only expensive full-history reads are paced.
     const MESSAGE_REFRESH_MS=50;
     let dirty={messages:false,status:false,controls:false,todos:false};
-    function reconcileNativeSnapshot(){
-      if(snapshotPending||stream!==source||!current(id,user))return;
-      snapshotPending=true;
-      // An incomplete/out-of-order SSE event is reconciled once from Native.
-      // This never blocks the live message stream or resends a prompt.
-      void history(id,true).then(()=>{
-        if(stream===source&&current(id,user))return refreshMessages();
-      }).catch(error=>{
-        if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;
-      }).finally(()=>{snapshotPending=false;if(stream===source&&current(id,user)&&needsSnapshot){dirty.messages=true;schedule();}});
-    }
     async function flush(){
       timer=null;if(pending||stream!==source||!current(id,user))return;
       const work=dirty;dirty={messages:false,status:false,controls:false,todos:false};pending=true;
       try{
-        // Status, approvals and todos must never block Native message parts.
-        if(work.status)void Promise.resolve().then(()=>window.refreshWorkspaceSessionStatus?.()).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
-        if(stream!==source||!current(id,user))return;
+        // Native SSE text must render before slow history/status requests.
         if(work.messages){
-          // Render the Native SSE cache first; never gate visible text on a
-          // history fetch. Only incomplete events need one background repair.
-          const incomplete=needsSnapshot,hadHistory=histories.has(id);
-          needsSnapshot=false;
+          const needsNativeRead=needsSnapshot;needsSnapshot=false;
           await refreshMessages();lastMessageRead=Date.now();
-          if(incomplete&&hadHistory)reconcileNativeSnapshot();
+          if(needsNativeRead)void history(id,true).then(()=>{
+            if(stream===source&&current(id,user))return refreshMessages();
+          }).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
         }
+        if(work.status)void Promise.resolve().then(()=>window.refreshWorkspaceSessionStatus?.()).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
         if(work.controls)void Promise.resolve().then(()=>refreshPermissions()).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
         if(work.todos)void Promise.resolve().then(()=>window.refreshWorkspaceTodos?.(true)).catch(error=>{if(stream===source&&current(id,user))$('#runtimeStatus').textContent=error.message;});
       }catch(error){if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;}
@@ -285,6 +422,7 @@
       const delay=dirty.messages?Math.max(0,MESSAGE_REFRESH_MS-(Date.now()-lastMessageRead)):80;
       timer=setTimeout(flush,delay);
     }
+    const credentialAlerts=new Set();
     source.onmessage=event=>{
       if(stream!==source||!current(id,user))return;
       let e;try{e=JSON.parse(event.data);}catch{return;}
@@ -295,45 +433,46 @@
         return;
       }
       const p=e.properties||{},session=p.sessionID||p.info?.sessionID||p.part?.sessionID;
-      // /event may contain updates from other sessions in this Workspace.
-      // Only the active, owned Native conversation may update its chat.
-      if(/^(message|session|todo)\./.test(e.type)){
-        if(session&&session!==row.runtime_id)return;
-        if(!session){
-          // Some Native part deltas carry messageID but no sessionID.
-          // Accept them only for an already owned message in this session.
-          const messageId=p.part?.messageID||p.messageID||p.info?.id;
-          if(!e.type.startsWith('message.')||!messageId||
-             !histories.get(id)?.messages.some(m=>m.info?.id===messageId))return;
-        }
-      }else if(session&&session!==row.runtime_id)return;
+      // info.id identifies an individual MESSAGE, not a Native session.
+      if(session&&session!==row.runtime_id)return;
+      if(!session&&e.type.startsWith('message.')){
+        const messageID=p.info?.id||p.part?.messageID||p.messageID;
+        if(!histories.get(id)?.messages.some(m=>m.info?.id===messageID))return;
+      }
+      if(!session&&e.type.startsWith('session.'))return;
       if(e.type==='file.edited'&&relativeFile(p.file,row))filesChanged();
       if(e.type==='message.part.updated'&&p.part?.type==='tool'){
         const activity=toolActivity(p.part,row);if(!['todowrite','todoread'].includes(activity.tool))window.renderWorkspaceEventLine?.('activity',activity);
         if(activity.status==='completed'&&activity.files.some(f=>f.operation!=='inspected')&&!changedTools.has(activity.id)){changedTools.add(activity.id);filesChanged();}
       }
+      // Native accepts prompt_async before the provider attempts authentication.
+      // Surface the actual provider failure classification even when no text is
+      // generated; never expose raw exception bodies that could contain keys.
+      const nativeIssue=e.type==='session.error'?p.error:
+        e.type==='session.status'&&p.status?.type==='retry'
+          ?{name:'RetryError',message:p.status.message}:
+        e.type==='message.updated'&&p.info?.role==='assistant'?p.info.error:null;
+      if(nativeIssue){
+        const failure=window.nativeDirectTest?.classifyError(nativeIssue);
+        const readable=failure?.message||label(
+          'OpenCode reported an error from the selected provider.',
+          'أبلغ OpenCode عن خطأ من مزود النموذج.');
+        const token=String(failure?.kind||'unknown')+':'+String(p.info?.id||p.messageID||'current');
+        const state=document.getElementById('runtimeStatus');
+        if(state)state.textContent=readable;
+        const submission=document.getElementById('submissionStatus');
+        if(submission)submission.textContent=readable;
+        if(!credentialAlerts.has(token)){
+          credentialAlerts.add(token);
+          if(credentialAlerts.size>20)credentialAlerts.delete(credentialAlerts.values().next().value);
+          toast(readable);
+        }
+      }
       if(['session.status','session.idle','session.error'].includes(e.type))statusEvents.set(id,(statusEvents.get(id)||0)+1);
       if(e.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
-      if(e.type==='session.idle'){statuses.set(id,'idle');clearAcceptedProgress(id);}
-      if(e.type==='session.error'){
-        clearAcceptedProgress(id);
-        statuses.set(id,'failed');dirty.messages=true;needsSnapshot=true;
-        // Never expose raw upstream error bodies: they may contain keys or request data.
-        const kind=failureKind(p.error);
-        const message={authentication:label('OpenCode provider authentication failed. Check this account connection.','فشلت مصادقة مزوّد OpenCode. راجع اتصال هذا الحساب.'),
-          rate_limit:label('The model provider rate limit was reached.','وصل مزوّد النموذج إلى حد الطلبات.'),
-          model_unavailable:label('The selected OpenCode model is unavailable.','نموذج OpenCode المحدد غير متاح.'),
-          timeout:label('The model provider timed out.','انتهت مهلة الاتصال بمزوّد النموذج.'),
-          provider_failed:label('OpenCode reported a model/provider failure.','أبلغ OpenCode عن فشل في النموذج أو المزوّد.')};
-        if(current(id,user))$('#runtimeStatus').textContent=message[kind]||message.provider_failed;
-      }
-      if(e.type.startsWith('message.')){
-        // User-echo events are not evidence of assistant output. A missing
-        // assistant reply still gets one bounded Native history reconciliation.
-        const messageId=p.part?.messageID||p.messageID||p.info?.id;
-        const assistant=p.info?.role==='assistant'||histories.get(id)?.messages.some(m=>m.info?.id===messageId&&m.info?.role==='assistant');
-        if(assistant)messageEvents.set(id,(messageEvents.get(id)||0)+1);
-        const state=histories.get(id);if(state){state.journal?.push(e);if(!reduce(state.messages,e))needsSnapshot=true;reconcile(id,state.messages);}else needsSnapshot=true;dirty.messages=true;}
+      if(e.type==='session.idle')statuses.set(id,'idle');
+      if(e.type==='session.error')statuses.set(id,'failed');
+      if(e.type.startsWith('message.')){const state=histories.get(id);if(state){state.journal?.push(e);if(!reduce(state.messages,e))needsSnapshot=true;reconcile(id,state.messages);}else needsSnapshot=true;dirty.messages=true;}
       if(e.type.startsWith('session.'))dirty.status=true;
       if(/^(permission|question)\./.test(e.type))dirty.controls=true;
       if(e.type.startsWith('todo.'))dirty.todos=true;
@@ -341,43 +480,17 @@
     };
     source.onopen=()=>{
       if(!current(id,user)||stream!==source)return;
-      // Open the Native feed immediately; one status read can reconcile later.
-      if(opened)filesChanged();
-      needsSnapshot=opened||!histories.has(id);opened=true;
-      dirty={messages:true,status:false,controls:true,todos:true};schedule();
       void synchronizeStatus(row,id,()=>current(id,user)&&stream===source)
-        .then(()=>{if(current(id,user)&&stream===source)window.refreshWorkspaceSessionStatus?.();})
         .catch(error=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;});
+      if(opened)filesChanged();needsSnapshot=opened||!histories.has(id);
+      opened=true;dirty={messages:true,status:true,controls:true,todos:true};schedule();
     };
     source.onerror=()=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent='Reconnecting to native OpenCode';};
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
   }
-  function stop(){stream?.close();stream=null;for(const id of [...progressTimers.keys()])clearAcceptedProgress(id);}
-  function clearAcceptedProgress(id){
-    for(const handle of progressTimers.get(id)||[])clearTimeout(handle);
-    progressTimers.delete(id);
-  }
-  function scheduleAcceptedProgress(id){
-    clearAcceptedProgress(id);
-    if(['idle','failed'].includes(statuses.get(id)))return;
-    const user=owner(),generation=epoch,seen=messageEvents.get(id)||0;
-    // Only fall back to the original Native /message endpoint when SSE is silent.
-    // Never repeat prompt_async and never query another account's conversation.
-    const handles=[2000,9000].map(delay=>setTimeout(async()=>{
-      if(epoch!==generation||!current(id,user)||(messageEvents.get(id)||0)!==seen||['idle','failed'].includes(statuses.get(id)))return;
-      try{
-        const messages=await history(id,true);
-        if(epoch!==generation||!current(id,user))return;
-        await refreshMessages();
-        if(statuses.get(id)==='submitted'&&!messages.some(m=>m.info?.role==='assistant'&&(m.info?.error||m.parts?.some(p=>p.type==='text'&&p.text?.trim()))))
-          $('#runtimeStatus').textContent=label('OpenCode accepted the prompt; awaiting model output.','استقبل OpenCode الرسالة؛ ما زلنا بانتظار رد النموذج.');
-      }catch(error){if(epoch===generation&&current(id,user))$('#runtimeStatus').textContent=error.message;}
-    },delay));
-    progressTimers.set(id,handles);
-  }
+  function stop(){stream?.close();stream=null;streamId='';}
   async function forceStop(id){
     const user=owner(),generation=epoch;
-    clearAcceptedProgress(id);
     sendGenerations.set(id,(sendGenerations.get(id)||0)+1);
     submissionsInFlight.get(id)?.abort();
     return coalesce('abort:'+id,async()=>{
@@ -408,6 +521,7 @@
     const row=await context(id);
     if(blocked(id))throw Error(label('Recover this conversation before sending. Your draft is preserved.','استعد هذه المحادثة قبل الإرسال. مسودتك محفوظة.'));
     const user=owner(),sendEpoch=epoch,sendGeneration=sendGenerations.get(id)||0,seenStatus=statusEvents.get(id)||0;select(id,{providerID,modelID,agent,variant});
+    if(streamId!==id)await start();
     const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
     const messageID='msg_'+((BigInt(Date.now())*4096n)&0xffffffffffffn).toString(16).padStart(12,'0')+Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');
     const parts=[{type:'text',text},...files.map(f=>({type:'file',mime:f.mime||({'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','pdf':'application/pdf'}[f.path.split('.').at(-1)]||'application/octet-stream'),url:row.file_base+f.path.split('/').map(encodeURIComponent).join('/'),filename:f.path.split('/').at(-1)}))];
@@ -456,9 +570,8 @@
     uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
     if((statusEvents.get(id)||0)===seenStatus)statuses.set(id,'submitted');
     if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'submitted';
-    // The Native receipt is confirmed; only a silent SSE stream needs a
-    // bounded read of existing Native history (never a second submission).
-    scheduleAcceptedProgress(id);
+    // The native acknowledgment is final for submission. Live/reconnect SSE
+    // reconciles execution; a second status read cannot undo the acknowledgment.
   }
   // Native owns both cancellation and subsequent execution. Never touch another session.
   async function replaceRunningModel(id,providerID,modelID){
@@ -507,7 +620,6 @@
   }
   async function recover(id,{release=false}={}){
     const user=owner(),generation=epoch;
-    clearAcceptedProgress(id);
     const result=await coalesce('recover:'+id,async()=>{
       const row=await context(id);await freshHistory(id);
       await synchronizeStatus(row,id,()=>owner()===user&&epoch===generation);
@@ -551,8 +663,10 @@
         const candidates=['read','edit','write','apply_patch'].includes(permission)?[item.metadata?.filepath,...(item.patterns||[])]:['glob','grep','list'].includes(permission)?[item.metadata?.path]:[];
         const paths=[...new Set(candidates.map(value=>relativeFile(value,row)).filter(Boolean))].slice(0,8);
         if(paths.length){const list=document.createElement('ul');for(const path of paths){const li=document.createElement('li');li.textContent=path;li.dir='auto';list.append(li);}card.append(list);}
-        const rememberFile=['read','edit','write','apply_patch'].includes(permission)&&paths.length>0;
-        const note=document.createElement('small');note.textContent=rememberFile?label('Allow once, or remember these files for later prompts in this conversation. The current run may still ask.','اسمح مرة، أو تذكّر هذه الملفات للرسائل القادمة في هذه المحادثة. قد يظل التشغيل الحالي يطلب الموافقة.'):label('This request only. Gateway verifies ownership and policy.','لهذا الطلب فقط. تتحقق البوابة من الملكية والسياسة.');card.append(note);
+        // Native direct TEST keeps permission replies in OpenCode: once/reject only.
+        // Gateway's legacy persistent remember endpoint is not a Native feature.
+        const rememberFile=!directSessionTransport()&&['read','edit','write','apply_patch'].includes(permission)&&paths.length>0;
+        const note=document.createElement('small');note.textContent=rememberFile?label('Allow once, or remember these files for later prompts in this conversation. The current run may still ask.','اسمح مرة، أو تذكّر هذه الملفات للرسائل القادمة في هذه المحادثة. قد يظل التشغيل الحالي يطلب الموافقة.'):directSessionTransport()?label('This Native permission request only.','طلب الإذن هذا داخل OpenCode فقط.'):label('This request only. Gateway verifies ownership and policy.','لهذا الطلب فقط. تتحقق البوابة من الملكية والسياسة.');card.append(note);
         const controls=document.createElement('div');controls.className='chat-approval-actions';
         for(const [text,reply] of [[label('Allow once','السماح مرة واحدة'),'once'],...(rememberFile?[[label('Remember these files','تذكّر هذه الملفات'),'remember']]:[]),[label('Reject','رفض'),'reject']]){const button=document.createElement('button');button.textContent=text;button.type='button';button.dataset.reply=reply;
           button.disabled=permissionReplies.has(actionKey)||reply==='once'&&!names[permission];
@@ -572,13 +686,41 @@
     try{return await job;}finally{if(discoveryReads.get(id)===job)discoveryReads.delete(id);}
   }
   async function loadDiscovery(id){
-    const [providers,agents]=await Promise.all(['provider','agent'].map(path=>native(id,path)));
-    if(!Array.isArray(providers.all)||!Array.isArray(providers.connected)||!Array.isArray(agents))throw Error('Invalid native discovery schema');
-    const result={native:true,loadedAt:Date.now(),workspace_id:String(id),health:{healthy:true},version:configuration.version,status:'ready',errors:{},agents,default_agent:null,
-      generation:'native-test',revision:'live',policy_revision:'native',providers:[...providers.all,...(providers.connected_entries||[])].map(p=>({...p,...providers.gateway_auth_status?.[p.id],connected:providers.connected.includes(p.id),allowed:true,
-        default_model:providers.default?.[p.id],models:Object.values(p.models||{}).map(m=>({...m,allowed:true}))}))};
-    return result;
+    const directMode=directSessionTransport();
+    // The connection dashboard owns one shared account inventory, backed by
+    // OpenCode's actual Native catalog. Opening a project must not reload it.
+    const inventory=directMode?await window.nativeDirectTest.workspaceRegistry():null;
+    const [providers,agents]=directMode
+      ?[inventory.data,inventory.agents]
+      :await Promise.all([native(id,'provider'),native(id,'agent')]);
+    if(!Array.isArray(providers.all)||!Array.isArray(providers.connected)||!Array.isArray(agents))
+      throw Error('Invalid native discovery schema');
+    const connected=new Set(providers.connected);
+    // Composer choices come exclusively from account Connections.
+    // The 50-provider limit belongs to the Connections picker, never here.
+    // Do not expose unconnected catalog models as workspace choices.
+    const first=directMode
+      ?providers.all.filter(p=>connected.has(p.id)&&
+          window.nativeDirectTest.providerAllowed(p.id)&&window.nativeDirectTest.providerVisible(p.id))
+        .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)))
+      :[...providers.all,...(providers.connected_entries||[])]
+        .filter(p=>connected.has(p.id)&&p.allowed!==false&&p.visible!==false);
+    return {native:true,loadedAt:Date.now(),workspace_id:String(id),health:{healthy:true},
+      version:configuration.version,status:'ready',errors:{},
+      agents:agents.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode)),
+      default_agent:null,generation:'native-test',revision:'native-account',
+      policy_revision:directMode?String(inventory.policy.updated_at||'admin'):'native',
+      providers:first.map(p=>({
+        ...p,...providers.gateway_auth_status?.[p.id],connected:connected.has(p.id),
+        allowed:directMode?window.nativeDirectTest.providerAllowed(p.id):true,
+        visible:directMode?window.nativeDirectTest.providerVisible(p.id):true,
+        default_model:providers.default?.[p.id],
+        models:Object.entries(p.models||{}).filter(([mid])=>!directMode||
+            window.nativeDirectTest.modelAllowed(p.id,mid)&&window.nativeDirectTest.modelVisible(p.id,mid))
+          .map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
+      }))};
   }
   window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
+  window.addEventListener('account-provider-changed',()=>{snapshots.clear();discoveryReads.clear();});
 })();

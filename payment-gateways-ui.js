@@ -4,8 +4,6 @@
   const billingTab = document.querySelector('#adminNav [data-admin-view="billing"]');
   const billingPanel = document.querySelector('[data-admin-panel="billing"]');
   if (!billingTab || !billingPanel) return;
-  // Legacy Stripe/Cryptomus draft editor retired: use dynamicPaymentProviders only.
-  return;
 
   const host = document.createElement('section');
   host.id = 'adminPaymentGatewaySettings';
@@ -125,67 +123,6 @@
           submit.disabled = false;
         }
       });
-      if (stripe) {
-        const tools=el('section','','payment-provider-diagnostics');
-        const output=el('p',tr('Tests have not been run.','لم تُشغّل الاختبارات بعد.'));
-        output.setAttribute('aria-live','polite');
-        const verify=el('button',tr('Verify Stripe API','فحص اتصال Stripe'),'button ghost small');
-        verify.type='button';
-        verify.onclick=async()=>{
-          verify.disabled=true;
-          output.textContent=tr('Checking with Stripe...','جارٍ الاتصال بـ Stripe...');
-          try {
-            const r=await api('/api/admin/payment-gateways/stripe/verify',{method:'POST'});
-            output.textContent=tr('Stripe accepted API credentials. Checkout not verified yet.','قبل Stripe مفاتيح API. لم يتم اختبار الدفع بعد.')+' ('+r.environment+')';
-          } catch(e) {output.textContent=tr('Connection failed: ','فشل الاتصال: ')+e.message;}
-          finally {verify.disabled=false;}
-        };
-        tools.append(verify);
-        if(current.mode==='test'){
-          const checkout=el('button',tr('Open Stripe test checkout','فتح الدفع التجريبي Stripe'),'button ghost small');
-          checkout.type='button';
-          checkout.onclick=async()=>{
-            checkout.disabled=true;
-            try {
-              const r=await api('/api/admin/payment-gateways/stripe/test-checkout',{method:'POST'});
-              if(!r.checkout_url)throw new Error('Stripe returned no checkout URL');
-              const link=el('a',tr('Open official Stripe test payment page','فتح صفحة الدفع التجريبي الرسمية'));
-              link.href=r.checkout_url;link.target='_blank';link.rel='noopener noreferrer';
-              output.replaceChildren(el('span',tr('Session created: ','تم إنشاء الجلسة: ')+r.session_id+' '),link);
-              const status=el('button',tr('Check Stripe payment result','فحص نتيجة الدفع'),'button ghost small');
-              status.type='button';
-              status.onclick=async()=>{
-                status.disabled=true;
-                try{
-                  const result=await api('/api/admin/payment-gateways/stripe/test-checkout/'+encodeURIComponent(r.session_id));
-                  output.append(el('p',JSON.stringify({status:result.status,payment_status:result.payment_status,currency:result.currency,amount:result.amount_total,subscription_activated:false})));
-                }catch(e){output.append(el('p',e.message));}
-                finally{status.disabled=false;}
-              };
-              tools.append(status);
-            }catch(e){output.textContent=e.message;}
-            finally{checkout.disabled=false;}
-          };
-          tools.append(checkout);
-        }
-        tools.append(output);card.append(tools);
-      }
-      if (provider === 'cryptomus') {
-        const paypalBox=el('section','','payment-provider-diagnostics');
-        const paypalResult=el('p',tr('PayPal connection has not been checked.','لم يُفحص اتصال PayPal بعد.'));
-        const button=el('button',tr('Verify PayPal OAuth','فحص اتصال PayPal'),'button ghost small');
-        button.type='button';
-        button.onclick=async()=>{
-          button.disabled=true;paypalResult.textContent=tr('Checking PayPal...','جارٍ الاتصال بـ PayPal...');
-          try{
-            const r=await api('/api/admin/payment-gateways/paypal/verify',{method:'POST'});
-            paypalResult.textContent=tr('PayPal OAuth accepted. Checkout capture still requires a Sandbox test.','نجح اتصال PayPal OAuth، ويلزم اختبار الدفع التجريبي.')+' ('+r.environment+')';
-          }catch(e){paypalResult.textContent=tr('PayPal rejected the check: ','فشل اختبار PayPal: ')+e.message;}
-          finally{button.disabled=false;}
-        };
-        paypalBox.append(el('h3','PayPal'),button,paypalResult);
-        card.append(paypalBox);
-      }
       host.append(card);
     }
   }

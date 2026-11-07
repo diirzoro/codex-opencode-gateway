@@ -8,9 +8,10 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
-from .routes import workspaces, agent, github, dashboard, plans, billing, management, homepage
+from .routes import workspaces, github, dashboard, plans, billing, management, homepage
 from .services import workspace_cache, customer_lifecycle, preview_access
-from .routes import preview_public, native_sessions, payment_gateways, help
+from .routes import preview_public, native_sessions, payment_gateways
+from .config import settings
 
 async def retention_maintenance():
     # Retention bookkeeping must not delay the HTML shell or authentication.
@@ -32,20 +33,10 @@ async def retention_maintenance():
                 # Jobs log sanitized IDs/categories; never print operational data.
                 import logging
                 logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
-        if native_sessions.enabled():
-            try:
-                from .services import native_catalog_maintenance
-                await asyncio.to_thread(native_catalog_maintenance.sweep)
-            except Exception:
-                import logging
-                logging.getLogger(__name__).warning('Native catalog maintenance unavailable; existing catalog and conversations preserved')
-            try:
-                # OpenCode Native DELETE owns actual history deletion; no
-                # parallel session engine or message-store cleanup is created.
-                await asyncio.to_thread(native_sessions.sweep_expired_native_history)
-            except Exception:
-                import logging
-                logging.getLogger(__name__).warning('Native 24-hour history retention could not complete; data preserved')
+        # Never run AI catalog refresh or session-history deletion from Python
+        # when OpenCode Native is the execution/storage owner. Native retains
+        # and manages its own source-of-truth cache, conversations and history.
+        # Existing account, project and upload housekeeping above remains.
 
 async def provider_maintenance():
     from .services import account_provider_sync
@@ -56,12 +47,6 @@ async def provider_maintenance():
 
 @asynccontextmanager
 async def lifespan(app):
-    try:
-        await asyncio.to_thread(help.initialize)
-    except Exception:
-        # Optional Help storage must never prevent existing registration, login or email from starting.
-        import logging
-        logging.getLogger(__name__).exception("Optional Help initialization unavailable")
     cleanup = asyncio.create_task(retention_maintenance())
     provider_sync = None if native_sessions.enabled() else asyncio.create_task(provider_maintenance())
     try:
@@ -82,7 +67,8 @@ app.include_router(auth.router); app.include_router(profile.router); app.include
 app.include_router(native_sessions.router)
 app.include_router(workspaces.router)
 app.include_router(preview_public.router)
-app.include_router(agent.router)
+# AI conversations, execution, tools, approvals and SSE are owned exclusively by
+# the existing OpenCode Native process; there is no Python agent/queue router.
 app.include_router(github.router)
 app.include_router(dashboard.router)
 app.include_router(plans.router)
@@ -90,7 +76,45 @@ app.include_router(billing.router)
 app.include_router(payment_gateways.router)
 app.include_router(management.router)
 app.include_router(homepage.router)
-app.include_router(help.router)
+
+# TEST-only route retirement: legacy AI/provider and file-read handlers are
+# not mounted at all. Login, project/workspace ownership, subscriptions,
+# GitHub account linking and administrative control routes remain intact.
+# The TEST UI uses OpenCode Native, with the ownership-only Nginx transport
+# for file reads; source definitions remain for non-TEST deployments.
+if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes':
+    from fastapi.routing import APIRoute
+    def _retired_test_data_route(route):
+        if not isinstance(route,APIRoute):return False
+        path=route.path
+        return (path.startswith('/api/admin/native/catalog-maintenance')
+            or path.startswith('/api/opencode/connections')
+            or path.startswith('/api/opencode/catalog/providers')
+            or path == '/api/opencode/catalog/agents'
+            or path.startswith('/api/workspaces/{workspace_id}/providers')
+            or path in {'/api/workspaces/{workspace_id}/files',
+                        '/api/workspaces/{workspace_id}/files/content',
+                        '/api/workspaces/{workspace_id}/runtime',
+                        '/api/workspaces/{workspace_id}/runtime/state',
+                        '/api/workspaces/{workspace_id}/runtime/agents',
+                        '/api/workspaces/{workspace_id}/agents'}
+            or path.startswith('/api/sessions/{session_id}/messages')
+            or path.startswith('/api/sessions/{session_id}/queue')
+            or path.startswith('/api/sessions/{session_id}/submissions')
+            or path in {'/api/sessions/{session_id}/stop',
+                        '/api/sessions/{session_id}/events',
+                        '/api/sessions/{session_id}/todos',
+                        '/api/sessions/{session_id}/diff'}
+            or path.startswith('/api/sessions/{session_id}/questions')
+            or path.startswith('/api/sessions/{session_id}/permissions')
+            or path in {'/api/workspaces/{workspace_id}/git/status',
+                        '/api/workspaces/{workspace_id}/git/commit',
+                        '/api/workspaces/{workspace_id}/git/push',
+                        '/api/workspaces/{workspace_id}/git/sync',
+                        '/api/workspaces/{workspace_id}/diff',
+                        '/api/projects/{project_id}/publish'})
+    app.router.routes[:]=[route for route in app.router.routes if not _retired_test_data_route(route)]
+
 @app.get("/api/health")
 def health(): return {"status": "ok"}
 frontend = Path(__file__).resolve().parents[2]
@@ -100,6 +124,21 @@ _CROSS_SITE_EXEMPT = {"/api/github/webhook"}
 
 @app.middleware("http")
 async def browser_boundary(request: Request, call_next):
+    # TEST OpenCode provider operations must never enter Python Gateway.
+    # The browser uses /native-direct/api/* -> Nginx -> OpenCode Native.
+    # Reject every legacy/catch-all account/workspace provider route here,
+    # including if the browser adapter fails to initialize.
+    if native_sessions.deployment() == 'test':
+        path=request.url.path
+        legacy_provider=(
+            path.startswith('/api/opencode/connections')
+            or path.startswith('/api/opencode/catalog/providers')
+            or path == '/api/opencode/catalog/agents'
+            or bool(re.fullmatch(r'/api/workspaces/[0-9a-fA-F-]{36}/providers(?:/.*)?',path))
+        )
+        if legacy_provider:
+            return JSONResponse({'detail':'TEST provider/model/auth services are OpenCode Native-only; Python Gateway route disabled'},
+                                status_code=410,headers={'Cache-Control':'no-store'})
     if preview_access.is_preview_host(request) and (
         request.method not in {'GET','HEAD'} or not request.url.path.startswith('/preview/')):
         return JSONResponse({'detail':'Not found'},status_code=404,

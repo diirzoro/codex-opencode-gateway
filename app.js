@@ -43,9 +43,528 @@ function invalidateProviderMutation(path,method='GET'){
  }
 }
 window.addEventListener('storage',event=>{
- if(currentUser&&event.key==='og-native-provider-revision:'+currentUser.id){window.workspaceRuntime?.clear();window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser.id}}));}
+ if(currentUser&&event.key==='og-native-provider-revision:'+currentUser.id){window.nativeDirectTest?.forget();window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser.id}}));}
 });
+
+/* TEST Native provider adapter: Native is the only model/credential registry.
+   No Python provider routes, database credentials, or second disk catalog. */
+window.nativeDirectTest=(()=>{
+  const testHost=()=>location.hostname==='test.opencode-gateway.codes';
+  const active=()=>testHost()&&Boolean(currentUser);
+  const base='/native-direct/api/';
+  const defaultDirectory='/var/lib/opencode-native-test/workspace';
+  let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
+  let deletedAuthSlots=new Set();
+  const url=(path,directory=defaultDirectory)=>base+path.replace(/^\/+/,'')+'?directory='+encodeURIComponent(directory);
+  const rootFromFile=file=>{
+    if(typeof file!=='string'||!file.startsWith('file:'))return null;
+    try{return decodeURIComponent(new URL(file).pathname).replace(/\/+$/,'');}catch{return null;}
+  };
+  const direct=async(path,{method='GET',value,signal,directory=defaultDirectory}={})=>{
+    // Timebox each Native control request. The larger verification deadline
+    // cannot stop a single fetch stuck at Nginx/upstream otherwise.
+    const timeout=method==='GET'?18000:30000;
+    const deadline=AbortSignal.timeout(timeout);
+    const effectiveSignal=signal?AbortSignal.any([signal,deadline]):deadline;
+    const options={method,cache:'no-store',credentials:'same-origin',signal:effectiveSignal};
+    if(value!==undefined){options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(value);}
+    let response;
+    try{response=await fetch(url(path,directory),options);}
+    catch(error){
+      if(deadline.aborted){
+        const e=new Error('OpenCode Native did not respond within '+Math.round(timeout/1000)+' seconds ('+path+')');
+        e.status=504;throw e;
+      }
+      throw error;
+    }
+    if(!response.ok){const e=new Error('OpenCode Native HTTP '+response.status+' ('+path+')');e.status=response.status;throw e;}
+    if(response.status===204)return null;
+    const body=await response.text();
+    if(!body)return null;
+    try{return JSON.parse(body);}catch{throw Error('Invalid OpenCode Native JSON ('+path+')');}
+  };
+  function ownerScope(){
+    const user=String(currentUser?.id||'');
+    if(scopeOwner!==user){
+      scopeOwner=user;deletedAuthSlots=new Set();catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
+      catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
+    }
+    return user;
+  }
+  function forget(){
+    catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
+    catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
+    window.nativeSession?.invalidate();window.workspaceRuntime?.clear();
+  }
+  async function catalog({force=false}={}){
+    const user=ownerScope();
+    // Keep only a browser-memory reference to Native's original /provider.
+    // Never build a second persistent catalog or refresh models on every prompt.
+    if(!force&&catalogSnapshot)return catalogSnapshot;
+    if(catalogPending)return catalogPending;
+    const promise=direct('provider').then(data=>{
+      if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid OpenCode Native provider response');
+      if(ownerScope()!==user)throw Error('Account changed during Native provider discovery');
+      catalogSnapshot=data;configuredSnapshot=workspaceSnapshot=null;
+      window.dispatchEvent(new CustomEvent('native-provider-inventory-updated',{detail:{owner:user}}));
+      return data;
+    });
+    catalogPending=promise;
+    try{return await promise;}finally{if(catalogPending===promise)catalogPending=null;}
+  }
+  // OpenCode's own public/free provider is usable without a user API key.
+  // This is determined only from Native model metadata, never hardcoded model IDs.
+  function publicFree(p){
+    return p?.id==='opencode'&&Object.values(p.models||{}).some(m=>
+      m?.cost?.input===0&&m?.cost?.output===0);
+  }
+  function nativeConnections(data){
+    return (data.connected||[]).filter(id=>!deletedAuthSlots.has(id));
+  }
+  async function agents({force=false}={}){
+    const user=ownerScope();
+    if(!force&&agentsSnapshot)return agentsSnapshot;
+    if(agentsPending)return agentsPending;
+    const promise=direct('agent').then(rows=>{
+      if(!Array.isArray(rows))throw Error('Invalid OpenCode Native agents');
+      if(ownerScope()!==user)throw Error('Account changed during Native agent discovery');
+      agentsSnapshot=rows;return rows;
+    });
+    agentsPending=promise;
+    try{return await promise;}finally{if(agentsPending===promise)agentsPending=null;}
+  }
+  async function visibility({force=false}={}){
+    const user=ownerScope();
+    if(!force&&policySnapshot)return policySnapshot;
+    if(policyPending)return policyPending;
+    const promise=api('/api/opencode/display-policy').then(data=>{
+      if(!Array.isArray(data?.allowed_providers)||!Array.isArray(data?.hidden_providers)
+        ||!Array.isArray(data?.allowed_models)||!data?.hidden_models)
+        throw Error('Admin provider visibility is not available');
+      if(ownerScope()!==user)throw Error('Account changed during policy discovery');
+      policySnapshot=data;return data;
+    });
+    policyPending=promise;
+    try{return await promise;}finally{if(policyPending===promise)policyPending=null;}
+  }
+  async function registry({force=false}={}){
+    const [data,agentRows,policy]=await Promise.all([catalog({force}),agents({force}),visibility({force})]);
+    return {data,agents:agentRows,policy};
+  }
+  // One owner-scoped browser-memory snapshot of Native's configured providers.
+  // Dashboard and Workspace share it; no second DB, file cache or Python AI.
+  // The first request reads OpenCode Native; provider mutations call forget().
+  async function configuredProviders({force=false}={}){
+    const user=ownerScope();
+    if(!force&&configuredSnapshot)return configuredSnapshot;
+    if(configuredPending)return configuredPending;
+    const job=(async()=>{
+      let value;
+      try{value=await direct('config/providers');}
+      catch(error){
+        // The fallback is still OpenCode Native, never a Gateway provider DB.
+        // Keep old TEST transports usable until the lightweight route exists.
+        if(error.status!==404&&error.status!==405)throw error;
+        return catalog({force});
+      }
+      if(!Array.isArray(value?.providers)||!value?.default||typeof value.default!=='object')
+        throw Error('Invalid OpenCode Native /config/providers response');
+      const all=value.providers.filter(p=>p&&typeof p.id==='string');
+      if(ownerScope()!==user)throw Error('Account changed during Native provider loading');
+      // /config/providers lists configured model definitions, NOT proof that a
+      // secret exists. /provider.connected is authoritative for candidate
+      // connections, and its stale cache after DELETE is masked per session.
+      // Public zero-cost OpenCode models remain usable without an API key.
+      const candidates=catalogSnapshot?new Set(nativeConnections(catalogSnapshot)):new Set();
+      const usable=all.filter(p=>publicFree(p)||candidates.has(p.id));
+      const result={all:usable,connected:usable.map(p=>p.id),default:value.default,
+        public_free:usable.filter(publicFree).map(p=>p.id)};
+      configuredSnapshot=result;
+      return result;
+    })();
+    configuredPending=job;
+    try{return await job;}finally{if(configuredPending===job)configuredPending=null;}
+  }
+  // Workspace never downloads the full catalog just to open a conversation.
+  // Provider/model visibility is Gateway *control-plane* metadata only; Native
+  // remains the sole source of AI model definitions, keys and execution.
+  let workspaceSnapshot=null,workspacePending=null;
+  async function workspaceRegistry({force=false}={}){
+    const user=ownerScope();
+    if(!force&&workspaceSnapshot)return workspaceSnapshot;
+    if(workspacePending)return workspacePending;
+    const job=Promise.all([configuredProviders({force}),agents({force}),visibility({force})])
+      .then(([data,agentRows,policy])=>{
+        if(ownerScope()!==user)throw Error('Account changed during Native workspace discovery');
+        workspaceSnapshot={data,agents:agentRows,policy};
+        return workspaceSnapshot;
+      });
+    workspacePending=job;
+    try{return await job;}finally{if(workspacePending===job)workspacePending=null;}
+  }
+  function providerAllowed(pid,policy=policySnapshot){
+    return !!policy&&(!policy.allowed_providers.length||policy.allowed_providers.includes(pid));
+  }
+  function providerVisible(pid,policy=policySnapshot){
+    return !!policy&&!policy.hidden_providers.includes(pid);
+  }
+  function modelAllowed(pid,mid,policy=policySnapshot){
+    return providerAllowed(pid,policy)&&(!policy.allowed_models.length||
+      policy.allowed_models.includes(mid)||policy.allowed_models.includes(pid+'/'+mid));
+  }
+  function modelVisible(pid,mid,policy=policySnapshot){
+    return !!policy&&!(policy.hidden_models[pid]||[]).includes(mid);
+  }
+  const idx=(p,data)=>({
+    id:p.id,name:p.name||p.id,visible:providerVisible(p.id),allowed:providerAllowed(p.id),
+    connected:publicFree(p)||nativeConnections(data).includes(p.id),public_free:publicFree(p),
+    auth_status:publicFree(p)?'free_native':nativeConnections(data).includes(p.id)?'configured':undefined,
+    verified:false,model_count:Object.keys(p.models||{}).length,
+    default_model:data.default?.[p.id]
+  });
+  function ordered(data,query=''){
+    const q=query.trim().toLowerCase();
+    return data.all.filter(p=>!q||p.id.toLowerCase().includes(q)||(p.name||'').toLowerCase().includes(q))
+      .sort((a,b)=>Number(data.connected.includes(b.id))-Number(data.connected.includes(a.id))
+        ||Number(['deepseek','openai','anthropic','google','opencode'].includes(b.id))-Number(['deepseek','openai','anthropic','google','opencode'].includes(a.id))
+        ||(a.name||a.id).localeCompare(b.name||b.id));
+  }
+  function find(data,pid){
+    const q=decodeURIComponent(pid).trim().toLowerCase();
+    const p=data.all.find(p=>p.id.toLowerCase()===q)||data.all.find(p=>(p.name||'').toLowerCase()===q);
+    if(!p){const e=new Error('Provider not found in OpenCode Native: '+pid);e.status=404;throw e;}
+    return p;
+  }
+  function methods(auth,pid){const list=auth?.[pid];return Array.isArray(list)&&list.length?list:[{type:'api',label:'API key'}];}
+  function modelDetails(p,data){
+    return {provider_id:p.id,connected:publicFree(p)||nativeConnections(data).includes(p.id),allowed:providerAllowed(p.id),
+      default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
+        allowed:modelAllowed(p.id,id),visible:modelVisible(p.id,id)}))};
+  }
+  function configuredListing(){
+    // First paint is lightweight. Do not claim credentials exist just because
+    // Native listed a model definition in /config/providers.
+    return configuredProviders().then(data=>data);
+  }
+  // Credential acceptance and provider authentication are different outcomes.
+  // Verify through a real model request in the EXISTING OpenCode Native process.
+  // Only Native /auth stores keys; never send them to Python or PostgreSQL.
+  function nativeFailure(value){
+    const raw=[value?.name,value?.message,value?.data?.message,value?.data?.statusCode,
+      value?.data?.code,value?.status,value?.error?.message]
+      .filter(v=>v!==undefined&&v!==null).join(' ').slice(0,3000);
+    if(/(?:401|unauthoriz|invalid.{0,40}(?:api.?key|token|credential)|incorrect.{0,30}key|authentication.?error|api.?key.{0,30}(?:invalid|incorrect|missing))/i.test(raw))
+      return {kind:'invalid_key',message:'رفض المزود مفتاح API (401 أو بيانات اعتماد غير صحيحة).'};
+    if(/(?:403|forbidden|access.denied|permission.denied)/i.test(raw))
+      return {kind:'access_denied',message:'رفض المزود صلاحية هذا المفتاح (403).'};
+    if(/(?:429|quota|rate.limit|free usage exceeded|insufficient|billing|credits|balance)/i.test(raw))
+      return {kind:'quota',message:'طلب OpenCode رُفض بسبب الرصيد أو حدود استخدام المزود.'};
+    if(/(?:model.{0,40}(?:not.found|unavailable|not supported)|invalid.model|(?:404).{0,30}model)/i.test(raw))
+      return {kind:'model_unavailable',message:'الموديل المختار غير متاح لدى المزود.'};
+    if(/(?:timeout|timed.out|network|connect|econn|enotfound|fetch.failed)/i.test(raw))
+      return {kind:'network',message:'تعذر اتصال OpenCode بمزود النموذج.'};
+    return {kind:'provider_error',message:'أعاد OpenCode خطأ من المزود. تحقق من صلاحية المفتاح وحالة النموذج.'};
+  }
+  async function verifyProviderModel(pid,modelID){
+    // A new, unpredictable challenge proves the selected Native model really
+    // responded. Generic text or an error message must NEVER verify a key.
+    const directory=defaultDirectory;
+    const challenge='NATIVE-VERIFY-'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase();
+    let sid='',completed=false;
+    try{
+      const session=await direct('session',{method:'POST',directory,
+        value:{title:'Native credential verification · '+pid}});
+      if(!/^ses_[A-Za-z0-9_-]+$/.test(session?.id||''))
+        throw Error('لم يؤكد OpenCode إنشاء جلسة التحقق.');
+      sid=session.id;
+      const receipt=await direct('session/'+encodeURIComponent(sid)+'/prompt_async',{
+        method:'POST',directory,value:{
+          model:{providerID:pid,modelID},
+          parts:[{type:'text',text:'Return only the following verification code, exactly as written, with no extra text: '+challenge}]
+        }});
+      if(receipt!==null&&receipt!==true&&receipt!==undefined)
+        throw Error('لم يؤكد OpenCode قبول رسالة التحقق.');
+      const deadline=Date.now()+65000;
+      let failure=null,unexpectedAnswer=false;
+      while(Date.now()<deadline){
+        await new Promise(resolve=>setTimeout(resolve,1800));
+        const messages=await direct('session/'+encodeURIComponent(sid)+'/message',{directory});
+        if(!Array.isArray(messages))throw Error('أعاد OpenCode سجل تحقق غير صالح.');
+        const assistant=messages.filter(row=>row?.info?.role==='assistant');
+        for(const message of assistant){
+          const info=message.info;
+          if(info?.error){failure=nativeFailure(info.error);break;}
+          if(info?.providerID!==pid||info?.modelID!==modelID){
+            // A fallback/foreign/default model is not proof of the requested key.
+            failure={kind:'wrong_model',message:'رد نموذج مختلف عن المزود أو النموذج المحدد. لم يتم توثيق هذا المفتاح.'};
+            break;
+          }
+          const answer=(message.parts||[]).filter(part=>part?.type==='text')
+            .map(part=>part.text||'').join('').trim();
+          if(!answer)continue;
+          if(!info?.time?.completed&&!info?.finish)continue;
+          if(answer===challenge){
+            completed=true;
+            return {verified:true,provider_id:pid,model_id:modelID};
+          }
+          unexpectedAnswer=true;
+        }
+        if(failure)break;
+        const states=await direct('session/status',{directory});
+        const state=states?.[sid];
+        if(state?.type==='retry'){
+          const problem=nativeFailure({name:'RetryError',message:state.message});
+          if(problem.kind!=='provider_error'){failure=problem;break;}
+        }
+        if(unexpectedAnswer&&(state===undefined||state?.type==='idle')){
+          failure={kind:'unexpected_response',message:'استجاب OpenCode، لكن النموذج لم يُرجع رمز التحقق الصحيح. لم يتم توثيق المفتاح.'};
+          break;
+        }
+      }
+      const error=new Error(failure?.message||'انتهت مهلة اختبار النموذج الحقيقي؛ لم يتم قبول اتصال غير متحقق.');
+      error.credentialKind=failure?.kind||'not_verified';
+      throw error;
+    }finally{
+      if(sid){
+        if(!completed)await direct('session/'+encodeURIComponent(sid)+'/abort',{
+          method:'POST',value:{},directory}).catch(()=>{});
+        await direct('session/'+encodeURIComponent(sid),{method:'DELETE',directory}).catch(()=>{});
+      }
+    }
+  }
+  const matches=(path)=>{
+    // TEST provider operations are Native-only even before auth is ready.
+    // They MUST NOT fall back to Python if the user session/direct link fails.
+    if(!testHost())return false;
+    if(/^\/api\/opencode\/(?:connections(?:\/|$)|catalog\/providers(?:\/|$)|catalog\/agents(?:$|\?))/.test(path))return true;
+    return /^\/api\/workspaces\/[^/]+\/providers(?:\/|$|\?)/.test(path);
+  };
+  async function route(path,options={}){
+    if(!active())throw Error('TEST OpenCode Native connection requires sign-in; Gateway provider fallback is disabled');
+    const method=(options.method||'GET').toUpperCase();
+    const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
+    // Agent discovery is its own Native endpoint: opening the agent selector
+    // must not download and parse the ~7 MB model/provider catalog.
+    if(name==='/api/opencode/catalog/agents'){
+      const agentRows=await agents();
+      return agentRows.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode))
+        .map(a=>({id:a.name,name:a.name,mode:a.mode}));
+    }
+    // Disconnect uses only the OpenCode Native /auth and /provider endpoints.
+    // Do not block it on policy, models, agents, or the 7 MB catalog presentation.
+    const directDelete=/^\/api\/(?:opencode\/connections|workspaces\/[^/]+\/providers)\/([^/]+)$/.exec(name);
+    if(method==='DELETE'&&directDelete){
+      const providerId=decodeURIComponent(directDelete[1]);
+      if(!/^[a-z0-9][a-z0-9._-]{0,119}$/i.test(providerId))
+        throw Error('Invalid OpenCode provider ID for credential deletion');
+      // Do not require /provider.connected before or after deletion: the
+      // built-in OpenCode provider can be usable without credentials, and the
+      // Native 1.19.x provider-state cache can remain stale after /auth DELETE.
+      // Native's DELETE response, not a catalog entry, acknowledges removal.
+      const result=await direct('auth/'+encodeURIComponent(providerId),{method:'DELETE'});
+      if(result!==true)throw Error('OpenCode did not acknowledge removal of this credential');
+      deletedAuthSlots.add(providerId);
+      forget();
+      invalidateProviderMutation(path,'DELETE');
+      return {native_acknowledged:true,credential_deleted:true,
+        provider_may_remain_available:true};
+    }
+    // Dashboard first paint: show existing Native-configured providers without
+    // downloading the entire ~7 MB discovery catalog. Searching or choosing an
+    // unconfigured provider still uses the authoritative OpenCode /provider.
+    if(name==='/api/opencode/catalog/providers/page' &&
+       !parsed.searchParams.get('query') &&
+       Number(parsed.searchParams.get('offset')||0)===0){
+      const [nativeData]=await Promise.all([configuredListing(),visibility()]);
+      // Show the fast /config/providers view first. After the ONE optional
+      // background /provider check, include Native connected candidates that
+      // are absent from /config/providers (e.g. an older OpenAI/Google auth).
+      // These extra entries are for credential management in Connections only;
+      // they are NOT automatically injected into Workspace model choices.
+      const configuredIds=new Set(nativeData.all.map(p=>p.id));
+      const otherNative=catalogSnapshot?catalogSnapshot.all.filter(p=>
+        nativeConnections(catalogSnapshot).includes(p.id)&&!configuredIds.has(p.id)):[];
+      const connected=[...nativeData.all,...otherNative];
+      const listData={...nativeData,connected:[...new Set([...nativeData.connected,...otherNative.map(p=>p.id)])],
+        default:{...(catalogSnapshot?.default||{}),...nativeData.default}};
+      const items=connected.slice(0,50).map(p=>idx(p,listData));
+      return {items,connected_items:connected.map(p=>idx(p,listData)),
+        total:connected.length,offset:0,limit:50,
+        next_offset:connected.length>50?50:null,native_configured_only:true};
+    }
+    const [data]=await Promise.all([catalog(),visibility()]);
+    if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
+      const query=parsed.searchParams.get('query')||'',offset=Number(parsed.searchParams.get('offset')||0);
+      const limit=Math.min(50,Math.max(1,Number(parsed.searchParams.get('limit')||50)));
+      const list=ordered(data,query),items=list.slice(offset,offset+limit).map(p=>idx(p,data));
+      return name.endsWith('/page')?{items,connected_items:data.all.filter(p=>publicFree(p)||nativeConnections(data).includes(p.id)).map(p=>idx(p,data)),total:list.length,offset,limit,next_offset:offset+limit<list.length?offset+limit:null}:items;
+    }
+    if(name.endsWith('/catalog/providers/search')||name.endsWith('/providers/search')){
+      const query=parsed.searchParams.get('query')||'';
+      const items=ordered(data,query).slice(0,50).map(p=>idx(p,data));
+      return name.startsWith('/api/workspaces/')?{native:true,providers:items}:items;
+    }
+    if(name.endsWith('/catalog/providers/resolve')||name.endsWith('/providers/resolve')){
+      const p=find(data,parsed.searchParams.get('name')||'');
+      const item=idx(p,data);
+      return name.startsWith('/api/workspaces/')?{native:true,providers:[item]}:item;
+    }
+    if(name==='/api/opencode/connections')return nativeConnections(data).map(provider_id=>({
+      provider_id,auth_status:'configured',verified:false}));
+    const isAccount=segments[0]==='api'&&segments[1]==='opencode'&&segments[2]==='connections';
+    const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
+    if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
+    if(isWorkspace&&segments.length===4)
+      return ordered(data).filter(p=>(publicFree(p)||nativeConnections(data).includes(p.id))&&providerAllowed(p.id)&&providerVisible(p.id))
+        .map(p=>idx(p,data));
+    const providerId=isAccount?segments[3]:segments[4];
+    if(!providerId)throw Error('Missing Native provider ID');
+    const p=find(data,providerId),tail=segments.slice(isAccount?4:5);
+    if(tail.length===1&&tail[0]==='models'){
+      // Workspaces select models from the account's manually connected providers.
+      // Never turn a full Native catalogue lookup into an unconnected model picker.
+      const item=modelDetails(p,data);
+      return isWorkspace&&!item.connected?{...item,models:[]}:item;
+    }
+    if(tail.length===1&&tail[0]==='options'){
+      const auth=await direct('provider/auth');
+      return {provider_id:p.id,auth_methods:methods(auth,p.id),models:modelDetails(p,data).models,
+        native:true,credential_storage_ready:true};
+    }
+    if(tail.length===1&&tail[0]==='credentials'&&method==='POST'){
+      const value=JSON.parse(options.body||'{}');
+      if(typeof value.api_key!=='string'||!value.api_key.trim())throw Error('API key is required');
+      // /provider.connected only reports Native availability; it cannot
+      // prove that a valid API key is saved. A provider may be free, configured
+      // through environment, or be listed in stale Native state.
+      // Do not mistake it for a credential and reject valid new keys.
+      // The form requires explicit consent because Native auth is process-global.
+      if(value.replace_existing!==true){
+        const error=new Error('يتطلب حفظ مفتاح Native المشترك تأكيدًا صريحًا من المستخدم.');
+        error.status=409;throw error;
+      }
+      const currentCatalog=await catalog({force:true});
+      const choices=Object.keys(p.models||{}).filter(mid=>modelAllowed(p.id,mid));
+      const selected=typeof value.model_id==='string'&&choices.includes(value.model_id)
+        ?value.model_id
+        :choices.includes(currentCatalog.default?.[p.id])?currentCatalog.default[p.id]:choices[0];
+      if(!selected)throw Error('لم يجد OpenCode نموذجًا صالحًا لاختبار مفتاح هذا المزود.');
+      options.onNativePhase?.('saving');
+      // The Native PUT itself can fail after writing the auth slot (network
+      // disconnect or nonstandard acknowledgement). Include it in rollback.
+      // This slot was checked as empty before we started the transaction.
+      try{
+        const inserted=await direct('auth/'+encodeURIComponent(p.id),{method:'PUT',
+          value:{type:'api',key:value.api_key}});
+        if(inserted!==true)throw Error('لم يؤكد OpenCode التخزين المؤقت للمفتاح.');
+        options.onNativePhase?.('verifying');
+        const checked=await verifyProviderModel(p.id,selected);
+        deletedAuthSlots.delete(p.id);
+        forget();invalidateProviderMutation(path,'POST');
+        return {connected:true,persisted:true,verified:true,
+          provider_id:p.id,verified_model_id:checked.model_id};
+      }catch(error){
+        options.onNativePhase?.('failed');
+        // No unverified key may remain configured after this attempted
+        // connection. The slot was empty before this operation; do not retain
+        // a bogus Connected state on auth, quota, timeout or model failure.
+        try{
+          const undone=await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
+          if(undone!==true)throw Error('OpenCode did not acknowledge removal of the pending key');
+          deletedAuthSlots.add(p.id);
+          // Native 1.19.x may cache /provider.connected after deleting auth.
+          // Do not call a stale catalog proof that the key still exists.
+        }catch(rollbackError){
+          error.message+=' تعذّر إلغاء الاعتماد المؤقت من OpenCode؛ افصل المزود قبل المحاولة مرة أخرى.';
+        }
+        forget();invalidateProviderMutation(path,'DELETE');
+        throw error;
+      }
+    }
+    if(tail[0]==='oauth'&&method==='POST'){
+      const request=JSON.parse(options.body||'{}');
+      const operation=tail[1]==='authorize'?'authorize':tail[1]==='callback'?'callback':null;
+      if(!operation)throw Error('Unsupported Native OAuth operation');
+      const result=await direct('provider/'+encodeURIComponent(p.id)+'/oauth/'+operation,{method:'POST',value:request});
+      if(operation==='callback'){forget();invalidateProviderMutation(path,'POST');}
+      return result;
+    }
+    throw Error('Unsupported direct OpenCode provider action: '+name);
+  }
+  return {active,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,matches,route,
+    providerAllowed,providerVisible,modelAllowed,modelVisible,classifyError:nativeFailure,rootFromFile,defaultDirectory};
+})();
+
 const api=async(path,options={})=>{
+ // TEST file reads: Python authorizes workspace ownership and path only.
+ // Nginx's X-Accel internal redirect transports the bytes directly from
+ // OpenCode /file and /file/content; no Python file listing or content handler.
+ if(location.hostname==='test.opencode-gateway.codes'){
+   const target=new URL(path,location.origin);
+   const git=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/git\/(status|commit|push|sync)$/i);
+   const projectPublish=/^\/api\/projects\/[0-9a-f-]{36}\/publish$/i.test(target.pathname);
+   if(projectPublish||(git&&git[2]!=='status')){
+     // Native OpenCode has no unrestricted Git publish endpoint. Never
+     // silently fall back to Python subprocess for code execution or push.
+     throw Error('TEST code changes and publishing must run through authorized OpenCode tools; legacy Python Git execution is disabled');
+   }
+   const nativeGitRead=async(workspace,resource)=>{
+     if(!currentUser)throw Error('Sign in before using Native VCS');
+     const response=await fetch('/native-session/'+workspace+'/'+resource,{
+       credentials:'same-origin',cache:'no-store',signal:options.signal});
+     const body=await response.json().catch(()=>({detail:'Invalid OpenCode response'}));
+     if(!response.ok)throw Error(body.detail||'OpenCode VCS request failed: '+response.status);
+     return body;
+   };
+   if(git&&git[2]==='status'){
+     const [changes,vcs]=await Promise.all([
+       nativeGitRead(git[1],'file/status'),
+       nativeGitRead(git[1],'vcs').catch(error=>{
+         if(error.message.includes('404'))return {};
+         throw error;
+       })]);
+     if(!Array.isArray(changes))throw Error('Invalid OpenCode file status');
+     return {changes:changes.filter(x=>x&&typeof x.path==='string')
+       .map(x=>({path:x.path,status:x.status||'modified'})),
+       clean:changes.length===0,branch:vcs?.branch||activeProject?.branch||null,
+       repository:activeProject?.repository||null,remote_branch:activeProject?.branch||null,
+       github_access:false,push_available:false,source:'opencode-native'};
+   }
+   const workspaceDiff=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/diff$/i);
+   if(workspaceDiff){
+     if(!currentUser||!activeSession||activeSession.workspace_id!==workspaceDiff[1])
+       return {diff:''};
+     const items=await api('/api/sessions/'+activeSession.id+'/diff');
+     const name=target.searchParams.get('path')||'';
+     if(!Array.isArray(items))throw Error('Invalid OpenCode session diff');
+     const found=items.find(x=>x.file===name||x.path===name);
+     return {diff:typeof found?.patch==='string'?found.patch:''};
+   }
+   const match=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/files(\/content)?$/i);
+   if(match){
+     if((options.method||'GET').toUpperCase()!=='GET')
+       throw Error('TEST files are OpenCode Native read-only through this route');
+     if(!currentUser)throw Error('Sign in before reading a Native workspace');
+     const nativePath=match[2]?'file/content':'file';
+     const requested=target.searchParams.get('path')||'';
+     if(target.searchParams.size>1||requested.length>1000)throw Error('Invalid Native file path');
+     const forwarded='/native-session/'+match[1]+'/'+nativePath+'?path='+encodeURIComponent(requested);
+     const response=await fetch(forwarded,{credentials:'same-origin',cache:'no-store',signal:options.signal});
+     const result=await response.json().catch(()=>({detail:'Invalid OpenCode response'}));
+     if(!response.ok)throw Error(result.detail||'OpenCode file request rejected: '+response.status);
+     if(match[2]){
+       if(typeof result?.content!=='string')throw Error('Invalid OpenCode file content');
+       return {path:requested,content:result.content};
+     }
+     if(!Array.isArray(result))throw Error('Invalid OpenCode file listing');
+     return result.filter(v=>v&&typeof v.path==='string'&&
+         !v.path.startsWith('/')&&!v.path.includes('\\')&&
+         !v.path.split('/').includes('..'))
+       .map(v=>({name:String(v.name||v.path.split('/').at(-1)),path:v.path,
+         type:v.type==='directory'?'directory':'file'}));
+   }
+ }
+ if(window.nativeDirectTest?.matches(path))return window.nativeDirectTest.route(path,options);
  if(window.nativeSession&&/^\/api\/(?:sessions(?:\/|\?|$)|workspaces\/[^/]+\/sessions)/.test(path))await window.nativeSession.ready();
  if(window.nativeSession?.active()){const routed=await window.nativeSession.route(path,options);if(routed)return routed.value;}
  const revision=authenticationRevision,controller=new AbortController();authenticatedRequests.add(controller);

@@ -40,7 +40,9 @@
     return window.openClientView(client[name]);
   }
   async function nativeCatalog(body,platform=false){
-    if(!platform||!admin())return;
+    // TEST models and provider cache are managed only by OpenCode Native.
+    // Do not expose the legacy Gateway/Python refresh scheduler in TEST.
+    if(location.hostname==='test.opencode-gateway.codes'||!platform||!admin())return;
     const box=section(body,tr('Native catalog maintenance','صيانة فهرس OpenCode'));
     const note=node('p',tr('Uses OpenCode’s own cache refresh. The running service may retain its current model snapshot; conversations are not restarted.','يستخدم تحديث Cache الأصلي في OpenCode. قد تحتفظ الخدمة الجارية بفهرسها الحالي؛ لا تُعاد تشغيل المحادثات.'));box.append(note);
     const state=node('p');state.setAttribute('role','status');box.append(state);
@@ -79,7 +81,7 @@
     body.dataset.billingRole='admin';
     const box=section(body,tr('Platform receiving methods','وسائل استلام المنصة'));
     box.append(node('p',tr('Configure where the platform receives payments. Customers choose these methods at checkout; they cannot edit them. These methods use manual receipt verification. Google Pay needs a processor-hosted checkout link; Binance transfers require receipt review. Do not enter card numbers, CVV or private keys.','أعدّ وسائل استلام مدفوعات المنصة. يختارها العميل أثناء الدفع ولا يستطيع تعديلها. هذه الوسائل تتطلب التحقق اليدوي من الاستلام. لا تدخل أرقام بطاقات أو CVV أو مفاتيح خاصة.')));
-    const paymentStatus=await api('/api/billing/paypal/status').catch(()=>({configured:false,environment:'unknown'}));box.append(node('p',tr('PayPal API: '+(paymentStatus.configured?'configured':'merchant setup required')+' · '+paymentStatus.environment,'PayPal API: '+(paymentStatus.configured?'مهيأ':'يتطلب إعداد التاجر')+' · '+paymentStatus.environment)));const query=platform?'?platform=true':'',items=await api('/api/billing/methods'+query),plans=await api('/api/plans');let editing=null;
+    const paymentStatus=await api('/api/billing/paypal/status');box.append(node('p',tr('PayPal API: '+(paymentStatus.configured?'configured':'merchant setup required')+' · '+paymentStatus.environment,'PayPal API: '+(paymentStatus.configured?'مهيأ':'يتطلب إعداد التاجر')+' · '+paymentStatus.environment)));const query=platform?'?platform=true':'',items=await api('/api/billing/methods'+query),plans=await api('/api/plans');let editing=null;
     // The dynamic provider catalogue is the only supported creation/editing UI.
     // Retain legacy method rows for historical orders, never delete their data.
     const profilesPanel=section(body,tr('Saved dynamic providers','المزودون المحفوظون ديناميكيًا'));
@@ -149,7 +151,7 @@
     const options=node('div','','provider-combo-options');options.hidden=true;comboWrap.append(combo,options);box.append(comboWrap);
     const progress=node('p','','provider-loading');progress.setAttribute('role','status');progress.setAttribute('aria-live','polite');box.append(progress);
     const status=node('p',tr('Choose a provider to inspect its connection.','اختر مزوّدًا لفحص اتصاله.'),'provider-combo-status');box.append(status);
-    const connectedBox=section(body,tr('Connected providers','المزوّدات المتصلة'));
+    const connectedBox=section(body,tr('Native credential inventory','مخزن مفاتيح OpenCode Native'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
     let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
     let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
@@ -201,7 +203,11 @@
       const discovery=new AbortController(),onAbort=()=>dlg.close();controller.signal.addEventListener('abort',onAbort,{once:true});
       dlg.addEventListener('close',()=>{discovery.abort();controller.signal.removeEventListener('abort',onAbort);for(const input of dlg.querySelectorAll('input[type=password]'))input.value='';view.connecting=false;host.remove();},{once:true});
       const currentDialog=()=>alive()&&contextCurrent()&&dlg.open;
-      body.append(node('p',tr('Credentials are stored on the server. Configuration alone does not verify provider access; test it with a native prompt.','تُحفظ الاعتمادات على الخادم. حفظ الإعداد لا يثبت صلاحية الوصول؛ تحقّق بإرسال طلب أصلي.')));
+      body.append(node('p',window.nativeDirectTest?.active()
+        ?tr('TEST: the key is sent to OpenCode Native, not the Gateway database. Native temporarily saves it, makes one real request to the selected model, and removes it on failed verification. No check is added to ordinary messages.',
+          'TEST: يُرسل المفتاح إلى OpenCode Native وليس قاعدة Gateway. يحفظه Native مؤقتًا ثم يجري اختبارًا حقيقيًا للنموذج المختار، ويحذفه إن فشل التحقق. لا توجد إعادة تحقق عند كل رسالة.')
+        :tr('Credentials are stored on the server. Configuration alone does not verify provider access; test it with a native prompt.',
+          'تُحفظ الاعتمادات على الخادم. حفظ الإعداد لا يثبت صلاحية الوصول؛ تحقّق بإرسال طلب أصلي.')));
       dlg.showModal();setFeedback(feedback,tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
       let choices,accountOptions=null;
       try{
@@ -237,20 +243,63 @@
         if(keyMethod&&accountOptions?.credential_storage_ready===false){setFeedback(feedback,tr('Provider connection is unavailable: secure credential storage needs administrator repair. Your API key has not been rejected by the provider.','الربط غير متاح: التخزين الآمن للاعتمادات يحتاج إصلاحًا من المدير. لم يرفض المزوّد مفتاح API الخاص بك.'),'error');return;}
         if(keyMethod){
           const key=input(f,tr('API key (server-side only)','مفتاح API (على الخادم فقط)'),'api_key','password');key.required=true;key.autocomplete='new-password';
-          f.append(node('p',accountOptions?.native?tr('OpenCode stores the credential. Verify access with a native conversation; saving does not test a paid model.','يحفظ OpenCode الاعتماد. تحقّق من الوصول بمحادثة أصلية؛ الحفظ لا يختبر نموذجًا مدفوعًا.'):tr('OpenCode validates the key with a real model request. Provider charges may apply.','يتحقق OpenCode من المفتاح بطلب نموذج فعلي؛ قد تُحتسب رسوم لدى المزوّد.'),'provider-note'));
+          if(window.nativeDirectTest?.active()){
+            const choices=(accountOptions?.models||[]).filter(m=>m?.id&&m.allowed!==false&&m.visible!==false);
+            if(choices.length){
+              const model=select(f,tr('Model to verify with (Native request)','النموذج المطلوب التحقق به عبر OpenCode'),'model_id',
+                choices.map(m=>[m.id,m.name||m.id]));
+              model.required=true;
+              const preferred=['deepseek-chat','deepseek-flash','gpt-4.1-mini','gemini-2.5-flash'];
+              model.value=preferred.find(id=>choices.some(m=>m.id===id))||choices[0].id;
+            }else{
+              setFeedback(feedback,tr('No allowed Native model is available for key verification.','لا يوجد نموذج Native مسموح به للتحقق من المفتاح.'),'error');
+              return;
+            }
+            f.append(node('p',tr('The key is held by OpenCode Native. One real model request verifies the key before connection succeeds; provider charges may apply. No test runs on each chat message.',
+              'يحفظ OpenCode Native المفتاح. يتحقق من صلاحيته بطلب نموذج حقيقي واحد عند الربط فقط، وقد تُحتسب رسوم. لا يُعاد الاختبار مع كل رسالة.'),'provider-note'));
+          }else{
+            f.append(node('p',accountOptions?.native?tr('OpenCode stores the credential. Verify access with a native conversation; saving does not test a paid model.','يحفظ OpenCode الاعتماد. تحقّق من الوصول بمحادثة أصلية؛ الحفظ لا يختبر نموذجًا مدفوعًا.'):tr('OpenCode validates the key with a real model request. Provider charges may apply.','يتحقق OpenCode من المفتاح بطلب نموذج فعلي؛ قد تُحتسب رسوم لدى المزوّد.'),'provider-note'));
+          }
         }
-        const submit=node('button',keyMethod?(accountOptions?.native?tr('Connect provider','ربط المزوّد'):tr('Validate and connect','تحقق واربط')):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
+        const submit=node('button',keyMethod?(window.nativeDirectTest?.active()?tr('Verify with Native and connect','تحقّق عبر Native ثم اربط'):(accountOptions?.native?tr('Connect provider','ربط المزوّد'):tr('Validate and connect','تحقق واربط'))):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
         const currentForm=()=>currentDialog()&&view.ready&&methodArea.contains(f);
         f.onsubmit=async event=>{
           event.preventDefault();if(submitting||!currentForm()||!f.reportValidity())return;
           const values=Object.fromEntries(new FormData(f));submitting=true;submit.disabled=methodPicker.disabled=true;f.setAttribute('aria-busy','true');
           try{
             if(keyMethod){
-              setFeedback(feedback,tr('Saving the credential through OpenCode…','جارٍ حفظ المفتاح عبر OpenCode…'));
-              const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{method:'POST',body:JSON.stringify({api_key:values.api_key,model_id:null,method:index,inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))})});
+              // Native 1.19.x uses process-global provider credentials. The
+              // configured/connected flag cannot prove whether an auth key
+              // exists, so ask explicitly before PUT may replace any slot.
+              if(window.nativeDirectTest?.active()){
+                const accepted=await window.confirmAction?.(tr(
+                  'Save this key in the shared OpenCode Native store? It may replace an existing credential for this provider and affect other accounts, including LIVE if they share this Native process. A failed verification removes the attempted Native key.',
+                  'هل تريد حفظ المفتاح في مخزن OpenCode Native المشترك؟ قد يستبدل اعتماد هذا المزود ويؤثر على حسابات أخرى، بما فيها LIVE إذا كانت تستخدم نفس العملية. عند فشل التحقق سيُحذف المفتاح الذي تمت تجربته.'));
+                if(!accepted)return;
+              }
+              setFeedback(feedback,tr('Connecting with OpenCode Native…','جارٍ الربط عبر OpenCode Native…'));
+              const nativePhase=(stage)=>{
+                if(!currentForm())return;
+                if(stage==='saving')setFeedback(feedback,tr('OpenCode Native is temporarily storing the key for verification…',
+                  'يحفظ OpenCode Native المفتاح مؤقتًا لغرض التحقق…'));
+                else if(stage==='verifying')setFeedback(feedback,tr('OpenCode Native is requesting a real response from the selected provider/model. This is NOT yet connected.',
+                  'يجري OpenCode Native طلبًا حقيقيًا إلى المزود والنموذج المختار. لم ينجح الربط بعد.'));
+                else if(stage==='failed')setFeedback(feedback,tr('Verification failed. Reverting the temporary Native key…',
+                  'فشل اختبار المفتاح. جارٍ إلغاء الحفظ المؤقت داخل Native…'),'warning');
+              };
+              const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{
+                method:'POST',
+                body:JSON.stringify({api_key:values.api_key,model_id:values.model_id||null,method:index,
+                  replace_existing:Boolean(window.nativeDirectTest?.active()),
+                  inputs:Object.fromEntries(promptInputs.filter(({field})=>!field.disabled).map(({prompt,field})=>[prompt.key,field.value]))}),
+                ...(window.nativeDirectTest?.active()?{onNativePhase:nativePhase}:{})
+              });
               f.reset();if(!alive()||!contextCurrent())return;
-              if(result.connected!==true||result.persisted!==true)throw new Error(tr('OpenCode connection and credential storage were not confirmed.','لم يتم تأكيد اتصال OpenCode وحفظ المفتاح.'));
-              dlg.close();toast(result.verified===false?tr('Credential configured. Send a native prompt to verify access.','حُفظ الاعتماد. أرسل طلبًا أصليًا للتحقق من صلاحية الوصول.'):tr('Provider connected.','تم ربط المزوّد.'));await reload();
+              if(result.connected!==true||result.persisted!==true||
+                ((window.nativeDirectTest?.active()||accountOptions?.native===true)&&result.verified!==true))
+                throw new Error(tr('OpenCode did not verify this key with a real model response.',
+                  'لم يؤكد OpenCode صلاحية المفتاح من خلال رد نموذج حقيقي.'));
+              dlg.close();toast(result.verified===true?tr('OpenCode verified this key with a real model response.','أكد OpenCode صلاحية المفتاح برد حقيقي من النموذج.'):result.verified===false?tr('Credential configured but not verified.','حُفظ المفتاح دون تحقق.'):tr('Provider connection saved.','حُفظ اتصال المزوّد.'));await reload();
             }else{
               setFeedback(feedback,tr('Starting OpenCode authorization…','جارٍ بدء تفويض OpenCode…'));
               const authorization=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values,...(reauthorizing?{reauthorize:true}:{})})});
@@ -281,40 +330,92 @@
       methodPicker.onchange=renderMethod;renderMethod();methodPicker.focus();
     };
     function renderSelected(p){
-      const state=p.auth_status==='reauthorization_required'?tr('Authorization required','يلزم إعادة التفويض'):
+      const state=window.nativeDirectTest?.active()&&p.public_free
+        ?tr('OpenCode Native free models · no key required','نماذج OpenCode المجانية · لا تحتاج إلى مفتاح')
+        :window.nativeDirectTest?.active()&&p.connected
+        ?tr('Available in Native · credential not verified','متاح في Native · لم يُثبت وجود مفتاح صالح')
+        :p.auth_status==='reauthorization_required'?tr('Authorization required','يلزم إعادة التفويض'):
         p.auth_status==='refresh_required'?tr('Token expired · refresh or reauthorize','انتهى التوكن · جدّد أو أعد التفويض'):p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
       const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
       status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String(p.model_count??p.models?.length??0)+' '+tr('models','نموذج')));
       if(!view.ready){status.append(node('span',tr('Refreshing workspace state…','جارٍ تحديث حالة مساحة العمل…')));return;}
       const act=node('div','','manage-actions');
-      if(p.connected)act.append(button(tr('Disconnect / delete key','فصل / حذف المفتاح'),()=>disconnect(p)));
+      if(p.public_free)act.append(node('span',tr('Available directly through OpenCode Native','متاح مباشرة عبر OpenCode Native')));
+      else if(p.connected)act.append(button(
+        window.nativeDirectTest?.active()?tr('Remove stored Native credential','إزالة اعتماد Native المحفوظ'):tr('Disconnect / delete key','فصل / حذف المفتاح'),
+        ()=>disconnect(p)));
       else if(p.allowed!==false)act.append(button(tr('Connect','ربط'),()=>openAuthDialog(p)));
       else act.append(node('span',tr('Restricted by platform policy','مقيّد بسياسة المنصة')));
       if(!workspaceId&&p.auth_type==='oauth'&&p.allowed!==false)act.append(button(tr('Reauthorize','إعادة التفويض'),()=>openAuthDialog({...p,reauthorize:true})));
       status.append(act);
     }
+    let disconnectingProvider='';
     async function disconnect(p){
-      if(!alive()||!contextCurrent()||!view.ready)return;
-      await api(workspaceId?base+encodeURIComponent(p.id):
-        '/api/opencode/connections/'+encodeURIComponent(p.id),{method:'DELETE'});
-      if(!alive()||!contextCurrent())return;
-      view.ready=false;
-      snapshot={...snapshot,providers:snapshot.providers.map(row=>row.id===p.id?{...row,connected:false}:row)};
-      searchRows=searchRows.map(row=>row.id===p.id?{...row,connected:false}:row);
-      renderConnected();renderOptions();
-      if(selectedProviderId===p.id)renderSelected({...p,connected:false});
-      toast(tr('Provider disconnected. Its saved key was deleted.','فُصل المزوّد وحُذف مفتاحه المحفوظ.'));await reload();
+      if(!alive()||!contextCurrent()||!view.ready||disconnectingProvider||p.public_free)return;
+      // /auth in OpenCode 1.19.4 is process-global, not per user.
+      // This explicit confirmation is mandatory even if the slot is legacy.
+      if(window.nativeDirectTest?.active()){
+        const ok=await window.confirmAction?.(tr(
+          'Delete the shared OpenCode Native key for '+(p.name||p.id)+'? This may disconnect other TEST accounts. It will only be reported successful after OpenCode confirms it is gone.',
+          'هل تريد حذف مفتاح '+(p.name||p.id)+' من مخزن OpenCode Native المشترك؟ قد يؤدي ذلك إلى فصل حسابات TEST أخرى. لن نعلن النجاح حتى يؤكد OpenCode زواله.'));
+        if(!ok)return;
+      }
+      disconnectingProvider=p.id;
+      const destination=workspaceId?base+encodeURIComponent(p.id):
+        '/api/opencode/connections/'+encodeURIComponent(p.id);
+      view.ready=false;renderConnected();renderOptions();
+      message(tr('Deleting key through OpenCode Native and confirming removal…',
+        'جارٍ حذف المفتاح عبر OpenCode Native والتأكد من زواله…'));
+      try{
+        // app.js maps this URL exclusively to Native DELETE /auth and a fresh
+        // Native GET /provider; no Python credential handler is involved.
+        const result=await api(destination,{method:'DELETE'});
+        if(window.nativeDirectTest?.active()&&result?.native_acknowledged!==true)
+          throw new Error(tr('OpenCode did not acknowledge credential deletion.','لم يؤكد OpenCode طلب حذف الاعتماد.'));
+        if(!alive()||!contextCurrent())return;
+        const original=[...snapshot.providers];
+        const previousSearch=[...searchRows];
+        snapshot={...snapshot,providers:original.map(row=>row.id===p.id?{...row,connected:false,verified:false,auth_status:undefined}:row)};
+        searchRows=previousSearch.map(row=>row.id===p.id?{...row,connected:false,verified:false,auth_status:undefined}:row);
+        if(selectedProviderId===p.id)renderSelected({...p,connected:false,verified:false,auth_status:undefined});
+        toast(tr('OpenCode acknowledged the credential deletion. The provider may still appear because its models are built in or its catalog is cached.','أكد OpenCode طلب حذف الاعتماد. قد يبقى المزود ظاهرًا لأن نماذجه مدمجة أو لأن فهرسه مخبأ.'));
+        await reload();
+      }catch(error){
+        if(alive()&&contextCurrent()){
+          message(error.message||tr('OpenCode deletion was not confirmed.','لم يؤكد OpenCode حذف المفتاح.'),true);
+          // Never optimistically clear a provider after an ambiguous failure.
+          // Re-read Native to display the current state without claiming success.
+          await refresh(true).catch(()=>{});
+        }
+      }finally{
+        disconnectingProvider='';
+        if(alive()&&contextCurrent()){view.ready=true;renderConnected();renderOptions();}
+      }
     }
     function renderConnected(){
-      connectedBox.replaceChildren(node('h2',tr('Connected providers','المزوّدات المتصلة')));
+      connectedBox.replaceChildren(node('h2',window.nativeDirectTest?.active()
+        ?tr('Available through OpenCode Native','المزوّدات المتاحة عبر OpenCode Native')
+        :tr('Connected providers','المزوّدات المتصلة')));
+      if(window.nativeDirectTest?.active())connectedBox.append(node('p',tr(
+        'The list comes from OpenCode Native, not a Gateway model database. A configured provider does not prove a saved or working API key. Free OpenCode models require no manual key. Deleting a shared credential can affect other accounts.',
+        'تأتي القائمة من OpenCode Native وليس من قاعدة نماذج Gateway. ظهور مزود مهيأ لا يثبت وجود مفتاح API أو عمله. نماذج OpenCode المجانية لا تحتاج إلى مفتاح يدوي. حذف اعتماد مشترك قد يؤثر على حسابات أخرى.')));
       const selected=(snapshot?.providers||[]).find(p=>p.id===selectedProviderId);
       if(selected)renderSelected(selected);
-      const rows=(snapshot?.providers||[]).filter(p=>p.connected);
+      const rows=(snapshot?.providers||[]).filter(p=>p.connected||p.public_free);
       if(!rows.length){connectedBox.append(node('p',tr('No connected providers.','لا توجد مزوّدات متصلة.')));return;}
       for(const p of rows){
-        const item=node('div','','manage-actions');item.append(node('strong',p.name||p.id),node('span',p.verified===true?tr('Tested','تم اختباره'):tr('Configured · not tested','مهيأ · لم يُختبر')));
+        const item=node('div','','manage-actions');item.append(node('strong',p.name||p.id),node('span',p.public_free
+          ?tr('Free models in Native · no API key','نماذج مجانية في Native · بلا مفتاح API'):window.nativeDirectTest?.active()
+          ?tr('Native provider · API key unverified','مزود Native · مفتاح API غير متحقق')
+          :p.verified===true?tr('Tested','تم اختباره'):tr('Configured · not tested','مهيأ · لم يُختبر')));
         if(p.allowed===false)item.append(node('span',tr('Restricted','مقيّد')));
-        const remove=button(tr('Disconnect / delete key','فصل / حذف المفتاح'),()=>disconnect(p));remove.disabled=!view.ready;item.append(remove);connectedBox.append(item);
+        if(!p.public_free){
+          const remove=button(window.nativeDirectTest?.active()
+            ?tr('Remove Native credential','إزالة اعتماد Native')
+            :tr('Disconnect / delete key','فصل / حذف المفتاح'),()=>disconnect(p));
+          remove.disabled=!view.ready;item.append(remove);
+        }
+        connectedBox.append(item);
       }
     }
     const renderOptions=()=>{
@@ -323,7 +424,7 @@
       const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
       const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>(query||p.visible!==false)&&(!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query))).slice(0,50);
       for(const p of rows){
-        const state=p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
+        const state=p.public_free?tr('Free Native models','نماذج Native مجانية'):p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
         const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
         const o=previous.get(p.id)||node('button','','provider-combo-option');previous.delete(p.id);o.dataset.providerId=p.id;o.textContent=(p.name||p.id)+' · '+state+restriction;o.type='button';
         o.onclick=()=>{
@@ -373,6 +474,10 @@
     });customButton.disabled=true;box.append(customButton);
     async function refresh(force=false){
       if(!alive())return;
+      if(force&&window.nativeDirectTest?.active()){
+        view.nativeCatalogRequested=false;
+        window.nativeDirectTest.forget();
+      }
       if(!workspaceId){
         view.ready=false;
         message(tr('Loading account providers…','جارٍ تحميل مزوّدات الحساب…'));
@@ -384,6 +489,15 @@
           renderOptions();renderConnected();
           message(tr('OpenCode providers ready','مزوّدو OpenCode جاهزون')+' · '+catalog.total);
           const selected=snapshot.providers.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
+          // Fast first paint uses /config/providers, then one authoritative
+          // /provider check in the background. No fake Connected state and no
+          // full catalog download on every Workspace opening.
+          if(window.nativeDirectTest?.active()&&!view.nativeCatalogRequested){
+            view.nativeCatalogRequested=true;
+            window.nativeDirectTest.catalog().then(()=>{
+              if(alive()&&!workspaceId)refresh(false).catch(()=>{});
+            }).catch(error=>{if(alive())message(error.message,true);});
+          }
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
       }

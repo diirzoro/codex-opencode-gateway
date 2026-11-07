@@ -23,6 +23,17 @@ FRONT={"app.js","index.html","styles.css","dashboards.js","enhancements.js",
 ALLOWED_ROOTS=("backend/app/","backend/alembic/versions/","assets/")
 ALLOWED_EXACT={"backend/alembic.ini","backend/alembic/env.py","backend/alembic/script.py.mako"}
 PROTECTED=("backend/app/services/preview_", "backend/app/routes/preview_", "backend/app/models/preview.py")
+# Exact obsolete AI-only Python files; these were removed from updates and are
+# pruned only inside /home/tahir/opencode-gateway-test after source reconciliation.
+RETIRED_AI = (
+    "backend/app/routes/agent.py",
+    "backend/app/services/message_queue.py",
+    "backend/app/services/opencode.py",
+    "backend/app/services/opencode_catalog.py",
+    "backend/app/services/account_provider_runtime.py",
+    "backend/app/services/session_recovery.py",
+)
+
 def run(*argv,timeout=90,cwd=None,env=None):
     return subprocess.run(argv,check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                           timeout=timeout,cwd=cwd,env=env).stdout.decode().strip()
@@ -121,13 +132,28 @@ def rollout(target,mode):
             ["git","-C",str(ROOT),"show",target+":"+name],check=True,capture_output=True,timeout=45).stdout
         old=dest.read_bytes() if dest.is_file() else None
         if expected!=old:changes.append((name,dest,expected))
-    print("TARGET",target,"FILES_TOTAL",len(source),"CHANGES",len(changes),flush=True)
+    # Deleted files are not returned by files(target). Remove only this
+    # explicit legacy AI allowlist; never prune arbitrary untracked files.
+    retired = [(name, check(name)) for name in RETIRED_AI if name not in source]
+    pending_retired = [(name, dest) for name, dest in retired if dest.exists()]
+    print("TARGET",target,"FILES_TOTAL",len(source),"CHANGES",len(changes),
+          "RETIRED_AI_FILES",len(pending_retired),flush=True)
     for name,_,_ in changes:print("CHANGE",name,flush=True)
+    for name,_ in pending_retired:print("REMOVE_LEGACY_AI",name,flush=True)
     if mode=="audit":return
     oldrev=active_revision()
     if mode=="rollback" and not oldrev:raise RuntimeError("No prior GitHub release marker; rollback unavailable")
     nativepid=run("systemctl","show","--value","-p","MainPID",NATIVE)
     for name,dest,data in changes:replace(dest,data);print("UPDATED",name,flush=True)
+    for name, dest in pending_retired:
+        dest.unlink()
+        print("DELETED_LEGACY_AI",name,flush=True)
+        # Remove only Python's compiled artifacts of this exact retired module.
+        cached=dest.parent/"__pycache__"
+        if cached.is_dir() and not cached.is_symlink():
+            for bytecode in cached.glob(dest.stem+".*.pyc"):
+                if bytecode.is_file() and not bytecode.is_symlink():
+                    bytecode.unlink()
     try:
         # A TEST-only, root-owned migration gate is a mandatory deployment dependency.
         # It must validate current_database() and run Alembic against the exact TEST

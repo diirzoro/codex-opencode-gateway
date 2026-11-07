@@ -1436,7 +1436,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     manualModel.hidden=!window.nativeSession?.active();
     recoveryAction.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
     cancelAttachment.hidden=!activeSession||!window.nativeSession?.pendingAttachment(activeSession.id);
-    q('sendMessage').disabled=sending||queuing||nativeBusy||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
+    q('sendMessage').disabled=sending||queuing||nativeBusy||(window.nativeSession?.active()&&busy)||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
     newSessionButton.disabled=newTask.disabled=!workAccess||(!window.nativeSession?.active()&&busy)||sending||Boolean(sessionCreating)||Boolean(pendingSubmission);
@@ -1909,18 +1909,23 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
+      // A new prompt never cancels a running Native model. Stop is explicit.
+      if(['submitted','waiting_approval'].includes(activeSession?.execution_status)){
+        submissionStatus.textContent=tr('OpenCode is processing this conversation. Wait or press Stop.','OpenCode يعالج هذه المحادثة. انتظر أو اضغط إيقاف صراحة.');
+        return;
+      }
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
-      try{if(!activeSession)await createSession({checked:false});
+      try{await refreshEntitlement();if(!workAccess)return;if(!activeSession)await createSession({checked:true});
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
         const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type}));
         await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});sentAttachments({attachments:nativeFiles});draft.confirm();
         submissionStatus.textContent=tr('Accepted by native OpenCode','قبله OpenCode الأصلي');
-        // Native SSE handles replies and status; no post-submit polling.
+        // OpenCode SSE owns reply presentation. No blocking Gateway history
+        // or status request after the Native prompt receipt.
       }catch(error){toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
     }
-    // LIVE is Native-only: never silently route a chat to Python's legacy
-    // queue or message execution when the OpenCode transport is unavailable.
-    if(location.hostname==='opencode-gateway.codes'){
+    // LIVE must not silently fall back to the legacy Python AI queue if Native is unavailable.
+    if(location.hostname==='opencode-gateway.codes'&&!window.nativeSession?.active()){
       submissionStatus.textContent=tr('OpenCode Native is unavailable. Nothing was sent.','اتصال OpenCode الأصلي غير متاح. لم تُرسل الرسالة.');
       toast(submissionStatus.textContent);
       return;
@@ -2070,15 +2075,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const [plans]=await Promise.all([api('/api/plans',{cache:'no-store'})]);
     const plan=plans.find(p=>p.id===planId);if(!plan)return toast(tr('Plan unavailable','الخطة غير متاحة'));
     const methods=await api('/api/billing/available-methods?plan_id='+encodeURIComponent(planId)+'&include_unavailable=true');
-    const stripeStatus=await api('/api/billing/stripe/status',{cache:'no-store'}).catch(()=>null);
-    methods.push({id:'stripe-test',kind:'stripe',label:'Stripe',
-      available:!!stripeStatus?.test_checkout_available,
-      available_reason:stripeStatus?.test_checkout_available?null:
-        (stripeStatus?.environment==='test'?'stripe_test_keys_incomplete':'stripe_test_not_configured'),
-      details:{checkout_mode:'stripe_test'}
-    });
-    // PayPal customer checkout is paused; retain saved payment records and merchant settings.
-    const reasonCopy={provider_not_connected:tr('Provider is not connected','المزود غير متصل'),processor_not_connected:tr('Payment processor is not connected','معالج الدفع غير متصل'),details_not_configured:tr('Receiving details are not configured','بيانات الاستلام غير مهيأة'),stripe_test_keys_incomplete:tr('Stripe test keys are incomplete','مفاتيح Stripe التجريبية غير مكتملة'),stripe_test_not_configured:tr('Stripe test mode is not configured','لم تتم تهيئة Stripe بوضع الاختبار')};const PAY_ICONS={paypal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5.8h5.9c2 0 3.3 1.2 3.1 3-.3 2.3-2.1 3.8-4.4 3.8H9.4L8.4 18h-2.6l1-6.4H5L7 5.8Z"/><path d="m12.6 8.6 1.4 1.2c1.8-1.2 4-.3 4.5 1.9.5 2.3-1.2 4.2-3.4 4.2h-1.7l-.5 3.1h-2.4l1.2-7.4h1.6"/></svg>',googlepay:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12a7 7 0 1 1-2.1-4.9"/><path d="M18.2 7.5H11.6"/><path d="M19.6 8.2 17 11.2"/></svg>',binance:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M12 3.5 19.5 7.8v8.4L12 20.5l-7.5-4.3V7.8L12 3.5Z"/><path d="M12 8.8 15 10.5v3L12 15.2 9 13.5v-3l3-1.7Z"/><path d="M9.5 8.5h5"/></svg>',bank:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M3 10h18M5 10l7-6 7 6M6.5 14h1.8v3.5H6.5Zm4.6 0h1.8v3.5h-1.8Zm4.6 0h1.8v3.5h-1.8Z"/></svg>',wallet:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a1 1 0 0 0-1-1h-4m-6-5h6"/></svg>'};PAY_ICONS.stripe=PAY_ICONS.googlepay;const payIcon=kind=>{const s=document.createElement('span');s.className='pay-icon';s.setAttribute('aria-hidden','true');s.innerHTML=PAY_ICONS[kind]||PAY_ICONS.wallet;return s;};
+    if(!methods.some(m=>m.details.checkout_mode==='paypal'))methods.push({id:'unavailable-paypal',kind:'paypal',label:'PayPal',available:false,details:{checkout_mode:'paypal'}});
+    const reasonCopy={provider_not_connected:tr('Provider is not connected','المزود غير متصل'),processor_not_connected:tr('Payment processor is not connected','معالج الدفع غير متصل'),details_not_configured:tr('Receiving details are not configured','بيانات الاستلام غير مهيأة')};const PAY_ICONS={paypal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5.8h5.9c2 0 3.3 1.2 3.1 3-.3 2.3-2.1 3.8-4.4 3.8H9.4L8.4 18h-2.6l1-6.4H5L7 5.8Z"/><path d="m12.6 8.6 1.4 1.2c1.8-1.2 4-.3 4.5 1.9.5 2.3-1.2 4.2-3.4 4.2h-1.7l-.5 3.1h-2.4l1.2-7.4h1.6"/></svg>',googlepay:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12a7 7 0 1 1-2.1-4.9"/><path d="M18.2 7.5H11.6"/><path d="M19.6 8.2 17 11.2"/></svg>',binance:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M12 3.5 19.5 7.8v8.4L12 20.5l-7.5-4.3V7.8L12 3.5Z"/><path d="M12 8.8 15 10.5v3L12 15.2 9 13.5v-3l3-1.7Z"/><path d="M9.5 8.5h5"/></svg>',bank:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M3 10h18M5 10l7-6 7 6M6.5 14h1.8v3.5H6.5Zm4.6 0h1.8v3.5h-1.8Zm4.6 0h1.8v3.5h-1.8Z"/></svg>',wallet:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a1 1 0 0 0-1-1h-4m-6-5h6"/></svg>'};const payIcon=kind=>{const s=document.createElement('span');s.className='pay-icon';s.setAttribute('aria-hidden','true');s.innerHTML=PAY_ICONS[kind]||PAY_ICONS.wallet;return s;};
     const dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog checkout-dialog';dialog.setAttribute('aria-label',tr('Subscription checkout','دفع الاشتراك'));
     dialog.append(title('Subscribe / Payment','الاشتراك / الدفع'),btn('checkoutClose','Close','إغلاق',()=>dialog.close()));
     const choices=textElement('div','','checkout-plans');for(const p of plans.filter(p=>p.active!==false)){
@@ -2089,63 +2087,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const select=document.createElement('select');select.id='checkoutMethod';select.hidden=true;
     const noteWrap=text('label','Billing note (optional)','ملاحظة دفع (اختياري)');noteWrap.htmlFor='checkoutNote';const noteInput=document.createElement('input');noteInput.id='checkoutNote';noteInput.maxLength=500;noteInput.autocomplete='off';noteWrap.append(noteInput);
     const rows=textElement('fieldset','','checkout-methods');rows.append(text('legend','Payment method','وسيلة الدفع'));
-    for(const method of methods){select.add(new Option(method.label,method.id));const label=textElement('label','','checkout-method');const radio=document.createElement('input');radio.type='radio';radio.name='payment-method';radio.value=method.id;radio.checked=method.id===(methodId||methods[0]?.id);const cardName=textElement('strong',method.label);cardName.prepend(payIcon(method.kind));const baseSub=method.details.checkout_mode==='stripe_test'?tr('Secure card checkout · testing environment','دفع آمن بالبطاقة · بيئة اختبار'):method.details.checkout_mode==='paypal'?tr('PayPal · official checkout · card / PayPal account','PayPal · دفع رسمي · بطاقة / حساب PayPal'):method.details.checkout_mode==='link'?(method.kind==='googlepay'?tr('Google Pay · hosted by your payment processor','Google Pay · عبر مزوّد الدفع'):tr('Secure hosted checkout','دفع عبر صفحة مزود الدفع')):(method.kind==='binance'?tr('Binance Pay · USDT transfer','Binance Pay · تحويل USDT'):(method.kind==='bank'?tr('Bank transfer','تحويل بنكي'):tr('Wallet transfer','تحويل محفظة')));const copy=textElement('span');copy.append(cardName,textElement('small',method.available?baseSub:tr('Not connected','غير متصل')+' · '+(reasonCopy[method.available_reason]||'')));label.append(radio,copy);rows.append(label);radio.onchange=()=>{select.value=radio.value;};}
+    for(const method of methods){select.add(new Option(method.label,method.id));const label=textElement('label','','checkout-method');const radio=document.createElement('input');radio.type='radio';radio.name='payment-method';radio.value=method.id;radio.checked=method.id===(methodId||methods[0]?.id);const cardName=textElement('strong',method.label);cardName.prepend(payIcon(method.kind));const baseSub=method.details.checkout_mode==='paypal'?tr('PayPal · official checkout · card / PayPal account','PayPal · دفع رسمي · بطاقة / حساب PayPal'):method.details.checkout_mode==='link'?(method.kind==='googlepay'?tr('Google Pay · hosted by your payment processor','Google Pay · عبر مزوّد الدفع'):tr('Secure hosted checkout','دفع عبر صفحة مزود الدفع')):(method.kind==='binance'?tr('Binance Pay · USDT transfer','Binance Pay · تحويل USDT'):(method.kind==='bank'?tr('Bank transfer','تحويل بنكي'):tr('Wallet transfer','تحويل محفظة')));const copy=textElement('span');copy.append(cardName,textElement('small',method.available?baseSub:tr('Not connected','غير متصل')+' · '+(reasonCopy[method.available_reason]||'')));label.append(radio,copy);rows.append(label);radio.onchange=()=>{select.value=radio.value;};}
     if(methodId&&methods.some(m=>m.id===methodId))select.value=methodId;
     const body=textElement('section','','checkout-receipt');body.setAttribute('aria-live','polite');
-    const showError=error=>{let status=body.querySelector('.checkout-error');if(!status){status=textElement('p','','api-message show error checkout-error');status.setAttribute('role','alert');body.prepend(status);}const raw=error?.message??error?.detail??error;
-      const detail=typeof raw==='string'?raw:(raw&&typeof raw==='object'
-        ?[raw.provider_code,raw.http_status&&('HTTP '+raw.http_status),raw.message].filter(Boolean).join(' · ')||tr('The payment provider rejected the request.','رفض مزود الدفع الطلب.')
-        :String(raw||tr('Payment failed.','فشل الدفع.')));
-      status.textContent=detail==='[object Object]'?tr('The payment request was rejected. Please check the server logs.','تم رفض طلب الدفع. يرجى فحص سجل الخادم.'):detail;};
+    const showError=error=>{let status=body.querySelector('.checkout-error');if(!status){status=textElement('p','','api-message show error checkout-error');status.setAttribute('role','alert');body.prepend(status);}status.textContent=error.message||String(error);};
     const renderProviderForm=method=>{
       const dl=document.createElement('dl');dl.className='checkout-details';
       for(const [label,value] of [[tr('Plan','الخطة'),plan.name],[tr('Amount','المبلغ'),(plan.price_cents/100).toFixed(2)],[tr('Currency','العملة'),plan.currency]]){dl.append(textElement('dt',label),textElement('dd',String(value)));}
       body.replaceChildren(dl);const phead=textElement('strong',method.label);phead.prepend(payIcon(method.kind));body.prepend(phead);
-      if(method.details.checkout_mode==='stripe_test'){
-        body.append(text('p','Enter your card details securely in the Stripe form below. No billing address is collected by Gateway.','أدخل بيانات البطاقة بأمان في نموذج Stripe أدناه. لا تجمع المنصة عنوان الفوترة.','checkout-lead'));
-        body.append(text('p',
-          'Paid subscriptions are non-refundable after confirmed payment, except where applicable law requires otherwise. Access activates automatically once the payment is verified by the server. Stripe test payments do not activate real subscriptions.',
-          'الاشتراكات المدفوعة غير قابلة للاسترداد بعد تأكيد الدفع، إلا في الحالات التي يفرضها القانون. يُفعّل الاشتراك تلقائيًا بعد تحقق الخادم من الدفع. المدفوعات التجريبية عبر Stripe لا تفعّل اشتراكًا حقيقيًا.',
-          'refund-policy'));
-        const stripeHost=document.createElement('div');
-        stripeHost.className='stripe-embedded-checkout';
-        stripeHost.setAttribute('aria-label',tr('Secure Stripe card payment','الدفع الآمن عبر Stripe'));
-        const stripeButton=btn('stripeCheckout','Show secure card form','عرض نموذج البطاقة الآمن',async()=>{
-          stripeButton.disabled=true;
-          stripeButton.textContent=tr('Loading secure card form…','جارٍ تحميل نموذج البطاقة الآمن…');
-          body.querySelector('.checkout-error')?.remove();
-          try{
-            const result=await api('/api/billing/stripe/embedded-test-checkout',{method:'POST',body:JSON.stringify({plan_id:planId})});
-            if(!result.client_secret||!result.publishable_key)throw new Error(tr('Stripe did not provide a payment form','لم يوفر Stripe نموذج الدفع'));
-            if(!window.Stripe){
-              await new Promise((resolve,reject)=>{
-                const script=document.createElement('script');
-                script.src='https://js.stripe.com/v3/';
-                script.async=true;
-                script.onload=resolve;
-                script.onerror=()=>reject(new Error(tr('Could not load the secure Stripe form','تعذر تحميل نموذج Stripe الآمن')));
-                document.head.append(script);
-              });
-            }
-            if(typeof window.Stripe!=='function')throw new Error(tr('Stripe form is unavailable','نموذج Stripe غير متاح'));
-            const stripe=window.Stripe(result.publishable_key);
-            const checkout=await stripe.initEmbeddedCheckout({clientSecret:result.client_secret});
-            if(!stripeHost.isConnected){checkout.destroy();return;}
-            checkout.mount(stripeHost);
-            stripeButton.hidden=true;
-          }catch(error){showError(error);stripeButton.disabled=false;stripeButton.textContent=tr('Retry secure card form','إعادة محاولة عرض نموذج البطاقة');}
-        });
-        stripeButton.classList.add('checkout-hosted-link');
-        stripeButton.disabled=!method.available;
-        stripeHost.style.minHeight='320px';
-        body.append(stripeButton,stripeHost);
-        if(!method.available)body.append(text('p','Stripe test API credentials must be configured before payment.','يجب ضبط مفاتيح Stripe التجريبية قبل بدء الدفع.','checkout-lead'));
-        else {
-          stripeButton.textContent=tr('Loading secure card form…','جارٍ تحميل نموذج البطاقة الآمن…');
-          stripeButton.click();
-        }
-        return;
-      }
       const pfield=(labelText,id,type,extra)=>{const wrap=text('label',labelText,labelText);wrap.htmlFor=id;const inp=document.createElement('input');inp.id=id;inp.type=type;inp.required=true;Object.assign(inp,extra||{});wrap.append(inp);body.append(wrap);return inp;};
       const payerName=pfield(tr('Your full name','اسمك الكامل'),'payerName','text',{maxLength:150,autocomplete:'name',value:(currentUser||window.reactivationAccount)?.username||''});
       const payerEmail=pfield(tr('Your email','بريدك الإلكتروني'),'payerEmail','email',{maxLength:254,autocomplete:'email',value:(currentUser||window.reactivationAccount)?.email||''});
@@ -2157,7 +2106,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         try{const account=currentUser||window.reactivationAccount;if(!payerCountry.value)return;const regions=await api('/api/locations/countries/'+payerCountry.value+'/regions');if(revision!==locationRevision||!body.contains(payerCountry))return;fillLocation(payerRegion,regions,prefill?account?.region:null);if(payerRegion.value){const cities=await api('/api/locations/regions/'+payerRegion.value+'/cities');if(revision===locationRevision&&body.contains(payerCountry))fillLocation(payerCity,cities,prefill?account?.city:null);}else payerCity.parentElement.hidden=true;
         }catch(error){showError(error);}finally{if(revision===locationRevision)go2.disabled=false;}};
       payerCountry.onchange=()=>loadChildren();payerRegion.onchange=async()=>{const revision=++locationRevision;go2.disabled=true;payerCity.replaceChildren(new Option(tr('Select','اختر'),''));payerCity.disabled=true;payerCity.required=false;try{if(payerRegion.value){const cities=await api('/api/locations/regions/'+payerRegion.value+'/cities');if(revision===locationRevision&&body.contains(payerCountry))fillLocation(payerCity,cities,null);}else payerCity.parentElement.hidden=true;}catch(error){showError(error);}finally{if(revision===locationRevision)go2.disabled=false;}};
-      const go2=textElement('button',method.kind==='stripe'?tr('Pay with Stripe','الدفع عبر Stripe'):method.kind==='googlepay'?tr('Pay with Google Pay','الدفع عبر Google Pay'):method.kind==='paypal'?tr('Pay with PayPal','الدفع عبر PayPal'):tr('Pay directly through bank / card','الدفع المباشر عبر البنك / البطاقة'),'button checkout-hosted-link');go2.type='button';
+      const go2=textElement('button',method.kind==='googlepay'?tr('Pay with Google Pay','الدفع عبر Google Pay'):method.kind==='paypal'?tr('Pay with PayPal','الدفع عبر PayPal'):tr('Pay directly through bank / card','الدفع المباشر عبر البنك / البطاقة'),'button checkout-hosted-link');go2.type='button';
       if(!method.available)body.append(text('p','This payment method is currently unavailable. Choose another method or contact support.','وسيلة الدفع هذه غير متاحة حاليًا. اختر وسيلة أخرى أو تواصل مع الدعم.','checkout-lead'));
       body.append(go2);go2.disabled=true;
       (async()=>{try{const countries=await api('/api/locations/countries');if(!body.contains(payerCountry))return;fillLocation(payerCountry,countries,(currentUser||window.reactivationAccount)?.country,true);payerCountry.parentElement.hidden=false;payerCountry.required=true;if(!countries.length)throw new Error(tr('No countries are configured. Contact administration.','لا توجد دول مهيأة. تواصل مع الإدارة.'));await loadChildren(true);}catch(error){showError(error);go2.disabled=true;}})();
@@ -2166,16 +2115,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const createProviderOrder=async()=>{body.querySelector('.checkout-error')?.remove();if(!method.available)throw new Error(tr('Could not connect to PayPal. No payment was made.','تعذر الربط مع PayPal. لم يتم خصم أي مبلغ.'));const result=await api('/api/billing/checkout',{method:'POST',body:JSON.stringify({plan_id:planId,method_id:method.id,billing_note:noteInput.value.trim(),payer_name:payerName.value.trim(),payer_email:payerEmail.value.trim(),country_id:Number(payerCountry.value),region_id:payerRegion.value?Number(payerRegion.value):null,city_id:payerCity.value?Number(payerCity.value):null})});latestOrder=result.order;confirmButton.hidden=!latestOrder?.provider_order_id;return result;};
       const confirmOrder=async(providerId)=>{if(!latestOrder?.id||providerId&&providerId!==latestOrder.provider_order_id)throw new Error(tr('Payment order does not match. Refresh checkout.','طلب الدفع غير مطابق. أعد فتح الدفع.'));const verified=await api('/api/billing/orders/'+latestOrder.id+'/paypal/capture',{method:'POST'});dialog.close();await refreshCustomerBilling();toast(verified.status==='sandbox_paid'?tr('Sandbox payment verified. Real subscription unchanged.','تم التحقق من الدفع التجريبي دون تفعيل اشتراك حقيقي.'):tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));};
       const confirmButton=btn('confirmPayPalPayment','Confirm PayPal payment','تأكيد دفع PayPal',()=>confirmOrder());confirmButton.hidden=true;body.append(confirmButton);
-      go2.onclick=async()=>{if(!validPayer())return;
-        if(method.details.checkout_mode==='stripe_test'){
-          go2.disabled=true;
-          try{
-            const result=await api('/api/billing/stripe/test-checkout',{method:'POST',body:JSON.stringify({plan_id:planId})});
-            if(!result.checkout_url)throw new Error(tr('Stripe did not return a checkout page','لم يُعد Stripe صفحة دفع'));
-            window.location.assign(result.checkout_url);
-          }catch(error){showError(error);go2.disabled=false;}
-          return;
-        }if(!method.available){showError(new Error(method.kind==='paypal'?tr('Could not connect to PayPal. No payment was made.','تعذر الربط مع PayPal. لم يتم خصم أي مبلغ.'):tr('Could not connect to the bank or payment processor. No payment was made.','تعذر الربط مع البنك أو مزوّد الدفع. لم يتم خصم أي مبلغ.')));return;}go2.disabled=true;try{const result=await createProviderOrder();if(result.automatic_processing&&result.approval_url)window.location.assign(result.approval_url);else if(result.payment_url){const link=textElement('a',tr('Open the payment provider page','فتح صفحة مزود الدفع'),'button checkout-hosted-link');link.href=result.payment_url;link.target='_blank';link.rel='noopener noreferrer';body.append(link);}}catch(error){showError(error);}finally{go2.disabled=false;}};
+      go2.onclick=async()=>{if(!validPayer())return;if(!method.available){showError(new Error(method.kind==='paypal'?tr('Could not connect to PayPal. No payment was made.','تعذر الربط مع PayPal. لم يتم خصم أي مبلغ.'):tr('Could not connect to the bank or payment processor. No payment was made.','تعذر الربط مع البنك أو مزوّد الدفع. لم يتم خصم أي مبلغ.')));return;}go2.disabled=true;try{const result=await createProviderOrder();if(result.automatic_processing&&result.approval_url)window.location.assign(result.approval_url);else if(result.payment_url){const link=textElement('a',tr('Open the payment provider page','فتح صفحة مزود الدفع'),'button checkout-hosted-link');link.href=result.payment_url;link.target='_blank';link.rel='noopener noreferrer';body.append(link);}}catch(error){showError(error);}finally{go2.disabled=false;}};
       if(method.details.checkout_mode==='paypal'){
         const host=textElement('div');host.id='paypalButtonHost';host.setAttribute('aria-label','PayPal');body.append(host);
         (async()=>{try{const status=await api('/api/billing/paypal/status');if(!body.contains(host))return;if(!status.client_id){host.append(text('p','The official PayPal form could not load because payment setup is incomplete.','تعذر تحميل نموذج PayPal الرسمي لأن إعداد الدفع غير مكتمل.','checkout-lead'));return;}
@@ -2217,33 +2157,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const method=methods.find(m=>m.id===select.value);
       if(!method){toast(tr('Choose a payment method first.','اختر وسيلة الدفع أولاً.'));return;}
       rows.hidden=true;choices.hidden=true;go.hidden=true;noteWrap.hidden=true;
-      if(['paypal','link','stripe_test'].includes(method.details.checkout_mode))renderProviderForm(method);
+      if(method.details.checkout_mode==='paypal'||method.details.checkout_mode==='link')renderProviderForm(method);
       else renderManualForm(method);
     });go.disabled=!methods.length;
     if(!methods.length)dialog.append(text('p','No payment method is configured for this plan yet.','لم تُعدّ وسيلة دفع لهذه الخطة بعد.'));
     dialog.append(rows,select,noteWrap,go,body,textElement('small',tr('Payment for: ','الدفع لحساب: ')+(currentUser||window.reactivationAccount).email),text('p','Accepted payments cannot be cancelled or refunded.','المدفوعات المقبولة غير قابلة للإلغاء أو الاسترداد.','refund-policy'));
     document.body.append(dialog);dialog.onclose=()=>dialog.remove();dialog.showModal();
   }
-  authReady.then(async()=>{
-    const params=new URLSearchParams(location.search);
-    const returned=params.get('stripe_diagnostic');
-    const session=params.get('session_id');
-    if(!returned)return;
-    history.replaceState(null,'',location.pathname+location.hash);
-    if(returned==='cancel'){toast(tr('Stripe test checkout cancelled; no subscription changed.','تم إلغاء اختبار Stripe ولم يتغير الاشتراك.'));return;}
-    if(!session){toast(tr('Stripe session ID missing.','معرّف جلسة Stripe مفقود.'));return;}
-    if(!currentUser&&!window.reactivationAccount){
-      toast(tr('Sign in to check the Stripe test result.','سجّل الدخول لفحص نتيجة دفع Stripe التجريبي.'));
-      return;
-    }
-    try{
-      const r=await api('/api/billing/stripe/test-checkout/'+encodeURIComponent(session));
-      const result=r.payment_status==='paid'?tr('Stripe confirmed TEST payment. No real subscription activated.','أكد Stripe نجاح الدفع التجريبي، ولم يُفعّل اشتراك حقيقي.'):
-        tr('Stripe test status: ','حالة اختبار Stripe: ')+(r.payment_status||r.status||'unknown');
-      toast(result);
-      await loadPaymentOrders();
-    }catch(e){toast(tr('Could not verify Stripe test result: ','تعذر التحقق من Stripe: ')+e.message);}
-  }).catch(()=>{});
   window.beginCheckout=beginCheckout;
   authReady.then(async()=>{const params=new URLSearchParams(location.search);const ret=params.get('payment_return'),cancel=params.get('payment_cancel');if(!ret&&!cancel)return;history.replaceState(null,'',location.pathname+location.hash);if(window.reactivationAccount){await window.loadManagement();await window.openReactivation();}else if(!currentUser){page('authPage');return;}else await window.openClientView('billing');try{await loadPaymentOrders()}catch(error){toast(error.message)}if(cancel){try{await api('/api/billing/orders/'+encodeURIComponent(cancel)+'/cancel',{method:'POST'});await loadPaymentOrders();toast(tr('Unaccepted payment request cancelled.','تم إلغاء طلب الدفع قبل قبوله.'));}catch(error){toast(error.message);}return}try{const order=await api('/api/billing/orders/'+encodeURIComponent(ret));const status=order&&order.status;if(status==='paid')toast(tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));else if(status==='sandbox_paid')toast(tr('Sandbox payment recorded. Real subscription unchanged.','سُجل الدفع التجريبي دون تفعيل اشتراك حقيقي.'));else if(status)toast(tr('Payment is pending verification. Press Confirm PayPal payment in Payment orders.','الدفع بانتظار التحقق. اضغط تأكيد دفع PayPal في طلبات الدفع.'));else toast(tr('Returned from PayPal. Confirm your payment in Payment orders.','عدت من PayPal. أكد الدفع من طلبات الدفع.'))}catch(error){toast(error.message)}}).catch(error=>toast(error.message));
   setInterval(async()=>{if(!currentUser||admin()||!document.querySelector('#workspacePage.active,#workspaceHomePage.active'))return;try{await refreshEntitlement();}catch(error){toast(error.message);}},30000);

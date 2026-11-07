@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import ExecutionEvent, Project, ProviderCredential, User, UserProviderCredential, Workspace, WorkspaceSession
-from ..services import credentials, github, opencode, opencode_catalog, policy, providers, runtime_snapshot, preview, session_lifecycle
+from ..services import credentials, github, policy, providers, runtime_snapshot, preview, session_lifecycle
+from ..services import native_control_bridge as opencode
 from ..services import workspaces as manager
 from ..services import user_provider_credentials
 from ..services import account_provider_sync
@@ -99,9 +100,18 @@ def _account_public_catalog(user, path, db, *, agents=False,full=False):
         native_sessions.admit(user)
         if not agents:return native_provider_accounts.catalog(db,user,full=full)
         return [{k:r[k] for k in ('name','mode','hidden') if k in r} for r in native_sessions.metadata('GET','/agent',native_provider_accounts.root(user)) if isinstance(r,dict)]
-    account, service = opencode.for_account(user.id, db=db)
-    with opencode.workspace_lock(account), service.state_lock:
-        return opencode_catalog.public_catalog(path, agents=agents, service=service)
+    raise HTTPException(410,"Legacy Python catalog removed; use OpenCode Native discovery")
+
+
+@router.get("/opencode/display-policy")
+def account_provider_display_policy(user: User=Depends(require_user),db: Session=Depends(get_db)):
+    """Expose only admin display settings; OpenCode remains provider/model registry.
+
+    This control-plane metadata has no credentials or full Native model catalog.
+    """
+    rules=policy.load(db).as_payload()
+    return {key:rules[key] for key in (
+        "allowed_providers","hidden_providers","allowed_models","hidden_models","updated_at")}
 
 
 @router.get("/opencode/catalog/providers")
@@ -114,7 +124,10 @@ def account_provider_catalog(user: User=Depends(require_user),db: Session=Depend
 def account_provider_page(offset: int=Query(default=0,ge=0),limit: int=Query(default=50,ge=1,le=50),
                           query: str=Query(default='',max_length=200),
                           user: User=Depends(require_user),db: Session=Depends(get_db)):
-    data=_account_catalog_state(db,user,_account_public_catalog(user,"/provider",db,full=True))
+    # The default account picker needs only the first 50 Native providers
+    # plus connected entries. Keep full Native lookup for searches and pages.
+    data=_account_catalog_state(db,user,_account_public_catalog(user,"/provider",db,
+        full=bool(offset or query.strip())))
     return providers.catalog_page(data,policy.load(db),offset=offset,limit=limit,query=query)
 
 
@@ -163,7 +176,7 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
         native_sessions.admit(user)
         data=native_provider_accounts.catalog(db,user,full=True)
         providers.resolve_provider(data,provider_id)
-        return {'provider_id':provider_id,'auth_methods':native_provider_accounts.methods(user,provider_id),'models':providers.model_details(data,provider_id,policy.load(db))['models'],'native':True,'credential_storage_ready':credentials.available(),'credential_storage_reason':None if credentials.available() else 'Secure account credential storage is not configured on this server; this is not a provider API-key rejection'}
+        return {'provider_id':provider_id,'auth_methods':native_provider_accounts.methods(user,provider_id,catalog=data),'models':providers.model_details(data,provider_id,policy.load(db))['models'],'native':True,'credential_storage_ready':True,'credential_storage_reason':None}
     if not 0 < len(provider_id) <= 120:
         raise HTTPException(422, "Invalid provider identifier")
     if not policy.provider_allowed(policy.load(db), provider_id):
@@ -194,11 +207,14 @@ def account_provider_options(provider_id: str,user: User=Depends(require_user),d
 @router.post("/opencode/connections/{provider_id}/credentials")
 def connect_account_provider(provider_id: str,data: ApiKeyCredential,
                              user: User=Depends(require_user),db: Session=Depends(get_db)):
-    """Validate a key without any project and store one credential per account."""
+    """Legacy account API-key storage. TEST uses OpenCode /auth directly."""
     if native_sessions.enabled():
-        native_sessions.admit(user);require_advanced(db,user)
-        result=native_provider_accounts.connect(db,user,provider_id,data)
-        require_advanced(db,user,start=True);db.commit();return result
+        # Fail closed: OpenCode PUT /auth only proves storage, not that the key
+        # is valid. TEST's direct Native flow must perform the real model
+        # round-trip and roll back a failed key before exposing "connected".
+        # Never save or mark verified:false credentials through this fallback.
+        native_sessions.admit(user)
+        raise HTTPException(409,'API key verification must complete through OpenCode Native before connecting; unverified credential was not saved')
     user_provider_credentials.require_schema(db)
     require_advanced(db,user)
     if not 0 < len(provider_id) <= 120:
