@@ -404,11 +404,18 @@ def authorize_native(workspace_id,resource,request,user,db,raw):
 
 def _authorize_native(workspace_id,resource,request,user,db,raw):
     if any(k.lower() in {'x-native-uri','x-accel-redirect','x-opencode-directory','x-native-upstream'} for k in request.headers):raise HTTPException(403,'Caller routing headers are not allowed')
-    if request.query_params:raise HTTPException(403,'Caller routing parameters are not allowed')
+    file_read=request.method=='GET' and resource in {'file','file/content','file/status','vcs'}
+    if request.query_params and not file_read:
+        raise HTTPException(403,'Caller routing parameters are not allowed')
+    if file_read and (set(request.query_params)-{'path'} or len(request.query_params)>1):
+        raise HTTPException(403,'Unsupported Native file query')
     write=request.method=='POST'
     if write and request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
     workspace,root,_,_=context(db,user,workspace_id)
     discovery=request.method=='GET' and resource in {'provider','agent'}
+    # Discovery is an authenticated, workspace-scoped control-plane response.
+    # Native is the source for provider/model definitions; only safe metadata
+    # is returned. Python does not perform inference or forward model prompts.
     if discovery:
         # Provider definitions contain an optional plaintext key and options.
         # This is management metadata, not an AI response. Never transport it
@@ -419,6 +426,22 @@ def _authorize_native(workspace_id,resource,request,user,db,raw):
         else:
             data=[{k:r[k] for k in ('name','mode','hidden','description') if k in r} for r in metadata('GET','/agent',root) if isinstance(r,dict)]
         return JSONResponse(data,headers={'Cache-Control':'no-store'})
+    if file_read:
+        # The body goes Nginx -> OpenCode /file*, never through Python.
+        # Gateway checks only project ownership and safe relative paths.
+        relative=request.query_params.get('path','')
+        if resource in {'file/status','vcs'}:
+            if relative:raise HTTPException(422,'Native status has no path parameter')
+        else:
+            if len(relative)>1000:raise HTTPException(422,'Invalid file path')
+            target=workspaces.safe_path(workspace,relative)
+            if resource=='file' and not target.is_dir():raise HTTPException(404,'Directory unavailable')
+            if resource=='file/content' and not target.is_file():raise HTTPException(404,'File unavailable')
+        params={'directory':str(root)}
+        if resource not in {'file/status','vcs'}:params['path']=relative
+        return Response(headers={'X-Accel-Redirect':'@native_session_'+deployment(),
+            'X-Native-URI':'/'+resource+'?'+urlencode(params),
+            'Cache-Control':'no-store'})
     match=re.fullmatch(r'session/('+ID+r')(?:/(message|todo|diff|prompt_async|abort))?',resource)
     if resource=='session/status':match=None
     if not discovery and resource not in {'event','permission','question','session/status'} and not match and not re.fullmatch(r'(permission|question)/'+ID+r'/(reply|reject)',resource):

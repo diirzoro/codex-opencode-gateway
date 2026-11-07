@@ -240,7 +240,8 @@ class CopyDecision(BaseModel):
 @router.post('/disconnect/workspaces/{workspace_id}')
 def disconnect_copy(workspace_id: uuid.UUID,body: CopyDecision,
                     user: User=Depends(require_user),db: Session=Depends(get_db)):
-    from ..services import workspaces,opencode,workspace_cache
+    from ..services import workspaces,workspace_cache
+    from ..services import native_control_bridge as opencode
     from . import workspaces as git_routes
     row,connection=_disconnect_copy(db,user,workspace_id)
     if connection.id!=body.connection_id:raise HTTPException(409,'Connection changed; review again')
