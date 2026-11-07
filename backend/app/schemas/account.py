@@ -3,11 +3,13 @@ import string
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 class RegisterRequest(BaseModel):
-    username: str = Field(min_length=6, max_length=50, pattern=r"^[A-Za-z0-9_.-]+$")
+    # Explicit Google-signup completion; stale OAuth cookies never change password registration.
+    social_signup: bool = False
+    username: str | None = Field(None, min_length=6, max_length=50, pattern=r"^[A-Za-z0-9_.-]+$")
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     phone: str = Field(min_length=6, max_length=30)
-    postal_code: str | None = Field(None, min_length=2, max_length=24)
+    postal_code: str = Field(min_length=2, max_length=24)
     country_id: int | None = None
     region_id: int | None = None
     city_id: int | None = None
@@ -48,8 +50,8 @@ class UserOut(BaseModel):
     username: str
     email: str
     phone: str
-    postal_code: str | None = None
-    country: str | None = None
+    postal_code: str
+    country: str | None
     region: str | None
     city: str | None
     role: str

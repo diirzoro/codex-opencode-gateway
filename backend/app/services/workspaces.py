@@ -1,11 +1,11 @@
 """Owned filesystem and Git operations; no shell strings or client local paths."""
 from pathlib import Path, PureWindowsPath
 from datetime import datetime, timezone
-import base64, difflib, os, re, subprocess, uuid, time, tempfile, zipfile
+import base64, difflib, os, re, stat, subprocess, uuid, time, tempfile, zipfile
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_, exists
 from ..config import settings
-from ..models import Project, Workspace
+from ..models import Project, Workspace, GithubConnection
 
 TEMPLATES = {
     "html": {"index.html": "<!doctype html>\n<html lang=\"en\"><meta charset=\"utf-8\"><title>New project</title><link rel=\"stylesheet\" href=\"styles.css\"><h1>New project</h1><script src=\"app.js\"></script></html>\n", "styles.css": "body { font-family: system-ui; margin: 3rem; }\n", "app.js": "'use strict';\n"},
@@ -16,15 +16,45 @@ TEMPLATES = {
 _FULL_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
 
+def github_project_attached(db, user_id, project):
+    """An imported/published GitHub workspace is usable ONLY with its owner
+    connection and original authorized installation. Never delete its files
+    merely because OAuth was revoked; reauthorization can restore access.
+    """
+    # A local project stays local even when its owner has previously
+    # published it to a GitHub remote; unlinking GitHub cannot lock it.
+    if project.source_type != 'github':
+        return True
+    if project.github_installation_id is None:
+        return False
+    return db.scalar(select(GithubConnection.id).where(
+        GithubConnection.user_id == user_id,
+        GithubConnection.installation_id == project.github_installation_id,
+        GithubConnection.suspended.is_(False))) is not None
+
+
+def visible_project_predicate(user_id):
+    connected = exists(select(GithubConnection.id).where(
+        GithubConnection.user_id == user_id,
+        GithubConnection.installation_id == Project.github_installation_id,
+        GithubConnection.suspended.is_(False)))
+    return or_(Project.source_type != 'github',
+               and_(Project.source_type == 'github',Project.github_installation_id.is_not(None),connected))
+
+
 def owned(db, model, identifier, user_id):
     row = db.scalar(select(model).where(model.id == identifier, model.user_id == user_id))
     if row is None:
         raise HTTPException(404, "Not found")
+    if model in (Project, Workspace):
+        project=row if model is Project else row.project
+        if not github_project_attached(db,user_id,project):
+            raise HTTPException(409, "GitHub project disconnected. Reauthorize the original GitHub account and installation to reopen this workspace; local files are preserved.")
     return row
 
 def root_for(workspace, *, allow_expired=False):
     if not allow_expired and workspace.status in {"cache_expiring", "cache_expired"}:
-        raise HTTPException(410, "Workspace files were cleaned under the inactivity policy. Account data and the original GitHub repository were not deleted.")
+        raise HTTPException(410, "Workspace working files are unavailable under the project storage policy. Account records and the original GitHub repository were not deleted.")
     base = settings.workspace_root.resolve()
     candidate = base / str(workspace.user_id) / str(workspace.id) / "repo"
     current = base
@@ -36,47 +66,140 @@ def root_for(workspace, *, allow_expired=False):
         raise HTTPException(403, "Unsafe workspace path")
     return candidate
 
-# Temporary workspace storage allowance for client projects (files, not database storage).
+# Unified owner-wide limit. Storage in GitHub.com is not part of this allowance.
+# Legacy constants are retained for consumers but do not define a second quota.
 WORKSPACE_QUOTA_BYTES = 50 * 1024 * 1024
-# Working materialization bound, distinct from the local-project product quota.
 GITHUB_WORKTREE_LIMIT_BYTES = 512 * 1024 * 1024
 
-def quota_bytes(workspace):
-    return GITHUB_WORKTREE_LIMIT_BYTES if workspace.project.source_type == "github" else WORKSPACE_QUOTA_BYTES
+def quota_bytes(workspace, db=None):
+    from .storage_policy import quota_mb, MIB
+    if db is not None:
+        return quota_mb(db, workspace.user_id) * MIB
+    from ..database import SessionLocal
+    with SessionLocal() as session:
+        return quota_mb(session, workspace.user_id) * MIB
 
-def usage_bytes(workspace):
+def usage_bytes(workspace, *, stop_at=None):
     if workspace.status in {"cache_expiring", "cache_expired"}:
         return 0
     root = root_for(workspace)
     if not root.is_dir():
         return 0
     total = 0
-    for item in root.rglob("*"):
-        try:
-            if item.is_file() and not item.is_symlink():
-                total += item.stat().st_size
-        except OSError:
-            continue
+    def failed(error):raise error
+    try:
+        if hasattr(os,'fwalk'):
+            # Descriptor-relative stat: never traverse symlink directories or
+            # follow a link substituted for a file during quota inspection.
+            for _,_,files,fd in os.fwalk(root,follow_symlinks=False,onerror=failed):
+                for name in files:
+                    try:info=os.stat(name,dir_fd=fd,follow_symlinks=False)
+                    except FileNotFoundError:continue  # File concurrently removed.
+                    if stat.S_ISREG(info.st_mode):total+=info.st_size
+                    if stop_at is not None and total>=stop_at:return total
+        else:
+            # Compatibility for non-POSIX development; production is Ubuntu.
+            for parent,_,files in os.walk(root,followlinks=False,onerror=failed):
+                for name in files:
+                    try:info=(Path(parent)/name).lstat()
+                    except FileNotFoundError:continue
+                    if stat.S_ISREG(info.st_mode):total+=info.st_size
+                    if stop_at is not None and total>=stop_at:return total
+    except OSError:
+        # Unknown usage must not admit another Native execution as under quota.
+        raise HTTPException(503,'Workspace storage inspection is unavailable; retry before continuing') from None
     return total
 
-def storage_payload(workspace):
-    from .workspace_cache import cache_payload
-    used = usage_bytes(workspace)
-    limit = quota_bytes(workspace)
-    remaining = max(0, limit - used)
-    return {"cache": cache_payload(workspace), "used_bytes": used, "limit_bytes": limit, "remaining_bytes": remaining,
-            "scope": "github_working_copy" if workspace.project.source_type == "github" else "local_project",
-            "used_mb": round(used / (1024 * 1024), 2), "limit_mb": limit // (1024 * 1024), "over_limit": used >= limit}
 
-def require_quota_headroom(workspace):
-    if usage_bytes(workspace) >= quota_bytes(workspace):
-        raise HTTPException(413, "Workspace storage limit reached. Export or safely resolve files before continuing.")
+def account_storage_parts(db,user_id,*,stop_at=None):
+    """Count regular on-disk files owned by this account, local + GitHub alike.
+
+    Count each Workspace's working files (including local .git metadata).
+    Never traverse another owner's path or follow a link.
+    """
+    local=github=0
+    rows=db.scalars(select(Workspace).join(Project,Project.id==Workspace.project_id).where(
+        Workspace.user_id==user_id,Project.user_id==user_id,
+        Workspace.status.not_in(['cache_expiring','cache_expired'])))
+    for row in rows:
+        remaining=None if stop_at is None else max(0,stop_at-local-github)
+        amount=usage_bytes(row,stop_at=remaining)
+        if row.project.source_type=='github':github+=amount
+        else:local+=amount
+        if stop_at is not None and local+github>=stop_at:break
+    return local,github
+
+
+def account_storage(db,user_id,*,stop_at=None):
+    return sum(account_storage_parts(db,user_id,stop_at=stop_at))
+
+
+def account_local_storage(db,user_id,*,stop_at=None):
+    """Compatibility helper returning local-only usage, not a second allowance."""
+    return account_storage_parts(db,user_id,stop_at=stop_at)[0]
+
+
+def account_local_storage_payload(db,user_id):
+    from .storage_policy import quota_mb, capacity_label, MIB
+    local,github=account_storage_parts(db,user_id)
+    used=local+github
+    limit_mb=quota_mb(db,user_id)
+    limit=limit_mb*MIB
+    return {'used_bytes':used,'limit_bytes':limit,'remaining_bytes':max(0,limit-used),
+            'used_mb':round(used/MIB,2),'limit_mb':limit_mb,
+            'local_used_mb':round(local/MIB,2),'github_used_mb':round(github/MIB,2),
+            'local_used_bytes':local,'github_used_bytes':github,
+            'over_limit':used>=limit,'percent_used':round(100*used/limit,1),
+            'plan_label':capacity_label(db,user_id),'scope':'account_all_projects',
+            'plan_disclaimer':'Gateway platform and workspace storage only. No AI model/API subscription or tokens; connect your own provider.'}
+
+
+def require_account_local_headroom(db,user_id,additional=0):
+    """Legacy call sites enforce the SAME shared quota, including GitHub."""
+    from .storage_policy import require_headroom
+    return require_headroom(db,user_id,additional=additional)
+
+
+def storage_payload(workspace, db=None):
+    from .workspace_cache import cache_payload
+    from ..database import SessionLocal
+    own_session=db is None
+    if own_session:
+        db=SessionLocal()
+    try:
+        account=account_local_storage_payload(db,workspace.user_id)
+        workspace_used=usage_bytes(workspace)
+        return {**account,'cache':cache_payload(workspace),
+                'workspace_used_mb':round(workspace_used/1048576,2),
+                'workspace_used_bytes':workspace_used,
+                'workspace_source':workspace.project.source_type}
+    finally:
+        if own_session:db.close()
+
+
+def require_quota_headroom(workspace,db=None,additional=0):
+    from ..database import SessionLocal
+    from .storage_policy import require_headroom
+    own_session=db is None
+    if own_session:db=SessionLocal()
+    try:
+        return require_headroom(db,workspace.user_id,additional=additional)
+    finally:
+        if own_session:db.close()
+
+PROTECTED_WORKSPACE_NAMES = frozenset({'.git','.ssh','.aws','.config','.opencode','opencode.json','opencode.jsonc','auth.json','credentials.json'})
+
+def protected_component(name):
+    value=name.casefold()
+    return value in PROTECTED_WORKSPACE_NAMES or value.startswith('.env') or value.endswith(('.pem','.key'))
 
 def safe_path(workspace, relative=""):
     if "\x00" in relative or "\\" in relative or PureWindowsPath(relative).drive or Path(relative).is_absolute():
         raise HTTPException(422, "A relative workspace path is required")
     parts = Path(relative).parts
-    if any(p in {"..", ".git", ".ssh", ".env"} for p in parts):
+    if (os.getenv('OPENCODE_NATIVE_TEST_ENABLED','').lower() in {'1','true','yes'} or os.getenv('OPENCODE_NATIVE_LIVE_ENABLED','').lower() in {'1','true','yes'}) and any(p in {'.opencode','opencode.json','opencode.jsonc'} for p in parts):
+        raise HTTPException(403, "Native executable configuration is managed by the server")
+    if any(p == ".." or protected_component(p) for p in parts):
         raise HTTPException(403, "Path is not accessible")
     root = root_for(workspace)
     candidate = root
@@ -211,6 +334,9 @@ def create(db, user, name, source_type, template=None, repository=None, branch=N
             for filename, content in TEMPLATES.get(template,{}).items():
                 (path/filename).write_text(content,encoding="utf-8")
             git(workspace,"init","--initial-branch=work")
+        # Verify aggregate owner use AFTER clone/template creation and BEFORE publish.
+        # No secondary GitHub-only allowance.
+        require_quota_headroom(workspace,db)
         workspace.status="ready"
         db.commit()
     except Exception:
@@ -225,15 +351,22 @@ def project_payload(row):
 
 def workspace_payload(row):
     from .workspace_cache import cache_payload
-    return {"cache":cache_payload(row),"id":str(row.id),"project_id":str(row.project_id),"status":row.status,"base_commit_sha":row.base_commit_sha,"created_at":row.created_at,"last_activity_at":row.last_activity_at}
+    try:
+        available = root_for(row).is_dir()
+    except (HTTPException, OSError):
+        available = False
+    return {"files_available":available,"cache":cache_payload(row),"id":str(row.id),"project_id":str(row.project_id),"status":row.status,"base_commit_sha":row.base_commit_sha,"created_at":row.created_at,"last_activity_at":row.last_activity_at}
 
 def files(workspace, relative=""):
     path=safe_path(workspace,relative)
     if not path.is_dir(): raise HTTPException(404,"Directory not found")
     result=[]
+    root=root_for(workspace)
+    from .chat_attachments import managed
+    temporary=managed(workspace)
     for item in sorted(path.iterdir(),key=lambda p:p.name.lower()):
-        if item.name in {".git",".env",".ssh"} or item.is_symlink() or (hasattr(item,"is_junction") and item.is_junction()): continue
-        result.append({"name":item.name,"path":item.relative_to(root_for(workspace)).as_posix(),"type":"directory" if item.is_dir() else "file"})
+        if (temporary and item.name=='__gateway_chat_attachments') or protected_component(item.name) or item.is_symlink() or (hasattr(item,"is_junction") and item.is_junction()): continue
+        result.append({"name":item.name,"path":item.relative_to(root).as_posix(),"type":"directory" if item.is_dir() else "file"})
         if len(result)>=1000: break
     return result
 
@@ -246,12 +379,15 @@ def content(workspace, relative):
 
 def status(workspace):
     raw=git(workspace,"status","--porcelain=v1","-z","--untracked-files=all").stdout
+    from .chat_attachments import managed
+    temporary=managed(workspace)
     entries=[]; fields=iter(raw.split("\x00"))
     for field in fields:
         if not field: continue
         code, path=field[:2],field[3:]
         entry={"status":code,"path":path}
         if "R" in code or "C" in code: entry["original_path"]=next(fields,"")
+        if temporary and (path=='__gateway_chat_attachments' or path.startswith('__gateway_chat_attachments/')): continue
         entries.append(entry)
     head=git(workspace,"rev-parse","--verify","HEAD",check=False)
     branch=git(workspace,"symbolic-ref","--short","HEAD",check=False)
@@ -280,7 +416,11 @@ def diff(workspace, relative=None):
 
 def commit(workspace,user,message):
     if not status(workspace)["changes"]: raise HTTPException(409,"No changes to commit")
-    git(workspace,"add","--all")
+    from .chat_attachments import managed
+    temporary=managed(workspace)
+    git(workspace,"add","--all",*(["--",".",":(exclude)__gateway_chat_attachments/**"] if temporary else []))
+    if temporary and git(workspace,"diff","--cached","--name-only","--","__gateway_chat_attachments").stdout.strip():
+        raise HTTPException(409,"Temporary attachments must not be committed")
     git(workspace,"-c",f"user.name={user.username}","-c",f"user.email={user.email}","commit","-m",message)
     return status(workspace)
 
@@ -307,13 +447,15 @@ def export(workspace):
     try:
         root = root_for(workspace)
         if not root.is_dir(): raise HTTPException(409,"Workspace files are unavailable")
+        from .chat_attachments import managed
+        temporary=managed(workspace)
         with zipfile.ZipFile(path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
             for directory, folders, files in os.walk(root,followlinks=False):
-                folders[:] = [name for name in folders if name not in {'.git','.ssh'} and not (Path(directory)/name).is_symlink()]
+                folders[:] = [name for name in folders if not (temporary and name=='__gateway_chat_attachments') and not protected_component(name) and not (Path(directory)/name).is_symlink()]
                 for name in files:
                     item=Path(directory)/name
                     relative=item.relative_to(root).as_posix()
-                    if item.is_symlink() or any(part.startswith('.env') or part.endswith(('.key','.pem')) for part in item.relative_to(root).parts): continue
+                    if item.is_symlink() or any(protected_component(part) for part in item.relative_to(root).parts): continue
                     archive.write(item,relative)
         return path
     except Exception:

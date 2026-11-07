@@ -63,6 +63,8 @@ class GithubConnection(Base):
     app_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     suspended: Mapped[bool] = mapped_column(Boolean, default=False)
     user_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True, unique=True)
+    github_user_login: Mapped[str | None] = mapped_column(String(120), nullable=True)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -74,12 +76,27 @@ class GithubAuthState(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    auth_session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('auth_sessions.id', ondelete='SET NULL'), nullable=True)
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    pending_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 class ProviderCredential(Base):
     __tablename__ = "provider_credentials"
     __table_args__ = (UniqueConstraint("workspace_id", "provider_id", name="uq_provider_workspace"),)
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    provider_id: Mapped[str] = mapped_column(String(120))
+    ciphertext: Mapped[str] = mapped_column(Text)
+    last4: Mapped[str] = mapped_column(String(8))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class UserProviderCredential(Base):
+    """User-owned encrypted API credential (not a shared provider catalog)."""
+    __tablename__ = "user_provider_credentials"
+    __table_args__ = (UniqueConstraint("user_id", "provider_id", name="uq_user_provider_credential"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     provider_id: Mapped[str] = mapped_column(String(120))
     ciphertext: Mapped[str] = mapped_column(Text)

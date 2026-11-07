@@ -1,0 +1,373 @@
+name: TEST | Fast deploy updates (manual audit optional)
+on:
+  push:
+    branches: [updates]
+    paths-ignore:
+      - 'docs/**'
+      - 'ops/native-direct/**'
+  workflow_dispatch:
+    inputs:
+      vps_username:
+        description: "VPS username (same as LIVE)"
+        required: true
+        type: string
+        default: tahir
+      confirmation:
+        description: "TEST: push to updates deploys automatically; dispatch permits audit, deploy or rollback"
+        required: true
+        type: choice
+        default: audit-test
+        options:
+          - audit-test
+          - deploy-test
+          - rollback-test
+      rollback_sha:
+        description: "Only for rollback-test: previous GitHub updates commit SHA (40 hex characters)"
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: opencode-test-deploy
+  cancel-in-progress: false
+jobs:
+  test:
+    # Do not silently skip this job on a mismatched event/ref.
+    # Fail explicitly at the first step before any TEST server access.
+    runs-on: ubuntu-latest
+    environment: test
+    timeout-minutes: 20
+    steps:
+      - name: Confirm TEST operation
+        id: confirm
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          mode="$(printf '%s' "$CONFIRMATION" | tr -d '[:space:]')"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            mode=deploy-test
+            if [[ "$COMMIT_MESSAGE" == 'ci(test): inspect direct Native transport' ]]; then mode=native-probe; fi
+          fi
+          echo "TEST workflow trigger: event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA"
+          [[ "$GITHUB_EVENT_NAME" == push || "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || { echo "Unsupported TEST trigger"; exit 1; }
+          [[ "$GITHUB_REF" == "refs/heads/updates" ]] || { echo "Ref is not updates: $GITHUB_REF"; exit 1; }
+          [[ "$mode" == "audit-test" || "$mode" == "deploy-test" || "$mode" == "rollback-test" || "$mode" == "native-probe" ]]
+          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate full TEST source and migration chain
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/full_test_git_release.py
+          python3 -m compileall -q backend/app backend/alembic/versions
+          python3 - <<'PY'
+          import pathlib, ast
+          versions=sorted(pathlib.Path('backend/alembic/versions').glob('*.py'))
+          assert versions, 'No Alembic migrations found'
+          revisions={}
+          for path in versions:
+              tree=ast.parse(path.read_text(encoding='utf-8'))
+              values={node.targets[0].id:ast.literal_eval(node.value) for node in tree.body if isinstance(node,ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and node.targets[0].id in ('revision','down_revision')}
+              assert values.get('revision') and values['revision'] not in revisions, path
+              revisions[values['revision']]=values.get('down_revision')
+          assert revisions['0024_github_app_settings']=='0023_admin_mail_drafts'
+          assert set(revisions.values())-set(revisions)-{None}==set(), 'Broken Alembic revision chain'
+          assert pathlib.Path('backend/alembic/versions/0022_email_service_policies.py').is_file()
+          assert pathlib.Path('backend/app/services/admin_email_config.py').is_file()
+          assert pathlib.Path('index.html').is_file()
+          print('FULL_SOURCE_PREFLIGHT_SUCCESS',len(versions),'migrations')
+          PY
+      - name: Validate TEST Native browser code before every deployment
+        run: |
+          set -euo pipefail
+          node --check app.js
+          node --check native-session-client.js
+          node --check runtime-client.js
+          node --check dashboards.js
+          node --check management.js
+          node tests/browser/test-native-provider-inventory.cjs
+      # QA is opt-in via workflow_dispatch → audit-test.
+      # Normal updates pushes deploy immediately after the small source preflight.
+      # Failed optional tests never block regular TEST releases.
+      - uses: actions/setup-python@v5
+        if: steps.confirm.outputs.mode == 'audit-test'
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        if: steps.confirm.outputs.mode == 'audit-test'
+        run: python -m pip install -r backend/requirements.txt
+      - name: Run backend authorization, account, Native and attachment regressions
+        if: steps.confirm.outputs.mode == 'audit-test'
+        run: |
+          python -m pytest -q \
+            backend/tests/test_github_boundaries.py \
+            backend/tests/test_github_disconnect_review.py \
+            backend/tests/test_email_verification_contracts.py \
+            backend/tests/test_email_code_signup.py \
+            backend/tests/test_registration_identity_uniqueness.py \
+            backend/tests/test_github_email_ownership.py \
+            backend/tests/test_admin_account_controls.py \
+            backend/tests/test_native_security_performance.py \
+            backend/tests/test_native_control_plane.py \
+            backend/tests/test_chat_attachments.py \
+            backend/tests/test_native_24h_retention.py
+      - uses: actions/setup-node@v4
+        if: steps.confirm.outputs.mode == 'audit-test'
+        with:
+          node-version: '22'
+      - name: Validate frontend syntax
+        if: steps.confirm.outputs.mode == 'audit-test'
+        run: |
+          set -euo pipefail
+          for file in app.js dashboards.js enhancements.js management.js native-session-client.js runtime-client.js; do
+            node --check "$file"
+          done
+      - name: Test protected browser flows
+        if: steps.confirm.outputs.mode == 'audit-test'
+        run: |
+          npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund jsdom@26.1.0
+          node tests/browser/test-github-email-proof.cjs
+          node tests/browser/test-native-ux.cjs
+          node tests/browser/test-admin-account-removal.cjs
+          node tests/browser/test-admin-users-table.cjs
+          node tests/browser/test-admin-user-editor.cjs
+          node tests/browser/test-existing-account-recovery.cjs
+      - name: Configure pinned SSH for TEST
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          EXPECTED_VPS_USER: ${{ secrets.VPS_USER }}
+          KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${HOST:?Missing STAGING_HOST}"
+          : "${USER:?Missing VPS username}"
+          : "${EXPECTED_VPS_USER:?Missing VPS_USER secret}"
+          [[ "$USER" == "$EXPECTED_VPS_USER" ]] || { echo "VPS username does not match existing VPS_USER secret"; exit 1; }
+          : "${KEY:?Missing STAGING_SSH_PRIVATE_KEY}"
+          : "${KNOWN_HOSTS:?Missing STAGING_SSH_KNOWN_HOSTS}"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Inspect TEST identity and service health
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          EXPECTED_VPS_USER: ${{ secrets.VPS_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${PORT:-22}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'test "$HOME" = /home/tahir && test -d /home/tahir/opencode-gateway-test/.git && test -f /home/tahir/opencode-gateway-test/.env && systemctl is-active --quiet opencode-gateway-test.service && systemctl is-active --quiet opencode-native-test.service'
+      - name: Inspect TEST Native local service and Nginx topology
+        if: steps.confirm.outputs.mode == 'native-probe'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="$PORT"
+          if test -z "$port"; then port=22; fi
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" 'bash -s' <<'NATIVE_DIAG'
+          set -eu
+          echo NATIVE_TOPOLOGY_START
+          root="$(sed -n 's/^WORKSPACE_ROOT=//p' /home/tahir/opencode-gateway-test/.env | tail -n 1)"
+          if test -z "$root"; then root='/home/tahir/opencode-gateway-test/workspaces'; fi
+          printf 'TEST_WORKSPACE_ROOT=%s\n' "$root"
+          if test -d "$root"; then echo TEST_WORKSPACE_ROOT_EXISTS=yes; else echo TEST_WORKSPACE_ROOT_EXISTS=no; fi
+          gateway_pid="$(systemctl show opencode-gateway-test.service -p MainPID --value)"
+          if test "$gateway_pid" -gt 1 && test -r "/proc/$gateway_pid/environ"; then
+            gateway_root="$(tr "\000" "\n" < "/proc/$gateway_pid/environ" | sed -n "s/^WORKSPACE_ROOT=//p" | head -n 1)"
+            printf "GATEWAY_WORKSPACE_ROOT_FROM_PROCESS=%s\n" "${gateway_root:-unset}"
+          fi
+          if test -r /home/tahir/opencode-gateway-test/backend/app/config.py; then echo "WORKSPACE_CONFIG_PRESENT=yes"; fi
+          for path in /home/tahir/opencode-gateway-test/workspaces /var/lib/opencode-gateway-test/workspaces /var/lib/opencode-gateway-test /home/tahir/opencode-gateway-test/runtime; do
+            if test -d "$path"; then echo "KNOWN_DATA_ROOT=$path"; fi
+          done
+          systemctl show opencode-native-test.service -p ActiveState -p MainPID -p User -p WorkingDirectory -p FragmentPath -p PrivateNetwork -p IPAddressDeny -p IPAddressAllow
+          command -v opencode || true
+          if command -v opencode >/dev/null 2>&1; then opencode --version || true; fi
+          for name in /etc/nginx/sites-enabled/*; do
+            if test -f "$name" && grep -Fq 'test.opencode-gateway.codes' "$name"; then
+              echo "TEST_NGINX_CONFIG=$name"
+              echo 'TEST_NGINX_TOPLEVEL'
+              grep -E '^[[:space:]]*(listen|server_name|include|location|proxy_pass|root|alias)[[:space:]]' "$name" | head -n 65 || true
+              echo 'TEST_NGINX_END'
+            fi
+          done
+          for endpoint in http://127.0.0.1:18098/provider/auth http://127.0.0.1:18098/session http://127.0.0.1:18098/global/health http://127.0.0.1:18097/provider; do
+            echo "UPSTREAM_CHECK=$endpoint"
+            curl -sS -m 12 -o /dev/null -w 'HTTP=%{http_code} CONNECT=%{time_connect} TTFB=%{time_starttransfer}\n' "$endpoint" || true
+          done
+          echo NATIVE_AGENT_PROBE_BEGIN
+          dir=/var/lib/opencode-native-test/workspace
+          for suffix in /agent /config/agents /config /provider/auth; do
+            for port in 18098 18097; do
+              code="$(curl -sS -G -m 15 -o /dev/null -w '%{http_code}' --data-urlencode "directory=$dir" "http://127.0.0.1:$port$suffix" || true)"
+              printf 'NATIVE_AGENT_PROBE port=%s path=%s code=%s\n' "$port" "$suffix" "$code"
+            done
+          done
+          worktree="$(find /var/lib/opencode-workspaces-test -mindepth 3 -maxdepth 3 -type d -name repo -print -quit 2>/dev/null || true)"
+          if test -n "$worktree"; then
+            for suffix in /agent /config/agents /config; do
+              code="$(curl -sS -G -m 15 -o /dev/null -w '%{http_code}' --data-urlencode "directory=$worktree" "http://127.0.0.1:18098$suffix" || true)"
+              printf 'NATIVE_PROJECT_AGENT path=%s code=%s\n' "$suffix" "$code"
+            done
+          else echo NATIVE_PROJECT_AGENT no_worktree; fi
+          echo NATIVE_AGENT_PROBE_END
+          # Native-only project-workspace smoke: do not call Gateway or DB.
+          if command -v jq >/dev/null 2>&1; then
+            worktree="$(find /var/lib/opencode-workspaces-test -mindepth 3 -maxdepth 3 -type d -name repo -print -quit 2>/dev/null || true)"
+            if test -n "$worktree"; then
+              echo NATIVE_PROJECT_ROOT_FOUND=yes
+              uri="$(jq -rn --arg v "$worktree" '$v|@uri')"
+              prefix='https://test.opencode-gateway.codes/native-direct/api/'
+              basic="$(cat /home/tahir/.native-direct-stage/native-access-password)"
+              response="$(mktemp)"
+              session_id=""
+              cleanup(){
+                if test -n "$session_id"; then
+                  curl -sS --max-time 15 --user "native-test:$basic" -X DELETE \
+                    -o /dev/null "$prefix""session/$session_id?directory=$uri" || true
+                fi
+                rm -f "$response"
+              }
+              trap cleanup EXIT
+              http="$(curl -sS --max-time 45 --user "native-test:$basic" \
+                -o "$response" -w '%{http_code}' "$prefix""provider?directory=$uri")" || http=000
+              echo "DIRECT_PROJECT_PROVIDER_HTTP=$http"
+              if test "$http" = 200; then
+                connected="$(jq -r 'if (.connected // []) | index("deepseek") then "yes" else "no" end' "$response")"
+                echo "DIRECT_PROJECT_DEEPSEEK_CONNECTED=$connected"
+                http="$(curl -sS --max-time 45 --user "native-test:$basic" \
+                  -H 'Content-Type: application/json' -X POST -d '{"title":"Native main TEST project smoke"}' \
+                  -o "$response" -w '%{http_code}' "$prefix""session?directory=$uri")" || http=000
+                echo "DIRECT_PROJECT_SESSION_CREATE_HTTP=$http"
+                if test "$http" = 200; then
+                  session_id="$(jq -r '.id // empty' "$response")"
+                  if [[ "$session_id" =~ ^ses_[A-Za-z0-9_-]+$ ]] && test "$connected" = yes; then
+                    body='{"model":{"providerID":"deepseek","modelID":"deepseek-flash"},"parts":[{"type":"text","text":"Reply with OK only, no tools."}]}'
+                    http="$(curl -sS --max-time 35 --user "native-test:$basic" \
+                      -H 'Content-Type: application/json' -X POST -d "$body" \
+                      -o "$response" -w '%{http_code}' \
+                      "$prefix""session/$session_id/prompt_async?directory=$uri")" || http=000
+                    echo "DIRECT_PROJECT_PROMPT_ASYNC_HTTP=$http"
+                    if test "$http" = 204 || test "$http" = 200; then
+                      for attempt in 1 2 3; do
+                        sleep 7
+                        http="$(curl -sS --max-time 35 --user "native-test:$basic" \
+                          -o "$response" -w '%{http_code}' \
+                          "$prefix""session/$session_id/message?directory=$uri")" || http=000
+                        if test "$http" = 200; then
+                          texts="$(jq -r '[.[] | select(.info.role=="assistant") | .parts[]? | select(.type=="text" and (.text | length)>0)]|length' "$response")"
+                          if test "$texts" -gt 0; then
+                            echo "DIRECT_PROJECT_NATIVE_ASSISTANT_REPLY=yes"
+                            break
+                          fi
+                        fi
+                      done
+                      test "$texts" -gt 0 || echo "DIRECT_PROJECT_NATIVE_ASSISTANT_REPLY=not_yet"
+                    fi
+                  fi
+                fi
+              fi
+              cleanup
+              trap - EXIT
+            else
+              echo NATIVE_PROJECT_ROOT_FOUND=no
+            fi
+          fi
+          echo NATIVE_TOPOLOGY_FINISHED
+          NATIVE_DIAG
+      - name: Full TEST audit or deploy by pinned GitHub commit
+        if: steps.confirm.outputs.mode != 'native-probe'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          EXPECTED_VPS_USER: ${{ secrets.VPS_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          TARGET_SHA: ${{ github.sha }}
+          MODE: ${{ steps.confirm.outputs.mode }}
+          ROLLBACK_SHA: ${{ inputs.rollback_sha }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          port="${PORT:-22}"
+          # Read the approved script directly from the reviewed GitHub revision.
+          # Git checkout and app source are preserved; no server .env, IP, port,
+          # nginx, systemd, database files, Native engine, or LIVE changes.
+          operation=audit
+          if [[ "$MODE" == "deploy-test" ]]; then operation=deploy; fi
+          if [[ "$MODE" == "rollback-test" ]]; then
+            operation=rollback
+            [[ "$ROLLBACK_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Supply an exact 40-character GitHub commit SHA for rollback"; exit 1; }
+            TARGET_SHA="$ROLLBACK_SHA"
+          fi
+          : "${VPS_SUDO_PASSWORD:?Missing protected VPS_SUDO_PASSWORD secret}"
+          [[ "$VPS_SUDO_PASSWORD" != *$'\n'* ]] || { echo "Invalid multi-line sudo secret"; exit 1; }
+          # Password travels only over encrypted SSH stdin; never in log or CLI arguments.
+          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates </dev/null && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && TEST_SUDO_PASS_STDIN=1 python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
+      - name: Enable lightweight OpenCode Native provider route (TEST only)
+        if: steps.confirm.outputs.mode == 'deploy-test'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          bash -n ops/native-direct/enable-config-providers-test.sh
+          port="${PORT:-22}"
+          : "${VPS_SUDO_PASSWORD:?Missing TEST sudo password}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'install -d -m 700 /home/tahir/.native-direct-stage'
+          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            ops/native-direct/enable-config-providers-test.sh \
+            "$USER@$HOST:/home/tahir/.native-direct-stage/enable-config-providers-test.sh"
+          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'read -r password; printf "%s\n" "$password" | sudo -S -p "" bash /home/tahir/.native-direct-stage/enable-config-providers-test.sh'
+      - name: Update TEST Native direct client from this exact commit
+        if: steps.confirm.outputs.mode == 'deploy-test'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          node --check assets/native-direct/app.js
+          port="${PORT:-22}"
+          # Static OpenCode Native UI is outside the Gateway Git worktree.
+          # Deploy it explicitly, never silently leave the old verifier live.
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'test -d /var/www/opencode-native-direct-test && install -d -m 700 /home/tahir/.native-direct-stage'
+          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            assets/native-direct/index.html assets/native-direct/app.js "$USER@$HOST:/home/tahir/.native-direct-stage/"
+          : "${VPS_SUDO_PASSWORD:?Missing protected VPS sudo credential}"
+          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'read -r pass; printf "%s\n" "$pass" | sudo -S -p "" sh -c "install -m 0644 /home/tahir/.native-direct-stage/app.js /var/www/opencode-native-direct-test/app.js && install -m 0644 /home/tahir/.native-direct-stage/index.html /var/www/opencode-native-direct-test/index.html"'
+          echo 'TEST Native direct web client updated from the same pinned commit.'
+      - name: Verify TEST health after TEST operation
+        if: steps.confirm.outputs.mode != 'audit-test' && steps.confirm.outputs.mode != 'native-probe'
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 6 --retry-delay 2 https://test.opencode-gateway.codes/api/health
+          echo
+      - name: Report scope
+        if: always()
+        run: |
+          echo "TEST fast deploy: push updates skips optional QA suites. Manual audit-test runs backend/browser checks; deployment remains TEST-only with protected secrets, scoped SSH, retained LIVE and Native engine boundaries." >> "$GITHUB_STEP_SUMMARY"

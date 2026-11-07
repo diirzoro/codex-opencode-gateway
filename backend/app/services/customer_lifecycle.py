@@ -1,12 +1,10 @@
 """Archive expired customers; reuse User, AccountAudit and existing token stores."""
 import logging
-import shutil
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import delete, select
-from ..config import settings
+from sqlalchemy import delete, func, inspect, select
 from ..database import SessionLocal
 from ..models import (AccountAudit, AuthSession, ExecutionEvent, GithubAuthState,
-    GithubConnection, PasswordReset, ProviderCredential, Subscription, User, Workspace, WorkspaceSession)
+    GithubConnection, PasswordReset, ProviderCredential, UserProviderCredential, Subscription, User, Workspace, WorkspaceSession, EmailVerification)
 from .entitlements import ACCOUNT_RETENTION_DAYS, aware
 
 POLICY_ACTION = "account.retention_started"
@@ -26,9 +24,12 @@ def initialize():
 
 
 def archive_deadline(user, subscription):
-    ends = [aware(user.trial_ends_at)]
-    if subscription and subscription.current_period_end:
-        ends.append(aware(subscription.current_period_end))
+    # Paid access supersedes the one-time trial. Retention starts from the
+    # paid expiry when present, never from a superseded future trial expiry.
+    paid_period = bool(subscription and subscription.plan_id and
+        subscription.current_period_end and subscription.status in
+        {"active", "expired", "cancelled", "pending_payment"})
+    ends = [aware(subscription.current_period_end)] if paid_period else [aware(user.trial_ends_at)]
     if _policy_started:
         ends.append(_policy_started)  # Existing customers receive a full grace period.
     return max(ends) + timedelta(days=ACCOUNT_RETENTION_DAYS)
@@ -50,6 +51,9 @@ def consent_payload(db, user_id):
 def archive_due(*, now=None):
     from . import opencode, workspace_cache
     from .entitlements import access_payload
+    from .archive_storage import StagedRuntime, recover_pending
+    with SessionLocal() as recovery_db:
+        recover_pending(recovery_db)
     if _policy_started is None:
         initialize()
     now = now or datetime.now(timezone.utc)
@@ -59,11 +63,12 @@ def archive_due(*, now=None):
     count = 0
     with SessionLocal() as db:
         ids = list(db.scalars(select(User.id).outerjoin(Subscription, Subscription.user_id == User.id)
-            .where(User.status == "active", User.role == "customer", User.trial_ends_at <= cutoff,
-                (Subscription.current_period_end.is_(None) | (Subscription.current_period_end <= cutoff)))
+            .where(User.status == "active", User.role == "customer",
+                func.coalesce(Subscription.current_period_end, User.trial_ends_at) <= cutoff)
             .order_by(User.trial_ends_at).limit(100)))
     for identifier in ids:
         locks = []
+        storage = None
         with SessionLocal() as db:
             try:
                 user = db.scalar(select(User).where(User.id == identifier).with_for_update(skip_locked=True))
@@ -79,6 +84,10 @@ def archive_due(*, now=None):
                     if ids_before != locked:
                         raise RuntimeError("Operational activity is in progress")
                 rows = list(db.scalars(select(Workspace).where(Workspace.user_id == identifier)))
+                account_lock = opencode.workspace_lock(opencode.account_workspace(identifier))
+                if not account_lock.acquire(blocking=False):
+                    raise RuntimeError("Account authentication is in progress")
+                locks.append(account_lock)
                 for row in rows:
                     lock = opencode.workspace_lock(row)
                     if not lock.acquire(blocking=False):
@@ -96,18 +105,24 @@ def archive_due(*, now=None):
                 activity.extend(aware(r.last_activity_at) for r in rows)
                 activity.extend(aware(value) for value in db.scalars(select(AuthSession.last_seen_at).where(
                     AuthSession.user_id == identifier, AuthSession.last_seen_at.is_not(None))))
+                # The account runtime exists even when no project was created.
+                # Stop it before erasing auth files so secrets do not survive in memory.
+                opencode.stop_workspace(opencode.account_workspace(identifier))
                 for row in rows:
                     opencode.stop_workspace(row)
                 # Project files have their own inactivity policy; account
                 # archival removes only sensitive operational runtime storage.
-                runtime_base = settings.runtime_root.resolve()
-                runtime = runtime_base / str(identifier)
-                if runtime.is_symlink(): raise RuntimeError("Unsafe runtime path")
-                if runtime.exists(): shutil.rmtree(runtime)
+                storage = StagedRuntime(identifier)
+                storage.stage()
                 session_ids = select(WorkspaceSession.id).where(WorkspaceSession.user_id == identifier)
                 db.execute(delete(ExecutionEvent).where(ExecutionEvent.session_id.in_(session_ids)))
-                for model in (WorkspaceSession, AuthSession, ProviderCredential, GithubAuthState, GithubConnection, PasswordReset):
+                for model in (WorkspaceSession, AuthSession, ProviderCredential, GithubAuthState, GithubConnection, PasswordReset, EmailVerification):
                     db.execute(delete(model).where(model.user_id == identifier))
+                # The account-owned credential table is introduced in migration
+                # 0017; archive its secrets too, but support pre-0017 installs.
+                if inspect(db.connection()).has_table("user_provider_credentials"):
+                    db.execute(delete(UserProviderCredential).where(
+                        UserProviderCredential.user_id == identifier))
                 user.status = "archived"
                 # Retain identity/contact/billing relationships, not a CRM copy
                 # of the old login secret. A later paid activation permits reset.
@@ -116,9 +131,31 @@ def archive_due(*, now=None):
                 db.add(AccountAudit(subject_id=identifier, action="account.last_activity", created_at=max(activity)))
                 db.add(AccountAudit(subject_id=identifier, action="account.archived"))
                 db.commit(); count += 1
+                # A failed erase is retried from the committed archived status.
+                try: storage.erase()
+                except Exception:
+                    logger.warning("Archived runtime erasure deferred for %s", identifier)
             except Exception:
                 db.rollback()
-                logger.warning("Customer archival could not complete for %s", identifier)
+                recovered = False
+                if storage is not None:
+                    try:
+                        # A lost commit acknowledgement may mean SQL actually
+                        # committed. Never restore secrets to an archived user.
+                        committed_status = db.scalar(select(User.status).where(User.id == identifier))
+                        if committed_status == "archived":
+                            count += 1
+                            storage.erase()
+                            recovered = True
+                        elif committed_status is not None:
+                            storage.restore()
+                    except Exception:
+                        # Unknown database outcome leaves the private staged
+                        # directory for the next status-based recovery pass.
+                        logger.warning("Account runtime restore deferred for %s", identifier)
+                    finally: db.rollback()
+                if not recovered:
+                    logger.warning("Customer archival could not complete for %s", identifier)
             finally:
                 for lock in reversed(locks): lock.release()
     return count

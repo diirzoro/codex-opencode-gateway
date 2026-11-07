@@ -1,6 +1,232 @@
 // Local Gateway enhancements. Loaded after app.js; it upgrades existing views with
 // real backend data (client dashboard, GitHub connection, provider credentials, push)
 // without altering the current layout or markup.
+// One explicit fresh link for admin and legacy dashboard entry points.
+let freshGithubPending=false;
+window.startFreshGithubConnection=async function(options={}){
+  const tr=(en,ar)=>lang==='ar'?ar:en;
+  if(freshGithubPending)return;
+  const owner=currentUser?.id;
+  if(!owner)return;
+  const valid=()=>currentUser?.id===owner&&(!options.isCurrent||options.isCurrent());
+  freshGithubPending=true;
+  try{
+    // Same-tab redirect avoids stranded about:blank windows and ambiguity
+    // between the user's Gateway account and a separate OAuth popup.
+    const next=await api('/api/github/connect',{method:'POST'});
+    if(!valid())return;
+    const target=new URL(next.url);
+    if(target.protocol!=='https:'||target.hostname!=='github.com'||
+       target.pathname!=='/login/oauth/authorize')
+      throw new Error(tr('Invalid GitHub authorization address.','عنوان تفويض GitHub غير صالح.'));
+    // Returning through /api/github/callback restores the Gateway page.
+    window.location.assign(target.href);
+  }catch(error){
+    toast(error.message);
+  }finally{
+    freshGithubPending=false;
+  }
+};
+// Discard displayed connection metadata in this and other tabs after mutation.
+window.addEventListener('storage',event=>{
+  if(event.key==='og-github-revision:'+currentUser?.id)window.dispatchEvent(new CustomEvent('gateway-github-changed',{detail:{owner:currentUser?.id}}));
+});
+window.addEventListener('gateway-github-changed',event=>{
+  if(event.detail?.owner!==currentUser?.id)return;
+  for(const id of ['connectionsGithub','clientGithubPanel']){
+    const box=document.getElementById(id);if(box)box.replaceChildren(textElement('p',lang==='ar'?'تغير اتصال GitHub. افتح الاتصالات للتحقق.':'GitHub connection changed. Reopen Connections to verify.'));
+  }
+});
+// One explicit review for customer, admin and legacy Disconnect entry points.
+window.disconnectGithubWithReview=async function(){
+  if(window.githubDisconnectReviewOpen)return false;
+  const owner=currentUser?.id,tr=(en,ar)=>lang==='ar'?ar:en;
+  if(!owner)return false;
+  window.githubDisconnectReviewOpen=true;
+  let dialog;
+  try{
+    const plan=await api('/api/github/disconnect/workspaces');
+    if(currentUser?.id!==owner)return false;
+    dialog=document.createElement('dialog');dialog.className='manage-card';
+    dialog.style.cssText='width:min(680px,92vw);max-height:85vh;overflow:auto;box-sizing:border-box';
+    dialog.setAttribute('aria-labelledby','githubDisconnectTitle');
+    const title=textElement('h3',tr('Disconnect GitHub','فصل GitHub'));title.id='githubDisconnectTitle';
+    dialog.append(title,textElement('p',tr('Revoke this GitHub account’s authorization for this app. Select imported copies to save and delete, or preserve them for 73 hours. Unsaved work stays protected. Internal projects and conversations remain.','إلغاء تفويض حساب GitHub لهذا التطبيق. اختر نسخ المشاريع لحفظها وحذفها، أو احتفظ بها 73 ساعة. تبقى التعديلات غير المحفوظة محمية، والمشاريع الداخلية والمحادثات محفوظة.')));
+    const selected=[],table=document.createElement('table'),head=document.createElement('thead'),hr=document.createElement('tr');
+    for(const label of [tr('Select','اختيار'),tr('Project / destination','المشروع / وجهة الحفظ'),tr('Review','المراجعة')])hr.append(textElement('th',label));head.append(hr);table.append(head);
+    const tbody=document.createElement('tbody');table.append(tbody);
+    for(const copy of plan.workspaces){
+      const row=document.createElement('tr'),choice=document.createElement('input');choice.type='checkbox';choice.checked=!copy.blocked;choice.disabled=!!copy.blocked;choice.setAttribute('aria-label',copy.name);
+      const cell=document.createElement('td');cell.append(choice);row.append(cell);
+      const name=textElement('td',copy.name+' · '+copy.repository+' → '+copy.branch),review=document.createElement('td');name.style.overflowWrap='anywhere';
+      if(copy.blocked)review.textContent=copy.blocked;
+      else{
+        const details=document.createElement('details');details.append(textElement('summary',copy.changes.length+tr(' changed files',' ملفات متغيرة')+' · '+(copy.ahead??'?')+tr(' unpushed commits',' commits غير مرفوعة')));
+        const list=document.createElement('ul');list.style.cssText='max-height:160px;overflow:auto;overflow-wrap:anywhere';
+        for(const item of copy.changes)list.append(textElement('li',item.status+' '+item.path));details.append(list);review.append(details);
+      }
+      row.append(name,review);tbody.append(row);selected.push({copy,choice});
+    }
+    const wrap=document.createElement('div');wrap.style.overflowX='auto';wrap.append(table);if(plan.workspaces.length)dialog.append(wrap);
+    const feedback=textElement('p');feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');
+    const save=textElement('button',tr('Save to GitHub, delete selected copies and disconnect','حفظ إلى GitHub وحذف النسخ المختارة ثم الفصل'),'button');
+    const keep=textElement('button',tr('Disconnect and keep files for 73 hours','فصل والاحتفاظ بالملفات 73 ساعة'),'button ghost');
+    const cancel=textElement('button',tr('Cancel','إلغاء'),'button ghost');for(const b of [save,keep,cancel])b.type='button';
+    save.disabled=!selected.some(x=>!x.copy.blocked);
+    dialog.append(feedback,save,keep,cancel);document.body.append(dialog);dialog.showModal();
+    return await new Promise(resolve=>{
+      let busy=false,deleted=0;
+      const finish=value=>{dialog.close();resolve(value);};
+      cancel.onclick=()=>{if(!busy)finish(false);};
+      dialog.oncancel=event=>{event.preventDefault();if(!busy)finish(false);};
+      const execute=async remove=>{
+        if(busy||currentUser?.id!==owner)return;
+        const copies=selected.filter(x=>x.choice.checked&&!x.copy.blocked).map(x=>x.copy);
+        if(remove&&!copies.length){feedback.textContent=tr('Select at least one working copy.','اختر نسخة مشروع واحدة على الأقل.');return;}
+        busy=true;save.disabled=keep.disabled=cancel.disabled=true;
+        try{
+          const message=remove?tr('Commit and push the reviewed changes to the listed branches, verify them, then permanently delete these LOCAL copies: ','حفظ التعديلات ومزامنتها إلى الفروع المعروضة والتحقق منها، ثم حذف هذه النسخ المحلية نهائيًا: ')+copies.map(x=>x.name).join(', '):tr('Revoke the GitHub grant for this account and app? Files remain; GitHub’s browser login is unaffected.','إلغاء تفويض حساب GitHub لهذا التطبيق؟ تبقى الملفات، ولا يتغير تسجيل دخول GitHub في المتصفح.');
+          if(!await window.confirmAction(message))return;
+          for(const copy of remove?copies:[]){
+            if(currentUser?.id!==owner)throw Error(tr('Account changed; operation stopped.','تغير الحساب؛ توقفت العملية.'));
+            feedback.textContent=tr('Saving and verifying: ','حفظ والتحقق: ')+copy.name;
+            const path='/api/github/disconnect/workspaces/'+encodeURIComponent(copy.id);
+            const saved=await api(path,{method:'POST',body:JSON.stringify({connection_id:plan.connection_id,snapshot:copy.snapshot,action:'save'})});
+            if(!saved.verified||!saved.snapshot)throw Error(tr('Remote save was not verified. Files preserved.','لم يُثبت الحفظ البعيد؛ الملفات محفوظة.'));
+            if(currentUser?.id!==owner)throw Error(tr('Account changed; files preserved.','تغير الحساب؛ الملفات محفوظة.'));
+            const result=await api(path,{method:'POST',body:JSON.stringify({connection_id:plan.connection_id,snapshot:saved.snapshot,action:'delete'})});
+            if(!result.deleted)throw Error(tr('Local cleanup was not confirmed.','لم يُؤكد حذف النسخة المحلية.'));deleted++;
+          }
+          if(currentUser?.id!==owner)throw Error(tr('Account changed; operation stopped.','تغير الحساب؛ توقفت العملية.'));
+          const result=await api('/api/github/disconnect',{method:'POST',body:JSON.stringify({connection_id:plan.connection_id})});
+          toast(result.grant_revocation==='verified'?tr('Disconnected. GitHub grant revoked.','تم الفصل وإلغاء تفويض GitHub.'):tr('Disconnected locally. GitHub grant revocation needs review.','تم الفصل محليًا؛ إلغاء تفويض GitHub يحتاج مراجعة.'));
+          // Invalidate already-open project/file trees in this browser and
+          // other tabs. The backend independently blocks detached GitHub IDs.
+          window.dispatchEvent(new CustomEvent('gateway-github-changed',{detail:{owner}}));
+          try{localStorage.setItem('og-github-revision:'+owner,String(Date.now()));}catch(error){}
+          finish(true);
+        }catch(error){feedback.textContent=error.message+(deleted?tr(' Verified local copies already removed: ',' عدد النسخ المحفوظة التي حُذفت بالفعل: ')+deleted:'');}
+        finally{busy=false;save.disabled=!selected.some(x=>!x.copy.blocked);keep.disabled=cancel.disabled=false;}
+      };
+      save.onclick=()=>execute(true);keep.onclick=()=>execute(false);
+    });
+  }catch(error){toast(error.message);return false;}
+  finally{if(dialog)dialog.remove();window.githubDisconnectReviewOpen=false;}
+};
+
+// Explicit server-verified identity confirmation shared by customer/admin views.
+window.renderGithubConfirmation=function(root,status,refresh){
+  if(!status.pending)return;
+  const item=status.pending,owner=currentUser?.id,tr=(en,ar)=>lang==='ar'?ar:en;
+  const errorText=error=>{
+    if(lang!=='ar')return error.message;
+    if(error.message.startsWith('This GitHub account is already connected'))return 'حساب GitHub هذا مرتبط حاليًا بحساب آخر في OpenCode Gateway، ولا يمكن ربطه بحسابين في الوقت نفسه.\n\nيرجى تسجيل الدخول إلى حساب Gateway المرتبط بهذا GitHub وإجراء Disconnect أولًا، أو اختيار حساب GitHub آخر.\n\nتسجيل الخروج وحده لا يفصل ربط GitHub.';
+    if(error.message.startsWith('This Gateway account email is not'))return 'غير مصرح بربط GitHub: يجب أن يطابق بريدك المسجل والمُوثَّق في المنصة البريد الأساسي الموثَّق في GitHub. استخدم حساب GitHub المطابق أو صحّح بريد المنصة عبر التحقق الرسمي ثم أعد الربط.';
+    if(error.message.startsWith('GitHub email authorization denied'))return 'غير مصرح بربط GitHub بهذا البريد: العنوان المُدخل لا يطابق البريد الأساسي الموثَّق لحساب GitHub المحدد. لم تُرسل أي رسالة تفعيل. تحقق من البريد ثم أعد المحاولة.';
+    if(error.message.startsWith('GitHub email could not be verified'))return 'تعذر التحقق من البريد. راجع البريد الأساسي لحساب GitHub الذي اخترته.';
+    if(error.message.startsWith('GitHub email verification is unavailable'))return 'التحقق من بريد GitHub غير متاح. يلزم فحص صلاحية قراءة البريد وخدمة الإرسال.';
+    if(error.message==='Incorrect GitHub verification code')return 'رمز التحقق من GitHub غير صحيح.';
+    if(error.message.startsWith('GitHub code is expired'))return 'رمز GitHub منتهي أو غير متاح. اطلب رمزًا جديدًا.';
+    if(error.message.startsWith('GitHub connection verification is disabled'))return 'خدمة التحقق من ربط GitHub معطلة من الإدارة؛ لا يمكن إنشاء ربط جديد.';
+    if(error.message.startsWith('Wait before requesting'))return 'انتظر قبل محاولة التحقق من بريد GitHub مرة أخرى.';
+    if(error.message.startsWith('Verify the code sent'))return 'تحقق من رمز بريد GitHub قبل تأكيد الربط.';
+    return error.message;
+  };
+  const box=textElement('section','','manage-card github-confirmation');
+  box.setAttribute('aria-label',tr('Confirm GitHub identity','تأكيد هوية GitHub'));
+  box.append(textElement('h3',tr('Confirm the GitHub account','تأكيد حساب GitHub')),
+    textElement('p',tr('You are linking @','أنت تربط @')+item.github_login+tr(' to this Gateway account. Continue only if this is your intended account.',' بحسابك الحالي في Gateway. أكمل فقط إذا كان هذا الحساب الذي تقصده.')));
+  const select=document.createElement('select');select.setAttribute('aria-label',tr('Authorized installation','التثبيت المصرح به'));
+  select.add(new Option(tr('Select your installation','اختر التثبيت الخاص بك'),''));
+  for(const installation of item.installations)select.add(new Option(installation.login+' · '+installation.id,String(installation.id)));
+  const accepted=document.createElement('input');accepted.type='checkbox';
+  const label=textElement('label');label.append(accepted,document.createTextNode(tr('I confirm @','أؤكد اختيار @')+item.github_login));
+  const feedback=textElement('p');feedback.setAttribute('role','status');
+  const confirm=textElement('button',tr('Confirm connection','تأكيد الربط'),'button');confirm.type='button';confirm.disabled=true;
+  let emailVerified=item.email_verification?.verified===true;
+  const update=()=>{confirm.disabled=!accepted.checked||!select.value||!emailVerified;};select.onchange=update;accepted.onchange=update;
+  confirm.onclick=async()=>{
+    if(confirm.disabled||currentUser?.id!==owner)return;
+    confirm.disabled=true;
+    try{await api('/api/github/confirm',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,github_user_id:item.github_user_id,installation_id:Number(select.value)})});
+      if(currentUser?.id===owner){toast(tr('GitHub connection confirmed.','تم تأكيد ربط GitHub.'));await refresh();}
+    }catch(error){if(currentUser?.id===owner){feedback.textContent=errorText(error);update();}}
+  };
+  const cancel=textElement('button',tr('Cancel / choose another account','إلغاء / اختيار حساب آخر'),'button ghost');cancel.type='button';
+  cancel.onclick=async()=>{if(currentUser?.id!==owner)return;cancel.disabled=true;try{await api('/api/github/disconnect',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id===owner)await refresh();}catch(error){feedback.textContent=errorText(error);cancel.disabled=false;}};
+  let activateCodeCountdown=()=>{};
+  {
+    const proof=textElement('section','','github-email-proof');
+    proof.append(textElement('h4',tr('Verify GitHub account ownership','التحقق من ملكية حساب GitHub')),
+      textElement('p',tr('Enter the verified primary email of your GitHub account. It must match the email registered and verified on this Gateway account. Both GitHub OAuth and a 60-second email code are required.','أدخل البريد الأساسي الموثَّق في GitHub، ويجب أن يطابق البريد المسجَّل والمُوثَّق لحسابك في المنصة. يتطلب الربط تفويض GitHub ورمز بريد صالحًا لمدة 60 ثانية.')));
+    const emailLabel=textElement('label',tr('GitHub primary email','البريد الإلكتروني الأساسي المرتبط بحساب GitHub'));
+    const email=document.createElement('input');email.type='email';email.autocomplete='off';email.required=true;email.maxLength=254;email.setAttribute('aria-label',tr('GitHub primary email','البريد الإلكتروني الأساسي المرتبط بحساب GitHub'));emailLabel.append(email);
+    const send=textElement('button',tr('Verify email and send code','التحقق من البريد وإرسال الرمز'),'button ghost');send.type='button';
+    const code=document.createElement('input');code.type='text';code.inputMode='numeric';code.autocomplete='one-time-code';code.maxLength=6;code.pattern='[0-9]{6}';code.setAttribute('aria-label',tr('GitHub email verification code','رمز التحقق من بريد GitHub'));code.hidden=emailVerified;
+    const verify=textElement('button',tr('Verify code','تحقق من الرمز'),'button');verify.type='button';verify.hidden=emailVerified;
+    const note=textElement('p',emailVerified?tr('GitHub email verified.','تم التحقق من بريد GitHub.'):'');note.setAttribute('role','alert');
+    note.setAttribute('aria-live','assertive');note.setAttribute('tabindex','-1');
+    note.classList.add('github-email-verification-feedback');
+    note.style.cssText='display:block;min-height:1.5em;padding:8px 10px;margin:6px 0;border-radius:7px;white-space:pre-wrap;overflow-wrap:anywhere;';
+    const setProofFeedback=(message,isError=false)=>{
+      note.textContent=message;
+      note.style.color=isError?'#a52323':'';
+      note.style.background=isError?'#fff1f1':'';
+      note.style.border=isError?'1px solid #d66':'1px solid transparent';
+      if(isError){note.hidden=false;note.focus();note.scrollIntoView?.({block:'nearest',behavior:'smooth'});}
+    };
+    const countdown=textElement('p','','github-email-countdown');countdown.setAttribute('role','status');countdown.setAttribute('aria-live','off');
+    let expiryTimer=null;
+    let expiresAt=Date.parse(item.email_verification?.expires_at||'');
+    const stopCountdown=()=>{if(expiryTimer!==null){document.defaultView?.clearInterval(expiryTimer);expiryTimer=null;}};
+    const tickCountdown=()=>{
+      if(!proof.isConnected||currentUser?.id!==owner){stopCountdown();return;}
+      if(emailVerified||!Number.isFinite(expiresAt)){countdown.textContent='';return;}
+      const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));
+      countdown.textContent=seconds
+        ?tr('Verification code expires in '+seconds+'s.','تنتهي صلاحية رمز GitHub بعد '+seconds+' ثانية.')
+        :tr('Code expired. Request a new code.','انتهت صلاحية رمز GitHub؛ اطلب رمزًا جديدًا.');
+      verify.disabled=seconds===0;send.disabled=seconds>0;
+    };
+    const startCountdown=()=>{
+      stopCountdown();
+      if(!Number.isFinite(expiresAt)||emailVerified)return;
+      tickCountdown();
+      expiryTimer=document.defaultView?.setInterval(tickCountdown,1000);
+    };
+    send.onclick=async()=>{
+      if(send.disabled||currentUser?.id!==owner)return;if(!email.reportValidity())return;send.disabled=true;emailVerified=false;update();
+      try{const result=await api('/api/github/pending/email/send',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,email:email.value.trim()})});if(currentUser?.id!==owner)return;
+        if(result.sent!==true||!Number.isFinite(Date.parse(result.expires_at)))throw Error(tr('Verification expiry was not confirmed. Try again.','لم يتم تأكيد وقت انتهاء الرمز؛ أعد المحاولة.'));
+        expiresAt=Date.parse(result.expires_at);
+        emailVerified=false;update();code.value='';code.hidden=verify.hidden=false;note.textContent=tr('Email matched. Verification code sent.','تمت مطابقة البريد وإرسال رمز التحقق.');startCountdown();code.focus();
+      }catch(error){setProofFeedback(errorText(error),true);}finally{send.disabled=Number.isFinite(expiresAt)&&!emailVerified&&Date.now()<expiresAt;}
+    };
+    verify.onclick=async()=>{
+      if(verify.disabled||currentUser?.id!==owner)return;
+      if(!/^[0-9]{6}$/.test(code.value)){setProofFeedback(tr('Enter the six-digit code.','أدخل الرمز المكوّن من ستة أرقام.'),true);return;}
+      if(!emailVerified&&Number.isFinite(expiresAt)&&expiresAt<=Date.now()){note.textContent=tr('Code expired; request a new one.','انتهت صلاحية الرمز؛ اطلب رمزًا جديدًا.');tickCountdown();return;}
+      verify.disabled=true;
+      try{const result=await api('/api/github/pending/email/verify',{method:'POST',body:JSON.stringify({connection_id:item.connection_id,code:code.value})});if(currentUser?.id!==owner)return;
+        emailVerified=result.verified===true;update();if(emailVerified){stopCountdown();countdown.textContent='';email.value='';code.value='';code.hidden=verify.hidden=true;send.textContent=tr('Send a fresh code','إرسال رمز جديد');note.textContent=tr('GitHub email verified. Confirm the account below.','تم التحقق من بريد GitHub. أكّد الحساب أدناه.');}
+      }catch(error){setProofFeedback(errorText(error),true);}finally{verify.disabled=false;}
+    };
+    proof.append(note,emailLabel,send,code,verify,countdown);box.append(proof);
+    activateCodeCountdown=()=>{if(item.email_verification?.sent&&!emailVerified&&Number.isFinite(expiresAt))startCountdown();};
+    if(item.installations.length)box.append(select,label,confirm);
+  }
+  if(!item.installations.length){
+    box.append(textElement('p',tr('This account has no authorized installation of this app. Install it on your own repositories first.','لا يوجد تثبيت مصرح لهذا التطبيق على هذا الحساب. ثبّته على مستودعاتك أولًا.')));
+    const install=textElement('button',tr('Install on my GitHub account','تثبيت على حسابي في GitHub'),'button');install.type='button';
+    install.onclick=async()=>{if(currentUser?.id!==owner||install.disabled)return;install.disabled=true;
+      try{const next=await api('/api/github/pending/install',{method:'POST',body:JSON.stringify({connection_id:item.connection_id})});if(currentUser?.id!==owner)return;const url=new URL(next.url);if(url.protocol!=='https:'||url.hostname!=='github.com'||!url.pathname.startsWith('/apps/'))throw Error('Invalid GitHub installation URL');window.location.assign(url.href);}
+      catch(error){feedback.textContent=errorText(error);}finally{install.disabled=false;}
+    };box.append(install);
+  }
+  box.append(cancel,feedback);root.append(box);
+  // Mount first: initial pending GitHub OTP can be restored after a refresh.
+  activateCodeCountdown();
+};
 (function () {
   function applyGithubCard(status) {
     var state = document.getElementById('githubCardState');
@@ -22,10 +248,10 @@
   }
 
   var connectButton = document.getElementById('connectGithubButton');
-  if (connectButton) connectButton.onclick = function () { window.location = '/api/github/install'; };
+  if (connectButton) connectButton.onclick = function () { void window.startFreshGithubConnection(); };
   var disconnectButton = document.getElementById('disconnectGithubButton');
   if (disconnectButton) disconnectButton.onclick = async function () {
-    try { await api('/api/github/disconnect', { method: 'POST' }); await loadProjects(); toast('GitHub disconnected'); }
+    try { if(!await window.disconnectGithubWithReview())return; await loadProjects(); toast('GitHub disconnected'); }
     catch (error) { toast(error.message); }
   };
 
@@ -105,8 +331,8 @@
   }
 
   async function adminPatchUser(id, payload) {
-    try { await api('/api/admin/users/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); apiMessage('adminUserMessage', 'Saved'); await loadAdminUsersData(); }
-    catch (error) { apiMessage('adminUserMessage', error.message, true); }
+    try { await api('/api/admin/users/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); apiMessage('adminUserMessage', 'Saved'); await gridUsers(); return true; }
+    catch (error) { apiMessage('adminUserMessage', error.message, true); return false; }
   }
 
   async function loadAdminUsersData() {
@@ -140,16 +366,127 @@
     var list = await api('/api/admin/workspaces'); var body = document.getElementById('adminWorkspacesBody'); body.replaceChildren();
     list.forEach(function (w) { var row = document.createElement('tr'); adminCells(row, [w.owner, w.project, w.status, w.base_commit_sha ? w.base_commit_sha.slice(0, 8) : '—', w.sessions, w.created_at ? new Date(w.created_at).toLocaleDateString('en-GB') : '—', w.last_activity_at ? new Date(w.last_activity_at).toLocaleString('en-GB') : '—']); body.append(row); });
   }
-  async function loadAdminSessions() {
-    var list = await api('/api/admin/sessions'); var body = document.getElementById('adminSessionsBody'); body.replaceChildren();
-    list.forEach(function (s) { var row = document.createElement('tr'); adminCells(row, [s.owner, s.project || '—', s.title, s.status, s.created_at ? new Date(s.created_at).toLocaleDateString('en-GB') : '—']); body.append(row); });
-  }
-  async function loadAdminGithubAdmin() {
-    var panel = document.getElementById('adminGithubPanel');
-    try {
-      var s = await api('/api/github/status');
-      panel.replaceChildren(textElement('p', 'Configured: ' + (s.configured ? 'yes' : 'no') + ' · Connected: ' + (s.connected ? 'yes' : 'no') + (s.account_login ? (' · ' + s.account_login) : '')), textElement('p', 'This is a status placeholder. The real GitHub authorization, clone and push flow is a later phase.'));
-    } catch (error) { panel.replaceChildren(textElement('p', error.message)); }
+  let adminGithubLoad=null;
+  function loadAdminGithubAdmin() {
+    if(!['admin','owner'].includes(currentUser?.role))return Promise.resolve();
+    const owner=currentUser.id;
+    if(adminGithubLoad?.owner===owner)return adminGithubLoad.promise;
+    const section=document.querySelector('[data-admin-panel="github"]');if(!section)return Promise.resolve();
+    let panel=document.getElementById('adminGithubPanel');
+    // Older loaders replaced the entire section, removing this host and its title.
+    if(!panel){panel=textElement('div','','admin-section');panel.id='adminGithubPanel';section.append(panel);}
+    panel.replaceChildren();
+    const heading=textElement('h2',tr('GitHub integration','تكامل GitHub'));
+    const note=textElement('p',tr('OpenCode executes native GitHub tools through MCP. Gateway manages account authorization and repository ownership. GitHub is not used for platform sign-in.','ينفّذ OpenCode أدوات GitHub الأصلية عبر MCP. يدير Gateway تفويض الحسابات وملكية المستودعات. لا يُستخدم GitHub للدخول إلى المنصة.'));
+    const nativeCard=textElement('section','','manage-card');nativeCard.setAttribute('aria-label',tr('Official Native GitHub integration','تكامل GitHub الأصلي الرسمي'));
+    nativeCard.append(textElement('h3',tr('OpenCode · official GitHub MCP','OpenCode · GitHub MCP الرسمي')));
+    const nativeGrid=textElement('div','','field-grid');
+    for(const [caption,value] of [['MCP server URL','https://api.githubcopilot.com/mcp/'],['Transport','remote']]){
+      const label=textElement('label','','field'),input=document.createElement('input');input.readOnly=true;input.value=value;input.setAttribute('aria-label',caption);label.append(textElement('span',caption),input);nativeGrid.append(label);
+    }
+    nativeCard.append(nativeGrid,textElement('p',tr('Official service settings only. Native connection and per-account authorization have not been verified by this page. No shared customer token is configured here.','هذه إعدادات الخدمة الرسمية فقط. لا تثبت هذه الصفحة اتصال Native أو تفويض كل حساب. لا يُضبط هنا رمز مشترك للعملاء.')));
+    const nativeDocs=textElement('a',tr('Official OpenCode installation guide','دليل الربط الرسمي مع OpenCode'),'button ghost');nativeDocs.href='https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-opencode.md';nativeDocs.target='_blank';nativeDocs.rel='noopener noreferrer';nativeCard.append(nativeDocs);
+    nativeCard.append(textElement('p',tr('Remote authentication uses an authorized token or host OAuth App. The official local MCP distribution includes its own OAuth registration, but requires a separate runtime. These credentials cannot be substituted into the Gateway App form.','مصادقة الخدمة البعيدة تحتاج رمزًا مفوّضًا أو تطبيق OAuth للمضيف. تتضمن نسخة MCP المحلية الرسمية تسجيل OAuth خاصًا بها، لكنها تحتاج عملية تشغيل إضافية. لا يمكن وضع بياناتها بدل بيانات تطبيق Gateway أدناه.')));
+    const gatewaySettings=textElement('details');gatewaySettings.append(textElement('summary',tr('Gateway repository authorization · App settings','تفويض مستودعات Gateway · إعدادات التطبيق')));
+    gatewaySettings.append(textElement('p',tr('Existing Gateway repository connection. Saved server settings take priority. For first-time TEST setup, the registered platform App identifiers are suggested; each customer still authorizes their own repositories. Blank secrets preserve saved values.','الربط الحالي لمستودعات Gateway. الأولوية لإعدادات الخادم المحفوظة. في إعداد TEST الأولي تُقترح معرّفات تطبيق المنصة المسجّل؛ يفوّض كل عميل مستودعاته بنفسه. الحقول السرية الفارغة تحتفظ بالقيم المحفوظة.')));
+    const status=textElement('p',tr('Checking configuration…','جارٍ فحص الإعدادات…'));status.setAttribute('role','status');
+    const grid=textElement('div','','field-grid');
+    const inputs=new Map();
+    const form=document.createElement('form');form.className='manage-card';form.setAttribute('aria-label',tr('GitHub App configuration','إعدادات تطبيق GitHub'));
+    const urls=textElement('details');urls.append(textElement('summary',tr('Callback and service URLs','عناوين العودة والخدمة')));
+    const urlGrid=textElement('div','','field-grid');urls.append(urlGrid);
+    for(const [caption,key] of [['App ID','app_id'],['App Slug','app_slug'],['OAuth Client ID','client_id'],['Public URL','public_base_url'],['Callback URL','callback_url'],['Webhook URL','webhook_url'],['API URL','api_base'],['GitHub URL','web_base']]){
+      const label=textElement('label','','field'),input=document.createElement('input');input.readOnly=!['app_id','app_slug','client_id'].includes(key);input.placeholder='—';input.setAttribute('aria-label',caption);
+      if(!input.readOnly){input.required=true;input.name=key;if(key==='app_id'){input.type='number';input.min='1';}else input.maxLength=key==='app_slug'?100:128;}
+      label.append(textElement('span',caption),input);(input.readOnly?urlGrid:grid).append(label);inputs.set(key,input);
+    }
+    const configuration=textElement('div'),connection=textElement('p'),database=textElement('p');database.setAttribute('role','status');
+    const authorize=textElement('button',tr('New GitHub connection','ربط GitHub جديد'),'button ghost');authorize.type='button';authorize.disabled=true;authorize.onclick=()=>window.startFreshGithubConnection();
+    const refresh=textElement('button',tr('Refresh','تحديث'),'button ghost');refresh.type='button';refresh.onclick=loadAdminGithubAdmin;
+    const credentialsPanel=textElement('details');credentialsPanel.append(textElement('summary',tr('Update App credentials','تحديث بيانات اعتماد التطبيق')));
+    const secretGrid=textElement('div','','field-grid');credentialsPanel.append(secretGrid);
+    function secretField(caption,name,type='password'){const label=textElement('label','','field'),input=document.createElement('input');input.type=type;input.name=name;input.autocomplete='new-password';input.setAttribute('aria-label',caption);label.append(textElement('span',caption),input);secretGrid.append(label);return input;}
+    const clientSecret=secretField('OAuth Client Secret','client_secret');clientSecret.maxLength=4096;
+    const privateKey=secretField(tr('Private key (.pem file)','المفتاح الخاص (ملف .pem)'),'private_key_file','file');privateKey.accept='.pem';
+    const webhookSecret=secretField('Webhook Secret (optional)','webhook_secret');webhookSecret.maxLength=4096;
+    const save=textElement('button',tr('Save GitHub App settings','حفظ إعدادات تطبيق GitHub'),'button');save.type='submit';save.disabled=true;
+    const setupNote=textElement('p');setupNote.setAttribute('role','status');
+    const saveStatus=textElement('p');saveStatus.setAttribute('role','status');
+    const connections=textElement('div');connections.id='adminGithubConnections';
+    form.append(grid,setupNote,credentialsPanel,save,saveStatus);
+    gatewaySettings.append(status,form,urls,configuration,database);
+    const identityConfirmation=textElement('div');panel.append(heading,note,nativeCard,gatewaySettings,connection,identityConfirmation,authorize,refresh,connections);
+    form.onsubmit=async event=>{
+      event.preventDefault();if(save.disabled||!current())return;
+      save.disabled=true;saveStatus.textContent=tr('Saving encrypted settings…','جارٍ حفظ الإعدادات مشفّرة…');
+      let saved=false;
+      try{
+        const file=privateKey.files?.[0];if(file&&file.size>32768)throw Error(tr('PEM file exceeds 32 KB','ملف PEM يتجاوز 32 كيلوبايت'));
+        const pem=file?await file.text():null;
+        if(!current())return;
+        const data={app_id:Number(inputs.get('app_id').value),app_slug:inputs.get('app_slug').value.trim(),client_id:inputs.get('client_id').value.trim(),client_secret:clientSecret.value||null,private_key:pem,webhook_secret:webhookSecret.value||null};
+        await api('/api/admin/github-configuration',{method:'PUT',body:JSON.stringify(data)});
+        saved=true;if(!current())return;
+        clientSecret.value='';privateKey.value='';webhookSecret.value='';
+        saveStatus.textContent=tr('Saved securely. Configuration is not a completed OAuth connection.','حُفظت الإعدادات بأمان. الحفظ وحده لا يعني نجاح ربط OAuth.');
+      }catch(error){if(current())saveStatus.textContent=error.message;}
+      finally{if(current())save.disabled=false;}
+      if(saved&&current()){
+        await loadAdminGithubAdmin();
+        const result=document.getElementById('adminGithubPanel');if(result&&currentUser?.id===owner)result.append(textElement('p',tr('GitHub App settings saved securely.','حُفظت إعدادات تطبيق GitHub بأمان.')));
+      }
+    };
+    const current=()=>currentUser?.id===owner&&['admin','owner'].includes(currentUser?.role)&&panel.isConnected;
+    const showConfig=async()=>{
+      try{
+        const config=await api('/api/admin/github-configuration');if(!current())return;
+        for(const [key,input] of inputs)input.value=String(config[key]??'');
+        // Public metadata, not credentials. Never replace a saved or partially
+        // configured App, and never apply TEST suggestions to another server.
+        const firstTestSetup=config.source==='protected_server_environment'&&config.public_base_url?.replace(/\/+$/,'')==='https://test.opencode-gateway.codes'&&
+          !config.configured&&!config.app_id&&!config.app_slug&&!config.client_id&&
+          !config.secrets?.client_secret&&!config.secrets?.private_key&&!config.secrets?.webhook_secret;
+        if(firstTestSetup){
+          for(const [key,value] of Object.entries({app_id:5470256,app_slug:'opencode-gateway-test-diirzoro',client_id:'Iv23liGSq3yRR7okVSQJ'}))inputs.get(key).value=String(value);
+          setupNote.textContent=tr('Registered platform App identifiers suggested · not saved or connected. Add its Client Secret and PEM after setting up Gateway encryption. These are not OpenCode-issued credentials.','اقتُرحت معرّفات تطبيق المنصة المسجّل · لم تُحفظ ولم يتم الربط. أضف Client Secret وملف PEM بعد إعداد تشفير Gateway. هذه ليست بيانات اعتماد صادرة عن OpenCode.');
+        }
+        gatewaySettings.open=!config.configured;
+
+        save.disabled=config.editable!==true||config.settings_schema_ready!==true||config.credential_storage_ready!==true;
+        saveStatus.textContent=config.settings_schema_ready!==true?tr('Apply TEST migration 0024 to enable saving.','طبّق ترحيل TEST رقم 0024 لتمكين الحفظ.'):config.credential_storage_ready!==true?tr('Gateway credential encryption is not configured. Complete server setup before saving secrets; preserve any existing key.','تشفير اعتمادات Gateway غير مُعدّ. أكمل إعداد الخادم قبل حفظ الأسرار، مع الحفاظ على أي مفتاح موجود.'):tr('Secrets are encrypted on the server. Empty fields keep existing secrets.','تُشفّر الأسرار على الخادم. الحقول الفارغة تحتفظ بالأسرار الحالية.');
+        status.textContent=config.configured?tr('GitHub App configured.','تطبيق GitHub مهيأ.'):tr('GitHub App is not ready on the server.','تطبيق GitHub غير جاهز على الخادم.');
+        configuration.append(textElement('p',[['OAuth Client Secret','client_secret'],['App private key','private_key'],['Webhook Secret','webhook_secret'],['Credential encryption key','encryption_key']].map(([name,key])=>name+': '+(config.secrets?.[key]?tr('Configured','موجود'):tr('Missing','ناقص'))).join(' · ')));
+        if(config.missing?.length)configuration.append(textElement('p',tr('Missing server settings: ','إعدادات الخادم الناقصة: ')+config.missing.join(', ')));
+        const schema=config.database;
+        database.textContent=!schema?tr('Database schema has not been verified. Deploy the matching diagnostics backend.','لم يتم التحقق من مخطط قاعدة البيانات. انشر الخلفية المتوافقة للفحص.'):!schema.checked?tr('Database schema inspection is unavailable.','تعذر التحقق من مخطط قاعدة البيانات.'):
+          schema.ready?tr('GitHub database schema is ready.','جداول GitHub وأعمدتها جاهزة.'):
+          tr('GitHub database migration required: ','يلزم ترحيل قاعدة بيانات GitHub: ')+(schema.missing||[]).join(', ');
+        if(schema?.checked&&schema.ready)database.dataset.ready='true';
+        if(schema?.revisions?.length)database.textContent+=' · Alembic: '+schema.revisions.join(', ');
+        if(schema&&!schema.ready)authorize.disabled=true;
+      }catch(error){if(current())status.textContent=tr('Configuration unavailable: ','تعذر تحميل الإعدادات: ')+error.message;}
+    };
+    const showConnection=async()=>{
+      try{const value=await api('/api/github/status');if(!current())return;
+        connection.textContent=value.connected?tr('My connected account: ','حسابي المتصل: ')+(value.github_login||value.account_login||'GitHub'):tr('My account is not connected.','حسابي غير مرتبط.');
+        identityConfirmation.replaceChildren();window.renderGithubConfirmation(identityConfirmation,value,loadAdminGithubAdmin);
+        const outcome=new URLSearchParams(location.search).get('github');
+        if(!value.pending&&['configuration','ownership-review','error'].includes(outcome)){
+          const notice=textElement('p',outcome==='ownership-review'?tr('An older GitHub connection needs verified ownership recovery. No new account was connected.','يلزم استرداد موثّق لملكية اتصال GitHub قديم. لم يُربط أي حساب جديد.'):tr('GitHub callback could not complete. Check Gateway diagnostics and the sanitized callback log category.','تعذر استكمال العودة من GitHub. راجع تشخيص Gateway وتصنيف الخطأ الآمن في السجل.'),'api-message show');notice.setAttribute('role','alert');identityConfirmation.append(notice);
+        }
+        // Enabled only after both configuration and database diagnostics succeed.
+        authorize.dataset.available=String(!!value.configured&&!value.connected);
+      }catch(error){if(current())connection.textContent=tr('Account status unavailable: ','تعذر فحص اتصال الحساب: ')+error.message;}
+    };
+    const entry={owner};adminGithubLoad=entry;
+    entry.promise=Promise.all([showConfig(),showConnection()]).then(async()=>{
+      if(!current())return;
+      authorize.disabled=authorize.dataset.available!=='true'||!database.dataset.ready;
+      // This child alone is owned by the connections renderer. Never give it the
+      // parent admin section: renderManagement starts by clearing its root.
+      if(window.renderManagement)await window.renderManagement(connections,'connections',true);
+    }).catch(error=>{if(current())connections.append(textElement('p',error.message));}).finally(()=>{if(adminGithubLoad===entry)adminGithubLoad=null;});
+    return entry.promise;
   }
 
   async function loadAdminBilling() {
@@ -216,16 +553,18 @@
     [['#icon-user', tr('Username', 'اسم المستخدم'), user.username], ['#icon-file', tr('Email', 'البريد'), user.email], ['#icon-shield', tr('Role', 'الدور'), user.role], ['#icon-clock', tr('Trial', 'التجربة'), (typeof user.trial_remaining_days === 'number' ? user.trial_remaining_days + ' ' + tr('days remaining', 'يوم متبقٍ') : '—')]].forEach(function (r) { var c = listCard(r[0], r[1], r[2]); box.append(c); });
   }
 
-  var ADMIN_LOADERS = { overview: loadAdminOverview, projects: loadAdminProjects, workspaces: loadAdminWorkspaces, sessions: loadAdminSessions, users: loadAdminUsersData, plans: loadAdminPlans, billing: loadAdminBilling, reports: loadAdminReports, audit: async function () {}, health: loadAdminHealth, policy: loadAdminPolicy, github: loadAdminGithubAdmin, trial: loadAdminTrial, settings: async function () {}, security: async function () {}, account: loadAdminAccount };
+  var ADMIN_LOADERS = { overview: loadAdminOverview, projects: loadAdminProjects, workspaces: loadAdminWorkspaces, users: loadAdminUsersData, plans: loadAdminPlans, billing: loadAdminBilling, reports: loadAdminReports, audit: async function () {}, health: loadAdminHealth, policy: loadAdminPolicy, github: loadAdminGithubAdmin, email: async function(){ if(window.gatewayLoadServiceCenter) await window.gatewayLoadServiceCenter(); }, trial: loadAdminTrial, settings: async function () {}, security: async function () {}, account: loadAdminAccount };
 
   function setAdminView(name) {
-    if (!['overview','users','plans','billing','reports','audit','health','policy','github','trial','settings','security','account'].includes(name)) name='overview';
+    if (!['overview','users','plans','billing','reports','audit','health','policy','github','email','trial','settings','security','account'].includes(name)) name='overview';
     adminView = name;
     document.querySelectorAll('#adminNav [data-admin-view]').forEach(function (b) { b.classList.toggle('active', b.dataset.adminView === name); });
     document.querySelectorAll('#adminPage [data-admin-panel]').forEach(function (p) { p.classList.toggle('active', p.dataset.adminPanel === name); });
     var loader = ADMIN_LOADERS[name];
     if (loader) return loader();
   }
+
+  window.openGithubConnectionPanel=()=>['admin','owner'].includes(currentUser?.role)?setAdminView('github'):window.openConnections?.('github');
 
   document.querySelectorAll('[data-admin-view]').forEach(function (button) {
     button.onclick = function () { setAdminView(button.dataset.adminView).catch(function (e) { toast(e.message); }); };
@@ -275,14 +614,24 @@
   }
 
   function planDisplayName(plan) {
-    return lang === 'ar' ? planDurationLabel(plan.duration_days) : plan.name;
+    const names={gateway_100:['Basic · 100 MB','أساسية · 100 ميجابايت'],gateway_150:['Standard · 150 MB','متوسطة · 150 ميجابايت'],gateway_250:['Plus · 250 MB','متقدمة · 250 ميجابايت']};
+    return names[plan.code]?tr(...names[plan.code]):plan.name;
   }
   function planDisplayTerm(plan) {
-    return plan.duration_days + ' ' + tr('days', 'يوم');
+    return (plan.storage_mb||50)+' MB · '+planDurationLabel(plan.duration_days);
+  }
+  function platformOnlyNote(){
+    return tr('Gateway platform access, free available services and ONE shared quota for local + GitHub projects. AI subscriptions, paid models, API keys and tokens are NOT included: connect your own AI provider.',
+      'الاشتراك لاستخدام منصة OpenCode Gateway وخدماتها المجانية المتاحة، وبحصة واحدة للمشاريع المحلية وGitHub. لا يشمل اشتراكات الذكاء الاصطناعي أو النماذج المدفوعة أو مفاتيح API؛ يربط العميل مزوّديه بنفسه.');
   }
   window.planDisplayName = planDisplayName;
   window.planDisplayTerm = planDisplayTerm;
   window.planDisplayPrice = function (plan) { return money(plan.price_cents); };
+
+  function platformCardNote() {
+    return tr('Platform subscription only · AI models/APIs not included · connect your own keys.',
+      'اشتراك المنصة فقط · نماذج وAPI غير مشمولة · أضف مفاتيحك الخاصة.');
+  }
 
   async function renderPricing() {
     var cards = document.getElementById('pricingCards');
@@ -290,6 +639,11 @@
     try {
       var plans = await api('/api/plans', { cache: 'no-store' });
       cards.replaceChildren();
+      var free=textElement('div','','price-card');
+      free.append(textElement('b','$0'),textElement('span',tr('Free trial · 50 MB','تجربة مجانية · 50 ميجابايت')),
+        textElement('small',tr('One 30-day trial · local + GitHub storage combined','تجربة واحدة لمدة 30 يومًا · المحلي وGitHub بحصة موحدة')),
+        textElement('small',platformCardNote()));
+      cards.append(free);
       var parts = [];
       plans.forEach(function (plan) {
         var duration = plan.durationLabel || planDurationLabel(plan.duration_days);
@@ -299,10 +653,19 @@
         card.append(textElement('b', money(plan.price_cents)));
         card.append(textElement('span', main));
         card.append(textElement('small', sub));
+        card.append(textElement('small',tr('Local and GitHub combined · one account quota','المشاريع المحلية وGitHub معًا · حصة واحدة للحساب')));
+        card.append(textElement('small',platformCardNote()));
         var choose=textElement('button',tr('Subscribe','اشترك'),'button small');choose.type='button';choose.dataset.planId=plan.id;choose.onclick=async function(){window.pendingCheckoutPlan=plan.id;if(currentUser){await window.openClientView('billing');await window.beginCheckout(plan.id);}else await page('authPage');};card.append(choose);
         cards.append(card);
         parts.push(money(plan.price_cents) + ' · ' + main);
       });
+      var disclaimer=document.getElementById('pricingDisclaimer');
+      if (!disclaimer) {
+        disclaimer=textElement('p','','pricing-disclaimer');
+        disclaimer.id='pricingDisclaimer';
+        cards.after(disclaimer);
+      }
+      disclaimer.textContent=platformOnlyNote();
       var summary = document.getElementById('pricingSummary');
       if (summary && parts.length) summary.textContent = parts.join(' · ');
       if (summary && !parts.length) summary.textContent = tr('No active offers are available right now.', 'لا توجد عروض نشطة حاليًا.');
@@ -355,14 +718,91 @@
     } catch (error) { apiMessage('adminPlanMessage', error.message, true); }
   };
 
+  const policyStyle=document.createElement('style');policyStyle.textContent=`
+  .native-policy-console{display:grid;gap:12px}.native-policy-console .manage-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .native-policy-console input[type=search]{flex:1;min-width:180px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text)}
+  .policy-provider-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-block-end:1px solid var(--line);flex-wrap:wrap}
+  .policy-provider-identity{flex:1;min-width:150px;display:grid;gap:3px}.policy-provider-identity small{color:var(--muted)}
+  .policy-model-editor{border:1px solid var(--line);border-radius:12px;padding:14px}.policy-model-list{display:grid;gap:6px;margin-block:10px}
+  .policy-model-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px;background:var(--control-fill);border-radius:8px}.policy-model-row small{color:var(--muted);overflow-wrap:anywhere}
+  `;document.head.append(policyStyle);
+  var policyVisibilityRevision=0;
   async function loadAdminPolicy() {
+    const owner=currentUser?.id,revision=++policyVisibilityRevision;
+    const t=(en,ar)=>lang==='ar'?ar:en;
+    const panel=document.querySelector('[data-admin-panel="policy"]');
+    let host=document.getElementById('adminCatalogVisibility');
+    if(!host){host=textElement('section','','manage-card native-policy-console');host.id='adminCatalogVisibility';panel.append(host);}
+    host.replaceChildren(textElement('p',t('Loading policy…','جارٍ تحميل السياسة…')));
     try {
-      var policy = await api('/api/admin/policy');
-      document.getElementById('policyProviders').value = (policy.allowed_providers || []).join(', ');
-      document.getElementById('policyModels').value = (policy.allowed_models || []).join(', ');
-      document.getElementById('policyTools').value = (policy.allowed_tools || []).join(', ');
-      document.getElementById('policyApproval').checked = !!policy.require_tool_approval;
-    } catch (error) { toast(error.message); }
+      let draft=await api('/api/admin/policy');
+      const valid=()=>revision===policyVisibilityRevision&&currentUser?.id===owner&&['admin','owner'].includes(currentUser?.role);
+      if(!valid())return;
+      document.getElementById('policyProviders').value=(draft.allowed_providers||[]).join(', ');
+      document.getElementById('policyModels').value=(draft.allowed_models||[]).join(', ');
+      document.getElementById('policyTools').value=(draft.allowed_tools||[]).join(', ');
+      document.getElementById('policyApproval').checked=!!draft.require_tool_approval;
+      const changedProviders=new Map(),changedModels=new Map(),selected=new Set();let rows=[],offset=0,next=null,pageRevision=0;
+      host.replaceChildren();
+      host.append(textElement('h2',t('Customer catalog visibility','ظهور الكتالوج للعملاء')),textElement('p',t('Hide from default suggestions only. Manual search, connections and use remain available. Access restrictions and customer credentials are separate.','الإخفاء من الاقتراحات الافتراضية فقط. البحث والربط والاستخدام اليدوي متاحة. قيود الوصول ومفاتيح العملاء منفصلة.')));
+      const toolbar=textElement('div','','manage-actions'),search=document.createElement('input');search.type='search';search.placeholder=t('Search all Native providers','ابحث في جميع مزوّدي Native');search.setAttribute('aria-label',search.placeholder);
+      function action(label,handler){const b=textElement('button',label,'button ghost small');b.type='button';b.onclick=async()=>{try{await handler();}catch(error){if(valid())status.textContent=error.message;}};return b;}
+      const status=textElement('p','','muted-small');status.setAttribute('role','status');
+      const list=textElement('div','','policy-provider-list'),details=textElement('section','','policy-model-editor');details.hidden=true;
+      const save=action(t('Save visibility','حفظ الظهور'),async()=>{
+        save.disabled=true;
+        try{
+          const current=await api('/api/admin/policy');if(!valid())return;
+          const hidden=new Set(current.hidden_providers||[]),models={...(current.hidden_models||{})};
+          changedProviders.forEach((visible,id)=>visible?hidden.delete(id):hidden.add(id));
+          changedModels.forEach((changes,pid)=>{const ids=new Set(models[pid]||[]);changes.forEach((visible,id)=>visible?ids.delete(id):ids.add(id));models[pid]=[...ids];});
+          const {updated_at,...body}=current;draft=await api('/api/admin/policy',{method:'PUT',body:JSON.stringify({...body,hidden_providers:[...hidden],hidden_models:models})});
+          if(!valid())return;changedProviders.clear();changedModels.clear();window.workspaceRuntime?.clear();status.textContent=t('Visibility saved. Manual access remains available.','حُفظ الظهور. الوصول اليدوي ما زال متاحًا.');await loadPage(offset,false);
+        }finally{save.disabled=false;}
+      });save.className='button';save.disabled=true;
+      const dirty=()=>{save.disabled=!changedProviders.size&&!changedModels.size;status.textContent=t('Unsaved visibility changes','تغييرات ظهور غير محفوظة');};
+      const providerVisible=r=>changedProviders.has(r.id)?changedProviders.get(r.id):!(draft.hidden_providers||[]).includes(r.id);
+      const bulk=visible=>{rows.filter(r=>selected.has(r.id)).forEach(r=>changedProviders.set(r.id,visible));dirty();renderRows();};
+      const pick=action(t('Select page','تحديد الصفحة'),()=>{rows.forEach(r=>selected.add(r.id));renderRows();});
+      const show=action(t('Show selected','إظهار المحدد'),()=>bulk(true)),hide=action(t('Hide selected','إخفاء المحدد'),()=>bulk(false));
+      toolbar.append(search,action(t('Search','بحث'),()=>{offset=0;return loadPage(0);}),pick,show,hide);
+      const previous=action(t('Previous','السابق'),()=>loadPage(Math.max(0,offset-6))),following=action(t('Next','التالي'),()=>loadPage(next)),pageInfo=textElement('span','','muted-small');
+      const pager=textElement('div','','manage-actions');pager.append(previous,pageInfo,following);
+      const add=action(t('Add from Native catalog','إضافة من كتالوج Native'),async()=>{
+        const id=await window.requestInput(t('Native provider ID or name · no API key','اسم أو معرّف مزوّد Native · دون مفتاح API'));
+        if(id){search.value=id;await loadPage(0);status.textContent=t('Choose a discovered provider below. Custom engine configuration is protected; connect your own key in Connections.','اختر مزوّدًا مكتشفًا أدناه. إعداد المحرك المخصص محمي؛ اربط مفتاح حسابك من الاتصالات.');}
+      });
+      host.append(toolbar,list,pager,details,add,save,status);
+      async function openModels(provider){
+        const result=await api('/api/admin/native/providers?provider_id='+encodeURIComponent(provider.id));if(!valid())return;
+        let modelOffset=0;const all=result.models;details.hidden=false;details.replaceChildren(textElement('h3',provider.name));
+        const find=document.createElement('input');find.type='search';find.placeholder=t('Search models of this provider','ابحث في نماذج هذا المزوّد');find.setAttribute('aria-label',find.placeholder);
+        const body=textElement('div','','policy-model-list'),nav=textElement('div','','manage-actions');
+        function visible(m){const changes=changedModels.get(provider.id);return changes?.has(m.id)?changes.get(m.id):!(draft.hidden_models?.[provider.id]||[]).includes(m.id);}
+        function set(m,on){if(!changedModels.has(provider.id))changedModels.set(provider.id,new Map());changedModels.get(provider.id).set(m.id,on);dirty();}
+        const back=action(t('Previous models','النماذج السابقة'),()=>{modelOffset=Math.max(0,modelOffset-8);render();}),more=action(t('Next models','النماذج التالية'),()=>{modelOffset+=8;render();}),count=textElement('span','','muted-small');nav.append(back,count,more);
+        const bulkModels=textElement('div','','manage-actions');
+        bulkModels.append(action(t('Show matching models','إظهار النماذج المطابقة'),()=>{matches().forEach(m=>set(m,true));render();}),action(t('Hide matching models','إخفاء النماذج المطابقة'),()=>{matches().forEach(m=>set(m,false));render();}),action(t('Close models','إغلاق النماذج'),()=>details.hidden=true));
+        const matches=()=>all.filter(m=>(m.id+' '+m.name).toLowerCase().includes(find.value.toLowerCase()));
+        function render(){const matchesNow=matches();body.replaceChildren();for(const m of matchesNow.slice(modelOffset,modelOffset+8)){const row=textElement('label','','policy-model-row'),toggle=document.createElement('input');toggle.type='checkbox';toggle.checked=visible(m);toggle.onchange=()=>set(m,toggle.checked);row.append(toggle,textElement('span',m.name),textElement('small',m.id));body.append(row);}back.disabled=modelOffset===0;more.disabled=modelOffset+8>=matchesNow.length;count.textContent=(matchesNow.length?modelOffset+1:0)+'–'+Math.min(modelOffset+8,matchesNow.length)+' / '+matchesNow.length;}
+        find.oninput=()=>{modelOffset=0;render();};details.append(find,bulkModels,body,nav);render();
+      }
+      function renderRows(){
+        list.replaceChildren();for(const r of rows){const row=textElement('div','','policy-provider-row'),check=document.createElement('input');check.type='checkbox';check.checked=selected.has(r.id);check.setAttribute('aria-label',t('Select ','تحديد ')+r.name);check.onchange=()=>{check.checked?selected.add(r.id):selected.delete(r.id);show.disabled=hide.disabled=!selected.size;};
+          const identity=textElement('div','','policy-provider-identity');identity.append(textElement('strong',r.name),textElement('small',r.id+' · '+r.model_count+t(' models',' نموذج')));
+          const visible=providerVisible(r),state=textElement('small',visible?t('Shown','ظاهر'):t('Hidden · manual access available','مخفي · متاح يدويًا'));if(!r.allowed)state.textContent+=' · '+t('Access restricted separately','الوصول مقيّد بصورة مستقلة');
+          const toggle=action(visible?t('Hide','إخفاء'):t('Show','إظهار'),()=>{changedProviders.set(r.id,!providerVisible(r));dirty();renderRows();});
+          row.append(check,identity,state,toggle,action(t('Models','النماذج'),()=>openModels(r)));list.append(row);
+        }show.disabled=hide.disabled=!rows.some(r=>selected.has(r.id));
+      }
+      async function loadPage(value,announce=true){
+        if(value===null)return;const sequence=++pageRevision;offset=value;
+        const result=await api('/api/admin/native/providers?limit=6&offset='+offset+'&query='+encodeURIComponent(search.value));if(!valid()||sequence!==pageRevision)return;
+        rows=result.items;next=result.next_offset;selected.clear();renderRows();previous.disabled=offset===0;following.disabled=next===null;pageInfo.textContent=(rows.length?offset+1:0)+'–'+(offset+rows.length)+' / '+result.total;if(announce)status.textContent=t('Native catalog · six providers per page','كتالوج Native · ستة مزوّدين في الصفحة');
+      }
+      search.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();loadPage(0).catch(error=>status.textContent=error.message);}};
+      await loadPage(0);
+    } catch(error){host.replaceChildren(textElement('p',error.message,'api-message'));}
   }
 
   var policyForm = document.getElementById('adminPolicyForm');
@@ -410,19 +850,8 @@
     if (tools) tools.onclick = openToolsPanel;
   }
 
-  function renderEventLine(kind) {
-    var feed = document.getElementById('agentFeed');
-    if (!feed) return;
-    var line = textElement('div', '· ' + kind, 'event-line');
-    feed.append(line);
-    feed.scrollTop = feed.scrollHeight;
-  }
-
-  // The base client owns the sole SSE connection and durable replay cursor.
-  window.renderWorkspaceEventLine = renderEventLine;
-
-  Object.assign(copy.en, { clientNavTitle: 'Client', clientDashboard: 'Dashboard', clientProjects: 'Projects', clientSessions: 'Sessions', clientAi: 'OpenCode', clientAccount: 'Account / Profile', clientDashboardLead: 'Your trial, connections, projects and recent activity in one place.', clientRecentLabel: 'RECENT', clientRecentProjects: 'Projects and workspaces', adminNavTitle: 'Administration', adminConsole: 'Admin Console', adminOverview: 'Overview', adminUsers: 'Users', adminProjects: 'Projects', adminWorkspaces: 'Workspaces', adminSessions: 'Sessions', adminPlans: 'Plans & Offers', adminPolicy: 'AI / OpenCode Policy', adminGithub: 'GitHub', adminAudit: 'Audit / Activity', adminSettings: 'Platform Settings', adminPersonal: 'Personal account', adminOverviewLead: 'Real backend metrics only. Metrics without a real query show "Not available yet".', adminPlatformStatus: 'PLATFORM STATUS', adminIntegrations: 'Integrations', adminUsersLead: 'Real account records. Role, status and trial changes call the admin API.', adminActions: 'Actions', adminProjectsLead: 'Metadata only. Customer source code is never shown here.', adminWorkspacesLead: 'Real workspace metadata. The physical path is never exposed.', adminSessionsLead: 'Real OpenCode conversation metadata.', adminPlansLead: 'Published offers are read by the public landing page through the plans API.', adminPolicyLead: 'These settings persist and limit what clients can select. User API keys and OAuth credentials are never shown here.', adminBilling: 'Billing / Subscriptions', adminReports: 'Reports', adminHealth: 'Platform Logs / Health', adminGithubSettings: 'GitHub Integration Settings', adminTrial: 'Trial / Entitlement Settings', adminSecurity: 'Security', clientRecentSessionsTitle: 'Recent sessions', clientProjectsLead: 'Your projects and workspaces.', clientSessionsLead: 'Workspaces and their OpenCode sessions.', clientAiLead: 'Runtime, provider and tool status for your workspaces.', clientGithubLead: 'Connect your GitHub account, then choose a repository and branch.', clientBillingLead: "Your own subscription only. Other customers' billing is never shown here.", clientPlansTitle: 'Plans & offers', clientCancel: 'Cancel subscription', clientReactivate: 'Reactivate', clientRenew: 'Renew subscription', clientInvoicesTitle: 'Invoices & payments', clientAccountLead: 'Personal details and preferences.', clientPersonalInfo: 'Personal information', clientUsername: 'Username', clientEmail: 'Email', clientPhone: 'Phone', clientLocation: 'Location / postal code', clientPreferences: 'Language / theme', clientSecurityNote: 'Use Password & security to change your password, revoke sign-ins, or suspend your account.', clientSecurityLead: 'Session and account security.', clientSecurity: 'Password & Security', clientDashboardBadge: 'CLIENT DASHBOARD', adminConsoleBadge: 'ADMIN CONSOLE', adminBillingLead: 'Business finance view, separate from the client billing page.', adminReportsLead: 'Real platform counts. Revenue appears only when backed by real payment data.', aUsername: 'Username', aEmail: 'Email', aRole: 'Role', aStatus: 'Status', aTrialRemaining: 'Trial remaining', aTrialEnd: 'Trial end', aPlan: 'Plan', aLastLogin: 'Last login', aCreated: 'Created', aProjectsWorkspaces: 'Projects / Workspaces', aCode: 'Code', aName: 'Name', aPrice: 'Price (USD)', aDays: 'Duration', aActive: 'Active', aAddPlan: 'Add plan', aSubscriptionsSmall: 'SUBSCRIPTIONS', aSubsTitle: 'Subscriptions across users', aOwner: 'Owner', aStarted: 'Started', aPeriodEnd: 'Period end', aCancelled: 'Cancelled', aTransactionsSmall: 'TRANSACTIONS', aTransactions: 'Payment transactions', aRevenueSmall: 'REVENUE', aRevenue: 'Revenue', aNay: 'Not available yet.', aAuditLogging: 'Audit logging is not available yet.', aHealthLead: 'Runtime health from the real backend.', aLoading: 'Loading…', aEnabledProviders: 'Enabled providers (comma separated)', aAllowedModels: 'Allowed models (comma separated)', aEnabledTools: 'Enabled tools / capabilities (comma separated)', aRequireApproval: 'Require approval before running tools', aSavePolicy: 'Save policy', aGithubLead: 'Connection status. The real GitHub integration is a later phase.', aLoadingStatus: 'Loading status…', aTrialLead: 'Trial entitlement overview. Editing trial defaults is not available yet.', aPlatformSettings: 'Platform settings are not available yet.', aAdminSecurityNotAvail: 'Admin security settings are not available yet.', aPersonalLead: 'Your own account. Administrative controls are on the other pages.' });
-  Object.assign(copy.ar, { clientNavTitle: 'العميل', clientDashboard: 'لوحة المعلومات', clientProjects: 'المشاريع', clientSessions: 'الجلسات', clientAi: 'OpenCode', clientAccount: 'الحساب / الملف', clientDashboardLead: 'تجربتك واتصالاتك ومشاريعك ونشاطك الأخير في مكان واحد.', clientRecentLabel: 'الأحدث', clientRecentProjects: 'المشاريع ومساحات العمل', adminNavTitle: 'الإدارة', adminConsole: 'لوحة الإدارة', adminOverview: 'نظرة عامة', adminUsers: 'المستخدمون', adminProjects: 'المشاريع', adminWorkspaces: 'مساحات العمل', adminSessions: 'الجلسات', adminPlans: 'الخطط والعروض', adminPolicy: 'سياسة الذكاء / OpenCode', adminGithub: 'GitHub', adminAudit: 'التدقيق / النشاط', adminSettings: 'إعدادات المنصة', adminPersonal: 'الحساب الشخصي', adminOverviewLead: 'مؤشرات حقيقية فقط. ما لا يوجد له استعلام حقيقي يظهر "غير متاح بعد".', adminPlatformStatus: 'حالة المنصة', adminIntegrations: 'التكاملات', adminUsersLead: 'سجلات حقيقية. تغيير الدور والحالة والتجربة يستدعي واجهة الإدارة.', adminActions: 'إجراءات', adminProjectsLead: 'بيانات وصفية فقط. لا يظهر كود العميل هنا.', adminWorkspacesLead: 'بيانات مساحة العمل الحقيقية. لا يُكشف المسار الفيزيائي.', adminSessionsLead: 'بيانات محادثات OpenCode الحقيقية.', adminPlansLead: 'تُقرأ العروض المنشورة في صفحة الهبوط عبر واجهة الخطط.', adminPolicyLead: 'تُحفظ هذه الإعدادات وتحدّ من اختيارات العملاء. لا تظهر مفاتيح المستخدمين أو رموز OAuth هنا.', adminBilling: 'الفوترة / الاشتراكات', adminReports: 'التقارير', adminHealth: 'سجلات المنصة / الحالة', adminGithubSettings: 'إعدادات تكامل GitHub', adminTrial: 'إعدادات التجربة / الاستحقاق', adminSecurity: 'الأمان', clientRecentSessionsTitle: 'الجلسات الأخيرة', clientProjectsLead: 'مشاريعك ومساحات العمل.', clientSessionsLead: 'مساحات العمل وجلسات OpenCode الخاصة بها.', clientAiLead: 'حالة وقت التشغيل والمزوّد والأدوات لمساحات عملك.', clientGithubLead: 'حالة الاتصال. التدفق الحقيقي للترخيص مرحلة لاحقة.', clientBillingLead: 'اشتراكك فقط. لا تظهر فوترة العملاء الآخرين هنا.', clientPlansTitle: 'الخطط والعروض', clientCancel: 'إلغاء الاشتراك', clientReactivate: 'إعادة التفعيل', clientRenew: 'تجديد الاشتراك', clientInvoicesTitle: 'الفواتير والمدفوعات', clientAccountLead: 'بياناتك وتفضيلاتك. لوحة المعلومات صفحة منفصلة.', clientPersonalInfo: 'المعلومات الشخصية', clientUsername: 'اسم المستخدم', clientEmail: 'البريد الإلكتروني', clientPhone: 'الهاتف', clientLocation: 'الموقع / الرمز البريدي', clientPreferences: 'اللغة / المظهر', clientSecurityNote: 'تغيير كلمة المرور وإدارة الأجهزة غير متاحين بعد. جلستك تستخدم ملف تعريف ارتباط HttpOnly وSameSite=Strict.', clientSecurityLead: 'أمان الجلسة والحساب.', clientSecurity: 'كلمة المرور والأمان', clientDashboardBadge: 'لوحة العميل', adminConsoleBadge: 'لوحة الإدارة', adminBillingLead: 'عرض مالي للعمل، منفصل عن صفحة فوترة العميل.', adminReportsLead: 'مؤشرات المنصة الحقيقية. تظهر الإيرادات فقط عند توفر بيانات دفع حقيقية.', aUsername: 'اسم المستخدم', aEmail: 'البريد الإلكتروني', aRole: 'الدور', aStatus: 'الحالة', aTrialRemaining: 'المتبقي من التجربة', aTrialEnd: 'نهاية التجربة', aPlan: 'الخطة', aLastLogin: 'آخر دخول', aCreated: 'تاريخ الإنشاء', aProjectsWorkspaces: 'المشاريع / مساحات العمل', aCode: 'الرمز', aName: 'الاسم', aPrice: 'السعر (سنتات)', aDays: 'الأيام', aActive: 'نشط', aAddPlan: 'إضافة خطة', aSubscriptionsSmall: 'الاشتراكات', aSubsTitle: 'الاشتراكات عبر المستخدمين', aOwner: 'المالك', aStarted: 'البدء', aPeriodEnd: 'نهاية الفترة', aCancelled: 'ملغى', aTransactionsSmall: 'المعاملات', aTransactions: 'معاملات الدفع', aRevenueSmall: 'الإيرادات', aRevenue: 'الإيرادات', aNay: 'غير متاح بعد.', aAuditLogging: 'سجل التدقيق غير متاح بعد.', aHealthLead: 'حالة وقت التشغيل من الخلفية الحقيقية.', aLoading: 'جارٍ التحميل…', aEnabledProviders: 'المزوّدون المفعّلون (مفصولة بفواصل)', aAllowedModels: 'النماذج المسموحة (مفصولة بفواصل)', aEnabledTools: 'الأدوات المفعّلة (مفصولة بفواصل)', aRequireApproval: 'تتطلب الموافقة قبل تشغيل الأدوات', aSavePolicy: 'حفظ السياسة', aGithubLead: 'حالة الاتصال. تكامل GitHub الحقيقي مرحلة لاحقة.', aLoadingStatus: 'جارٍ تحميل الحالة…', aTrialLead: 'نظرة عامة على استحقاق التجربة. تعديل مدة التجربة الافتراضية غير متاح بعد.', aPlatformSettings: 'إعدادات المنصة غير متاحة بعد.', aAdminSecurityNotAvail: 'إعدادات أمان الإدارة غير متاحة بعد.', aPersonalLead: 'حسابك الخاص. عناصر التحكم الإدارية في الصفحات الأخرى.' });
+  Object.assign(copy.en, { clientNavTitle: 'Client', clientDashboard: 'Dashboard', clientProjects: 'Projects', clientSessions: 'Sessions', clientAi: 'OpenCode', clientAccount: 'Account / Profile', clientDashboardLead: 'Your trial, connections, projects and recent activity in one place.', clientRecentLabel: 'RECENT', clientRecentProjects: 'Projects and workspaces', adminNavTitle: 'Administration', adminConsole: 'Admin Console', adminOverview: 'Overview', adminUsers: 'Users', adminProjects: 'Projects', adminWorkspaces: 'Workspaces', adminSessions: 'Sessions', adminPlans: 'Plans & Offers', adminPolicy: 'AI / OpenCode Policy', adminGithub: 'GitHub', adminAudit: 'Audit / Activity', adminSettings: 'Platform Settings', adminPersonal: 'Personal account', adminOverviewLead: 'Real backend metrics only. Metrics without a real query show "Not available yet".', adminPlatformStatus: 'PLATFORM STATUS', adminIntegrations: 'Integrations', adminUsersLead: 'Real account records. Role, status and trial changes call the admin API.', adminActions: 'Actions', adminProjectsLead: 'Metadata only. Customer source code is never shown here.', adminWorkspacesLead: 'Real workspace metadata. The physical path is never exposed.', adminSessionsLead: 'Real OpenCode conversation metadata.', adminPlansLead: 'Published offers are read by the public landing page through the plans API.', adminPolicyLead: 'These settings persist and limit what clients can select. User API keys and OAuth credentials are never shown here.', adminBilling: 'Billing / Subscriptions', adminReports: 'Reports', adminHealth: 'Platform Logs / Health', adminGithubSettings: 'GitHub Integration Settings', adminTrial: 'Trial / Entitlement Settings', adminSecurity: 'Security', clientRecentSessionsTitle: 'Recent sessions', clientProjectsLead: 'Your projects and workspaces.', clientSessionsLead: 'Workspaces and their OpenCode sessions.', clientAiLead: 'Runtime, provider and tool status for your workspaces.', clientGithubLead: 'Connect your GitHub account, then choose a repository and branch.', clientBillingLead: "Your own subscription only. Other customers' billing is never shown here.", clientPlansTitle: 'Plans & offers', clientCancel: 'Cancel subscription', clientReactivate: 'Reactivate', clientRenew: 'Renew subscription', clientInvoicesTitle: 'Invoices & payments', clientAccountLead: 'Personal details and preferences.', clientPersonalInfo: 'Personal information', clientUsername: 'Username', clientEmail: 'Email', clientPhone: 'Phone', clientLocation: 'Location / postal code', clientPreferences: 'Language / theme', clientSecurityNote: 'Use Password & security to change your password, revoke sign-ins, or suspend your account.', clientSecurityLead: 'Session and account security.', clientSecurity: 'Password & Security', clientDashboardBadge: 'CLIENT DASHBOARD', adminConsoleBadge: 'ADMIN CONSOLE', adminBillingLead: 'Business finance view, separate from the client billing page.', adminReportsLead: 'Real platform counts. Revenue appears only when backed by real payment data.', aUsername: 'Username', aEmail: 'Email', aRole: 'Role', aStatus: 'Status', aTrialRemaining: 'Trial remaining', aTrialEnd: 'Trial end', aPlan: 'Plan', aLastLogin: 'Last login', aCreated: 'Created', aProjectsWorkspaces: 'Projects / Workspaces', aCode: 'Code', aName: 'Name', aPrice: 'Price (USD)', aDays: 'Duration', aActive: 'Active', aAddPlan: 'Add plan', aSubscriptionsSmall: 'SUBSCRIPTIONS', aSubsTitle: 'Subscriptions across users', aOwner: 'Owner', aStarted: 'Started', aPeriodEnd: 'Period end', aCancelled: 'Cancelled', aTransactionsSmall: 'TRANSACTIONS', aTransactions: 'Payment transactions', aRevenueSmall: 'REVENUE', aRevenue: 'Revenue', aNay: 'Not available yet.', aAuditLogging: 'Audit logging is not available yet.', aHealthLead: 'Runtime health from the real backend.', aLoading: 'Loading…', aEnabledProviders: 'Enabled providers (comma separated)', aAllowedModels: 'Allowed models (comma separated)', aEnabledTools: 'Enabled tools / capabilities (comma separated)', aRequireApproval: 'Require approval before running tools', aSavePolicy: 'Save policy', aGithubLead: 'GitHub App configuration, database readiness, and account connections.', aLoadingStatus: 'Loading status…', aTrialLead: 'Trial entitlement overview. Editing trial defaults is not available yet.', aPlatformSettings: 'Platform settings are not available yet.', aAdminSecurityNotAvail: 'Admin security settings are not available yet.', aPersonalLead: 'Your own account. Administrative controls are on the other pages.' });
+  Object.assign(copy.ar, { clientNavTitle: 'العميل', clientDashboard: 'لوحة المعلومات', clientProjects: 'المشاريع', clientSessions: 'الجلسات', clientAi: 'OpenCode', clientAccount: 'الحساب / الملف', clientDashboardLead: 'تجربتك واتصالاتك ومشاريعك ونشاطك الأخير في مكان واحد.', clientRecentLabel: 'الأحدث', clientRecentProjects: 'المشاريع ومساحات العمل', adminNavTitle: 'الإدارة', adminConsole: 'لوحة الإدارة', adminOverview: 'نظرة عامة', adminUsers: 'المستخدمون', adminProjects: 'المشاريع', adminWorkspaces: 'مساحات العمل', adminSessions: 'الجلسات', adminPlans: 'الخطط والعروض', adminPolicy: 'سياسة الذكاء / OpenCode', adminGithub: 'GitHub', adminAudit: 'التدقيق / النشاط', adminSettings: 'إعدادات المنصة', adminPersonal: 'الحساب الشخصي', adminOverviewLead: 'مؤشرات حقيقية فقط. ما لا يوجد له استعلام حقيقي يظهر "غير متاح بعد".', adminPlatformStatus: 'حالة المنصة', adminIntegrations: 'التكاملات', adminUsersLead: 'سجلات حقيقية. تغيير الدور والحالة والتجربة يستدعي واجهة الإدارة.', adminActions: 'إجراءات', adminProjectsLead: 'بيانات وصفية فقط. لا يظهر كود العميل هنا.', adminWorkspacesLead: 'بيانات مساحة العمل الحقيقية. لا يُكشف المسار الفيزيائي.', adminSessionsLead: 'بيانات محادثات OpenCode الحقيقية.', adminPlansLead: 'تُقرأ العروض المنشورة في صفحة الهبوط عبر واجهة الخطط.', adminPolicyLead: 'تُحفظ هذه الإعدادات وتحدّ من اختيارات العملاء. لا تظهر مفاتيح المستخدمين أو رموز OAuth هنا.', adminBilling: 'الفوترة / الاشتراكات', adminReports: 'التقارير', adminHealth: 'سجلات المنصة / الحالة', adminGithubSettings: 'إعدادات تكامل GitHub', adminTrial: 'إعدادات التجربة / الاستحقاق', adminSecurity: 'الأمان', clientRecentSessionsTitle: 'الجلسات الأخيرة', clientProjectsLead: 'مشاريعك ومساحات العمل.', clientSessionsLead: 'مساحات العمل وجلسات OpenCode الخاصة بها.', clientAiLead: 'حالة وقت التشغيل والمزوّد والأدوات لمساحات عملك.', clientGithubLead: 'حالة الاتصال. التدفق الحقيقي للترخيص مرحلة لاحقة.', clientBillingLead: 'اشتراكك فقط. لا تظهر فوترة العملاء الآخرين هنا.', clientPlansTitle: 'الخطط والعروض', clientCancel: 'إلغاء الاشتراك', clientReactivate: 'إعادة التفعيل', clientRenew: 'تجديد الاشتراك', clientInvoicesTitle: 'الفواتير والمدفوعات', clientAccountLead: 'بياناتك وتفضيلاتك. لوحة المعلومات صفحة منفصلة.', clientPersonalInfo: 'المعلومات الشخصية', clientUsername: 'اسم المستخدم', clientEmail: 'البريد الإلكتروني', clientPhone: 'الهاتف', clientLocation: 'الموقع / الرمز البريدي', clientPreferences: 'اللغة / المظهر', clientSecurityNote: 'تغيير كلمة المرور وإدارة الأجهزة غير متاحين بعد. جلستك تستخدم ملف تعريف ارتباط HttpOnly وSameSite=Strict.', clientSecurityLead: 'أمان الجلسة والحساب.', clientSecurity: 'كلمة المرور والأمان', clientDashboardBadge: 'لوحة العميل', adminConsoleBadge: 'لوحة الإدارة', adminBillingLead: 'عرض مالي للعمل، منفصل عن صفحة فوترة العميل.', adminReportsLead: 'مؤشرات المنصة الحقيقية. تظهر الإيرادات فقط عند توفر بيانات دفع حقيقية.', aUsername: 'اسم المستخدم', aEmail: 'البريد الإلكتروني', aRole: 'الدور', aStatus: 'الحالة', aTrialRemaining: 'المتبقي من التجربة', aTrialEnd: 'نهاية التجربة', aPlan: 'الخطة', aLastLogin: 'آخر دخول', aCreated: 'تاريخ الإنشاء', aProjectsWorkspaces: 'المشاريع / مساحات العمل', aCode: 'الرمز', aName: 'الاسم', aPrice: 'السعر (سنتات)', aDays: 'الأيام', aActive: 'نشط', aAddPlan: 'إضافة خطة', aSubscriptionsSmall: 'الاشتراكات', aSubsTitle: 'الاشتراكات عبر المستخدمين', aOwner: 'المالك', aStarted: 'البدء', aPeriodEnd: 'نهاية الفترة', aCancelled: 'ملغى', aTransactionsSmall: 'المعاملات', aTransactions: 'معاملات الدفع', aRevenueSmall: 'الإيرادات', aRevenue: 'الإيرادات', aNay: 'غير متاح بعد.', aAuditLogging: 'سجل التدقيق غير متاح بعد.', aHealthLead: 'حالة وقت التشغيل من الخلفية الحقيقية.', aLoading: 'جارٍ التحميل…', aEnabledProviders: 'المزوّدون المفعّلون (مفصولة بفواصل)', aAllowedModels: 'النماذج المسموحة (مفصولة بفواصل)', aEnabledTools: 'الأدوات المفعّلة (مفصولة بفواصل)', aRequireApproval: 'تتطلب الموافقة قبل تشغيل الأدوات', aSavePolicy: 'حفظ السياسة', aGithubLead: 'إعداد تطبيق GitHub وجاهزية قاعدة البيانات واتصالات الحسابات.', aLoadingStatus: 'جارٍ تحميل الحالة…', aTrialLead: 'نظرة عامة على استحقاق التجربة. تعديل مدة التجربة الافتراضية غير متاح بعد.', aPlatformSettings: 'إعدادات المنصة غير متاحة بعد.', aAdminSecurityNotAvail: 'إعدادات أمان الإدارة غير متاحة بعد.', aPersonalLead: 'حسابك الخاص. عناصر التحكم الإدارية في الصفحات الأخرى.' });
   applyPrefs();
 
   // Re-render the active surface after a language switch so dynamic panels match the shell.
@@ -445,10 +874,10 @@
   wireChatControls();
   // Landing pricing is loaded when that page becomes visible, after auth routing.
 
-  // --- Routing: after auth, customer -> Client Dashboard; admin/owner -> Admin Console ---
+  // --- Routing: after auth, customer -> workspace; admin/owner -> Admin Console ---
   protectedPages.add('clientPage');
   function homeFor(user) { return (user && (user.role === 'admin' || user.role === 'owner')) ? 'adminPage' : 'workspaceHomePage'; }
-  async function routeHome() { clientView='dashboard'; adminView='overview'; await page(homeFor(currentUser));if(!['admin','owner'].includes(currentUser?.role)&&window.pendingCheckoutPlan){const plan=window.pendingCheckoutPlan;window.pendingCheckoutPlan=null;await window.openClientView('billing');await window.beginCheckout(plan);} }
+  async function routeHome() { clientView='dashboard'; adminView='overview'; if(!['admin','owner'].includes(currentUser?.role)&&window.openClientWorkspace)await window.openClientWorkspace();else await page(homeFor(currentUser));if(!['admin','owner'].includes(currentUser?.role)&&window.pendingCheckoutPlan){const plan=window.pendingCheckoutPlan;window.pendingCheckoutPlan=null;await window.openClientView('billing');await window.beginCheckout(plan);} }
   var _pageImpl = page;
   page = async function (id) {
     if (['admin','owner'].includes(currentUser?.role) && ['workspaceHomePage','connectionsPage','clientPage','accountPage','billingPage','workspacePage','onboarding'].includes(id)) id='adminPage';
@@ -555,9 +984,6 @@
   function billingCard(label, value, hint) { var c = textElement('article', ''); c.append(textElement('small', label)); c.append(textElement('h3', value)); if (hint) c.append(textElement('p', hint)); return c; }
   async function loadClientBilling() {
     var data = await api('/api/billing/subscription', { cache: 'no-store' });
-    var subStatus = data.subscription && data.subscription.status;
-    var cancelBtn = document.getElementById('billingCancel'); if (cancelBtn) cancelBtn.hidden = !(subStatus === 'active' || subStatus === 'pending_payment');
-    var reactivateBtn = document.getElementById('billingReactivate'); if (reactivateBtn) reactivateBtn.hidden = !(subStatus === 'cancelled' || subStatus === 'expired');
     var summary = document.getElementById('billingSummary'); if (summary) {
       summary.replaceChildren();
       var planName = data.plan ? data.plan.name : tr('No plan assigned', 'لا توجد خطة');
@@ -571,6 +997,11 @@
     }
     var plans = document.getElementById('billingPlans'); if (plans) {
       plans.replaceChildren();
+      var trialCard=textElement('div','','price-card');
+      trialCard.append(textElement('b','$0'),textElement('span',tr('Free trial · 50 MB','تجربة مجانية · 50 ميجابايت')),
+        textElement('small',tr('One trial for 30 days after verification','تجربة واحدة لمدة 30 يومًا بعد التفعيل')),
+        textElement('small',platformOnlyNote()));
+      plans.append(trialCard);
       (data.plans || []).forEach(function (plan, idx) {
         var card = textElement('div', '', 'price-card');
         var isCurrent = data.plan && data.plan.id === plan.id;
@@ -581,6 +1012,8 @@
         var duration = plan.durationLabel || planDurationLabel(plan.duration_days);
         card.append(textElement('span', planDisplayName(plan)));
         card.append(textElement('small', planDisplayTerm(plan)));
+        card.append(textElement('small',tr('Shared account storage: GitHub + local workspaces','مساحة الحساب مشتركة: GitHub + المشاريع المحلية')));
+        card.append(textElement('small',platformOnlyNote()));
         var select = textElement('button', isCurrent ? tr('Current plan', 'الخطة الحالية') : (isSelected ? tr('Selected', 'محددة') : tr('Select', 'اختيار')), 'button small');
         if (isCurrent || isSelected) select.className = 'button small';
         select.onclick = async function () {
@@ -590,15 +1023,15 @@
         card.append(select); plans.append(card);
       });
     }
-    var note = document.getElementById('billingPaymentNote'); if (note) note.textContent = tr('Select a plan to pay using a platform method. Manual transfers activate after receipt verification. Card checkout is not configured yet.', 'اختر خطة للدفع بإحدى وسائل المنصة. يُفعّل التحويل اليدوي بعد التحقق من الاستلام. الدفع بالبطاقة غير مهيأ بعد.');
+    var note = document.getElementById('billingPaymentNote'); if (note) note.textContent = platformOnlyNote()+' '+tr('Access starts only after verified payment.','يبدأ الاشتراك المدفوع بعد تأكيد الدفع فقط.');
 
 
   }
   // Reuse the existing billing cards/plans without establishing normal login.
   window.loadReactivationBilling=loadClientBilling;
-  var billingCancel = document.getElementById('billingCancel');
+  var billingCancel = document.getElementById('billingCancel');if(billingCancel)billingCancel.hidden=true;
   if (billingCancel) billingCancel.onclick = async function () { try { await api('/api/billing/subscription/cancel', { method: 'POST' }); apiMessage('billingMessage', 'Subscription cancelled'); await loadClientBilling(); } catch (error) { apiMessage('billingMessage', error.message, true); } };
-  var billingReactivate = document.getElementById('billingReactivate');
+  var billingReactivate = document.getElementById('billingReactivate');if(billingReactivate)billingReactivate.hidden=true;
   if (billingReactivate) billingReactivate.onclick = async function () { try { await api('/api/billing/subscription/reactivate', { method: 'POST' }); apiMessage('billingMessage', 'Reactivated into pending payment'); await loadClientBilling(); } catch (error) { apiMessage('billingMessage', error.message, true); } };
   var billingRenew = document.getElementById('billingRenew');
   if (billingRenew) billingRenew.onclick = async function () { try { const state=await api('/api/billing/subscription');const plan=state.plan||state.selected_plan;if(plan)await window.beginCheckout(plan.id);else document.getElementById('billingPlans').scrollIntoView({block:'center',behavior:'smooth'}); } catch (error) { apiMessage('billingMessage', error.message, true); } };
@@ -616,29 +1049,16 @@
     } catch (error) { apiMessage('loginMessage', error.message, true); }
     finally { button.disabled = false; }
   };
-  $('#registerForm').onsubmit = async function (event) {
-    event.preventDefault();if($('#registerSubmit').disabled||!event.currentTarget.reportValidity())return;
-    if (value('registerUsername').length < 6) { apiMessage('registerMessage', t('usernameHint'), true); return; }
-    const password = $('#registerPassword').value;
-    if (password.length < 8 || !/[0-9]/.test(password) || ![...password].some(function (c) { return passwordSymbols.includes(c); })) { apiMessage('registerMessage', t('passwordHint'), true); return; }
-    const button = $('#registerSubmit'); button.disabled = true;
-    try {
-      const prefs = { preferred_language: lang, preferred_theme: dark ? 'dark' : 'light' };
-      await api('/api/auth/register', { method: 'POST', body: JSON.stringify({ username: value('registerUsername'), email: value('registerEmail'), password: $('#registerPassword').value, phone: value('registerPhone') }) });
-      renderProfile(await api('/api/profile', { method: 'PATCH', body: JSON.stringify(prefs) }));
-      $('#registerPassword').value = '';
-      if (pendingIdea) { $('#projectName').value = pendingIdea.slice(0, 120); pendingIdea = ''; }
-      await routeHome();
-    } catch (error) { apiMessage('registerMessage', error.message, true); }
-    finally { button.disabled = false; }
-  };
+  // app.js owns registerForm.onsubmit: password signup must display the
+  // pending_verification OTP step and MUST NOT call /api/profile before proof.
+  // Do not override registration here; enhancement routing applies only to login.
 
   navigationReady.then(async function () {
     if(window.passwordRecoveryActive)return;
     var flag = new URLSearchParams(location.search).get('github');
     if (flag) {
-      history.replaceState(null, '', location.pathname);
-      if (flag === 'connected' && currentUser) { toast('GitHub connected'); await page('accountPage'); return; }
+      // Keep the callback outcome until the main bootstrap has opened its panel.
+      if (flag === 'connected' && currentUser) toast('Check the GitHub identity and connection status.');
       if (flag === 'error') { toast('GitHub connection was not completed'); }
     }
     if (currentUser) {
@@ -660,7 +1080,7 @@
   function emptyState(iconHref, title, desc, actionLabel, actionFn) { var box = textElement('div', '', 'empty-state'); var ic = textElement('div', '', 'es-icon'); ic.appendChild(navIcon(iconHref)); box.append(ic); box.append(textElement('h3', title)); if (desc) box.append(textElement('p', desc)); if (actionLabel && actionFn) { var b = textElement('button', actionLabel, 'button'); b.onclick = actionFn; box.append(b); } return box; }
   function listCard(iconHref, title, subtitle) { var card = textElement('div', '', 'list-card'); var ic = textElement('div', '', 'lc-icon'); ic.appendChild(navIcon(iconHref)); card.append(ic); var main = textElement('div', '', 'lc-main'); main.append(textElement('b', title)); if (subtitle) main.append(textElement('small', subtitle)); card.append(main); card.append(textElement('div', '', 'lc-actions')); return card; }
   function statusBadge(status) { var map = { ready: ['good', tr('Ready', 'جاهز')], creating: ['info', tr('Creating', 'جارٍ الإنشاء')], failed: ['danger', tr('Failed', 'فشل')], pushed: ['good', tr('Pushed', 'تم الدفع')], active: ['good', tr('Active', 'نشط')], suspended: ['danger', tr('Suspended', 'موقوف')], cancelled: ['danger', tr('Cancelled', 'ملغى')], pending_payment: ['info', tr('Pending payment', 'بانتظار الدفع')], trial: ['info', tr('Trial', 'تجريبي')], completed: ['good', tr('Completed', 'مكتمل')], idle: ['muted', tr('Idle', 'خامل')], submitted: ['info', tr('Running', 'قيد التشغيل')] }; var m = map[status]; return badge(m ? m[1] : status, m ? m[0] : 'muted'); }
-  function statusText(status) { var m = { ready: tr('Ready', 'جاهز'), creating: tr('Creating', 'جارٍ الإنشاء'), failed: tr('Failed', 'فشل'), pushed: tr('Pushed', 'تم الدفع'), active: tr('Active', 'نشط'), suspended: tr('Suspended', 'موقوف'), cancelled: tr('Cancelled', 'ملغى'), pending_payment: tr('Pending payment', 'بانتظار الدفع'), trial: tr('Trial', 'تجريبي'), completed: tr('Completed', 'مكتمل'), idle: tr('Idle', 'خامل'), submitted: tr('Running', 'قيد التشغيل'), expired: tr('Expired', 'منتهي') }; return m[status] || status; }
+  function statusText(status) { var m = { ready: tr('Ready', 'جاهز'), creating: tr('Creating', 'جارٍ الإنشاء'), failed: tr('Failed', 'فشل'), pushed: tr('Pushed', 'تم الدفع'), active: tr('Active', 'نشط'), suspended: tr('Suspended', 'موقوف'), cancelled: tr('Cancelled', 'ملغى'), pending_payment: tr('Pending payment', 'بانتظار الدفع'), trial: tr('Trial', 'تجريبي'), completed: tr('Completed', 'مكتمل'), idle: tr('Idle', 'خامل'), submitted: tr('Running', 'قيد التشغيل'), expired: tr('Expired', 'منتهي'), archived: tr('Archived', 'مؤرشف'), identity_released: tr('Identity released', 'تم تحرير بيانات التسجيل') }; return m[status] || status; }
   function projectSourceIcon(source) { return source === 'github' ? '#icon-github' : (source === 'template' ? '#icon-grid' : '#icon-folder'); }
 
   function injectNavIcons() {
@@ -712,7 +1132,7 @@
     }
     var qa = document.getElementById('clientQuickActions');
     if (!qa) { qa = textElement('div', '', 'quick-actions'); qa.id = 'clientQuickActions';
-      [['#icon-plus', tr('New project', 'مشروع جديد'), function () { page('onboarding'); }], ['#icon-folder', tr('Open workspace', 'فتح مساحة عمل'), function () { setClientView('projects'); }], ['#icon-github', tr('Connect GitHub', 'ربط GitHub'), function () { window.location = '/api/github/install'; }], ['#icon-opencode', tr('Configure AI provider', 'تهيئة مزوّد الذكاء'), function () { setClientView('ai'); }]].forEach(function (q) { var btn = textElement('button', '', 'button ghost'); btn.appendChild(navIcon(q[0])); btn.appendChild(textElement('span', q[1])); btn.onclick = q[2]; qa.append(btn); });
+      [['#icon-plus', tr('New project', 'مشروع جديد'), function () { page('onboarding'); }], ['#icon-folder', tr('Open workspace', 'فتح مساحة عمل'), function () { setClientView('projects'); }], ['#icon-github', tr('New GitHub connection', 'ربط GitHub جديد'), function () { void window.startFreshGithubConnection(); }], ['#icon-opencode', tr('Configure AI provider', 'تهيئة مزوّد الذكاء'), function () { setClientView('ai'); }]].forEach(function (q) { var btn = textElement('button', '', 'button ghost'); btn.appendChild(navIcon(q[0])); btn.appendChild(textElement('span', q[1])); btn.onclick = q[2]; qa.append(btn); });
       var summaryEl = document.getElementById('clientSummary'); if (summaryEl && summaryEl.parentNode) summaryEl.parentNode.insertBefore(qa, summaryEl);
     }
     renderClientProjectsUI(data); renderClientSessionsUI(data);
@@ -779,18 +1199,19 @@
   loadClientGithub = async function () {
     var panel = document.getElementById('clientGithubPanel'); if (!panel) return;
     try { var s = await api('/api/github/status');
+      if(s.pending){panel.replaceChildren();window.renderGithubConfirmation(panel,s,loadClientGithub);return;}
       if (s.connected) {
         panel.replaceChildren();
         panel.append(textElement('h3', tr('GitHub connected', 'GitHub متصل')));
         panel.append(textElement('p', (s.account_login || '') + ' · ' + (s.target_type || 'User')));
-        var disc = textElement('button', tr('Disconnect', 'فصل'), 'button ghost'); disc.onclick = async function () { try { await api('/api/github/disconnect', { method: 'POST' }); toast(tr('Disconnected', 'تم الفصل')); await loadClientGithub(); } catch (e) { toast(e.message); } }; panel.append(disc);
+        var disc = textElement('button', tr('Disconnect', 'فصل'), 'button ghost'); disc.onclick = async function () { try { if(!await window.confirmAction(tr('Disconnect GitHub, revoke its token and remove your verified personal App installation? All project files and unpushed changes remain.','فصل GitHub وإبطال رمزه وإزالة تثبيت التطبيق الشخصي المتحقق؟ تبقى ملفات المشاريع والتعديلات غير المرفوعة.')))return; await api('/api/github/disconnect', { method: 'POST' }); toast(tr('Disconnected', 'تم الفصل')); await loadClientGithub(); } catch (e) { toast(e.message); } }; panel.append(disc);
       } else {
         var cp = textElement('div', '', 'connect-panel');
         var ic = textElement('div', '', 'cp-icon'); ic.appendChild(navIcon('#icon-github')); cp.append(ic);
-        cp.append(textElement('h3', tr('Connect GitHub', 'ربط GitHub')));
+        cp.append(textElement('h3', tr('New GitHub connection', 'ربط GitHub جديد')));
         cp.append(textElement('p', tr('Link your GitHub account to clone repositories and push changes. Tokens stay on the server and are never stored in your browser.', 'اربط حسابك على GitHub لاستنساخ المستودعات وإرسال التغييرات. تبقى الرموز على الخادم ولا تُخزَّن في متصفحك.')));
-        var btn = textElement('button', tr('Connect GitHub', 'ربط GitHub'), 'button');
-        btn.onclick = function () { window.location = '/api/github/install'; };
+        var btn = textElement('button', tr('New GitHub connection', 'ربط GitHub جديد'), 'button');
+        btn.onclick = function () { void window.startFreshGithubConnection(); };
         if (!s.configured) { btn.disabled = true; btn.title = tr('GitHub App is not configured', 'تطبيق GitHub غير مكوّن'); }
         cp.append(btn); panel.replaceChildren(cp);
       }
@@ -817,6 +1238,7 @@
     [['#icon-shield', tr('Password', 'كلمة المرور'), tr('Password change is not available yet.', 'تغيير كلمة المرور غير متاح بعد.'), 'muted', tr('Coming later', 'لاحقًا')], ['#icon-user', tr('Active session', 'الجلسة النشطة'), tr('HttpOnly, SameSite=Strict cookie.', 'ملف تعريف ارتباط HttpOnly وSameSite=Strict.'), 'good', tr('Active', 'نشطة')], ['#icon-settings', tr('Two-factor authentication', 'المصادقة الثنائية'), tr('Not configured.', 'غير مكوّنة.'), 'muted', tr('Not configured', 'غير مكوّنة')], ['#icon-terminal', tr('Devices & sessions', 'الأجهزة والجلسات'), tr('Device management is not available yet.', 'إدارة الأجهزة غير متاحة بعد.'), 'muted', tr('Coming later', 'لاحقًا')]].forEach(function (r) { var row = listCard(r[0], r[1], r[2]); row.append(badge(r[4], r[3])); panel.append(row); });
   }
 
+  function accountText(tag,en,ar,cls){const node=textElement(tag,tr(en,ar),cls);node.dataset.accountEn=en;node.dataset.accountAr=ar;return node;}
   async function loadClientAccount() {
     var user=currentUser;if(!user)return;renderProfile(user);
     var box=document.getElementById('accountSummary');if(!box)return;box.replaceChildren();
@@ -824,20 +1246,28 @@
     try {
       var data=await api('/api/dashboard');if(currentUser?.id!==user.id)return;renderProfile(data.profile);
       var access=data.access,advanced=access.advanced_trial;
-      information.replaceChildren(textElement('h3',tr('Your access & usage','صلاحياتك واستخدامك')));
-      [[tr('Account status','حالة الحساب'),data.profile.status],[tr('Role','الدور'),data.profile.role],
-       [tr('Core trial','تجربة الأساس'),access.core_trial.remaining_days+' '+tr('days remaining','يوم متبقٍ')],
-       [tr('Advanced trial','التجربة المتقدمة'),advanced.state==='not_started'?tr('10 days from first actual use, capped by core trial','10 أيام من أول استخدام فعلي ولا تتجاوز تجربة الأساس'):advanced.remaining_days+' '+tr('days remaining','يوم متبقٍ')],
-       [tr('Access / plan','الوصول / الخطة'),access.reason==='subscription'?(data.profile.plan||tr('Active subscription','اشتراك نشط')):access.reason==='administration'?tr('Administration','إدارة'):access.allowed?tr('Core trial','تجربة الأساس'):tr('Read-only · upgrade to code','للقراءة فقط · اشترك للبرمجة')],
-       [tr('GitHub','GitHub'),data.github.connected?(data.github.account_login||tr('Connected','متصل')):tr('Not connected','غير متصل')],
-       [tr('Saved provider keys','مفاتيح المزوّدات المحفوظة'),data.counts.credentials]].forEach(function(row){information.append(textElement('p',row[0]+' · '+row[1]));});
-      var connections=textElement('button',tr('Connected providers · selected workspace','المزوّدات المتصلة · مساحة العمل المختارة'),'button ghost small');connections.onclick=()=>window.openConnections('providers');information.append(connections);
-      if(!access.advanced_integrations||!access.core_access){var upgrade=textElement('button',tr('View plans / upgrade','عرض الخطط / الاشتراك'),'button small');upgrade.onclick=()=>window.openClientView('billing');information.append(upgrade);}
-      var storage=document.createElement('details');storage.append(textElement('summary',tr('Local project storage (50 MB each)','تخزين المشاريع المحلية (50 MB لكل مشروع)')));var usage=textElement('div','');storage.append(usage);information.append(storage);var loaded=false;
-      storage.ontoggle=async()=>{if(!storage.open||loaded)return;loaded=true;usage.replaceChildren(textElement('p',tr('Loading storage usage…','جارٍ تحميل استخدام التخزين…')));try{var rows=await Promise.all(data.projects.filter(p=>p.source_type!=='github').flatMap(p=>p.workspaces.map(async w=>{var s=await api('/api/workspaces/'+w.id+'/storage');return p.name+' · '+s.used_mb+' / '+s.limit_mb+' MB';})));if(currentUser?.id!==user.id)return;usage.replaceChildren(...rows.map(value=>textElement('p',value)));if(!rows.length)usage.append(textElement('p',tr('No local projects yet','لا توجد مشاريع محلية بعد')));}catch(error){loaded=false;usage.replaceChildren(textElement('p',error.message));}};
-      var signIns=textElement('div','','account-sign-ins');signIns.append(textElement('h4',tr('Link a sign-in identity','ربط هوية للدخول')));information.append(signIns);
-      api('/api/auth/social/options').then(function(options){if(currentUser?.id!==user.id||!signIns.isConnected)return;for(const provider of ['github','google']){var link=textElement('button',tr('Link sign-in with ','ربط الدخول عبر ')+provider,'button ghost small');link.disabled=!options[provider];link.title=link.disabled?tr('Not configured on this server','غير مهيأ على هذا الخادم'):'';link.onclick=()=>window.linkSignInProvider(provider);signIns.append(link);}signIns.append(textElement('p',tr('Sign-in identity does not authorize GitHub repositories. Linking requires an active sign-in session.','هوية الدخول لا تمنح صلاحية لمستودعات GitHub. الربط يتطلب جلسة دخول نشطة.')));}).catch(function(error){signIns.append(textElement('p',error.message));});
-      information.append(textElement('h4',tr('How your data is handled','كيف تُدار بياناتك')),textElement('p',tr('Local projects remain on Gateway. GitHub repositories remain in your GitHub account; OpenCode uses a server-side working copy. Credentials are encrypted server-side. Trial expiry does not delete files. Local project files are cleaned after 7 days of meaningful inactivity; temporary GitHub worktrees after 73 hours. Customer records are archived after 90 days of expired access; identity, billing history and explicit marketing-consent state are preserved, while operational secrets are removed. Hardware isolation is not provided.','تبقى المشاريع المحلية في Gateway ومستودعات GitHub في حسابك؛ يستخدم OpenCode نسخة عمل على الخادم. تُشفّر بيانات الاعتماد على الخادم. انتهاء التجربة لا يحذف الملفات. تُنظّف ملفات المشاريع المحلية بعد 7 أيام من الخمول الحقيقي ونسخ GitHub المؤقتة بعد 73 ساعة. يُؤرشف العميل بعد 90 يومًا من انتهاء الوصول مع حفظ الهوية وسجل الفوترة وحالة الموافقة التسويقية الصريحة، وتنظيف بيانات التشغيل الحساسة. لا يُقدّم عزل عتادي.')));
+      var heading=textElement('header','','account-card-heading'),icon=textElement('span','','account-card-icon');icon.append(navIcon('#icon-shield'));
+      var headingText=textElement('div');headingText.append(accountText('h3','Account status','حالة الحساب'),accountText('p','Your current access.','معلومات الوصول الحالية.'));
+      var stateNames={active:['Active','نشط'],suspended:['Suspended','معلّق'],deletion_requested:['Deletion requested','طلب حذف'],archived:['Archived','مؤرشف']};
+      var state=accountText('span',...(stateNames[data.profile.status]||['Unavailable','غير متاح']),'account-state');heading.append(icon,headingText,state);information.replaceChildren(heading);
+      var plan=access.reason==='subscription'?(data.profile.plan?[data.profile.plan,data.profile.plan]:['Active subscription','اشتراك نشط']):access.allowed?['Core trial','تجربة الأساس']:['Access expired','انتهت مدة الوصول'];
+      var planRow=textElement('div','','account-info-row');planRow.append(accountText('small','Current access','الوصول الحالي'),accountText('span',...plan));information.append(planRow);
+      var daysRow=textElement('div','','account-info-row');var days=access.remaining_days??access.core_trial.remaining_days;daysRow.append(accountText('small','Time remaining','الوقت المتبقي'),accountText('span',days+' days',days+' يومًا','account-days'));information.append(daysRow);
+      var advancedNotice=textElement('div','','account-advanced-notice');advancedNotice.append(navIcon('#icon-clock'),accountText('p',advanced.state==='not_started'?'Advanced trial: 10 days from first actual use, capped by core trial.':'Advanced trial: '+advanced.remaining_days+' days remaining',advanced.state==='not_started'?'التجربة المتقدمة: 10 أيام من أول استخدام فعلي ولا تتجاوز تجربة الأساس.':'التجربة المتقدمة: '+advanced.remaining_days+' يوم متبقٍ'));information.append(advancedNotice);
+      var billing=accountText('button','View subscription & invoices','عرض الاشتراك والفواتير','button ghost small account-billing-link');billing.type='button';billing.onclick=()=>window.openClientView('billing');information.append(billing);
+      var extras=document.getElementById('accountDetailsBody');extras.replaceChildren();
+      var language=document.getElementById('accountLanguage'),appearance=document.getElementById('accountAppearance');language.value=lang;appearance.value=dark?'dark':'light';
+      language.onchange=async()=>{lang=language.value;await savePrefs();await window.openClientView('account');};appearance.onchange=async()=>{dark=appearance.value==='dark';await savePrefs();};
+      document.querySelector('[data-client-panel=account] [data-edit-profile]').onclick=async()=>{if(await window.editProfileForm())await window.openClientView('account');};
+      document.getElementById('accountReturnWorkspace').onclick=()=>window.openClientWorkspace().catch(error=>toast(error.message));
+      document.querySelectorAll('[data-account-section]').forEach(button=>button.onclick=()=>window.openClientView(button.dataset.accountSection));
+      var connections=textElement('button',tr('Connected providers · selected workspace','المزوّدات المتصلة · مساحة العمل المختارة'),'button ghost small');connections.onclick=()=>window.openConnections('providers');extras.append(connections);
+      if(!access.advanced_integrations||!access.core_access){var upgrade=textElement('button',tr('View plans / upgrade','عرض الخطط / الاشتراك'),'button small');upgrade.onclick=()=>window.openClientView('billing');extras.append(upgrade);}
+      var storage=document.createElement('details');storage.append(textElement('summary',tr('Shared Gateway storage · local + GitHub','مساحة Gateway الموحدة · المحلي وGitHub')));var usage=textElement('div','');storage.append(usage);extras.append(storage);var loaded=false;
+      storage.ontoggle=async()=>{if(!storage.open||loaded)return;loaded=true;usage.replaceChildren(textElement('p',tr('Loading storage usage…','جارٍ تحميل استخدام التخزين…')));try{var sum=await api('/api/profile/storage');if(currentUser?.id!==user.id)return;usage.replaceChildren(textElement('p',tr('Shared usage across ALL local + GitHub workspaces: ','الاستخدام الموحد لجميع مشاريع المحلي وGitHub: ')+sum.used_mb+' / '+sum.limit_mb+' MB · '+tr('Remaining: ','المتبقي: ')+(sum.remaining_bytes/1048576).toFixed(2)+' MB · '+tr('Local: ','محلي: ')+sum.local_used_mb+' MB · GitHub: '+sum.github_used_mb+' MB'));}catch(error){loaded=false;usage.replaceChildren(textElement('p',error.message));}};
+      var signIns=textElement('div','','account-sign-ins');signIns.append(textElement('h4',tr('Link a sign-in identity','ربط هوية للدخول')));extras.append(signIns);
+      api('/api/auth/social/options').then(function(options){if(currentUser?.id!==user.id||!signIns.isConnected)return;for(const provider of ['google']){var link=textElement('button',tr('Link sign-in with ','ربط الدخول عبر ')+provider,'button ghost small');link.disabled=!options[provider];link.title=link.disabled?tr('Not configured on this server','غير مهيأ على هذا الخادم'):'';link.onclick=()=>window.linkSignInProvider(provider);signIns.append(link);}signIns.append(textElement('p',tr('Sign-in identity does not authorize GitHub repositories. Linking requires an active sign-in session.','هوية الدخول لا تمنح صلاحية لمستودعات GitHub. الربط يتطلب جلسة دخول نشطة.')));}).catch(function(error){signIns.append(textElement('p',error.message));});
+      extras.append(textElement('h4',tr('How your data is handled','كيف تُدار بياناتك')),textElement('p',tr('Local projects remain on Gateway. GitHub repositories remain in your GitHub account; OpenCode uses a server-side working copy. Credentials are encrypted server-side. Trial expiry does not delete files. Local project files are cleaned after 7 days of meaningful inactivity; temporary GitHub worktrees after 73 hours. Customer records are archived after 90 days of expired access; identity, billing history and explicit marketing-consent state are preserved, while operational secrets are removed. Hardware isolation is not provided.','تبقى المشاريع المحلية في Gateway ومستودعات GitHub في حسابك؛ يستخدم OpenCode نسخة عمل على الخادم. تُشفّر بيانات الاعتماد على الخادم. انتهاء التجربة لا يحذف الملفات. تُنظّف ملفات المشاريع المحلية بعد 7 أيام من الخمول الحقيقي ونسخ GitHub المؤقتة بعد 73 ساعة. يُؤرشف العميل بعد 90 يومًا من انتهاء الوصول مع حفظ الهوية وسجل الفوترة وحالة الموافقة التسويقية الصريحة، وتنظيف بيانات التشغيل الحساسة. لا يُقدّم عزل عتادي.')));
     } catch(error){if(currentUser?.id===user.id)information.replaceChildren(textElement('p',error.message));}
   }
 
@@ -845,12 +1275,7 @@
   injectNavIcons();
 
   var editProfile = textElement('button', tr('Edit profile', 'تعديل الملف'), 'button ghost small'); editProfile.type = 'button';
-  editProfile.onclick = async function () {
-    var values=await window.editProfileForm();if(!values)return;var phone=values.phone,postal=values.postal_code;
-    var body = {};
-    if (phone.trim()) body.phone = phone.trim(); if (postal.trim()) body.postal_code = postal.trim();
-    try { await api('/api/profile', { method: 'PATCH', body: JSON.stringify(body) }); renderProfile(await api('/api/profile')); toast(tr('Profile updated', 'تم تحديث الملف')); } catch (e) { toast(e.message); }
-  };
+  editProfile.onclick = async function () { await window.editProfileForm(); };
   var personalInfo = document.querySelector('#accountPage .settings-list');
   if (personalInfo) personalInfo.append(editProfile);
   /* ===== fixed headers, header auth, back navigation, advanced data grids ===== */
@@ -1133,6 +1558,60 @@
   /* ============ 5. grids for admin sections ============ */
   var NOT_AVAILABLE = tr('Not available yet', 'غير متاح بعد');
 
+  function openAdminAccountRemoval(u){
+    const body=document.createElement('section');
+    const info=textElement('p',tr(
+      'Archive: keep access disabled and allow account recovery. Delete permanently: physically erase the CUSTOMER row from the database after explicit confirmations. Deletion is REFUSED while projects, conversations, connected GitHub or payment orders remain; review those assets separately first. No project files or invoices are silently deleted.',
+      'الأرشفة: تعطيل الحساب مع إمكانية استرجاعه. الحذف النهائي: حذف سجل العميل فعليًا من قاعدة البيانات بعد تأكيدين واضحين. يُرفض الحذف إذا بقيت مشاريع أو محادثات أو اتصال GitHub أو طلبات دفع؛ راجع هذه البيانات أولًا. لن تُحذف الملفات أو الفواتير بصمت.'
+    ));
+    const feedback=textElement('p','','manage-identity-removal-feedback');
+    feedback.setAttribute('role','alert');
+    body.append(info,feedback);
+    const archive=textElement('button',tr('Archive · recoverable','أرشفة · قابلة للاسترجاع'),'button ghost small');
+    archive.type='button';
+    archive.disabled=u.status==='archived'||u.status==='identity_released';
+    archive.onclick=async()=>{
+      if(!await window.confirmAction(tr('Archive '+u.username+'? This account remains in the database and may be recovered.','أرشفة '+u.username+'؟ يبقى الحساب في قاعدة البيانات ويمكن استرجاعه.')))return;
+      archive.disabled=remove.disabled=true;
+      try{
+        await api('/api/admin/users/'+u.id,{method:'DELETE'});
+        feedback.textContent=tr('Account archived; identifiers remain reserved.','تمت الأرشفة؛ تظل بيانات التسجيل محجوزة.');
+        modal.close();await gridUsers();
+      }catch(error){feedback.textContent=error.message;archive.disabled=remove.disabled=false;}
+    };
+    const remove=textElement('button',tr('Delete customer from database permanently','حذف العميل نهائيًا من قاعدة البيانات'),'button danger small');
+    remove.type='button';
+    remove.onclick=async()=>{
+      if(u.status!=='archived'&&u.status!=='identity_released'){
+        feedback.textContent=tr('First archive this account using the separate Archive button. No change was made.','يجب أرشفة هذا العميل أولًا من زر الأرشفة المنفصل. لم يتم تعديل الحساب.');return;
+      }
+      const typed=await window.requestInput(tr(
+        'Permanently delete this customer from the database. Type the EXACT current username: '+u.username+'. Deletion will be refused if projects, conversations or payments remain.',
+        'لحذف هذا العميل نهائيًا من قاعدة البيانات اكتب اسم المستخدم الحالي حرفيًا: '+u.username+'. يُرفض الحذف إذا بقيت مشاريع أو محادثات أو مدفوعات.'
+      ));
+      if(typed!==u.username){if(typed!==null)feedback.textContent=tr('Username confirmation did not match.','اسم المستخدم المُدخل لا يطابق المطلوب.');return;}
+      if(!await window.confirmAction(tr(
+        'PERMANENT DATABASE DELETE of '+u.username+'. This cannot be undone. Are you certain?',
+        'حذف نهائي لا رجعة فيه لسجل '+u.username+' من قاعدة البيانات. هل تؤكد ذلك؟'
+      )))return;
+      archive.disabled=remove.disabled=true;
+      try{
+        const result=await api('/api/admin/users/'+u.id+'/delete-permanently',{
+          method:'POST',body:JSON.stringify({confirm_username:u.username,confirmation:'DELETE PERMANENTLY'})
+        });
+        if(result.database_row_deleted!==true||result.deleted!==true)
+          throw Error(tr('Database deletion was not confirmed.','لم تؤكد قاعدة البيانات حذف العميل.'));
+        feedback.textContent=tr('Customer row deleted permanently.','حُذف سجل العميل نهائيًا من قاعدة البيانات.');
+        modal.close();await gridUsers();
+      }catch(error){
+        feedback.textContent=error.message;
+        archive.disabled=remove.disabled=false;
+        await gridUsers();
+      }
+    };
+    const modal=openModal(tr('Manage account · '+u.username,'إدارة الحساب · '+u.username),body,[archive,remove]);
+  }
+
   async function gridUsers() {
     var list = await api('/api/admin/users');
     var body = document.getElementById('adminUsersBody');
@@ -1156,7 +1635,7 @@
       row.append(el('td', '', u.trial_remaining_days + ' ' + tr('days', 'يوم')));
       row.append(el('td', '', fmtDate(u.trial_ends_at)));
       row.append(el('td', '', u.plan || tr('Not assigned', 'غير محدد')));
-      row.append(el('td', '', u.last_login_at ? new Date(u.last_login_at).toLocaleString(lang === 'ar' ? 'ar-u-nu-latn' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : tr('Never', 'أبدًا')));
+      row.append(el('td', '', u.last_login_at ? new Date(u.last_login_at).toLocaleString() : tr('Never', 'أبدًا')));
       row.append(el('td', '', fmtDate(u.created_at)));
       row.append(el('td', '', (u.projects_count || 0) + ' / ' + (u.workspaces_count || 0)));
       body.append(row);
@@ -1168,13 +1647,15 @@
         return cellActions([
           ['icon-eye', tr('View details', 'عرض التفاصيل'), function () { openUserModal(u, false); }],
           ['icon-edit', tr('Edit user', 'تعديل المستخدم'), function () { openUserModal(u, true); }],
-          ['icon-trash', tr('Delete is not available yet', 'الحذف غير متاح بعد'), null, true],
+          ['icon-close', u.status==='active'?tr('Suspend','تعليق'):tr('Activate','تفعيل'), function(){return adminPatchUser(u.id,{status:u.status==='active'?'suspended':'active'});},u.id===currentUser.id||u.role==='owner'||['archived','identity_released'].includes(u.status)||(currentUser.role!=='owner'&&u.role==='admin')],
+          ['icon-plus',tr('Extend trial','تمديد التجربة'),async function(){var value=await window.requestInput(tr('Trial days','أيام التجربة'),'10');if(value===null)return;var days=Number(value);if(!Number.isInteger(days)||days<0||days>3650){toast(tr('Invalid days','عدد أيام غير صالح'));return;}await adminPatchUser(u.id,{trial_days:days});}],
+          ['icon-trash',tr('Choose archive or permanent login-identity removal','اختيار الأرشفة أو حذف هوية الدخول نهائيًا'),function(){openAdminAccountRemoval(u);},u.id===currentUser.id||['admin','owner'].includes(u.role)||u.status==='identity_released'],
         ]);
       },
     });
   }
 
-  function openUserModal(u, editable) {
+  async function openUserModal(u, editable) {
     var pairs = [
       [tr('Username', 'اسم المستخدم'), u.username],
       [tr('Email', 'البريد'), u.email],
@@ -1183,7 +1664,7 @@
       [tr('Plan', 'الخطة'), u.plan || tr('Not assigned', 'غير محدد')],
       [tr('Trial remaining', 'مدة التجربة المتبقية'), u.trial_remaining_days + ' ' + tr('days', 'يوم')],
       [tr('Trial end', 'نهاية التجربة'), fmtDate(u.trial_ends_at)],
-      [tr('Last login', 'آخر دخول'), u.last_login_at ? new Date(u.last_login_at).toLocaleString(lang === 'ar' ? 'ar-u-nu-latn' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : tr('Never', 'أبدًا')],
+      [tr('Last login', 'آخر دخول'), u.last_login_at ? new Date(u.last_login_at).toLocaleString() : tr('Never', 'أبدًا')],
       [tr('Projects / Workspaces', 'المشاريع / مساحات العمل'), (u.projects_count || 0) + ' / ' + (u.workspaces_count || 0)],
     ];
     if (!editable) {
@@ -1204,8 +1685,23 @@
       statusSel.append(o);
     });
     var trialIn = document.createElement('input');
-    trialIn.type = 'number'; trialIn.min = '0'; trialIn.max = '3650'; trialIn.value = String(u.trial_remaining_days);
-    var body = el('div');
+    trialIn.type = 'number'; trialIn.min = '0'; trialIn.max = '3650'; trialIn.value = '0';
+    var body = el('div'),profileFields={};
+    for(const [key,en,ar,type] of [['username','Username','اسم المستخدم','text'],['email','Email','البريد الإلكتروني','email'],['phone','Phone (international)','الهاتف الدولي','tel'],['postal_code','Postal / calling code','الرمز البريدي / رمز البلد','text']]){
+      const input=document.createElement('input');input.type=type;input.value=u[key]||'';input.required=true;input.name=key;
+      input.maxLength=key==='username'?50:key==='email'?254:key==='phone'?30:24;
+      profileFields[key]=input;body.append(labeled(tr(en,ar),input));
+    }
+    for(const [key,en,ar,options] of [['preferred_language','Language','اللغة',['ar','en']],['preferred_theme','Theme','المظهر',['light','dark']]]){
+      const input=document.createElement('select');input.name=key;for(const value of options){const option=document.createElement('option');option.value=option.textContent=value;input.append(option);}input.value=u[key]||options[0];profileFields[key]=input;body.append(labeled(tr(en,ar),input));
+    }
+    body.append(kv([[tr('Location','الموقع'),[u.country,u.region,u.city].filter(Boolean).join(' / ')||'—'],[tr('Created','تاريخ الإنشاء'),fmtDate(u.created_at)],[tr('Last login','آخر دخول'),fmtDate(u.last_login_at)],[tr('Projects / Workspaces','المشاريع / مساحات العمل'),(u.projects_count||0)+' / '+(u.workspaces_count||0)]]));
+    const locationInputs={};
+    for(const [key,en,ar] of [['country_id','Country','الدولة'],['region_id','Region','المحافظة'],['city_id','City','المدينة']]){const select=document.createElement('select');select.name=key;const option=document.createElement('option');option.value=u[key]||'';option.textContent=u[key.replace('_id','')]||tr('Not assigned','غير محدد');select.append(option);select.disabled=true;locationInputs[key]=select;body.append(labeled(tr(en,ar),select));}
+    async function loadLocation(key,path,selected){const select=locationInputs[key];select.disabled=true;const entries=path?await api(path):[];select.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent=tr('Not assigned','غير محدد');select.append(empty);for(const entry of entries){const option=document.createElement('option');option.value=entry.id;option.textContent=entry.name;select.append(option);}if(selected&&!entries.some(entry=>String(entry.id)===String(selected))){const current=document.createElement('option');current.value=selected;current.textContent=u[key.replace('_id','')]||String(selected);select.append(current);}select.value=selected||'';select.disabled=false;}
+    locationInputs.country_id.onchange=async()=>{try{await loadLocation('region_id',locationInputs.country_id.value?'/api/locations/countries/'+locationInputs.country_id.value+'/regions':null,null);await loadLocation('city_id',null,null);}catch(error){toast(error.message);}};
+    locationInputs.region_id.onchange=async()=>{try{await loadLocation('city_id',locationInputs.region_id.value?'/api/locations/regions/'+locationInputs.region_id.value+'/cities':null,null);}catch(error){toast(error.message);}};
+    var planSel=document.createElement('select');const currentPlan=document.createElement('option');currentPlan.value=u.plan_id||'';currentPlan.textContent=u.plan||tr('Not assigned','غير محدد');planSel.append(currentPlan);planSel.disabled=true;body.append(labeled(tr('Plan','الخطة'),planSel));
     body.append(
       labeled(tr('Role', 'الدور'), roleSel),
       labeled(tr('Status', 'الحالة'), statusSel),
@@ -1215,13 +1711,19 @@
     save.type = 'button';
     save.onclick = async function () {
       save.disabled = true;
-      var patch={status:statusSel.value,trial_days:Number(trialIn.value)};
+      var days=Number(trialIn.value);if(!Number.isInteger(days)||days<0||days>3650){save.disabled=false;toast(tr('Invalid days','عدد أيام غير صالح'));return;}
+      if(!Array.from(Object.values(profileFields)).every(input=>input.reportValidity())){save.disabled=false;return;}
+      var patch={};if(statusSel.value!==u.status)patch.status=statusSel.value;if(days>0)patch.trial_days=days;
+      for(const [key,input] of Object.entries(profileFields)){if(input.value!==String(u[key]||''))patch[key]=input.value;}
+      for(const [key,input] of Object.entries(locationInputs)){if(!input.disabled&&String(u[key]||'')!==input.value)patch[key]=input.value?Number(input.value):null;}
+      if(!planSel.disabled&&String(u.plan_id||'')!==planSel.value)patch.plan_id=planSel.value?Number(planSel.value):null;
       if(currentUser.role==='owner' && roleSel.value!==u.role)patch.role=roleSel.value;
-      await adminPatchUser(u.id,patch);
-      save.disabled = false;
-      modal.close();
+      try{if(await adminPatchUser(u.id,patch))modal.close();}catch(error){toast(error.message);}finally{save.disabled=false;}
     };
     openModal(tr('Edit user', 'تعديل المستخدم') + ' · ' + u.username, body, [save]);
+    try{await loadLocation('country_id','/api/locations/countries',u.country_id);await loadLocation('region_id',u.country_id?'/api/locations/countries/'+u.country_id+'/regions':null,u.region_id);await loadLocation('city_id',u.region_id?'/api/locations/regions/'+u.region_id+'/cities':null,u.city_id);}catch(error){body.append(el('p','',tr('Location lookup unavailable; existing values are preserved.','تعذر تحميل المواقع؛ تُحفظ القيم الحالية.')));}
+    try{const plans=await api('/api/admin/plans');planSel.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent=tr('Not assigned','غير محدد');planSel.append(empty);for(const plan of plans){const option=document.createElement('option');option.value=plan.id;option.textContent=plan.name;planSel.append(option);}planSel.value=u.plan_id||'';planSel.disabled=false;}catch(error){body.append(el('p','',tr('Plan lookup unavailable; existing plan will be preserved.','تعذر تحميل الخطط؛ ستُحفظ الخطة الحالية.')));}
+
   }
 
   async function gridPlans() {
@@ -1248,7 +1750,7 @@
             ]), []);
           }],
           ['icon-edit', tr('Edit plan', 'تعديل الخطة'), function () { openPlanModal(plan); }],
-          ['icon-trash', tr('Delete is not available yet', 'الحذف غير متاح بعد'), null, true],
+
         ]);
       },
     });
@@ -1327,24 +1829,14 @@
   CLIENT_LOADERS.account = async function () {
     await prevClientAccount();
     var host = clientAccountHost();
-    if (host && !host.querySelector('[data-signout]')) host.append(signOutRow());
+    var accountPanel=document.querySelector('[data-client-panel=account]');if(accountPanel&&!accountPanel.querySelector('[data-signout]')){var signout=signOutRow();signout.classList.add('account-signout');accountPanel.append(signout);}
     var info = document.querySelector('[data-client-panel="account"] .settings-list');
     if (info && !info.querySelector('[data-edit-profile]')) {
       var edit = el('button', 'button ghost small');
       edit.type = 'button';
       edit.setAttribute('data-edit-profile', '');
       edit.textContent = tr('Edit profile', 'تعديل الملف');
-      edit.onclick = async function () {
-        var values=await window.editProfileForm();if(!values)return;var phone=values.phone,postal=values.postal_code;
-        var body = {};
-        if (phone.trim()) body.phone = phone.trim();
-        if (postal.trim()) body.postal_code = postal.trim();
-        try {
-          await api('/api/profile', { method: 'PATCH', body: JSON.stringify(body) });
-          renderProfile(await api('/api/profile'));
-          toast(tr('Profile updated', 'تم تحديث الملف'));
-        } catch (e) { toast(e.message); }
-      };
+      edit.onclick = async function () { await window.editProfileForm(); };
       var editRow=el('div','signout-row');editRow.append(edit);info.append(editRow);
     }
   };
@@ -1373,15 +1865,660 @@
   CLIENT_LOADERS.ai=async function(){await aiLoader();await window.renderManagement(managementHost(document.getElementById('clientAiPanel'),'clientProviderSettings'),'providers');};
   CLIENT_LOADERS.security=function(){return window.renderManagement(document.getElementById('clientSecurityPanel'),'security');};
   const accountLoader=CLIENT_LOADERS.account;
-  CLIENT_LOADERS.account=async function(){await accountLoader();const host=managementHost(document.querySelector('[data-client-panel="account"]'),'clientAccountActivity');await window.renderManagement(host,'logs');await window.renderManagement(managementHost(document.querySelector('[data-client-panel="account"]'),'clientAccountLifecycle'),'lifecycle');};
+  CLIENT_LOADERS.account=async function(){await accountLoader();const host=managementHost(document.querySelector('[data-client-panel="account"]'),'clientAccountActivity');await window.renderManagement(host,'logs');const lifecycle=managementHost(document.querySelector('[data-client-panel="account"]'),'clientAccountLifecycle');if(lifecycle.parentElement.tagName!=='DETAILS'){const details=textElement('details','','account-sensitive');details.append(textElement('summary',tr('Suspend or request deletion','تعليق الحساب أو طلب حذفه')));lifecycle.before(details);details.append(lifecycle);}await window.renderManagement(lifecycle,'lifecycle');const signout=document.querySelector('[data-client-panel=account] .account-signout');if(signout)document.querySelector('[data-client-panel=account]').append(signout);};
   const adminBillingLoader=ADMIN_LOADERS.billing;
   ADMIN_LOADERS.billing=async function(){await adminBillingLoader();await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="billing"]'),'adminBillingMethods'),'billing',true);};
+  const nativePolicyLoader=ADMIN_LOADERS.policy;
+  ADMIN_LOADERS.policy=async function(){await nativePolicyLoader();if(!window.nativeSession||!await window.nativeSession.ready())return;await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="policy"]'),'adminNativeCatalogMaintenance'),'nativeCatalog',true);};
   ADMIN_LOADERS.audit=function(){return window.renderManagement(document.querySelector('[data-admin-panel="audit"]'),'logs',true)};
-  ADMIN_LOADERS.github=function(){return window.renderManagement(document.querySelector('[data-admin-panel="github"]'),'connections',true)};
+  ADMIN_LOADERS.github=loadAdminGithubAdmin;
   ADMIN_LOADERS.settings=function(){return window.renderManagement(document.querySelector('[data-admin-panel="settings"]'),'locations',true)};
   ADMIN_LOADERS.security=function(){return window.renderManagement(document.querySelector('[data-admin-panel="security"]'),'security')};
   const adminAccountLoader=ADMIN_LOADERS.account;
   ADMIN_LOADERS.account=async function(){await adminAccountLoader();await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="account"]'),'adminAccountActivity'),'logs');};
   window.openClientView=async function(name){clientView=name;await page('clientPage');};
   window.openAdminView=async function(name){if(['admin','owner'].includes(currentUser?.role))adminView=name;await page('adminPage');};
+
+  /* ===== Homepage Content: Landing carousel + Admin "Homepage Content" ===== */
+    Object.assign(copy.en,{adminHomepage:'Homepage Content',adminHomepageLead:'Manage the Landing carousel: offers, announcements, partner promotions and platform messages.'});
+    Object.assign(copy.ar,{adminHomepage:'محتوى الصفحة الرئيسية',adminHomepageLead:'أدر شريط الصفحة الرئيسية: العروض والإعلانات وترويج الشركاء ورسائل المنصة.'});
+  
+    var HOME_TYPE_LABEL = { platform:['Platform Information','معلومات المنصة'], announcement:['Announcement','إعلان'], offer:['Offer','عرض'], update:['Update / News','تحديث / خبر'], partner:['Partner Promotion','ترويج شريك'], advertisement:['Advertisement','إعلان مدفوع'] };
+    var HOME_BADGE_LABEL = { new:['New','جديد'], offer:['Offer','عرض'], important:['Important','مهم'], update:['Update','تحديث'] };
+    var HOME_ICONS = ['icon-opencode','icon-github','icon-grid','icon-file','icon-folder','icon-clock','icon-diff','icon-home','icon-chat','icon-commit','icon-shield','icon-settings','icon-search','icon-link','icon-user','icon-terminal'];
+    var home = { host:null, track:null, viewport:null, dots:null, prev:null, next:null, play:null, items:[], index:0, timer:null, autoEnabled:true, hovered:false, focused:false, built:false, editing:null };
+    var homeReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  
+    function homeLabel(map, key) { var row = map[key]; return row ? (lang === 'ar' ? row[1] : row[0]) : ''; }
+    function homeSvg(id) { return '<svg class="ui-icon" aria-hidden="true"><use href="#' + id + '"/></svg>'; }
+    function homeControlSvg(kind) { return '<svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + (kind === 'pause' ? '<path d="M9 5v14M15 5v14"/>' : '<path d="m9 5 9 7-9 7Z"/>') + '</svg>'; }
+    function homeLocalized(target, value) {
+      target.replaceChildren();
+      String(value || '').split(/(OpenCode|GitHub|50 MB)/g).forEach(function (part) {
+        if (!part) return;
+        if (/^(OpenCode|GitHub|50 MB)$/.test(part)) { var b = document.createElement('bdi'); b.dir = 'ltr'; b.textContent = part; target.append(b); }
+        else target.append(document.createTextNode(part));
+      });
+    }
+    function homeVisible() { var v = home.host ? parseInt(getComputedStyle(home.host).getPropertyValue('--cards'), 10) : 3; return v > 0 ? v : 3; }
+    function homeMax() { return Math.max(0, home.items.length - homeVisible()); }
+    function homeRtl() { return (document.documentElement.dir || 'ltr') === 'rtl'; }
+  
+    function homeBuildShell() {
+      var host = home.host; host.replaceChildren(); home.built = true;
+      var viewport = el('div', 'home-viewport'); var track = el('div', 'home-track'); viewport.append(track);
+      var nav = el('div', 'home-nav');
+      var prev = el('button', 'home-arrow home-prev'); prev.type = 'button'; prev.innerHTML = homeSvg('icon-back');
+      var dots = el('div', 'home-dots');
+      var next = el('button', 'home-arrow home-next'); next.type = 'button'; next.innerHTML = homeSvg('icon-back');
+      var play = el('button', 'home-arrow home-play'); play.type = 'button';
+      nav.append(prev, dots, next, play); host.append(viewport, nav);
+      home.viewport = viewport; home.track = track; home.dots = dots; home.prev = prev; home.next = next; home.play = play;
+      prev.addEventListener('click', function (e) { homeGo(home.index - 1); if (e.detail > 0) prev.blur(); });
+      next.addEventListener('click', function (e) { homeGo(home.index + 1); if (e.detail > 0) next.blur(); });
+      play.addEventListener('click', function (e) { home.autoEnabled = !home.autoEnabled; homeUpdate(); homeSchedule(); if (e.detail > 0) play.blur(); });
+      host.addEventListener('pointerenter', function (e) { if (e.pointerType === 'mouse') { home.hovered = true; homeSchedule(); } });
+      host.addEventListener('pointerleave', function () { home.hovered = false; homeSchedule(); });
+      host.addEventListener('focusin', function () { home.focused = true; homeSchedule(); });
+      host.addEventListener('focusout', function () { home.focused = false; homeSchedule(); });
+      host.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); homeGo(home.index + (((e.key === 'ArrowRight') !== homeRtl()) ? 1 : -1)); }
+        else if (e.key === 'Home') { e.preventDefault(); homeGo(0); }
+        else if (e.key === 'End') { e.preventDefault(); homeGo(homeMax()); }
+      });
+      var start = null;
+      viewport.addEventListener('pointerdown', function (e) { if (e.pointerType !== 'mouse') start = { x: e.clientX, y: e.clientY }; });
+      viewport.addEventListener('pointerup', function (e) {
+        if (!start) return; var dx = e.clientX - start.x, dy = e.clientY - start.y; start = null;
+        if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.3) homeGo(home.index + (((dx < 0) !== homeRtl()) ? 1 : -1));
+      });
+      document.addEventListener('visibilitychange', homeSchedule);
+      if (homeReduced.addEventListener) homeReduced.addEventListener('change', function () { home.autoEnabled = !homeReduced.matches; homeUpdate(); homeSchedule(); });
+      if (window.ResizeObserver) new ResizeObserver(function () { homeUpdate(); }).observe(viewport);
+    }
+  
+    function homeRenderCards() {
+      if (!home.track) return;
+      var ar = lang === 'ar'; home.track.replaceChildren();
+      home.items.forEach(function (item) {
+        var card = el('article', 'home-card');
+        card.setAttribute('data-type', item.item_type || '');
+        card.setAttribute('data-media', item.media_kind || 'none');
+        if (item.media_kind !== 'none') {
+          var media = el('div', 'home-media');
+          if (item.media_kind === 'image' && item.image_url) {
+            var img = document.createElement('img'); img.src = item.image_url; img.alt = '';
+            img.onerror = function () { media.innerHTML = homeSvg(item.icon || 'icon-grid'); };
+            media.append(img);
+          }
+          else media.innerHTML = homeSvg(item.icon || 'icon-grid');
+          card.append(media);
+        }
+        if (item.badge && HOME_BADGE_LABEL[item.badge]) { var badge = el('span', 'home-badge', homeLabel(HOME_BADGE_LABEL, item.badge)); badge.setAttribute('data-badge', item.badge); card.append(badge); }
+        var title = el('h3', 'home-title'); homeLocalized(title, ar ? item.title_ar : item.title_en); card.append(title);
+        var body = el('p', 'home-text'); homeLocalized(body, ar ? item.body_ar : item.body_en); card.append(body);
+        var ctaLabel = ar ? item.cta_label_ar : item.cta_label_en;
+        if (ctaLabel && item.cta_url) { var link = el('a', 'home-cta'); link.href = item.cta_url; homeLocalized(link, ctaLabel); card.append(link); }
+        home.track.append(card);
+      });
+    }
+  
+    function homeRenderDots() {
+      if (!home.dots) return;
+      var total = homeMax() + 1;
+      if (home.dots.children.length !== total) {
+        home.dots.replaceChildren();
+        for (var i = 0; i < total; i++) (function (n) {
+          var dot = el('button', 'home-dot'); dot.type = 'button';
+          dot.addEventListener('click', function (e) { homeGo(n); if (e.detail > 0) dot.blur(); });
+          home.dots.append(dot);
+        })(i);
+      }
+    }
+  
+    function homeUpdate() {
+      if (!home.track || !home.items.length) return;
+      if (home.index > homeMax()) home.index = 0;
+      homeRenderDots();
+      var cards = home.track.children;
+      var gap = parseFloat(getComputedStyle(home.track).gap || '0') || 20;
+      var cw = cards[0] ? cards[0].getBoundingClientRect().width : 0;
+      var offset = home.index * (cw + gap);
+      home.track.style.transform = homeRtl() ? ('translateX(' + offset + 'px)') : ('translateX(-' + offset + 'px)');
+      var vis = homeVisible();
+      for (var i = 0; i < cards.length; i++) { var shown = i >= home.index && i < home.index + vis; cards[i].setAttribute('aria-hidden', String(!shown)); cards[i].inert = !shown; }
+      var dots = home.dots.children;
+      for (var j = 0; j < dots.length; j++) dots[j].setAttribute('aria-current', String(j === home.index));
+      if (home.play) { home.play.innerHTML = homeControlSvg(home.autoEnabled ? 'pause' : 'play'); home.play.setAttribute('aria-label', home.autoEnabled ? tr('Pause automatic rotation', 'إيقاف الدوران التلقائي') : tr('Resume automatic rotation', 'استئناف الدوران التلقائي')); }
+    }
+  
+    function homeSchedule() {
+      if (home.timer) { clearTimeout(home.timer); home.timer = null; }
+      var playing = home.autoEnabled && !home.hovered && !home.focused && !document.hidden && !homeReduced.matches;
+      if (home.host) home.host.setAttribute('data-playing', playing ? 'true' : 'false');
+      if (playing) home.timer = setTimeout(function () { homeGo(home.index + 1); }, 6500);
+    }
+  
+    function homeGo(next) { var max = homeMax(); home.index = next > max ? 0 : (next < 0 ? max : next); homeUpdate(); homeSchedule(); }
+  
+    function homeWithPlatformBenefits(items) {
+      // Owner-approved product information, not demo projects or database rows.
+      // Preserve every admin item, its dates/media/CTA and existing order.
+      var existing=Array.isArray(items)?items:[],icons=['icon-terminal','icon-github','icon-link','icon-clock'];
+      var required=icons.map(function(icon,index){
+        var key='b'+(index+1);
+        return {id:'gateway-benefit-'+(index+1),item_type:'platform',media_kind:'icon',icon:icon,
+          title_en:copy.en[key+'t'],title_ar:copy.ar[key+'t'],body_en:copy.en[key+'d'],body_ar:copy.ar[key+'d']};
+      });
+      return required.filter(function(info){return !existing.some(function(item){return item.title_en===info.title_en&&item.title_ar===info.title_ar&&item.body_en===info.body_en&&item.body_ar===info.body_ar;});}).concat(existing);
+    }
+
+    async function renderHomeCarousel() {
+      var host = document.getElementById('homeCarousel');
+      if (!host) return;
+      home.host = host;
+      var items;
+      try { items = await api('/api/homepage', { cache: 'no-store', allowAnonymous: true }); }
+      catch (error) { items=home.remoteItems||[]; }
+      home.remoteItems=Array.isArray(items)?items:[];
+      home.items = homeWithPlatformBenefits(home.remoteItems);
+      if (!home.items.length) { host.replaceChildren(); return; }
+      if (!home.built || !home.track) homeBuildShell();
+      homeRenderCards(); homeUpdate(); homeSchedule();
+    }
+    window.renderHomeCarousel = renderHomeCarousel;
+  
+    function homeField(id, labelText, tag, attrs) { var wrap = el('label'); wrap.append(el('span', '', labelText)); var input = document.createElement(tag); input.id = id; if (attrs) for (var k in attrs) input.setAttribute(k, attrs[k]); wrap.append(input); return wrap; }
+    function homeOptions(select, pairs) { select.replaceChildren(); pairs.forEach(function (pair) { var o = document.createElement('option'); o.value = pair[0]; o.textContent = pair[1]; select.append(o); }); }
+  
+    function adminHomepageRow(item, position, rows) {
+      var row = document.createElement('tr');
+      row.append(el('td', '', item.title_en + ' / ' + item.title_ar));
+      row.append(el('td', '', homeLabel(HOME_TYPE_LABEL, item.item_type)));
+      row.append(el('td', '', item.badge ? homeLabel(HOME_BADGE_LABEL, item.badge) : '—'));
+      var orderTd = el('td');
+      var up = el('button', 'button ghost small', '↑'); up.type = 'button'; up.disabled = position === 0; up.title = tr('Move up','تحريك لأعلى');
+      up.onclick = function () { homeMove(item, rows[position - 1]); };
+      var down = el('button', 'button ghost small', '↓'); down.type = 'button'; down.disabled = position === rows.length - 1; down.title = tr('Move down','تحريك لأسفل');
+      down.onclick = function () { homeMove(item, rows[position + 1]); };
+      orderTd.append(up, down, document.createTextNode(' ' + item.sort_order)); row.append(orderTd);
+      var pinTd = el('td'); var pinBtn = el('button', 'button ghost small', item.pinned ? '★' : '☆'); pinBtn.type = 'button';
+      pinBtn.onclick = function () { homePatch(item.id, { pinned: !item.pinned }); }; pinTd.append(pinBtn); row.append(pinTd);
+      var enTd = el('td'); var enBtn = el('button', 'button ghost small', item.enabled ? tr('Disable','تعطيل') : tr('Enable','تفعيل')); enBtn.type = 'button';
+      enBtn.onclick = function () { homePatch(item.id, { enabled: !item.enabled }); }; enTd.append(enBtn); row.append(enTd);
+      row.append(el('td', '', (item.starts_at ? String(item.starts_at).slice(0,10) : '—') + ' → ' + (item.ends_at ? String(item.ends_at).slice(0,10) : '—')));
+      var mediaTd = el('td');
+      mediaTd.append(el('span', '', item.media_kind === 'image' ? tr('image','صورة') : (item.icon || '—')));
+      var upload = document.createElement('input'); upload.type = 'file'; upload.accept = 'image/png,image/jpeg,image/webp';
+      upload.onchange = async function () { if (!upload.files[0]) return; var fd = new FormData(); fd.append('file', upload.files[0]); try { await api('/api/admin/homepage/' + item.id + '/image', { method: 'POST', body: fd }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } };
+      mediaTd.append(upload);
+      if (item.has_image) { var rm = el('button', 'button ghost small', tr('Remove image','إزالة الصورة')); rm.type = 'button'; rm.onclick = async function () { try { await api('/api/admin/homepage/' + item.id + '/image', { method: 'DELETE' }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } }; mediaTd.append(rm); }
+      row.append(mediaTd);
+      var actTd = el('td');
+      var edit = el('button', 'button ghost small', tr('Edit','تعديل')); edit.type = 'button'; edit.onclick = function () { homeEditItem(item); };
+      var del = el('button', 'button ghost small', tr('Delete','حذف')); del.type = 'button';
+      del.onclick = async function () { if (!await window.confirmAction(tr('Delete this homepage item?','حذف هذا العنصر؟'))) return; try { await api('/api/admin/homepage/' + item.id, { method: 'DELETE' }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } };
+      actTd.append(edit, del); row.append(actTd);
+      return row;
+    }
+  
+    async function homePatch(id, payload) { try { await api('/api/admin/homepage/' + id, { method: 'PATCH', body: JSON.stringify(payload) }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } }
+    async function homeMove(item, neighbour) { if (!neighbour) return; try { await api('/api/admin/homepage/' + item.id, { method: 'PATCH', body: JSON.stringify({ sort_order: neighbour.sort_order }) }); await api('/api/admin/homepage/' + neighbour.id, { method: 'PATCH', body: JSON.stringify({ sort_order: item.sort_order }) }); await loadAdminHomepage(); await renderHomeCarousel(); } catch (e) { apiMessage('adminHomepageMessage', e.message, true); } }
+  
+    function homeEditItem(item) {
+      var set = function (id, v) { var node = document.getElementById(id); if (node) node.value = v == null ? '' : v; };
+      set('homeTitleEn', item.title_en); set('homeTitleAr', item.title_ar);
+      set('homeBodyEn', item.body_en); set('homeBodyAr', item.body_ar);
+      set('homeType', item.item_type); set('homeBadge', item.badge || ''); set('homeIcon', item.icon || HOME_ICONS[0]);
+      set('homeCtaEn', item.cta_label_en); set('homeCtaAr', item.cta_label_ar); set('homeCtaUrl', item.cta_url);
+      set('homeSort', item.sort_order);
+      set('homeStart', item.starts_at ? String(item.starts_at).slice(0,10) : ''); set('homeEnd', item.ends_at ? String(item.ends_at).slice(0,10) : '');
+      var pin = document.getElementById('homePinned'); if (pin) pin.checked = !!item.pinned;
+      home.editing = item.id;
+      var submit = document.getElementById('homeSubmit'); if (submit) submit.textContent = tr('Save changes','حفظ التغييرات');
+      var cancel = document.getElementById('homeCancel'); if (cancel) cancel.hidden = false;
+      var form = document.getElementById('adminHomepageForm'); if (form) form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  
+    function buildAdminHomepage(panel, rows) {
+      panel.replaceChildren();
+      var msg = el('div', 'api-message'); msg.id = 'adminHomepageMessage'; panel.append(msg);
+      var wrap = el('div', 'table-wrap');
+      var table = document.createElement('table'); var thead = document.createElement('thead'); var htr = document.createElement('tr');
+      ['Title','Type','Badge','Order','Pinned','Enabled','Starts / Ends','Media','Actions'].forEach(function (t) { htr.append(el('th', '', t)); });
+      thead.append(htr); table.append(thead);
+      var body = document.createElement('tbody'); body.id = 'adminHomepageBody'; table.append(body);
+      rows.forEach(function (item, index) { body.append(adminHomepageRow(item, index, rows)); });
+      wrap.append(table); panel.append(wrap);
+  
+      var form = document.createElement('form'); form.className = 'manage-form'; form.id = 'adminHomepageForm';
+      form.append(homeField('homeTitleEn', tr('Title (EN)','العنوان (إنجليزي)'), 'input', { required: 'required', maxlength: '200' }));
+      form.append(homeField('homeTitleAr', tr('Title (AR)','العنوان (عربي)'), 'input', { required: 'required', maxlength: '200' }));
+      form.append(homeField('homeBodyEn', tr('Description (EN)','الوصف (إنجليزي)'), 'input', { maxlength: '1000' }));
+      form.append(homeField('homeBodyAr', tr('Description (AR)','الوصف (عربي)'), 'input', { maxlength: '1000' }));
+      var typeField = homeField('homeType', tr('Content type','نوع المحتوى'), 'select'); homeOptions(typeField.querySelector('select'), Object.keys(HOME_TYPE_LABEL).map(function (k) { return [k, homeLabel(HOME_TYPE_LABEL, k)]; })); form.append(typeField);
+      var badgeField = homeField('homeBadge', tr('Badge','الشارة'), 'select'); homeOptions(badgeField.querySelector('select'), [['', tr('None','بدون')]].concat(Object.keys(HOME_BADGE_LABEL).map(function (k) { return [k, homeLabel(HOME_BADGE_LABEL, k)]; }))); form.append(badgeField);
+      var iconField = homeField('homeIcon', tr('Icon','الأيقونة'), 'select'); homeOptions(iconField.querySelector('select'), HOME_ICONS.map(function (i) { return [i, i.replace('icon-', '')]; })); form.append(iconField);
+      form.append(homeField('homeCtaEn', tr('CTA label (EN)','نص الزر (إنجليزي)'), 'input', { maxlength: '80' }));
+      form.append(homeField('homeCtaAr', tr('CTA label (AR)','نص الزر (عربي)'), 'input', { maxlength: '80' }));
+      form.append(homeField('homeCtaUrl', tr('CTA URL','رابط الزر'), 'input', { maxlength: '500', placeholder: 'https://… or /path' }));
+      form.append(homeField('homeSort', tr('Order','الترتيب'), 'input', { type: 'number', min: '0', max: '100000' }));
+      form.append(homeField('homeStart', tr('Starts on','يبدأ في'), 'input', { type: 'date' }));
+      form.append(homeField('homeEnd', tr('Ends on','ينتهي في'), 'input', { type: 'date' }));
+      form.append(homeField('homeImage', tr('Image (optional, ≤3 MB)','صورة (اختياري، ≤3 ميجابايت)'), 'input', { type: 'file', accept: 'image/png,image/jpeg,image/webp' }));
+      var pinRow = el('label', 'checkbox-row'); var pin = document.createElement('input'); pin.type = 'checkbox'; pin.id = 'homePinned'; pinRow.append(pin, el('span', '', tr('Pinned / featured','مثبّت / مميّز'))); form.append(pinRow);
+      var actions = el('div', 'admin-actions');
+      var submit = el('button', 'button', tr('Add item','إضافة عنصر')); submit.type = 'submit'; submit.id = 'homeSubmit';
+      var cancel = el('button', 'button ghost', tr('Cancel edit','إلغاء التعديل')); cancel.type = 'button'; cancel.id = 'homeCancel'; cancel.hidden = true;
+      actions.append(submit, cancel); form.append(actions);
+      panel.append(form);
+  
+      home.editing = null;
+      cancel.onclick = function () { home.editing = null; form.reset(); submit.textContent = tr('Add item', 'إضافة عنصر'); cancel.hidden = true; };
+      form.onsubmit = async function (event) {
+        event.preventDefault();
+        var payload = {
+          item_type: value('homeType'), badge: value('homeBadge') || null,
+          title_en: value('homeTitleEn'), title_ar: value('homeTitleAr'),
+          body_en: value('homeBodyEn'), body_ar: value('homeBodyAr'),
+          cta_label_en: value('homeCtaEn') || null, cta_label_ar: value('homeCtaAr') || null,
+          cta_url: value('homeCtaUrl') || null, icon: value('homeIcon') || null,
+          pinned: pin.checked,
+          starts_at: value('homeStart') || null, ends_at: value('homeEnd') || null
+        };
+        var sort = value('homeSort'); if (sort !== '') payload.sort_order = Number(sort);
+        submit.disabled = true;
+        try {
+          var saved = home.editing ? await api('/api/admin/homepage/' + home.editing, { method: 'PATCH', body: JSON.stringify(payload) }) : await api('/api/admin/homepage', { method: 'POST', body: JSON.stringify(payload) });
+          var fileInput = document.getElementById('homeImage');
+          if (fileInput && fileInput.files && fileInput.files[0]) { var fd = new FormData(); fd.append('file', fileInput.files[0]); await api('/api/admin/homepage/' + saved.id + '/image', { method: 'POST', body: fd }); }
+          apiMessage('adminHomepageMessage', home.editing ? tr('Item updated','تم تحديث العنصر') : tr('Item added','تمت إضافة العنصر'));
+          await loadAdminHomepage(); await renderHomeCarousel();
+        } catch (error) { apiMessage('adminHomepageMessage', error.message, true); }
+        finally { submit.disabled = false; }
+      };
+    }
+  
+    async function loadAdminHomepage() {
+      var panel = document.getElementById('adminHomepagePanel');
+      if (!panel) return;
+      try { var rows = await api('/api/admin/homepage', { cache: 'no-store' }); buildAdminHomepage(panel, rows); }
+      catch (error) { panel.replaceChildren(textElement('p', error.message)); }
+    }
+    ADMIN_LOADERS.homepage = loadAdminHomepage;
+  
+    var prevHomePrefs = applyPrefs;
+    applyPrefs = function () { prevHomePrefs(); if (home.items.length) { homeRenderCards(); homeUpdate(); } };
+  
+    function homeKick() { renderHomeCarousel().catch(function () {}); }
+    if (document.readyState === 'complete') homeKick(); else window.addEventListener('load', homeKick, { once: true });
+    window.setTimeout(homeKick, 900);
+    window.setTimeout(homeKick, 2600);
+    document.addEventListener('visibilitychange', function () { if (document.getElementById('landing')?.classList.contains('active')) homeKick(); });
+    window.addEventListener('focus', homeKick);
+})();
+
+
+/* TEST: administrator-defined payment/bank settings; no automatic checkout. */
+(() => {
+  const billingTab = document.querySelector('#adminNav [data-admin-view="billing"]');
+  const panel = document.querySelector('[data-admin-panel="billing"]');
+  if (!panel || !billingTab) return;
+  const host = document.createElement('section');
+  host.id = 'dynamicPaymentProviders';
+  host.className = 'admin-section dynamic-payment-providers';
+  panel.prepend(host);
+  let revision = 0;
+  let activeSlug = '';
+  const tr = (en, ar) => (typeof lang !== 'undefined' && lang === 'ar') ? ar : en;
+  const el = (tag, text='', cls='') => {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    if (cls) node.className = cls;
+    return node;
+  };
+  const button = (label, handler, cls='button small') => {
+    const b=el('button',label,cls);
+    b.type='button';
+    b.addEventListener('click',handler);
+    return b;
+  };
+  const categories=[
+    ['bank',tr('Bank','بنك')],['wallet',tr('Wallet','محفظة')],
+    ['processor',tr('Payment service','خدمة دفع')],
+    ['crypto',tr('Digital asset service','خدمة أصول رقمية')],
+    ['other',tr('Other / custom','أخرى / مخصّصة')]
+  ];
+  const modes=[
+    ['manual',tr('Manual transfer + receipt review','تحويل يدوي مع مراجعة إيصال')],
+    ['hosted',tr('Provider-hosted payment link (configuration only)','رابط دفع لدى مزوّد (إعداد فقط)')],
+    ['api',tr('API integration (credentials only)','API (حفظ بيانات الربط فقط)')]
+  ];
+  const environments=[['test',tr('Test / Sandbox','تجريبي / Sandbox')],
+                      ['live',tr('Live credentials — storage only','مفاتيح حقيقية — تخزين فقط')]];
+  const fieldKinds=[
+    ['text',tr('Text / identifier','نص / معرّف')],
+    ['secret',tr('Secret / API key','مفتاح سري / API')],
+    ['url',tr('URL','رابط')]
+  ];
+  const presets=[
+    ['merchant_id','Merchant ID','text'],
+    ['security_key','Security / signing key','secret'],
+    ['api_key','API key','secret'],
+    ['webhook_secret','Webhook signing secret','secret'],
+    ['iban','IBAN','text'],
+    ['swift_bic','SWIFT / BIC','text'],
+    ['bank_name','Bank name','text'],
+    ['account_name','Account holder','text'],
+    ['account_number','Account number','text'],
+    ['payment_url','Hosted checkout URL','url']
+  ];
+  // Templates are editable EXAMPLES, never an allowed-provider list.
+  const providerExamples=[
+    {code:'custom',name:tr('Another company / custom','شركة أخرى / مخصّصة'),label:'',slug:'',
+     category:'other',mode:'manual',fields:[]},
+    {code:'paypal',name:'PayPal',label:'PayPal',slug:'paypal',
+     category:'processor',mode:'api',fields:[['merchant_id','Merchant ID','text'],['client_id','Client ID','text'],['client_secret','Client secret','secret'],['webhook_id','Webhook ID','text']]},
+    {code:'stripe',name:'Stripe',label:'Stripe',slug:'stripe',
+     category:'processor',mode:'api',fields:[['publishable_key','Publishable key','text'],['secret_key','API secret key','secret'],['webhook_secret','Webhook signing secret','secret']]},
+    {code:'cryptomus',name:'Cryptomus',label:'Cryptomus',slug:'cryptomus',
+     category:'crypto',mode:'api',fields:[['merchant_id','Merchant ID','text'],['payment_api_key','Payment API key','secret'],['payout_api_key','Payout API key (optional)','secret']]},
+    {code:'bank',name:tr('Bank transfer template','نموذج حساب بنكي'),label:'',slug:'',
+     category:'bank',mode:'manual',fields:[['bank_name','Bank name','text'],['account_name','Account holder','text'],['account_number','Account number','text'],['iban','IBAN (optional)','text'],['swift_bic','SWIFT/BIC (optional)','text']]},
+    {code:'wallet',name:tr('Wallet / mobile money template','نموذج محفظة إلكترونية'),label:'',slug:'',
+     category:'wallet',mode:'manual',fields:[['wallet_name','Wallet name','text'],['account_name','Account name','text'],['account_reference','Wallet / account reference','text']]}
+  ];
+  function selectInput(label,options,defaultValue){
+    const wrap=el('label',label),s=el('select');
+    for(const [value,name] of options){
+      const option=el('option',name);option.value=value;s.append(option);
+    }
+    s.value=defaultValue||options[0][0];
+    wrap.append(s);return {wrap,input:s};
+  }
+  function textInput(label,value='',maxLength=100){
+    const wrap=el('label',label),i=el('input');
+    i.type='text';i.value=value;i.maxLength=maxLength;i.autocomplete='off';wrap.append(i);
+    return {wrap,input:i};
+  }
+  async function load(){
+    const sequence=++revision;
+    if(!['admin','owner'].includes(typeof currentUser==='undefined'?'':currentUser?.role))return;
+    host.replaceChildren(el('h2',tr('Flexible payment & bank connections','إدارة البنوك وخدمات الدفع الديناميكية')),
+      el('p',tr('Add any bank or provider and define the fields it requires. Save Merchant ID, API/security keys, IBAN or custom fields from here. This is encrypted configuration only; it does NOT charge customers, enable a webhook or change existing payment methods.',
+        'أضف أي بنك أو مزوّد وحدد الحقول التي يتطلبها. احفظ Merchant ID ومفاتيح API والتوقيع وIBAN أو أي حقول أخرى من هنا. هذه إعدادات مشفّرة فقط ولا تُحصّل من العملاء أو تُفعّل Webhook أو تغيّر وسائل الدفع الحالية.')));
+    let data;
+    try{ data=await api('/api/admin/payment-gateways/profiles',{cache:'no-store'}); }
+    catch(err){if(sequence===revision)host.append(el('p',err.message,'api-message'));return;}
+    if(sequence!==revision)return;
+    const toolbar=el('div','','dynamic-provider-toolbar');
+    const picker=selectInput(tr('Choose an existing bank or payment service','اختر بنكًا أو خدمة دفع محفوظة'),
+      [['',tr('Select a provider','اختر الشركة / البنك')],...data.profiles.map(p=>[p.slug,p.label])],
+      data.profiles.some(p=>p.slug===activeSlug)?activeSlug:(data.profiles[0]?.slug||''));
+    picker.input.id='dynamicProviderSelect';
+    activeSlug=picker.input.value;
+    const add=button(tr('+ Add new provider','+ إضافة جديد'),()=>editor(null),'button small');
+    add.id='dynamicProviderAdd';
+    toolbar.append(picker.wrap,add);
+    host.append(toolbar);
+    const detail=el('div','','dynamic-provider-cards');
+    host.append(detail);
+    function showSelected(){
+      detail.replaceChildren();
+      activeSlug=picker.input.value;
+      const profile=data.profiles.find(p=>p.slug===activeSlug);
+      if(!profile){
+        detail.append(el('div',tr('Select a saved provider, or add any new bank or service.',
+          'اختر بنكًا أو خدمة محفوظة، أو اضغط «إضافة جديد» لإضافة أي شركة.'),'dynamic-provider-empty'));
+        return;
+      }
+      const card=el('article','','dynamic-provider-card');
+      const head=el('div','','dynamic-provider-summary');
+      const icon=el('span',profile.category==='bank'?'▦':profile.category==='wallet'?'◈':'◇','dynamic-provider-symbol');
+      icon.setAttribute('aria-hidden','true');
+      const names=el('div');
+      names.append(el('h3',profile.label),
+        el('p',profile.category+' · '+profile.connection_mode+' · '+profile.environment));
+      head.append(icon,names);
+      const fields=profile.fields.filter(f=>f.configured).length;
+      const status=el('span',profile.configured?tr('Fields saved','الحقول محفوظة'):tr('Incomplete draft','مسودة غير مكتملة'),
+        'dynamic-provider-status');
+      head.append(status);
+      card.append(head,
+        el('p',tr('Stored fields: ','الحقول المحفوظة: ')+fields+' / '+profile.fields.length,
+           'dynamic-provider-description'),
+        el('p',tr('Settings only · Automatic checkout is not activated.',
+          'إعدادات الربط فقط · التحصيل الآلي غير مفعل.'),
+          'dynamic-provider-hint'));
+      const actions=el('div','','dynamic-provider-actions');
+      actions.append(button(tr('Edit connection','تعديل بيانات الربط'),()=>editor(profile),'button small'));
+      if(profile.connection_mode==='api'){
+        card.append(el('p',tr('API credentials are saved, but automatic payment needs a verified provider-specific integration.',
+          'تم حفظ بيانات API، لكن الدفع الآلي يتطلب تكاملًا موثقًا خاصًا بالمزوّد.'),'dynamic-provider-hint'));
+      }else{
+        actions.append(button(tr('Configure customer checkout','إعداد الدفع للعملاء'),
+          ()=>publishDialog(profile),'button small'));
+        if(profile.publication?.published){
+          actions.append(button(tr('Disable checkout','إيقاف الدفع'),async()=>{
+            if(typeof window.confirmAction!=='function')return;
+            if(!await window.confirmAction(tr('Disable this payment method for new orders?',
+              'إيقاف وسيلة الدفع للطلبات الجديدة؟')))return;
+            try{
+              await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+'/publish',{method:'DELETE'});
+              await load();
+            }catch(e){detail.append(el('p',e.message));}
+          },'button ghost small'));
+        }
+      }
+      actions.append(button(tr('Delete draft','حذف المسودة'),async()=>{
+        if(typeof window.confirmAction!=='function')return;
+        if(!await window.confirmAction(tr('Delete saved settings for '+profile.label+'? Existing payment records will remain untouched.',
+          'حذف إعدادات '+profile.label+'؟ ستبقى جميع سجلات الدفع الحالية دون تغيير.')))return;
+        try{
+          await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug),{method:'DELETE'});
+          activeSlug='';await load();
+        }catch(error){detail.append(el('p',error.message,'dynamic-provider-feedback'));}
+      },'button ghost small'));
+      card.append(actions);
+      detail.append(card);
+    }
+    picker.input.addEventListener('change',showSelected);
+    showSelected();
+
+  }
+
+
+  async function publishDialog(profile){
+    const popup=el('dialog','','dynamic-provider-dialog dynamic-provider-publish-dialog');
+    popup.setAttribute('aria-modal','true');
+    const heading=el('div','','dynamic-provider-modal-head');
+    heading.append(el('h2',tr('Activate verified-receipt checkout','تفعيل الدفع بمراجعة الإيصال')),
+      button('×',()=>popup.close(),'dynamic-provider-close'));
+    popup.append(heading,el('p',tr(
+      'This offers real receiving details or a hosted link to TEST customers. Payments do not activate subscriptions until an administrator verifies the receipt. Never pay real money when testing.',
+      'تظهر بيانات الاستلام أو رابط الدفع لعملاء TEST. لا تُفعّل الاشتراكات حتى تتحقق الإدارة من الإيصال. لا تدفع أموالًا حقيقية أثناء الاختبار.'),
+      'dynamic-provider-modal-lead'));
+    const form=el('form','','dynamic-provider-form manage-form');
+    const currency=selectInput(tr('Currency','العملة'),[['USD','USD'],['GBP','GBP'],['EUR','EUR'],['YER','YER']],'USD');
+    const notes=el('label',tr('Payment instructions for customers','تعليمات الدفع للعملاء'));
+    const instruction=el('textarea');instruction.required=true;instruction.minLength=10;instruction.maxLength=1000;instruction.rows=4;
+    notes.append(instruction);
+    form.append(currency.wrap,notes);
+    let plan=null;
+    if(profile.connection_mode==='hosted'){
+      const response=await api('/api/plans');
+      const items=Array.isArray(response)?response:(response.plans||[]);
+      const candidates=items.filter(p=>p.active!==false&&p.currency==='USD'&&p.price_cents>0);
+      plan=selectInput(tr('Subscription plan for this link','الخطة المرتبطة بالرابط'),
+        [['',tr('Choose a plan','اختر خطة')],...candidates.map(p=>[String(p.id),p.name])],'');
+      plan.input.required=true;form.append(plan.wrap);
+    }
+    const consent=el('label',tr('I confirmed the account/link details and will verify actual payment before activating any subscription.',
+      'أؤكد صحة حساب الاستلام أو الرابط وسأتحقق من وصول المال قبل تفعيل أي اشتراك.'),'dynamic-provider-consent');
+    const checked=el('input');checked.type='checkbox';checked.required=true;consent.prepend(checked);
+    const actions=el('div','','dynamic-provider-actions');
+    const save=el('button',tr('Enable for TEST','تفعيل في TEST'),'button');save.type='submit';
+    actions.append(save,button(tr('Cancel','إلغاء'),()=>popup.close(),'button ghost small'));
+    const error=el('p','','dynamic-provider-feedback');
+    form.append(consent,error,actions);popup.append(form);document.body.append(popup);
+    popup.addEventListener('close',()=>popup.remove(),{once:true});
+    popup.showModal();
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();save.disabled=true;
+      try{
+        const payload={
+          currency:currency.input.value,
+          instructions:instruction.value.trim(),
+          plan_id:plan?Number(plan.input.value):null,
+          confirmed_receiving_details:true
+        };
+        const result=await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+
+          '/publish',{method:'POST',body:JSON.stringify(payload)});
+        if(!result.published)throw new Error(tr('Checkout was not enabled','لم يتم تفعيل وسيلة الدفع'));
+        popup.close();activeSlug=profile.slug;await load();
+      }catch(e){error.textContent=e.message;save.disabled=false;}
+    });
+  }
+
+  function editor(profile){
+    document.querySelectorAll('dialog.dynamic-provider-dialog').forEach(d=>d.close());
+    const area=el('dialog','','dynamic-provider-dialog dynamic-provider-editor');
+    area.setAttribute('aria-modal','true');
+    area.setAttribute('aria-labelledby','dynamicProviderModalTitle');
+    const header=el('div','','dynamic-provider-modal-head');
+    const titles=el('div');
+    const caption=el('span',tr('PAYMENT CONNECTION','إعداد وسيلة الدفع'),'dynamic-provider-eyebrow');
+    const modalTitle=el('h2',profile?tr('Edit provider settings','تعديل بيانات الشركة'):tr('Add bank or payment service','إضافة بنك أو خدمة دفع'));
+    modalTitle.id='dynamicProviderModalTitle';
+    titles.append(caption,modalTitle);
+    const close=button('×',()=>area.close(),'dynamic-provider-close');
+    close.setAttribute('aria-label',tr('Close without saving','إغلاق دون حفظ'));
+    header.append(titles,close);
+    area.append(header,el('p',tr('Set up any provider. Fields marked Required are mandatory for that provider; secrets remain encrypted. Never enter banking passwords, OTP/2FA codes or card information.',
+        'حدد بيانات أي شركة أو بنك. يمكنك اختيار الحقول المطلوبة، وتبقى المفاتيح السرية مشفّرة. لا تدخل كلمات مرور البنك أو رموز OTP أو بيانات البطاقات.'),'dynamic-provider-modal-lead'));
+    const form=el('form','','dynamic-provider-form manage-form');
+    form.autocomplete='off';
+    let templatePicker=null;
+    if(!profile){
+      const template=selectInput(tr('Optional ready-made example (you can change its company name and fields)','اختر نموذجًا اختياريًا (يمكن تعديل اسم الشركة وكل الحقول)'),
+        providerExamples.map(p=>[p.code,p.name]),'custom');
+      templatePicker=template.input;
+      form.append(template.wrap);
+    }
+    const name=textInput(tr('Provider / bank name','اسم البنك أو خدمة الدفع'),profile?.label||'',100);
+    const slug=textInput(tr('Unique code in English, e.g. bank_uk or my_wallet','رمز مميز بالإنجليزية مثل bank_uk أو my_wallet'),profile?.slug||'',60);
+    slug.input.pattern='[a-z][a-z0-9_-]{1,59}';
+    slug.input.required=true;name.input.required=true;
+    if(profile)slug.input.readOnly=true;
+    const category=selectInput(tr('Provider category','نوع الخدمة'),categories,profile?.category||'bank');
+    const mode=selectInput(tr('How this provider would be used','طريقة استخدام الخدمة'),modes,profile?.connection_mode||'manual');
+    const environment=selectInput(tr('Credential environment','بيئة مفاتيح الربط'),environments,profile?.environment||'test');
+    form.append(name.wrap,slug.wrap,category.wrap,mode.wrap,environment.wrap);
+    form.append(el('h4',tr('Custom connection fields','حقول الربط المخصّصة')));
+    const rows=el('div','','dynamic-provider-fields');form.append(rows);
+    const rowControls=[];
+    function addField(field={}){
+      if(rowControls.filter(r=>r.element.isConnected).length>=30)return;
+      const row=el('div','','dynamic-provider-field');
+      const key=textInput(tr('Field code (English)','رمز الحقل بالإنجليزية'),field.key||'',48);
+      key.input.required=true;key.input.pattern='[a-z][a-z0-9_]{1,47}';
+      const label=textInput(tr('Field label','اسم الحقل'),field.label||'',100);label.input.required=true;
+      const kind=selectInput(tr('Field type','نوع الحقل'),fieldKinds,field.kind||'text');
+      const required=el('label',tr('Required','مطلوب'),'dynamic-provider-check');
+      const requiredInput=el('input');requiredInput.type='checkbox';requiredInput.checked=Boolean(field.required);required.prepend(requiredInput);
+      const valueWrap=el('label',tr('Value / connection credential','القيمة / بيانات الربط'));
+      const value=el('input');value.autocomplete='off';value.maxLength=2048;
+      value.value=(field.kind==='secret')?'':(field.value||'');
+      valueWrap.append(value);
+      const clear=el('label',tr('Erase saved secret','مسح المفتاح المحفوظ'),'dynamic-provider-check');
+      const clearInput=el('input');clearInput.type='checkbox';clear.prepend(clearInput);
+      clearInput.checked=false;
+      const savedSecret=field.kind==='secret'&&field.configured;
+      if(savedSecret)kind.input.disabled=true;
+      function updateKind(){
+        const secret=kind.input.value==='secret';
+        value.type=secret?'password':kind.input.value==='url'?'url':'text';
+        value.placeholder=secret?(savedSecret?tr('Saved securely · blank retains key','المفتاح محفوظ · اتركه فارغًا للاحتفاظ به'):tr('Enter secret, stored encrypted','أدخل المفتاح وسيُحفظ مشفرًا')):'';
+        clear.hidden=!(secret&&savedSecret);
+      }
+      kind.input.addEventListener('change',updateKind);updateKind();
+      const remove=button(tr('Remove field','حذف الحقل'),()=>row.remove(),'button ghost small');
+      row.append(key.wrap,label.wrap,kind.wrap,required,valueWrap,clear,remove);
+      rows.append(row);
+      rowControls.push({element:row,collect:()=>({
+        key:key.input.value.trim(),label:label.input.value.trim(),
+        kind:kind.input.value,required:requiredInput.checked,
+        value:value.value,clear:clearInput.checked
+      })});
+    }
+    for(const field of (profile?.fields||[]))addField(field);
+    if(templatePicker){
+      templatePicker.addEventListener('change',async()=>{
+        const example=providerExamples.find(p=>p.code===templatePicker.value);
+        if(!example)return;
+        const typed=name.input.value.trim()||slug.input.value.trim()||
+          rowControls.some(r=>r.element.isConnected);
+        if(typed){
+          const approved=typeof window.confirmAction==='function'
+            ? await window.confirmAction(tr('Replace the unsaved field draft with this example? Existing saved providers will not change.',
+               'استبدال الحقول غير المحفوظة بهذا النموذج؟ لن تتغير الشركات المحفوظة.'))
+            : false;
+          if(!approved){templatePicker.value='custom';return;}
+        }
+        name.input.value=example.label;
+        slug.input.value=example.slug;
+        category.input.value=example.category;
+        mode.input.value=example.mode;
+        rows.replaceChildren();
+        rowControls.length=0;
+        for(const [key,label,kind] of example.fields){
+          addField({key,label,kind,required:false,value:''});
+        }
+      });
+    }
+    const addActions=el('div','','dynamic-provider-presets');
+    for(const [key,label,kind] of presets){
+      addActions.append(button('+ '+label,()=>{
+        if(rowControls.some(r=>r.element.isConnected&&r.collect().key===key))return;
+        addField({key,label,kind,required:false});
+      },'button ghost small'));
+    }
+    addActions.append(button(tr('+ Custom field','+ حقل آخر'),()=>addField(),'button ghost small'));
+    form.append(addActions);
+    const note=el('p',tr('Draft only: API credentials are encrypted and never shown again; this form does not enable checkout.',
+      'مسودة إعدادات فقط: تُحفظ المفاتيح مشفّرة ولا تُعرض ثانيةً، ولا يُفعّل هذا النموذج التحصيل الآلي.'),'dynamic-provider-hint');
+    const feedback=el('p','','dynamic-provider-feedback');
+    const controls=el('div','','dynamic-provider-actions');
+    const save=el('button',tr('Save encrypted settings','حفظ الإعدادات المشفّرة'),'button');
+    save.type='submit';
+    controls.append(save,button(tr('Cancel','إلغاء'),()=>area.close(),'button ghost small'));
+    form.append(note,controls,feedback);area.append(form);
+    document.body.append(area);
+    area.addEventListener('close',()=>{
+      area.querySelectorAll('input[type="password"]').forEach(input=>{input.value='';});
+      area.remove();
+    },{once:true});
+    area.addEventListener('click',event=>{
+      if(event.target===area)area.close();
+    });
+    area.showModal();
+    (profile?name.input:templatePicker)?.focus();
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();
+      const fields=rowControls.filter(r=>r.element.isConnected).map(r=>r.collect());
+      if(!fields.length){feedback.textContent=tr('Add at least one field','أضف حقلًا واحدًا على الأقل');return;}
+      const body={slug:slug.input.value.trim(),label:name.input.value.trim(),category:category.input.value,
+        connection_mode:mode.input.value,environment:environment.input.value,fields};
+      save.disabled=true;feedback.textContent=tr('Saving encrypted profile…','جارٍ حفظ الإعدادات المشفّرة…');
+      try{
+        const url='/api/admin/payment-gateways/profiles'+(profile?'/'+encodeURIComponent(profile.slug):'');
+        await api(url,{method:profile?'PUT':'POST',body:JSON.stringify(body)});
+        activeSlug=body.slug;
+        area.close();
+        await load();
+      }catch(error){feedback.textContent=error.message;save.disabled=false;}
+    });
+  }
+  billingTab.addEventListener('click',()=>load().catch(()=>{}));
+  if(panel.classList.contains('active'))load().catch(()=>{});
 })();

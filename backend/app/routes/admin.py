@@ -1,15 +1,19 @@
 from datetime import datetime, timedelta, timezone
 import json
 import uuid as _uuid
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from typing import Literal
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field, EmailStr, field_validator
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, ProviderCredential, Subscription, User, Workspace, WorkspaceSession
+from ..services.storage_policy import PLAN_MB
 from ..models.platform import get_policy
-from ..services import opencode
+from ..services import github
+from ..services import native_control_bridge as opencode
 from ..services.accounts import user_payload
 from .dependencies import require_admin
 
@@ -34,8 +38,17 @@ class PlanPatch(BaseModel):
     active: bool | None = None
     sort_order: int | None = Field(default=None, ge=0, le=10000)
 
-class UserAdminPatch(BaseModel):
+from ..schemas import ProfilePatch
+
+class UserAdminPatch(ProfilePatch):
     model_config = ConfigDict(extra="forbid")
+    username: str | None = Field(default=None,min_length=6,max_length=50,pattern=r'^[A-Za-z0-9_.-]+$')
+    email: EmailStr | None = None
+    @field_validator('username','email')
+    @classmethod
+    def identity_required(cls,value):
+        if value is None:raise ValueError('Identity cannot be empty')
+        return value.strip().lower()
     plan_id: int | None = None
     status: str | None = Field(default=None, pattern="^(active|suspended)$")
     role: str | None = Field(default=None, pattern="^(customer|support|finance|admin|owner)$")
@@ -47,6 +60,8 @@ class PolicyIn(BaseModel):
     allowed_models: list[str] = Field(default_factory=list, max_length=500)
     allowed_tools: list[str] = Field(default_factory=list, max_length=500)
     require_tool_approval: bool = True
+    hidden_providers: list[str] | None = Field(default=None,max_length=2000)
+    hidden_models: dict[str,list[str]] | None = None
 
 def _count(db, model, *conditions):
     return db.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
@@ -61,14 +76,15 @@ def _runtime_health():
         return {"mode": settings.runtime_mode, "healthy": False, "detail": "Runtime is not reachable"}
 
 def plan_payload(row: Plan) -> dict:
-    return {"id": row.id, "code": row.code, "name": row.name, "price_cents": row.price_cents, "currency": row.currency, "duration_days": row.duration_days, "active": bool(row.active), "sort_order": row.sort_order}
+    return {"id": row.id, "code": row.code, "name": row.name, "price_cents": row.price_cents, "currency": row.currency, "duration_days": row.duration_days, "active": bool(row.active), "sort_order": row.sort_order, "storage_mb": PLAN_MB.get(row.code,50),
+            "includes_ai_api": False}
 
 @router.get("/users")
 def users(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     rows = list(db.scalars(select(User).order_by(User.created_at.desc())))
     project_counts = dict(db.execute(select(Project.user_id, func.count()).group_by(Project.user_id)).all())
     workspace_counts = dict(db.execute(select(Workspace.user_id, func.count()).group_by(Workspace.user_id)).all())
-    return [{**user_payload(u), "plan_id": u.plan_id, "plan": u.plan.name if u.plan else None,
+    return [{**user_payload(u), "country_id":u.country_id,"region_id":u.region_id,"city_id":u.city_id,"created_at":u.created_at,"plan_id": u.plan_id, "plan": u.plan.name if u.plan else None,
              "projects_count": project_counts.get(u.id, 0), "workspaces_count": workspace_counts.get(u.id, 0)} for u in rows]
 
 @router.patch("/users/{user_id}")
@@ -80,10 +96,32 @@ def update_user(user_id: str, data: UserAdminPatch, actor: User = Depends(requir
         raise HTTPException(422, "Invalid user id")
     if user is None:
         raise HTTPException(404, "User not found")
+    if user.status=='identity_released':
+        raise HTTPException(409, 'Released archived identities cannot be edited or reactivated')
     if user.id == actor.id or user.role == 'owner' or (actor.role != 'owner' and user.role == 'admin'):
         raise HTTPException(403, 'Cannot change this administrator account')
     if data.role is not None and actor.role != 'owner':
         raise HTTPException(403, 'Owner role required')
+    values=data.model_dump(exclude_unset=True,exclude={'plan_id','status','role','trial_days'})
+    if any(key in values for key in ('country_id','region_id','city_id')):
+        from ..services.location_validation import validate_locations
+        validate_locations(db,values.get('country_id',user.country_id),values.get('region_id',user.region_id),values.get('city_id',user.city_id))
+    if 'phone' in values:
+        from ..security.identities import normalized_phone
+        values['phone']=normalized_phone(values['phone'],values.get('postal_code',user.postal_code))
+        if values['phone'] is None:raise HTTPException(422,'Enter a valid international phone number')
+    for key,value in values.items():setattr(user,key,value)
+    # Database unique indexes remain authoritative, including concurrent edits.
+    try:db.flush()
+    except IntegrityError:
+        db.rollback();raise HTTPException(409,'Email, username or phone is already registered') from None
+    if 'email' in values or 'username' in values:
+        from .management import revoke
+        revoke(db,user)
+    if 'email' in values:
+        from ..models import PasswordReset,EmailVerification
+        db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
+        db.execute(update(EmailVerification).where(EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None)).values(used_at=datetime.now(timezone.utc)))
     if "plan_id" in data.model_fields_set:
         if data.plan_id is not None and db.get(Plan, data.plan_id) is None:
             raise HTTPException(422, "Unknown plan")
@@ -103,8 +141,166 @@ def update_user(user_id: str, data: UserAdminPatch, actor: User = Depends(requir
         if user.trial_started_at is None: user.trial_started_at = now
     from .management import audit
     audit(db, actor, 'account.admin_updated', user.id)
+    if data.status=='suspended':audit(db,actor,'account.admin_suspended',user.id)
+    if 'email' in values:audit(db,actor,'account.email_changed',user.id)
     db.commit(); db.refresh(user)
     return {**user_payload(user), "plan_id": user.plan_id, "plan": user.plan.name if user.plan else None}
+
+@router.delete('/users/{user_id}')
+def archive_user(user_id:_uuid.UUID,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Reversible account removal: preserve every owned record and foreign key."""
+    user=db.scalar(select(User).where(User.id==user_id).with_for_update())
+    if user is None:raise HTTPException(404,'User not found')
+    if user.id==actor.id or user.role in {'admin','owner'}:
+        raise HTTPException(403,'Administrator accounts cannot be removed')
+    if user.status=='identity_released':
+        raise HTTPException(409,'This account identity has already been released; archival cannot restore it')
+    from .management import stop_work,revoke,audit
+    if user.status!='archived':
+        stop_work(db,user);revoke(db,user);user.status='archived'
+        audit(db,actor,'account.admin_archived',user.id);db.commit()
+    return {'archived':True,'data_preserved':True,'id':str(user.id)}
+
+class ReleaseArchivedIdentifiers(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    # Explicit re-entry of the actual archived username, not a reusable token.
+    confirm_username:str=Field(min_length=1,max_length=50)
+
+
+@router.post('/users/{user_id}/release-identifiers')
+def release_archived_identifiers(user_id:_uuid.UUID,data:ReleaseArchivedIdentifiers,
+                                 actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Irreversibly release archived signup identifiers; preserve owned data.
+
+    Archive means recoverable and keeps its identifiers. This separate action
+    de-identifies the original account and permanently disables reactivation.
+    Projects, Native history, subscriptions and payment records keep their
+    original UUID/foreign keys. This is NOT a hard-delete/personal-data purge.
+    """
+    from ..models import AuthSession, PasswordReset, EmailVerification, GithubAuthState
+    from .management import revoke, audit
+    user=db.scalar(select(User).where(User.id==user_id).with_for_update())
+    if user is None:raise HTTPException(404,'User not found')
+    if user.id==actor.id or user.role in {'admin','owner'} or actor.role not in {'admin','owner'}:
+        raise HTTPException(403,'Administrator accounts cannot be released')
+    if user.status!='archived':
+        raise HTTPException(409,'Only archived accounts can release registration identifiers')
+    if data.confirm_username!=user.username:
+        raise HTTPException(400,'Enter the archived username exactly to confirm permanent identity release')
+    if db.scalar(select(GithubConnection.id).where(GithubConnection.user_id==user.id)):
+        raise HTTPException(409,'Disconnect the archived account GitHub connection before releasing identifiers')
+    if db.scalar(select(GithubAuthState.state).where(GithubAuthState.user_id==user.id)):
+        raise HTTPException(409,'Pending GitHub authorization must expire and be cleared before identity release')
+    # A released account cannot log in, obtain an account-recovery link or
+    # enter the paid reactivation flow. Rotating the identity, not User.id,
+    # leaves original project ownership isolated from subsequent signups.
+    revoke(db,user)
+    now=datetime.now(timezone.utc)
+    db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
+    db.execute(update(EmailVerification).where(
+        EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None)).values(used_at=now))
+    marker=user.id.hex
+    user.username='released_'+marker
+    user.email='released-'+marker+'@invalid.example'
+    user.phone=''
+    user.postal_code=''
+    user.github_subject=None
+    user.google_subject=None
+    user.password_hash='!archived!'
+    user.status='identity_released'
+    user.last_login_at=None
+    audit(db,actor,'account.identifiers_released',user.id)
+    try:db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409,'Identity release conflicted with a concurrent account change') from None
+    return {'released':True,'id':str(user.id),'registration_identifiers_available':True,
+            'account_reactivation_disabled':True,'project_data_preserved':True,
+            'permanent_account_deletion':False}
+
+
+class PermanentUserDelete(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    confirm_username:str=Field(min_length=1,max_length=80)
+    confirmation:str=Field(pattern='^DELETE PERMANENTLY' + '$')
+
+
+@router.post('/users/{user_id}/delete-permanently')
+def permanently_delete_user(user_id:_uuid.UUID,data:PermanentUserDelete,
+                            actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Actually DELETE the user row, only when owned data can be removed safely.
+
+    Do not substitute an identity_released tombstone. A non-empty GitHub or
+    local project requires a separate owner-reviewed Native/filesystem cleanup,
+    and paid records require a statutory retention decision. We refuse either
+    rather than deleting another service's work, invoices or runtime history.
+    All DB mutations below are one transaction, rolled back on FK conflict.
+    """
+    from sqlalchemy import delete, or_, inspect
+    from ..database import Base
+    user=db.scalar(select(User).where(User.id==user_id).with_for_update())
+    if user is None:raise HTTPException(404,'User not found')
+    if user.id==actor.id or user.role in {'admin','owner'}:
+        raise HTTPException(403,'Administrators and the current account cannot be permanently deleted here')
+    if user.status not in {'archived','identity_released'}:
+        raise HTTPException(409,'Archive this customer first; permanent deletion requires a separate confirmation')
+    if data.confirm_username!=user.username:
+        raise HTTPException(400,'Type the current archived username exactly; account was not deleted')
+    # Never destroy local source, GitHub copies, OpenCode conversations, or
+    # actual financial records in a generic user-row deletion.
+    blockers={}
+    for model,name in ((Project,'projects'),(Workspace,'workspaces'),
+                       (WorkspaceSession,'conversations'),(PaymentOrder,'payment_orders'),
+                       (GithubConnection,'github_connections')):
+        if db.scalar(select(model.user_id).where(model.user_id==user.id).limit(1)) is not None:
+            blockers[name]=True
+    if blockers:
+        raise HTTPException(409,'Permanent deletion requires separate review/cleanup of: '+', '.join(blockers))
+    # Revoke sessions and remove every account-owned dependent row with an
+    # actual users.id FK, even if a new migration adds such a table later.
+    # Audit and third-party payments remain but their nullable user references
+    # are anonymized, protecting records belonging to others.
+    inspector=inspect(db.connection())
+    try:
+        for table in reversed(Base.metadata.sorted_tables):
+            if table.name=='users' or not inspector.has_table(table.name):continue
+            columns=[column for column in table.c
+                     if any(fk.column.table.name=='users' and fk.column.name=='id'
+                            for fk in column.foreign_keys)]
+            if not columns:continue
+            if table.name in {'projects','workspaces','workspace_sessions','payment_orders','github_connections'}:
+                continue
+            if table.name=='account_audit':
+                db.execute(update(table).where(or_(*(c==user.id for c in columns)))
+                           .values({c.name:None for c in columns}))
+                continue
+            if table.name=='payment_orders':
+                continue
+            owned=table.c.get('user_id')
+            if owned is not None and any(owned is col for col in columns):
+                db.execute(delete(table).where(owned==user.id))
+            for column in columns:
+                if column is owned:continue
+                if not column.nullable:
+                    # A non-null third-party relation must be reviewed rather
+                    # than deleting unrelated customers' records.
+                    if db.scalar(select(column).where(column==user.id).limit(1)) is not None:
+                        raise HTTPException(409,'Other records still depend on this user: '+table.name)
+                else:
+                    db.execute(update(table).where(column==user.id).values({column.name:None}))
+        # A customer can have been an invoice reviewer without owning a paid
+        # order. Preserve the order and drop only the reviewer reference.
+        db.execute(update(PaymentOrder).where(PaymentOrder.reviewed_by==user.id).values(reviewed_by=None))
+        db.execute(delete(User).where(User.id==user.id))
+        db.flush()
+        if db.get(User,user_id) is not None:raise HTTPException(409,'Database did not confirm permanent deletion')
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409,'Other database records still reference this user; no deletion occurred') from None
+    return {'deleted':True,'database_row_deleted':True,'id':str(user_id),
+            'projects_deleted':False,'payment_records_deleted':False}
+
 
 @router.get("/overview")
 def overview(_: User = Depends(require_admin), db: Session = Depends(get_db)):
@@ -132,7 +328,7 @@ def overview(_: User = Depends(require_admin), db: Session = Depends(get_db)):
         "plans": {"total": _count(db, Plan), "active": _count(db, Plan, Plan.active.is_(True))},
         "runtime": _runtime_health(),
         "integrations": {
-            "github": {"configured": settings.github_configured, "connected_users": github_connected},
+            "github": {"configured": github.configured(db), "connected_users": github_connected},
             "opencode": settings.runtime_mode,
             "payments": "not_available",
         },
@@ -171,19 +367,6 @@ def admin_workspaces(_: User = Depends(require_admin), db: Session = Depends(get
         output.append({"id": str(workspace.id), "owner": owner.username if owner else None, "project": project.name if project else None,
                        "status": workspace.status, "base_commit_sha": workspace.base_commit_sha, "sessions": session_counts.get(workspace.id, 0),
                        "created_at": workspace.created_at, "last_activity_at": workspace.last_activity_at})
-    return output
-
-@router.get("/sessions")
-def admin_sessions(_: User = Depends(require_admin), db: Session = Depends(get_db)):
-    owners = _user_index(db)
-    workspaces = {w.id: w for w in db.scalars(select(Workspace))}
-    projects = {p.id: p for p in db.scalars(select(Project))}
-    output = []
-    for session in db.scalars(select(WorkspaceSession).order_by(WorkspaceSession.created_at.desc())):
-        owner = owners.get(session.user_id); workspace = workspaces.get(session.workspace_id)
-        project = projects.get(workspace.project_id) if workspace else None
-        output.append({"id": str(session.id), "owner": owner.username if owner else None, "workspace": workspace.status if workspace else None,
-                       "project": project.name if project else None, "title": session.title, "status": session.status, "created_at": session.created_at})
     return output
 
 @router.get("/subscriptions")
@@ -263,8 +446,13 @@ def admin_reports(_: User = Depends(require_admin), db: Session = Depends(get_db
     }
 
 @router.get("/plans")
-def list_plans(_: User = Depends(require_admin), db: Session = Depends(get_db)):
-    rows = db.scalars(select(Plan).order_by(Plan.sort_order, Plan.id))
+def list_plans(include_retired: bool = False, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    # Keep legacy plan rows for historical subscriptions, but remove them from
+    # the default admin catalogue. Admin can explicitly inspect them if needed.
+    statement = select(Plan)
+    if not include_retired:
+        statement = statement.where(Plan.code.notin_(("monthly", "two_months", "three_months")))
+    rows = db.scalars(statement.order_by(Plan.sort_order, Plan.id))
     return [plan_payload(p) for p in rows]
 
 @router.post("/plans", status_code=201)
@@ -292,9 +480,445 @@ def read_policy(_: User = Depends(require_admin), db: Session = Depends(get_db))
 @router.put("/policy")
 def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session = Depends(get_db)):
     row = get_policy(db)
-    row.allowed_providers = json.dumps(sorted({p.strip() for p in data.allowed_providers if p.strip()}))
-    row.allowed_models = json.dumps(sorted({m.strip() for m in data.allowed_models if m.strip()}))
+    previous=row.as_payload()
+    hidden=data.hidden_providers if data.hidden_providers is not None else previous['hidden_providers']
+    selection=data.hidden_models if data.hidden_models is not None else previous['hidden_models']
+    if len(selection)>1000 or sum(len(v) for v in selection.values())>10000 or any(not key or len(key)>200 or any(not v or len(v)>300 for v in values) for key,values in selection.items()) or any(not p or len(p)>200 for p in hidden):
+        raise HTTPException(422,'Invalid provider/model policy')
+    row.allowed_providers = json.dumps({'allowed':sorted({p.strip() for p in data.allowed_providers if p.strip()}),'hidden':sorted(set(hidden))})
+    row.allowed_models = json.dumps({'allowed':sorted({m.strip() for m in data.allowed_models if m.strip()}),'hidden':{key:sorted(set(values)) for key,values in selection.items()}})
     row.allowed_tools = json.dumps(sorted({t.strip() for t in data.allowed_tools if t.strip()}))
     row.require_tool_approval = data.require_tool_approval
     db.commit(); db.refresh(row)
     return row.as_payload()
+
+@router.get('/native/providers')
+def native_provider_policy_catalog(offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=50),query:str=Query('',max_length=200),provider_id:str|None=Query(None,max_length=200),actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from . import native_sessions
+    from ..services import native_provider_accounts,policy,providers
+    if not native_sessions.enabled():raise HTTPException(409,'Native discovery is not enabled')
+    native_sessions.admit(actor)
+    data=native_sessions.metadata('GET','/provider',native_provider_accounts.root(actor))
+    if not isinstance(data,dict) or not isinstance(data.get('all'),list):raise HTTPException(502,'Invalid Native catalog')
+    rules=policy.load(db)
+    def summary(entry):
+        pid=entry['id']
+        return {'id':pid,'name':str(entry.get('name',pid)), 'runtime_configured':pid in data.get('connected',[]),
+                'allowed':policy.provider_allowed(rules,pid),'visible':policy.provider_visible(rules,pid),'model_count':len(entry.get('models',{}))}
+    if provider_id is not None:
+        entry=next((r for r in data['all'] if r.get('id')==provider_id),None)
+        if entry is None:raise HTTPException(404,'Provider is not discovered by Native')
+        return {'provider':summary(entry),'models':[{'id':mid,'name':str(m.get('name',mid)), 'allowed':policy.model_allowed(rules,mid,provider_id),'visible':policy.model_visible(rules,provider_id,mid)} for mid,m in entry.get('models',{}).items()]}
+    term=query.casefold();rows=sorted([r for r in data['all'] if not term or term in (str(r.get('id',''))+' '+str(r.get('name',''))).casefold()],key=lambda r:r['id'])
+    return {'items':[summary(r) for r in rows[offset:offset+limit]],'total':len(rows),'next_offset':offset+limit if offset+limit<len(rows) else None,
+            'custom_provider_creation':False,'custom_provider_reason':'Custom Native provider configuration is protected on the shared engine. Select an existing discovered provider; customer credentials connect separately.'}
+
+class EmailDeliveryUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    provider: Literal["resend", "brevo"] = "resend"
+    smtp_from: str | None = Field(default=None,min_length=6,max_length=254)
+    sender_name: str | None = Field(default=None,min_length=1,max_length=120)
+    api_key: str | None = Field(default=None,min_length=5,max_length=4096)
+
+def _mask_secret(value):
+    if not isinstance(value,str) or not value:return None
+    if len(value)<=8:return '\u2022'*4
+    return value[:3]+'\u2022\u2022\u2022\u2022'+value[-4:]
+
+def _saved_provider_keys(saved, mail):
+    """List every saved provider credential with a masked key, for admin review."""
+    from ..services import email_delivery
+    accounts=dict((saved or {}).get('provider_accounts') or {})
+    active=mail.get('provider','resend')
+    if active in email_delivery.PROVIDERS and active not in accounts:
+        accounts[active]=mail
+    keys=[]
+    for pid in email_delivery.PROVIDERS:
+        acct=accounts.get(pid,{})
+        secret=acct.get('api_key') if pid=='brevo' else acct.get('smtp_password')
+        keys.append({
+            'provider':pid,
+            'sender':acct.get('smtp_from') or email_delivery.DEFAULT_SENDER,
+            'sender_name':acct.get('sender_name') or email_delivery.DEFAULT_NAME,
+            'configured':bool(secret),
+            'key_masked':_mask_secret(secret),
+            'active':pid==active,
+        })
+    return keys
+
+@router.put("/service-integrations/email")
+def save_email_delivery(data: EmailDeliveryUpdate, actor: User = Depends(require_admin), db: Session = Depends(get_db)):
+    from ..services import admin_email_config, email_delivery
+    existing=admin_email_config.read(db) or {}
+    accounts=dict(existing.get('provider_accounts') or {})
+    old_provider=existing.get('provider','resend')
+    if old_provider in email_delivery.PROVIDERS:
+        accounts[old_provider]={key:value for key,value in existing.items() if key not in ('provider_accounts','inbox_api_key')}
+    selected=accounts.get(data.provider,{})
+    sender=data.smtp_from or selected.get('smtp_from') or email_delivery.DEFAULT_SENDER
+    if not sender.endswith("@opencode-gateway.codes") or any(c in sender for c in "\r\n<> ,"):
+        raise HTTPException(422,"Sender must use the authorized opencode-gateway.codes domain")
+    name=data.sender_name or selected.get('sender_name') or email_delivery.DEFAULT_NAME
+    if any(c in name for c in '\r\n'):raise HTTPException(422,'Invalid sender name')
+    key=data.api_key or selected.get('api_key' if data.provider=='brevo' else 'smtp_password')
+    if not key:raise HTTPException(422,'Enter an API key for the selected email provider')
+    # Verify this API key is not already saved under another provider.
+    duplicate_of=None
+    for pid,acct in accounts.items():
+        if pid==data.provider:continue
+        other=acct.get('api_key') if pid=='brevo' else acct.get('smtp_password')
+        if other and other==key:duplicate_of=pid;break
+    cfg={'provider':data.provider,'smtp_from':sender,'sender_name':name}
+    if data.provider=='brevo':cfg['api_key']=key
+    else:cfg.update(smtp_host='smtp.resend.com',smtp_port=587,smtp_username='resend',smtp_password=key)
+    accounts[data.provider]=dict(cfg)
+    cfg['provider_accounts']=accounts
+    # Read credentials belong to Resend, independent of the active sender.
+    if existing.get('inbox_api_key'):cfg['inbox_api_key']=existing['inbox_api_key']
+    elif data.provider=='resend' and data.api_key:cfg['inbox_api_key']=data.api_key
+    admin_email_config.save(db,actor.id,cfg)
+    return {**email_delivery.public_config(cfg),'credentials_configured':True,'delivery_verified':False,'duplicate_of':duplicate_of}
+
+@router.delete("/service-integrations/provider-keys/{provider}")
+def delete_provider_key(provider: str, actor: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Remove one saved provider credential completely; never leaves a copy behind."""
+    from ..services import admin_email_config, email_delivery
+    if provider not in email_delivery.PROVIDERS:
+        raise HTTPException(422,'Unknown email provider')
+    existing=admin_email_config.read(db) or {}
+    accounts=dict(existing.get('provider_accounts') or {})
+    # A credential may live in provider_accounts, at the top level (legacy/active),
+    # or both. Detect any real saved secret for this provider.
+    acct=accounts.get(provider) or {}
+    had_secret=bool(acct.get('api_key') or acct.get('smtp_password'))
+    if existing.get('provider')==provider:
+        had_secret=had_secret or bool(existing.get('api_key') or existing.get('smtp_password'))
+    if not had_secret:
+        raise HTTPException(404,'No saved API key for this provider')
+    # Remove this provider's credential everywhere it could be stored.
+    accounts.pop(provider,None)
+    if existing.get('provider')==provider:
+        # Choose the next active provider that still holds a key, else Resend (empty).
+        new_active=next((pid for pid in email_delivery.PROVIDERS
+                         if pid in accounts and (accounts[pid].get('api_key') or accounts[pid].get('smtp_password'))),
+                        'resend')
+        # Rebuild a flattened top-level config so smtp_settings/ready stay correct.
+        inbox=existing.get('inbox_api_key')
+        existing={'provider':new_active}
+        if new_active in accounts:
+            existing.update(accounts[new_active])
+        if inbox:existing['inbox_api_key']=inbox
+    existing['provider_accounts']=accounts
+    admin_email_config.save(db,actor.id,existing)
+    return {'deleted':True,'provider':provider}
+
+class SupportInboxCredential(BaseModel):
+    model_config=ConfigDict(extra="forbid", str_strip_whitespace=True)
+    api_key: str = Field(min_length=5,max_length=4096)
+
+@router.put("/service-integrations/inbox-credential")
+def save_inbox_credential(data:SupportInboxCredential,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from ..services import admin_email_config, credentials
+    if not credentials.available():
+        raise HTTPException(503,"Encrypted credential storage is unavailable")
+    config=admin_email_config.read(db)
+    if config is None:
+        raise HTTPException(409,"Configure the Resend sender first")
+    from ..services.email_delivery import read_resend
+    read_resend("/emails/receiving?limit=1",data.api_key)
+    config["inbox_api_key"]=data.api_key
+    admin_email_config.save(db,actor.id,config)
+    return {"configured":True,"address":"support@opencode-gateway.codes"}
+
+class AdminDraftWrite(BaseModel):
+    model_config=ConfigDict(extra="forbid", str_strip_whitespace=True)
+    to: str = Field(default="",max_length=254)
+    subject: str = Field(default="",max_length=300)
+    body: str = Field(default="",max_length=50000)
+
+@router.get("/service-integrations/drafts")
+def list_admin_mail_drafts(actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from sqlalchemy import text
+    from ..services import credentials
+    if not credentials.available():
+        raise HTTPException(503,"Encrypted drafts require CREDENTIALS_ENCRYPTION_KEY")
+    rows=db.execute(text("""SELECT id, ciphertext, updated_at FROM admin_mail_drafts
+                            WHERE admin_id=:admin ORDER BY updated_at DESC LIMIT 50"""),
+                    {"admin":actor.id}).all()
+    items=[]
+    for row in rows:
+        try: draft=json.loads(credentials.decrypt(row.ciphertext))
+        except Exception:raise HTTPException(503,"Cannot decrypt a stored draft") from None
+        items.append({"id":str(row.id),"to":draft.get("to",""),"subject":draft.get("subject",""),
+                      "preview":draft.get("body","")[:140],"updated_at":row.updated_at.isoformat()})
+    return {"items":items}
+
+@router.get("/service-integrations/drafts/{draft_id}")
+def get_admin_mail_draft(draft_id:_uuid.UUID,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from sqlalchemy import text
+    from ..services import credentials
+    token=db.execute(text("""SELECT ciphertext FROM admin_mail_drafts
+                            WHERE id=:id AND admin_id=:admin"""),
+                     {"id":draft_id,"admin":actor.id}).scalar_one_or_none()
+    if token is None:raise HTTPException(404,"Draft not found")
+    try: draft=json.loads(credentials.decrypt(token))
+    except Exception:raise HTTPException(503,"Cannot decrypt a stored draft") from None
+    return {"id":str(draft_id),**{field:draft.get(field,"") for field in ("to","subject","body")}}
+
+@router.post("/service-integrations/drafts")
+def create_admin_mail_draft(data:AdminDraftWrite,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from sqlalchemy import text
+    from ..services import credentials
+    token=credentials.encrypt(data.model_dump_json())
+    draft_id=_uuid.uuid4()
+    db.execute(text("""INSERT INTO admin_mail_drafts(id,admin_id,ciphertext)
+                       VALUES(:id,:admin,:token)"""),{"id":draft_id,"admin":actor.id,"token":token})
+    db.commit()
+    return {"id":str(draft_id),"saved":True}
+
+@router.put("/service-integrations/drafts/{draft_id}")
+def update_admin_mail_draft(draft_id:_uuid.UUID,data:AdminDraftWrite,
+                            actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from sqlalchemy import text
+    from ..services import credentials
+    token=credentials.encrypt(data.model_dump_json())
+    updated=db.execute(text("""UPDATE admin_mail_drafts SET ciphertext=:token,
+                              updated_at=CURRENT_TIMESTAMP WHERE id=:id AND admin_id=:admin
+                              RETURNING id"""),
+                       {"token":token,"id":draft_id,"admin":actor.id}).scalar_one_or_none()
+    if updated is None:db.rollback();raise HTTPException(404,"Draft not found")
+    db.commit()
+    return {"id":str(draft_id),"saved":True}
+
+@router.delete("/service-integrations/drafts/{draft_id}")
+def delete_admin_mail_draft(draft_id:_uuid.UUID,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from sqlalchemy import text
+    deleted=db.execute(text("""DELETE FROM admin_mail_drafts
+                               WHERE id=:id AND admin_id=:admin RETURNING id"""),
+                       {"id":draft_id,"admin":actor.id}).scalar_one_or_none()
+    if deleted is None:db.rollback();raise HTTPException(404,"Draft not found")
+    db.commit()
+    return {"deleted":True}
+
+class AdminComposeEmail(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    to: str = Field(min_length=3,max_length=254)
+    subject: str = Field(min_length=1,max_length=300)
+    body: str = Field(min_length=1,max_length=100000)
+
+@router.post("/service-integrations/send-email")
+def admin_compose_send(data:AdminComposeEmail,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Send admin-authored mail through the saved sender; acceptance is not inbox delivery."""
+    import re
+    from email.message import EmailMessage
+    from ..services import email_verification, email_delivery
+    if not re.fullmatch(r"[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+",data.to):
+        raise HTTPException(422,"Invalid recipient address")
+    cfg=email_verification.smtp_settings(db)
+    if not email_delivery.ready(cfg):raise HTTPException(503,'Configure an email provider and encryption before sending')
+    if cfg.get('provider','resend') not in email_delivery.PROVIDERS or (cfg.get('provider','resend')=='resend' and cfg.get('smtp_host')!='smtp.resend.com'):
+        raise HTTPException(503,'Admin compose requires a supported configured email provider')
+    message=EmailMessage();message['From']=cfg['smtp_from'];message['To']=data.to;message['Subject']=data.subject;message.set_content(data.body)
+    email_delivery.send(cfg,message)
+    return {"sent":True,"to":data.to}
+
+@router.get("/service-integrations/sent-emails")
+def resend_sent_emails(_:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Read real Resend sent-email metadata. No keys or HTML returned to browsers."""
+    from ..services import admin_email_config
+    cfg=admin_email_config.read(db) or {}
+    key=cfg.get("inbox_api_key")
+    if not key:return {"configured":False,"items":[],"reason":"Resend read-capable API key is required"}
+    from ..services.email_delivery import read_resend
+    payload=read_resend("/emails?limit=50",key)
+    return {"configured":True,"items":[
+        {"id":str(item.get("id","")),"to":item.get("to",[])[:10] if isinstance(item.get("to"),list) else [],
+         "subject":str(item.get("subject",""))[:300],
+         "status":str(item.get("last_event") or item.get("status") or "unknown")[:50],
+         "created_at":str(item.get("created_at",""))}
+        for item in payload.get("data",[]) if isinstance(item,dict)
+    ],"has_more":bool(payload.get("has_more",False))}
+
+@router.get("/service-integrations/support-inbox")
+def support_inbox(_:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Admin-only, read-only metadata for messages addressed to support mailbox."""
+    from ..services import admin_email_config
+    cfg=admin_email_config.read(db) or {}
+    key=cfg.get("inbox_api_key")
+    if not key:return {"configured":False,"items":[],"reason":"Receiving API key has not been configured"}
+    from ..services.email_delivery import read_resend
+    payload=read_resend("/emails/receiving?limit=50",key)
+    items=[]
+    for message in payload.get("data",[]):
+        if not isinstance(message,dict):continue
+        recipients=message.get("to") or []
+        if not isinstance(recipients,list) or not any(str(x).lower()=="support@opencode-gateway.codes" for x in recipients):
+            continue
+        items.append({"id":str(message.get("id","")),"from":str(message.get("from",""))[:254],
+                      "subject":str(message.get("subject",""))[:300],
+                      "created_at":str(message.get("created_at",""))})
+    return {"configured":True,"items":items,"has_more":bool(payload.get("has_more",False))}
+
+@router.get("/service-integrations/sent-emails/{message_id}")
+def resend_sent_message(message_id:_uuid.UUID,_:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Read a sent message from Resend, returning bounded text only."""
+    from ..services import admin_email_config
+    cfg=admin_email_config.read(db) or {}
+    key=cfg.get("inbox_api_key")
+    if not key:raise HTTPException(503,"Resend read key is not configured")
+    from ..services.email_delivery import read_resend
+    mail=read_resend("/emails/"+str(message_id),key)
+    recipients=mail.get("to") or []
+    return {"id":str(message_id),"subject":str(mail.get("subject",""))[:300],
+            "to":recipients[:10] if isinstance(recipients,list) else [],
+            "from":str(mail.get("from",""))[:254],
+            "text":str(mail.get("text") or "")[:50000],
+            "created_at":str(mail.get("created_at","")),
+            "status":str(mail.get("last_event",""))[:50]}
+
+@router.get("/service-integrations/support-inbox/{message_id}")
+def support_inbox_message(message_id:_uuid.UUID,_:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from ..services import admin_email_config
+    cfg=admin_email_config.read(db) or {}
+    key=cfg.get("inbox_api_key")
+    if not key:raise HTTPException(503,"Receiving API key has not been configured")
+    from ..services.email_delivery import read_resend
+    email=read_resend("/emails/receiving/"+str(message_id),key)
+    recipients=email.get("to") or []
+    if not isinstance(recipients,list) or not any(str(x).lower()=="support@opencode-gateway.codes" for x in recipients):
+        raise HTTPException(404,"Support email not found")
+    # Plain text only; never render untrusted email HTML.
+    return {"id":str(message_id),"subject":str(email.get("subject",""))[:300],
+            "from":str(email.get("from",""))[:254],
+            "text":str(email.get("text") or "")[:50000],
+            "created_at":str(email.get("created_at",""))}
+
+class EmailServiceToggle(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    enabled: bool
+
+@router.put("/service-integrations/services/{service_id}")
+def update_email_service(service_id:str, data:EmailServiceToggle,
+                         _:User=Depends(require_admin), db:Session=Depends(get_db)):
+    from ..services import email_service_policies
+    if service_id not in email_service_policies.SUPPORTED:
+        raise HTTPException(409,"This email service is not implemented")
+    if service_id not in {'registration_verification','password_reset','github_connection_verification'}:
+        from ..services import email_notifications
+        if not email_notifications.ready(db):raise HTTPException(503,'Apply email notification migration 0027 before changing this service')
+    try:
+        email_service_policies.set_enabled(db, service_id, data.enabled)
+    except Exception:
+        db.rollback()
+        raise
+    return {"id":service_id,"enabled":data.enabled,"saved":True}
+
+class NotificationReport(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    user_id:_uuid.UUID
+    event_id:_uuid.UUID
+    detail:str=Field(min_length=1,max_length=2000)
+
+@router.post('/service-integrations/services/{service_id}/report')
+def notification_report(service_id:str,data:NotificationReport,actor:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from ..services import email_notifications
+    if service_id not in email_notifications.MANUAL:raise HTTPException(409,'This service is driven by its original event source')
+    target=db.get(User,data.user_id)
+    if target is None:raise HTTPException(404,'User not found')
+    result=email_notifications.deliver(db,target,service_id,'manual:'+str(data.event_id),data.detail)
+    if result=='disabled':raise HTTPException(409,'Enable this notification before sending')
+    if result in {'migration_required','sender_unavailable'}:raise HTTPException(503,'Notification storage or configured sender is unavailable')
+    return {'accepted':result=='accepted','state':result}
+
+@router.get("/service-integrations")
+def service_integrations(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    import os
+    from ..services import email_verification
+    from ..services import admin_email_config, credentials
+    from ..services import email_delivery
+    saved=admin_email_config.read(db)
+    mail=email_verification.smtp_settings(db)
+    mail_ready=email_delivery.ready(mail)
+    required=email_verification.required_for_registration(db)
+    from ..services import email_service_policies
+    recovery_enabled=email_service_policies.enabled(db,"password_reset",True)
+    github_verification_enabled=email_service_policies.enabled(db,'github_connection_verification',True)
+    from sqlalchemy import inspect
+    github_verification_ready=inspect(db.connection()).has_table('github_identity_registry')
+    from ..services import email_notifications
+    notification_schema=email_notifications.ready(db)
+    accounts=dict((saved or {}).get('provider_accounts') or {})
+    if mail.get('provider','resend') in email_delivery.PROVIDERS:accounts[mail.get('provider','resend')]=mail
+    return {"email":{**email_delivery.public_config(mail),"sending_ready":mail_ready,
+          "verification_required":required,"settings_schema_ready":admin_email_config.schema_ready(db),
+          "credential_storage_ready":credentials.available(),
+          "receiving_configured":bool((saved or {}).get("inbox_api_key")),"delivery_verified":False,
+          "credentials_configured":bool(mail.get('api_key') if mail.get('provider')=='brevo' else mail.get('smtp_password')),
+          "message_provider":"resend",
+          "provider_configurations":{pid:email_delivery.public_config(accounts.get(pid,{'provider':pid})) for pid in email_delivery.PROVIDERS},
+          "saved_provider_keys":_saved_provider_keys(saved,mail)},
+       "services":[
+         {"id":"registration_verification","enabled":required,"available":True,"editable":True,
+          "reason":"" if mail_ready else "Selected email provider API key is missing"},
+         {"id":"password_reset","enabled":recovery_enabled,"available":True,"editable":True,"delivery_ready":mail_ready,"reason":"Uses the configured email sender"},
+         {"id":"github_connection_verification","enabled":github_verification_enabled,"available":github_verification_ready,"editable":True,"delivery_ready":mail_ready,
+          "reason":"Apply migration 0029" if not github_verification_ready else "New GitHub connections require email matching and OTP; disabling blocks new connections"},
+         *({"id":i,"available":i in email_service_policies.SUPPORTED and notification_schema,"editable":i in email_service_policies.SUPPORTED and notification_schema,"enabled":email_service_policies.enabled(db,i,False),"reason":"Apply migration 0027" if i in email_service_policies.SUPPORTED and not notification_schema else "Requires an authorized Resend Full access read key" if i=="support_received" else "Manual administrator report" if i in {"system_updates","service_incident","backup_status"} else "Gateway event notification" if i in email_service_policies.SUPPORTED else "Source event integration is not available"} for i in
+           ("welcome_email","subscription_expiry","low_balance","account_suspension",
+            "payment_receipt","renewal_reminder","system_updates","login_security",
+            "password_changed","email_changed","payment_failed","trial_expiring",
+            "support_received","support_unanswered","service_incident","mail_delivery_failure",
+            "unusual_activity","backup_status"))
+       ]}
+
+@router.get("/github-configuration")
+def github_configuration(_:User=Depends(require_admin),db:Session=Depends(get_db)):
+    """Read-only effective GitHub settings metadata; never disclose secrets."""
+    from ..services import github, credentials, github_app_config
+    cfg=github_app_config.effective(settings,db)
+    return {
+        "provider":"github_app", "configured":github.configured(db,config=cfg),
+        "database":github.schema_status(db),
+        "app_id":cfg.github_app_id,
+        "app_slug":cfg.github_app_slug or "",
+        "client_id":cfg.github_client_id or "",
+        "callback_url":cfg.github_callback_url,
+        "public_base_url":settings.public_base_url,
+        "api_base":cfg.github_api_base,
+        "web_base":cfg.github_web_base,
+        "webhook_url":settings.public_base_url.rstrip("/")+"/api/github/webhook",
+        "secrets":{
+            "client_secret":bool(cfg.github_client_secret),
+            "private_key":bool(cfg.github_private_key),
+            "webhook_secret":bool(cfg.github_webhook_secret),
+            "encryption_key":credentials.available(),
+        },
+        "missing":[label for label,ok in {
+            "GITHUB_APP_ID":bool(cfg.github_app_id),
+            "GITHUB_APP_SLUG":bool(cfg.github_app_slug),
+            "GITHUB_CLIENT_ID":bool(cfg.github_client_id),
+            "GITHUB_CLIENT_SECRET":bool(cfg.github_client_secret),
+            "GITHUB_APP_PRIVATE_KEY":bool(cfg.github_private_key),
+            "CREDENTIALS_ENCRYPTION_KEY":credentials.available(),
+        }.items() if not ok],
+        "source":"encrypted_database" if github_app_config.read(db) is not None else "protected_server_environment",
+        "editable":True,
+        "settings_schema_ready":github_app_config.schema_ready(db),
+        "credential_storage_ready":credentials.available(),
+        "message":"Blank secrets preserve saved values. Saving requires migration 0024 and the original Gateway encryption key. App registration alone does not authorize customer repositories.",
+    }
+
+class GithubAppConfigurationIn(BaseModel):
+    model_config=ConfigDict(extra='forbid',str_strip_whitespace=True)
+    app_id:int=Field(gt=0)
+    app_slug:str=Field(pattern=r'^[a-z0-9][a-z0-9-]{0,99}$')
+    client_id:str=Field(min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_]+$')
+    client_secret:str|None=None
+    private_key:str|None=None
+    webhook_secret:str|None=None
+
+@router.put('/github-configuration')
+def save_github_configuration(data:GithubAppConfigurationIn,user:User=Depends(require_admin),db:Session=Depends(get_db)):
+    from ..services import github_app_config
+    github_app_config.save(db,user.id,settings,data.model_dump())
+    return github_configuration(user,db)

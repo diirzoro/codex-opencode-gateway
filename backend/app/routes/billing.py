@@ -11,9 +11,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..models import Plan, Subscription, User, PaymentOrder,BillingMethod,AccountAudit
+from ..models import Plan, Subscription, User, PaymentOrder,BillingMethod,AccountAudit,Country,Region,City
+from ..services.storage_policy import PLAN_MB
 from .dependencies import require_user,require_admin,require_billing_user,access_payload
 from ..services import paypal
+
+LEGACY_PLAN_CODES = frozenset(('monthly', 'two_months', 'three_months'))
+from ..services.location_validation import validate_locations
+from ..services.billing_methods import method_payload
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 PAYMENT_MESSAGE = "Payment integration not available yet"
@@ -37,7 +42,9 @@ def ensure_subscription(db, user, commit=True, *, lock=False) -> Subscription:
 def plan_payload(plan):
     if plan is None:
         return None
-    return {"id": plan.id, "code": plan.code, "name": plan.name, "price_cents": plan.price_cents, "currency": plan.currency, "duration_days": plan.duration_days}
+    return {"id": plan.id, "code": plan.code, "name": plan.name, "price_cents": plan.price_cents, "currency": plan.currency, "duration_days": plan.duration_days,
+            "storage_mb": PLAN_MB.get(plan.code, 50), "includes_ai_api": False,
+            "service_description": "Gateway platform and shared local/GitHub storage only; connect your own AI models/API keys."}
 
 def subscription_payload(db, user) -> dict:
     row = ensure_subscription(db, user)
@@ -46,15 +53,24 @@ def subscription_payload(db, user) -> dict:
     if end is not None and end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
     remaining = max(0, ceil((end - now).total_seconds() / 86400)) if end else 0
-    plans = [plan_payload(p) for p in db.scalars(select(Plan).where(Plan.active.is_(True)).order_by(Plan.sort_order, Plan.id))]
+    paid_end = row.current_period_end
+    if paid_end is not None and paid_end.tzinfo is None:
+        paid_end = paid_end.replace(tzinfo=timezone.utc)
+    paid_active = bool(row.status == 'active' and row.plan_id and paid_end and paid_end > now)
+    paid_remaining = max(0, ceil((paid_end - now).total_seconds() / 86400)) if paid_end else 0
+    plans = [plan_payload(p) for p in db.scalars(select(Plan).where(Plan.active.is_(True), ~Plan.code.in_(LEGACY_PLAN_CODES)).order_by(Plan.sort_order, Plan.id))]
+    access = access_payload(db, user)
     return {
         "plan": plan_payload(user.plan),
         "selected_plan": plan_payload(db.get(Plan, row.plan_id)) if row.plan_id else None,
-        "trial": {"started_at": user.trial_started_at, "ends_at": user.trial_ends_at, "remaining_days": remaining, "active": remaining > 0},
+        "trial": {"started_at": user.trial_started_at, "ends_at": user.trial_ends_at, "remaining_days": access["core_trial"]["remaining_days"], "active": access["core_trial"]["active"]},
         "subscription": {"status": row.status, "started_at": row.started_at, "current_period_end": row.current_period_end, "cancelled_at": row.cancelled_at, "auto_renew": bool(row.auto_renew)},
         "plans": plans,
+        "paid_entitlement": {"active": paid_active, "ends_at": paid_end,
+                             "remaining_days": paid_remaining if paid_active else 0,
+                             "plan_id": row.plan_id if paid_active else None},
         "payment": {"available": bool(db.scalar(select(BillingMethod.id).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)).limit(1))), "message": "Choose checkout; activation requires verified payment" if db.scalar(select(BillingMethod.id).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)).limit(1)) else PAYMENT_MESSAGE},
-        "access": access_payload(db,user),
+        "access": access,
     }
 
 @router.get("/subscription")
@@ -64,7 +80,7 @@ def get_subscription(user: User = Depends(require_billing_user), db: Session = D
 @router.post("/subscription/select")
 def select_plan(data: SelectPlan, user: User = Depends(require_billing_user), db: Session = Depends(get_db)):
     plan = db.get(Plan, data.plan_id)
-    if plan is None or not plan.active:
+    if plan is None or not plan.active or plan.code in LEGACY_PLAN_CODES:
         raise HTTPException(422, "Unknown or inactive plan")
     # Choosing a renewal must not erase already purchased access. Checkout's
     # PaymentOrder records the purchased plan; activation changes the paid plan.
@@ -88,6 +104,8 @@ def select_plan(data: SelectPlan, user: User = Depends(require_billing_user), db
 @router.post("/subscription/cancel")
 def cancel_subscription(user: User = Depends(require_user), db: Session = Depends(get_db)):
     row = ensure_subscription(db, user)
+    if row.plan_id and row.current_period_end:
+        raise HTTPException(409, 'Accepted subscription payments cannot be cancelled. Your purchased period is unchanged.')
     if row.status == "cancelled":
         return subscription_payload(db, user)
     row.status = "cancelled"
@@ -98,6 +116,8 @@ def cancel_subscription(user: User = Depends(require_user), db: Session = Depend
 @router.post("/subscription/reactivate")
 def reactivate_subscription(user: User = Depends(require_user), db: Session = Depends(get_db)):
     row = ensure_subscription(db, user)
+    if row.plan_id and row.current_period_end:
+        raise HTTPException(409, 'Use checkout to renew. Your purchased period is unchanged.')
     if row.status in {"cancelled", "expired"}:
         row.status = "pending_payment" if row.plan_id else "trial"
         row.cancelled_at = None
@@ -140,6 +160,9 @@ class Checkout(BaseModel):
     payer_name:str=Field(default='',max_length=150)
     payer_email:str=Field(default='',max_length=254)
     payer_country:str=Field(default='',max_length=80)
+    country_id:int|None=Field(default=None,ge=1)
+    region_id:int|None=Field(default=None,ge=1)
+    city_id:int|None=Field(default=None,ge=1)
 class PaymentReference(BaseModel):
     model_config=ConfigDict(extra='forbid',str_strip_whitespace=True)
     reference:str=Field(min_length=3,max_length=200)
@@ -161,22 +184,26 @@ def receipts_root():
     root.mkdir(parents=True,exist_ok=True)
     return root
 def order_payload(row):
-    data={key:(str(getattr(row,key)) if key in {'id','user_id','method_id'} and getattr(row,key) is not None else getattr(row,key)) for key in ['id','user_id','plan_id','method_id','plan_name','method_label','amount_cents','currency','duration_days','status','payment_reference','provider_order_id','provider_capture_id','provider_environment','billing_note','sender_name','sender_email','sender_bank','sender_account','payer_name','payer_email','payer_country','transfer_date','amount_sent_cents','reject_reason','created_at','paid_at']}
+    data={key:(str(getattr(row,key)) if key in {'id','user_id','method_id'} and getattr(row,key) is not None else getattr(row,key)) for key in ['id','user_id','plan_id','method_id','plan_name','method_label','amount_cents','currency','duration_days','status','payment_reference','provider_order_id','provider_capture_id','provider_environment','billing_note','sender_name','sender_email','sender_bank','sender_account','payer_name','payer_email','payer_country','payer_region','payer_city','transfer_date','amount_sent_cents','reject_reason','created_at','paid_at','archived_at']}
     data['has_receipt']=bool(row.receipt_path)
     return data
 @router.post('/checkout',status_code=201)
 def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     plan=db.get(Plan,data.plan_id);method=db.get(BillingMethod,data.method_id)
-    if not plan or not plan.active: raise HTTPException(422,'Unknown or inactive plan')
+    if not plan or not plan.active or plan.code in LEGACY_PLAN_CODES: raise HTTPException(422,'Unknown, inactive or retired plan')
     if not method or method.user_id is not None or not method.enabled: raise HTTPException(422,'Payment method is unavailable')
-    from .management import method_payload
     details=method_payload(method)
     if details['details'].get('checkout_mode')=='link' and (not details['details'].get('payment_url') or not details['details'].get('plan_id')):
         raise HTTPException(503,'This payment method needs its hosted checkout link and matching plan configured by administration. No payment was made.')
     if details['details'].get('currency')!=plan.currency: raise HTTPException(422,'Payment method currency does not match this plan')
     if details['details'].get('plan_id') not in (None,plan.id):raise HTTPException(422,'Payment link belongs to another plan')
+    validate_locations(db,data.country_id,data.region_id,data.city_id)
+    country=db.get(Country,data.country_id) if data.country_id else None
+    region=db.get(Region,data.region_id) if data.region_id else None
+    city=db.get(City,data.city_id) if data.city_id else None
     allowed_countries=[c.upper() for c in (details['details'].get('available_country_codes') or [])]
-    user_code=(user.country.code.upper() if getattr(user,'country',None) and user.country.code else None)
+    billing_country=country or getattr(user,'country',None)
+    user_code=billing_country.code.upper() if billing_country and billing_country.code else None
     if allowed_countries and (not user_code or user_code not in allowed_countries): raise HTTPException(422,'This payment method is not available for your country')
     if details['details'].get('checkout_mode')=='link':
         host=(__import__('urllib.parse',fromlist=['urlsplit']).urlsplit(details['details'].get('payment_url') or '').hostname or '').lower()
@@ -187,13 +214,19 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
     if plan.price_cents<=0 or plan.duration_days<=0: raise HTTPException(422,'Plan requires valid paid price and duration')
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.user_id==user.id,PaymentOrder.plan_id==plan.id,PaymentOrder.method_id==method.id,PaymentOrder.status.in_(['awaiting_payment','pending_review'])))
     if row is None:
-        row=PaymentOrder(user_id=user.id,plan_id=plan.id,method_id=method.id,plan_name=plan.name,method_label=method.label,amount_cents=plan.price_cents,currency=plan.currency,duration_days=plan.duration_days,provider_environment=paypal.settings.paypal_environment if details['details'].get('checkout_mode')=='paypal' else None,billing_note=data.billing_note or None,payer_name=data.payer_name or None,payer_email=data.payer_email or None,payer_country=data.payer_country or None)
+        row=PaymentOrder(user_id=user.id,plan_id=plan.id,method_id=method.id,plan_name=plan.name,method_label=method.label,amount_cents=plan.price_cents,currency=plan.currency,duration_days=plan.duration_days,provider_environment=paypal.settings.paypal_environment if details['details'].get('checkout_mode')=='paypal' else None,billing_note=data.billing_note or None,payer_name=data.payer_name or user.username,payer_email=data.payer_email or user.email,payer_country=country.name if country else data.payer_country or None,payer_region=region.name if region else None,payer_city=city.name if city else None)
         db.add(row);db.commit();db.refresh(row)
+    elif row.status=='awaiting_payment' and not row.provider_order_id:
+        row.payer_name=data.payer_name or user.username;row.payer_email=data.payer_email or user.email
+        row.payer_country=country.name if country else data.payer_country or None;row.payer_region=region.name if region else None;row.payer_city=city.name if city else None
+        db.commit()
+    if row.archived_at is not None:
+        row.archived_at=None;db.commit()
     if details['details'].get('checkout_mode')=='paypal':
         row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==row.id).with_for_update())
         if row.provider_order_id:
             payload=paypal.show_order(row)
-            if payload.get('status')=='COMPLETED':return {'order':order_payload(row),'method':details,'automatic_processing':True,'approval_url':None,'message':'Payment is awaiting server verification. Confirm it to reconcile.'}
+            if payload.get('status') in {'APPROVED','COMPLETED'}:return {'order':order_payload(row),'method':details,'automatic_processing':True,'approval_url':None,'message':'Payment is awaiting server verification. Confirm it to reconcile.'}
         else:
             payload=paypal.create_order(row)
             provider_id=payload.get('id','')
@@ -204,15 +237,49 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
         return {'order':order_payload(row),'method':details,'automatic_processing':True,'approval_url':url,'message':'Approve payment on PayPal, then confirm payment here. Only verified completed captures activate subscriptions.'}
     return {'order':order_payload(row),'method':details,'payment_url':details['details'].get('payment_url') if details['details'].get('checkout_mode')=='link' else None,'automatic_processing':False,'message':'Complete payment, then submit its reference. Administration must verify receipt before activation.'}
 @router.get('/orders')
-def orders(user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
-    return [order_payload(row) for row in db.scalars(select(PaymentOrder).where(PaymentOrder.user_id==user.id).order_by(PaymentOrder.created_at.desc()))]
+def orders(archived:bool=False,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
+    state=PaymentOrder.archived_at.is_not(None) if archived else PaymentOrder.archived_at.is_(None)
+    return [order_payload(row) for row in db.scalars(select(PaymentOrder).where(PaymentOrder.user_id==user.id,state).order_by(PaymentOrder.created_at.desc()))]
+
+class ArchivePayment(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    archived:bool
+
+@router.post('/orders/{order_id}/archive')
+def archive_payment(order_id:uuid.UUID,data:ArchivePayment,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
+    row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
+    if not row:raise HTTPException(404,'Payment order not found')
+    row.archived_at=(row.archived_at or datetime.now(timezone.utc)) if data.archived else None
+    db.commit();return order_payload(row)
+@router.get('/orders/{order_id}')
+def get_order(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
+    row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id))
+    if not row:raise HTTPException(404,'Payment order not found')
+    return order_payload(row)
+
+@router.get('/orders/{order_id}/cancellation-status')
+def cancellation_status(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
+    row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id))
+    if not row:raise HTTPException(404,'Payment order not found')
+    allowed=row.status in {'awaiting_payment','pending_review','failed','rejected'} and not row.provider_capture_id and not row.paid_at
+    provider_status=None
+    if allowed and row.provider_order_id:
+        provider_status=paypal.show_order(row).get('status')
+        allowed=provider_status in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED'}
+    return {'can_cancel':allowed,'provider_status':provider_status}
+
 @router.post('/orders/{order_id}/cancel')
 def cancel_order(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
-    if row.provider_environment:raise HTTPException(409,'PayPal payments cannot be cancelled from here; use Confirm PayPal payment or contact support')
-    if row.status in {'paid','sandbox_paid'}:raise HTTPException(409,'Completed payments cannot be cancelled')
-    if row.status in {'rejected','cancelled'}:return order_payload(row)
+    if row.status in {'paid','sandbox_paid'} or row.provider_capture_id or row.paid_at:raise HTTPException(409,'Accepted payments cannot be cancelled or refunded')
+    if row.status=='cancelled':return order_payload(row)
+    if row.status not in {'awaiting_payment','pending_review','failed','rejected','cancelled'}:
+        raise HTTPException(409,'This payment cannot be cancelled after acceptance')
+    if row.provider_order_id:
+        payload=paypal.show_order(row)
+        if payload.get('status') not in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED'}:
+            raise HTTPException(409,'This PayPal order is approved or completed. Confirm its payment status before cancelling; no refund has been issued.')
     row.status='cancelled'
     db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='billing.payment_cancelled'))
     db.commit();return order_payload(row)
@@ -222,6 +289,7 @@ def delete_order(order_id:uuid.UUID,user:User=Depends(require_user),db:Session=D
     from pathlib import Path
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
+    if row.provider_order_id:raise HTTPException(409,'PayPal provider records are retained for reconciliation; an unpaid request can be cancelled instead')
     if row.status not in {'failed','cancelled','rejected'}:
         raise HTTPException(409,'Only failed, cancelled or rejected payments can be removed; successful payments are kept as records')
     if row.receipt_path:
@@ -337,7 +405,11 @@ def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_billing_user),db
     if not row:raise HTTPException(404,'Payment order not found')
     if not row.provider_order_id:raise HTTPException(409,'This is not a PayPal API payment')
     if row.status in {'paid','sandbox_paid'}:return order_payload(row)
-    payload=paypal.capture_order(row)
+    if row.status in {'cancelled','rejected','failed'}:
+        payload=paypal.show_order(row)
+        if payload.get('status')!='COMPLETED':raise HTTPException(409,'This payment request was cancelled. Start a new checkout; no new charge was made.')
+    else:
+        payload=paypal.capture_order(row)
     capture_id=paypal.verified_capture(row,payload)
     row.provider_capture_id=capture_id
     if row.provider_environment=='sandbox':
@@ -349,4 +421,4 @@ def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_billing_user),db
 
 @router.get('/paypal/status')
 def paypal_status(user:User=Depends(require_billing_user)):
-    return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','client_id':paypal.settings.paypal_client_id if paypal.configured() else None}
+    return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','sdk_available':bool(paypal.settings.paypal_client_id),'client_id':paypal.settings.paypal_client_id}

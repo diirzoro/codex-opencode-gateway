@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 from ..database import get_db
 from ..models import User, AccountAudit
 from ..schemas import ProfilePatch, UserOut
@@ -10,6 +12,8 @@ from ..services.entitlements import access_payload
 from .auth import validate_locations
 from .dependencies import require_user
 router = APIRouter(prefix="/api/profile", tags=["profile"])
+from . import profile_changes
+router.include_router(profile_changes.router)
 
 class MarketingConsent(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -36,13 +40,30 @@ def get_access(user: User = Depends(require_user), db: Session = Depends(get_db)
     # Lightweight; no billing mutation, runtime startup or external GitHub request.
     return {"access": access_payload(db, user)}
 
+@router.get('/storage')
+def account_storage(user:User=Depends(require_user),db:Session=Depends(get_db)):
+    from ..services.workspaces import account_local_storage_payload
+    return account_local_storage_payload(db,user.id)
+
+
 @router.get("", response_model=UserOut)
 def get_profile(user: User = Depends(require_user)): return user_payload(user)
 
 @router.patch("", response_model=UserOut)
 def patch_profile(data: ProfilePatch, user: User = Depends(require_user), db: Session = Depends(get_db)):
     values = data.model_dump(exclude_unset=True)
+    if any(k in values for k in ('phone','postal_code','country_id','region_id','city_id')):
+        raise HTTPException(409,'Use the 60-second email verification workflow to update personal contact details')
     country_id = values.get("country_id", user.country_id); region_id = values.get("region_id", user.region_id); city_id = values.get("city_id", user.city_id)
     if any(k in values for k in ("country_id", "region_id", "city_id")): validate_locations(db, country_id, region_id, city_id)
+    if 'phone' in values:
+        from ..security.identities import normalized_phone
+        phone=normalized_phone(values['phone'],values.get('postal_code',user.postal_code))
+        if phone is None:raise HTTPException(422,'Enter a valid international phone number')
+        if db.scalar(select(User.id).where(User.phone_identity==phone,User.id!=user.id)) is not None:raise HTTPException(409,'Phone number is already registered')
+        values['phone']=phone
     for key, value in values.items(): setattr(user, key, value)
-    db.commit(); db.refresh(user); return user_payload(user)
+    try:db.commit()
+    except IntegrityError:
+        db.rollback();raise HTTPException(409,'Account identifier is already registered') from None
+    db.refresh(user); return user_payload(user)

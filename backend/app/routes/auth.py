@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, EmailStr
 import secrets, uuid
 from ..services import social_login
 from sqlalchemy import or_, select, func
@@ -9,12 +9,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
-from ..models import AuthSession, City, Country, Region, User
+from ..models import AuthSession, City, Country, Region, User, EmailVerification
 from ..schemas import LoginRequest, RegisterRequest, UserOut
 from ..security.passwords import hash_password, verify_password
 from ..security.sessions import (hash_session_token, new_session_token, idle_expires_at,
     normal_access_ready, reactivation_cookie_name)
 from ..services.accounts import user_payload
+from ..services.location_validation import validate_locations
+from ..services.disposable_email import require_permanent_email
+from ..services import email_verification, registration_drafts
 from ..services.entitlements import CORE_TRIAL_DAYS
 from .dependencies import require_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -27,54 +30,244 @@ def set_session(response: Response, db: Session, user: User):
     session = AuthSession(user_id=user.id, token_hash=hashed, last_seen_at=now,
                           expires_at=now+timedelta(days=settings.session_days))
     db.add(session)
+    from ..models import AccountAudit
+    db.add(AccountAudit(subject_id=user.id,action='session.login'))
     db.commit()
     # A browser-session cookie, with authoritative server-side idle expiry.
     response.set_cookie(settings.session_cookie_name, raw, httponly=True, secure=settings.cookie_secure, samesite="strict", path="/")
     response.delete_cookie(reactivation_cookie_name(), path="/api", secure=settings.cookie_secure, httponly=True, samesite="strict")
     response.headers["X-Session-Idle-Expires-At"] = idle_expires_at(session).isoformat()
 
-def validate_locations(db, country_id, region_id, city_id):
-    country = db.scalar(select(Country).where(Country.id == country_id, Country.enabled.is_(True)))
-    if not country: raise HTTPException(422, "Invalid country")
-    region = None
-    if region_id is not None:
-        region = db.scalar(select(Region).where(Region.id == region_id, Region.country_id == country_id, Region.enabled.is_(True)))
-        if not region: raise HTTPException(422, "Invalid region")
-    if city_id is not None:
-        if region is None or not db.scalar(select(City).where(City.id == city_id, City.region_id == region.id, City.enabled.is_(True))):
-            raise HTTPException(422, "Invalid city")
+class RegistrationOut(UserOut):
+    verification_challenge: str | None = None
+    verification_expires_in: int | None = None
 
-@router.post("/register", response_model=UserOut, status_code=201)
+@router.post("/register", status_code=201)
 def register(data: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
-    username, email = data.username.strip().lower(), data.email.lower()
-    if db.scalar(select(User).where(or_(func.lower(User.username) == username, func.lower(User.email) == email))):
-        raise HTTPException(409, "Username or email already exists")
-    if data.country_id is not None:
-        validate_locations(db, data.country_id, data.region_id, data.city_id)
-    elif data.region_id is not None or data.city_id is not None:
-        raise HTTPException(422, "Select a country before choosing a region or city")
-    now = datetime.now(timezone.utc)
-    user = User(username=username, email=email, password_hash=hash_password(data.password), phone=data.phone.strip(), postal_code=data.postal_code.strip() if data.postal_code else None, country_id=data.country_id, region_id=data.region_id, city_id=data.city_id, trial_started_at=now, trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS), last_login_at=now)
-    pending = request.cookies.get(social_login.SIGNUP_COOKIE)
-    if pending:
-        identity = social_login.unseal(pending, 'signup')
-        if email != identity['email']: raise HTTPException(422, 'Use the verified sign-in email to complete registration')
-        setattr(user, identity['provider'] + '_subject', identity['subject'])
-        response.delete_cookie(social_login.SIGNUP_COOKIE, path='/api/auth', secure=settings.cookie_secure, httponly=True, samesite='strict')
-    db.add(user)
+    # Google social signup already has a trusted verified mailbox. Password
+    # signup is NEVER a User row until the six-digit email proof succeeds.
+    # Password signup always starts email OTP. A leftover Google signup cookie
+    # must never silently switch a customer to a different authorization flow.
+    pending=request.cookies.get(social_login.SIGNUP_COOKIE) if data.social_signup else None
+    if not data.social_signup:
+        payload,ticket=registration_drafts.start(db,data)
+        response.delete_cookie(social_login.SIGNUP_COOKIE,path='/api/auth',
+                               secure=settings.cookie_secure,httponly=True,samesite='strict')
+        response.set_cookie(registration_drafts.COOKIE,ticket,httponly=True,
+            secure=settings.cookie_secure,samesite='strict',path='/api/auth',max_age=3600)
+        return payload
+    if not pending:
+        raise HTTPException(400,'Google signup authorization is missing; start Google sign-in again')
+    identity=social_login.unseal(pending,'signup')
+    email=str(data.email).strip().casefold()
+    if email!=identity['email']:
+        raise HTTPException(422,'Use your verified Google sign-in email to complete registration')
+    details=registration_drafts.normalized(data,db)
+    now=datetime.now(timezone.utc)
+    user=User(**details,status='active',trial_started_at=now,
+              trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS),last_login_at=now)
+    setattr(user,identity['provider']+'_subject',identity['subject'])
+    from ..models import AccountAudit
     try:
+        db.add(user);db.flush()
+        db.add(AccountAudit(subject_id=user.id,action='account.registered_active'))
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(409, "Username or email already exists")
-    db.refresh(user); set_session(response, db, user)
+        raise HTTPException(409,'Username, email or phone number is already registered') from None
+    db.refresh(user)
+    response.delete_cookie(social_login.SIGNUP_COOKIE,path='/api/auth',
+                           secure=settings.cookie_secure,httponly=True,samesite='strict')
+    set_session(response,db,user)
     return user_payload(user)
+
+
+class StagedChallenge(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    challenge_id:uuid.UUID
+
+
+class StagedCode(StagedChallenge):
+    code:str=Field(pattern=r'^[0-9]{6}$')
+
+
+class StagedRegistrationPatch(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    username:str|None=Field(default=None,min_length=6,max_length=50,pattern=r'^[A-Za-z0-9_.-]+$')
+    email:EmailStr|None=None
+    password:str|None=Field(default=None,min_length=8,max_length=128)
+    phone:str|None=Field(default=None,min_length=6,max_length=30)
+    postal_code:str|None=Field(default=None,min_length=2,max_length=24)
+    country_id:int|None=None
+    region_id:int|None=None
+    city_id:int|None=None
+
+
+def signup_ticket(request:Request):
+    return request.cookies.get(registration_drafts.COOKIE,'') 
+
+
+def check_signup_origin(request:Request):
+    # Accept loopback aliases (localhost vs 127.0.0.1 vs ::1) only in local
+    # development; production HTTPS origins still compare strictly.
+    from ..security.origins import same_origin
+    origin=request.headers.get('origin')
+    if not origin:
+        return
+    if not same_origin(origin,settings.public_base_url):
+        raise HTTPException(403,'Invalid registration origin')
+
+
+@router.get('/registration/pending')
+def pending_registration(request:Request,response:Response,db:Session=Depends(get_db)):
+    """Resume this browser's pending OTP only; do not generate/send another."""
+    check_signup_origin(request)
+    response.headers['Cache-Control']='no-store'
+    return registration_drafts.recover(db,signup_ticket(request))
+
+
+@router.post('/registration/confirm',response_model=UserOut)
+def confirm_registration(data:StagedCode,request:Request,response:Response,db:Session=Depends(get_db)):
+    check_signup_origin(request)
+    user=registration_drafts.finish(db,data.challenge_id,signup_ticket(request),data.code)
+    response.delete_cookie(registration_drafts.COOKIE,path='/api/auth',
+                           secure=settings.cookie_secure,httponly=True,samesite='strict')
+    set_session(response,db,user)
+    return user_payload(user)
+
+
+@router.post('/registration/resend')
+def resend_registration(data:StagedChallenge,request:Request,db:Session=Depends(get_db)):
+    check_signup_origin(request)
+    return registration_drafts.resend(db,data.challenge_id,signup_ticket(request))
+
+
+@router.patch('/registration/update')
+def update_registration(data:StagedRegistrationPatch,challenge_id:uuid.UUID,
+                        request:Request,db:Session=Depends(get_db)):
+    check_signup_origin(request)
+    if not data.model_fields_set:
+        raise HTTPException(422,'No registration details were changed')
+    return registration_drafts.edit(db,challenge_id,signup_ticket(request),data)
+
+
+@router.post('/registration/cancel')
+def cancel_registration(data:StagedChallenge,request:Request,response:Response,
+                        db:Session=Depends(get_db)):
+    check_signup_origin(request)
+    result=registration_drafts.abandon(db,data.challenge_id,signup_ticket(request))
+    response.delete_cookie(registration_drafts.COOKIE,path='/api/auth',
+                           secure=settings.cookie_secure,httponly=True,samesite='strict')
+    return result
+
+
+@router.get("/verify-email")
+def verify_email(token: str, db: Session = Depends(get_db)):
+    verification, now = email_verification.verify(db, token)
+    user = db.scalar(select(User).where(User.id == verification.user_id).with_for_update())
+    if user is None or user.status != "pending_email":
+        raise HTTPException(400, "Email verification is no longer available")
+    user.status = "active"
+    user.trial_started_at = now
+    user.trial_ends_at = now + timedelta(days=CORE_TRIAL_DAYS)
+    verification.used_at = now
+    from ..models import AccountAudit
+    db.add(AccountAudit(subject_id=user.id,action='account.email_verified'))
+    db.commit()
+    return RedirectResponse("/#email=verified", status_code=303)
+
+
+class ResendEmailVerification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: str
+    password: str
+
+
+@router.post("/resend-verification")
+def resend_verification(data: ResendEmailVerification, db: Session = Depends(get_db)):
+    # Ownership of a pending registration is established by its password.
+    identity = data.identity.strip().lower()
+    user = db.scalar(select(User).where(or_(func.lower(User.email) == identity,
+        func.lower(User.username) == identity)).with_for_update())
+    if not user or not verify_password(data.password, user.password_hash):
+        raise HTTPException(401, "Invalid credentials")
+    if user.status != "pending_email":
+        raise HTTPException(409, "Account is not awaiting email verification")
+    return resend_code_for_user(db,user)
+
+
+def resend_code_for_user(db,user):
+    email_verification.require_code_schema(db)
+    if not email_verification.smtp_ready(db):raise HTTPException(503,'Email verification delivery is unavailable')
+    now=datetime.now(timezone.utc)
+    recent=db.scalar(select(EmailVerification).where(EmailVerification.user_id==user.id).order_by(EmailVerification.created_at.desc()).limit(1))
+    if recent and recent.created_at and (now-(recent.created_at if recent.created_at.tzinfo else recent.created_at.replace(tzinfo=timezone.utc))).total_seconds()<60:
+        raise HTTPException(429,'Wait one minute before requesting another verification code')
+    count=db.scalar(select(func.count()).select_from(EmailVerification).where(EmailVerification.user_id==user.id,EmailVerification.created_at>now-timedelta(hours=1)))
+    if count>=5:raise HTTPException(429,'Verification code request limit reached; try again later')
+    for record in db.scalars(select(EmailVerification).where(EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None))):record.used_at=now
+    challenge,code=email_verification.create_code(db,user);db.flush();email_verification.send_code(user.email,code,db);db.commit()
+    return {'sent':True,'email':user.email,'verification_challenge':str(challenge),'verification_expires_in':60}
+
+
+class PendingEmailResend(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    email: EmailStr
+
+@router.post('/pending/resend-code')
+def pending_resend_code(data:PendingEmailResend,db:Session=Depends(get_db)):
+    """Resend the verification code for an email that is registered but not yet
+    verified, so a returning applicant can complete verification instead of a
+    bare warning. The code is mailed only to the matching pending address."""
+    email=str(data.email).strip().casefold()
+    user=db.scalar(select(User).where(func.lower(User.email)==email))
+    if user is None or user.status!='pending_email':
+        raise HTTPException(404,'No pending verification for this email')
+    return resend_code_for_user(db,user)
+
+
+class VerifyEmailCode(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    challenge_id: uuid.UUID
+    code: str=Field(pattern=r'^[0-9]{6}$')
+
+class ResendVerificationCode(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    challenge_id: uuid.UUID
+
+
+def pending_code_user(db,challenge):
+    email_verification.require_code_schema(db)
+    record=db.get(EmailVerification,challenge)
+    if record is None:raise HTTPException(400,'Verification request is no longer available')
+    user=db.scalar(select(User).where(User.id==record.user_id).with_for_update().execution_options(populate_existing=True))
+    if user is None or user.status!='pending_email':raise HTTPException(400,'Verification request is no longer available')
+    return user
+
+@router.post('/verify-email-code',response_model=UserOut)
+def verify_email_code(data:VerifyEmailCode,response:Response,db:Session=Depends(get_db)):
+    user=pending_code_user(db,data.challenge_id)
+    verification,now=email_verification.verify_code(db,data.challenge_id,data.code)
+    user.status='active';user.trial_started_at=now;user.trial_ends_at=now+timedelta(days=CORE_TRIAL_DAYS);user.last_login_at=now;verification.used_at=now
+    from ..models import AccountAudit
+    db.add(AccountAudit(subject_id=user.id,action='account.email_verified'));db.commit();set_session(response,db,user)
+    return user_payload(user)
+
+@router.post('/resend-verification-code')
+def resend_email_code(data:ResendVerificationCode,db:Session=Depends(get_db)):
+    return resend_code_for_user(db,pending_code_user(db,data.challenge_id))
+
 
 @router.post("/login", response_model=UserOut)
 def login(data: LoginRequest, response: Response, db: Session = Depends(get_db)):
     identity = data.identity.strip().lower()
     user = db.scalar(select(User).where(or_(func.lower(User.email) == identity, func.lower(User.username) == identity)))
-    if not user or not verify_password(data.password, user.password_hash): raise HTTPException(401, "Invalid credentials")
+    if not user or not verify_password(data.password, user.password_hash):
+        if user:
+            from ..models import AccountAudit
+            db.add(AccountAudit(subject_id=user.id,action='security.failed_login'));db.commit()
+        raise HTTPException(401, 'Invalid credentials')
+    if user.status == "pending_email":raise HTTPException(403,"Confirm your email using the verification code; use Resend verification if needed")
     if user.status != "active": raise HTTPException(403, "Account is not active")
     response.delete_cookie('gateway_login_signup', path='/api/auth', secure=settings.cookie_secure, httponly=True, samesite='strict')
     user.last_login_at = datetime.now(timezone.utc); db.commit(); set_session(response, db, user)
@@ -131,6 +324,7 @@ def social_pending(request: Request):
 
 @router.get('/social/{provider}/start')
 def social_start(provider: str, request: Request, db: Session = Depends(get_db)):
+    if provider == 'github': raise HTTPException(404, 'GitHub sign-in is disabled; repository authorization is separate')
     session = None
     if request.cookies.get(settings.session_cookie_name):
         require_user(request, db)
@@ -144,6 +338,7 @@ def social_start(provider: str, request: Request, db: Session = Depends(get_db))
 @router.get('/social/{provider}/callback')
 def social_callback(provider: str, request: Request, state: str = '', code: str = '',
                     error: str | None = None, db: Session = Depends(get_db)):
+    if provider == 'github': raise HTTPException(404, 'GitHub sign-in is disabled; repository authorization is separate')
     response = RedirectResponse('/#social=error', status_code=303)
     response.delete_cookie(social_login.FLOW_COOKIE, path='/api/auth/social', secure=settings.cookie_secure, httponly=True, samesite='lax')
     try:

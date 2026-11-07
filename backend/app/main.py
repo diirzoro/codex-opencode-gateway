@@ -8,8 +8,10 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from urllib.parse import urlsplit
 from .routes import admin, auth, locations, profile
-from .routes import workspaces, agent, github, dashboard, plans, billing, management
-from .services import workspace_cache, customer_lifecycle
+from .routes import workspaces, github, dashboard, plans, billing, management, homepage
+from .services import workspace_cache, customer_lifecycle, preview_access
+from .routes import preview_public, native_sessions, payment_gateways
+from .config import settings
 
 async def retention_maintenance():
     # Retention bookkeeping must not delay the HTML shell or authentication.
@@ -21,33 +23,105 @@ async def retention_maintenance():
             logging.getLogger(__name__).warning("Retention policy initialization could not complete")
     while True:
         await asyncio.sleep(300)
-        for job in (workspace_cache.sweep, customer_lifecycle.archive_due):
+        from .services import email_notifications, github as github_service, chat_attachments, registration_drafts
+        for job in (workspace_cache.sweep, customer_lifecycle.archive_due, email_notifications.sweep,
+                    github_service.expire_pending_authorizations, chat_attachments.sweep,
+                    registration_drafts.sweep):
             try:
                 await asyncio.to_thread(job)
             except Exception:
                 # Jobs log sanitized IDs/categories; never print operational data.
                 import logging
                 logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
+        # Never run AI catalog refresh or session-history deletion from Python
+        # when OpenCode Native is the execution/storage owner. Native retains
+        # and manages its own source-of-truth cache, conversations and history.
+        # Existing account, project and upload housekeeping above remains.
+
+async def provider_maintenance():
+    from .services import account_provider_sync
+    while True:
+        await asyncio.sleep(5)
+        if not native_sessions.enabled():
+            await asyncio.to_thread(account_provider_sync.sweep)
 
 @asynccontextmanager
 async def lifespan(app):
     cleanup = asyncio.create_task(retention_maintenance())
+    provider_sync = None if native_sessions.enabled() else asyncio.create_task(provider_maintenance())
     try:
         yield
     finally:
         cleanup.cancel()
+        if provider_sync is not None:provider_sync.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup
+        if provider_sync is not None:
+            with suppress(asyncio.CancelledError):
+                await provider_sync
+
+preview_access.install_access_log_redaction()
 
 app = FastAPI(title="OpenCode Gateway API", version="0.1.0", lifespan=lifespan)
 app.include_router(auth.router); app.include_router(profile.router); app.include_router(locations.router); app.include_router(admin.router)
+app.include_router(native_sessions.router)
 app.include_router(workspaces.router)
-app.include_router(agent.router)
+app.include_router(preview_public.router)
+# AI conversations, execution, tools, approvals and SSE are owned exclusively by
+# the existing OpenCode Native process; there is no Python agent/queue router.
 app.include_router(github.router)
 app.include_router(dashboard.router)
 app.include_router(plans.router)
 app.include_router(billing.router)
+app.include_router(payment_gateways.router)
 app.include_router(management.router)
+app.include_router(homepage.router)
+
+# Legacy OpenCode provider/catalog/session-execution routes are retired in every
+# Native deployment (TEST, LOCAL, LIVE) so no provider/credential/session request
+# reaches Python. Project file/Git routes remain Platform-owned and are NOT retired
+# here (the TEST UI handles files via Native, but LOCAL keeps the Python handlers).
+if native_sessions.enabled():
+    from fastapi.routing import APIRoute
+    def _retired_open_code_route(route):
+        if not isinstance(route,APIRoute):return False
+        path=route.path
+        return (path.startswith('/api/opencode/connections')
+            or path.startswith('/api/opencode/catalog/providers')
+            or path == '/api/opencode/catalog/agents'
+            or path.startswith('/api/workspaces/{workspace_id}/providers')
+            or path in {'/api/workspaces/{workspace_id}/runtime',
+                        '/api/workspaces/{workspace_id}/runtime/state',
+                        '/api/workspaces/{workspace_id}/runtime/agents',
+                        '/api/workspaces/{workspace_id}/agents'}
+            or path.startswith('/api/sessions/{session_id}/messages')
+            or path.startswith('/api/sessions/{session_id}/queue')
+            or path.startswith('/api/sessions/{session_id}/submissions')
+            or path in {'/api/sessions/{session_id}/stop',
+                        '/api/sessions/{session_id}/events',
+                        '/api/sessions/{session_id}/todos',
+                        '/api/sessions/{session_id}/diff'}
+            or path.startswith('/api/sessions/{session_id}/questions')
+            or path.startswith('/api/sessions/{session_id}/permissions')
+            or path in {'/api/projects/{project_id}/publish'})
+    app.router.routes[:]=[route for route in app.router.routes if not _retired_open_code_route(route)]
+
+# TEST-only: the TEST UI reads files/Git through OpenCode Native directly.
+if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes':
+    from fastapi.routing import APIRoute
+    def _retired_test_file_route(route):
+        if not isinstance(route,APIRoute):return False
+        path=route.path
+        return path in {'/api/workspaces/{workspace_id}/files',
+                        '/api/workspaces/{workspace_id}/files/content',
+                        '/api/workspaces/{workspace_id}/git/status',
+                        '/api/workspaces/{workspace_id}/git/commit',
+                        '/api/workspaces/{workspace_id}/git/push',
+                        '/api/workspaces/{workspace_id}/git/sync',
+                        '/api/workspaces/{workspace_id}/diff'}
+    app.router.routes[:]=[route for route in app.router.routes if not _retired_test_file_route(route)]
+
+
 @app.get("/api/health")
 def health(): return {"status": "ok"}
 frontend = Path(__file__).resolve().parents[2]
@@ -57,6 +131,37 @@ _CROSS_SITE_EXEMPT = {"/api/github/webhook"}
 
 @app.middleware("http")
 async def browser_boundary(request: Request, call_next):
+    # The Gateway is an internal admin service on its own port; the single user
+    # entry is Nginx. Reject direct requests addressed to the Gateway port so
+    # the app is not served as a second standalone frontend. Nginx forwards the
+    # browser Host (8080) so the internal proxy is unaffected.
+    host = request.headers.get("host", "")
+    try:
+        direct_port = urlsplit("http://" + host).port
+    except ValueError:
+        direct_port = None
+    if direct_port == settings.app_port:
+        return JSONResponse({"detail": "Not found"}, status_code=404,
+                            headers={"Cache-Control": "no-store"})
+    # TEST OpenCode provider operations must never enter Python Gateway.
+    # The browser uses /native-direct/api/* -> Nginx -> OpenCode Native.
+    # Reject every legacy/catch-all account/workspace provider route here,
+    # including if the browser adapter fails to initialize.
+    if native_sessions.deployment() == 'test':
+        path=request.url.path
+        legacy_provider=(
+            path.startswith('/api/opencode/connections')
+            or path.startswith('/api/opencode/catalog/providers')
+            or path == '/api/opencode/catalog/agents'
+            or bool(re.fullmatch(r'/api/workspaces/[0-9a-fA-F-]{36}/providers(?:/.*)?',path))
+        )
+        if legacy_provider:
+            return JSONResponse({'detail':'TEST provider/model/auth services are OpenCode Native-only; Python Gateway route disabled'},
+                                status_code=410,headers={'Cache-Control':'no-store'})
+    if preview_access.is_preview_host(request) and (
+        request.method not in {'GET','HEAD'} or not request.url.path.startswith('/preview/')):
+        return JSONResponse({'detail':'Not found'},status_code=404,
+                            headers={'Cache-Control':'no-store','X-Frame-Options':'DENY'})
     origin = request.headers.get("origin")
     if request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path not in _CROSS_SITE_EXEMPT:
         if request.headers.get("sec-fetch-site") == "cross-site":
@@ -85,7 +190,45 @@ async def browser_boundary(request: Request, call_next):
         await asyncio.to_thread(workspace_cache.end_upload, upload_db, response.status_code < 400)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["X-Frame-Options"] = "DENY"
+    # Correlate failed Preview documents/assets without recording URLs, query
+    # parameters, cookies, source, user IDs or arbitrary incoming header values.
+    if (request.method == "GET" and response.status_code >= 400
+        and re.fullmatch(r"/api/workspaces/[0-9a-f-]{36}/preview/live/.*", request.url.path)):
+        import logging
+        import uuid
+        reference = uuid.uuid4().hex[:12]
+        site = request.headers.get("sec-fetch-site", "missing")
+        dest = request.headers.get("sec-fetch-dest", "missing")
+        site = site if site in {"same-origin", "same-site", "cross-site", "none", "missing"} else "other"
+        dest = dest if dest in {"iframe", "document", "script", "style", "image", "empty", "missing"} else "other"
+        logging.getLogger(__name__).warning(
+            "Preview relay failed status=%d site=%s destination=%s reference=%s",
+            response.status_code, site, dest, reference)
+        response.headers["X-Preview-Reference"] = reference
+    owned_preview = (getattr(request.state, "owned_preview_response", False) is True
+        and request.method == "GET"
+        and re.fullmatch(r"/api/workspaces/[0-9a-f-]{36}/preview/live/.*", request.url.path)
+        and response.headers.get("Content-Security-Policy") == "sandbox allow-scripts")
+    public_preview = (preview_access.is_preview_host(request)
+        and getattr(request.state,'public_preview_response',False) is True
+        and request.method in {'GET','HEAD'}
+        and request.url.path.startswith('/preview/'))
+    if public_preview:
+        if 'X-Frame-Options' in response.headers:
+            del response.headers['X-Frame-Options']
+        if 'Set-Cookie' in response.headers:
+            del response.headers['Set-Cookie']
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Cache-Control'] = 'no-store'
+    elif owned_preview:
+        # Opaque-origin sandbox is retained. Only our own application can frame
+        # an owned preview; authentication/errors and every other page deny it.
+        if "X-Frame-Options" in response.headers:
+            del response.headers["X-Frame-Options"]
+        response.headers["Content-Security-Policy"] = "sandbox allow-scripts; frame-ancestors 'self'"
+        response.headers["Referrer-Policy"] = "no-referrer"
+    else:
+        response.headers["X-Frame-Options"] = "DENY"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     elif request.url.path in {"/", "/index.html"}:
@@ -97,7 +240,7 @@ async def browser_boundary(request: Request, call_next):
     return response
 
 # Explicit public assets only. Never mount the repository, docs or runtime root.
-_VERSIONED_ASSETS = {"app.js", "enhancements.js", "management.js", "dashboards.js", "runtime-client.js", "styles.css"}
+_VERSIONED_ASSETS = {"app.js", "enhancements.js", "management.js", "dashboards.js", "runtime-client.js", "native-session-client.js", "styles.css"}
 
 @lru_cache(maxsize=32)
 def _asset_digest(name, modified, size):
@@ -111,6 +254,8 @@ def public_file(name):
     def serve(request: Request):
         if name == "index.html":
             html = (frontend / name).read_text(encoding="utf-8")
+            if native_sessions.enabled():
+                html=html.replace('<script defer src="runtime-client.js', '<script defer src="native-session-client.js?v=native"></script>\n  <script defer src="runtime-client.js')
             # Content versions change automatically when any script/style changes.
             html = re.sub(r'(src|href)="([\w.-]+)\?v=[^"]*"',
                           lambda match: f'{match[1]}="{match[2]}?v={asset_version(match[2])}"'
@@ -127,5 +272,5 @@ def public_file(name):
         return response
     return serve
 
-for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/dashboards.js": "dashboards.js", "/runtime-client.js": "runtime-client.js", "/styles.css": "styles.css"}.items():
+for url, name in {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/enhancements.js": "enhancements.js", "/management.js": "management.js", "/dashboards.js": "dashboards.js", "/runtime-client.js": "runtime-client.js", "/native-session-client.js": "native-session-client.js", "/styles.css": "styles.css"}.items():
     app.add_api_route(url, public_file(name), methods=["GET"], include_in_schema=False)

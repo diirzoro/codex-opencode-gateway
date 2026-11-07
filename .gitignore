@@ -51,5 +51,23 @@ receipts/
 # Local audit artifacts (never commit)
 .audit/
 
-# Local agent sandbox (prototypes/experiments only; never commit)
-agent-test/
+# Test/debug/experimental artifacts (never commit)
+TEST_DEPLOY_REQUEST.md
+deployment/TEST_DATABASE_MIGRATIONS.md
+deploy/
+scripts/
+releases/
+ops/
+backend/scripts/*_test.py
+backend/scripts/diagnose_*.py
+backend/scripts/audit_*.py
+backend/scripts/preflight_*.py
+docs/TEST_FUNCTIONAL_FIXES_2026-10-15.md
+docs/TEST_NATIVE_DIRECT_AUDIT_2026-11-03_AR.md
+docs/TEST_SIX_ISSUE_SOURCE_CHECKPOINT.md
+docs/RESEND_TEST_EMAIL_EXISTING_SMTP.md
+docs/NATIVE_AUTH_TEST_CUTOVER.md
+docs/NATIVE_TEST_COORDINATED_RELEASE.md
+docs/PREVIEW_TEST_DEPLOYMENT_CHECKLIST.md
+docs/PREVIEW_BROWSER_ORIGIN_TEST_SETUP.md
+docs/NATIVE_SESSION_TEST_NGINX.conf

@@ -36,9 +36,35 @@ def _connection_events(db, workspace):
 
 
 def connection_revision(db, workspace):
-    from ..models import AccountAudit
+    from sqlalchemy import inspect, select
+    from ..models import AccountAudit, UserProviderCredential
     latest = db.scalar(_connection_events(db, workspace).order_by(AccountAudit.id.desc()).limit(1))
-    return latest.id if latest else 0
+    legacy_revision = latest.id if latest else 0
+    # A credential added/deleted from the user's dashboard changes every
+    # workspace's catalog identity, even if its runtime has not restarted yet.
+    if not inspect(db.connection()).has_table("user_provider_credentials"):
+        return str(legacy_revision)
+    rows = db.execute(select(UserProviderCredential.provider_id, UserProviderCredential.updated_at).where(
+        UserProviderCredential.user_id == workspace.user_id).order_by(UserProviderCredential.provider_id))
+    revision = hashlib.sha256()
+    for provider_id, updated_at in rows:
+        revision.update(provider_id.encode())
+        revision.update(b":")
+        revision.update(str(updated_at).encode())
+        revision.update(b";")
+    return str(legacy_revision) + ":" + revision.hexdigest()[:16]
+
+
+def is_locally_connected(db, workspace, provider_id):
+    """Conservatively detect an existing workspace OAuth/provider connection."""
+    from sqlalchemy import select
+    from ..models import AccountAudit
+    binding = _binding(workspace, provider_id)
+    latest = db.scalar(select(AccountAudit).where(
+        AccountAudit.subject_id == workspace.user_id,
+        AccountAudit.action.in_(["provider-on:" + binding, "provider-off:" + binding]))
+        .order_by(AccountAudit.id.desc()).limit(1))
+    return bool(latest and latest.action.startswith("provider-on:"))
 
 
 def is_locally_disconnected(db, workspace, provider_id):
@@ -54,17 +80,32 @@ def is_locally_disconnected(db, workspace, provider_id):
 def client_catalog(db, workspace, data):
     if data is None:
         return None
-    from ..models import AccountAudit
+    from sqlalchemy import inspect, select
+    from ..models import AccountAudit, UserProviderCredential
     disconnected = set()
     for row in db.scalars(_connection_events(db, workspace).order_by(AccountAudit.id)):
         kind, binding = row.action.split(":", 1)
-        if kind == "provider-off": disconnected.add(binding)
-        else: disconnected.discard(binding)
-    # Overlay only connected state; OpenCode still owns definitions/auth/models.
-    return {**data, "connected": [identifier for identifier in data.get("connected", [])
-                                  if _binding(workspace, identifier) not in disconnected],
+        if kind == "provider-off":
+            disconnected.add(binding)
+        else:
+            disconnected.discard(binding)
+    account_ids = set()
+    auth_status = {}
+    if inspect(db.connection()).has_table("user_provider_credentials"):
+        from . import account_provider_sync
+        rows = list(db.scalars(select(UserProviderCredential).where(UserProviderCredential.user_id == workspace.user_id)))
+        account_ids = {r.provider_id for r in rows}
+        services = account_provider_sync.services_for(workspace.user_id)
+        auth_status = {r.provider_id:account_provider_sync.public_status(r,services) for r in rows}
+    # A single account credential is usable in all owned workspaces. Legacy
+    # per-workspace disconnect events must not mask an active account key.
+    connected = [identifier for identifier in data.get("connected", [])
+                 if (identifier in account_ids or _binding(workspace, identifier) not in disconnected)
+                 and auth_status.get(identifier,{}).get("auth_status")!="reauthorization_required"]
+    # Only claim connected when this isolated runtime reports the provider.
+    return {**data, "connected": connected, "gateway_auth_status":auth_status,
             "gateway_disconnected": [entry["id"] for entry in data.get("all", [])
-                                     if _binding(workspace, entry["id"]) in disconnected]}
+                if entry["id"] not in account_ids and _binding(workspace, entry["id"]) in disconnected]}
 
 
 def public_metadata(value):
@@ -83,7 +124,7 @@ def public_metadata(value):
 
 
 def catalog(data, methods, policy=None):
-    from .policy import provider_allowed, model_allowed
+    from .policy import provider_allowed, model_allowed, model_visible
     if not isinstance(data, dict) or not isinstance(data.get("all"), list):
         raise HTTPException(502, "OpenCode returned an invalid provider catalog")
     connected = set(data.get("connected", []))
@@ -95,7 +136,7 @@ def catalog(data, methods, policy=None):
         provider["locally_disconnected"] = provider_id in data.get("gateway_disconnected", [])
         provider["allowed"] = policy is None or provider_allowed(policy, provider_id)
         provider["models"] = [{**public_metadata(model), "id": identifier,
-                               "allowed": provider["allowed"] and (policy is None or model_allowed(policy, identifier))}
+                               "allowed": provider["allowed"] and (policy is None or model_allowed(policy, identifier, provider_id))}
                               for identifier, model in entry.get("models", {}).items()]
         # The methods are schema, not credentials. Preserve prompt keys/conditions.
         provider["auth_methods"] = methods.get(provider_id, [])
@@ -115,8 +156,9 @@ def _catalog_entries(data):
 
 
 def provider_index(entry, data, policy=None):
-    from .policy import provider_allowed
-    return {"id": entry["id"], "name": entry.get("name") or entry["id"],
+    from .policy import provider_allowed,provider_visible
+    return {"id": entry["id"],"visible":policy is None or provider_visible(policy,entry['id']), "name": entry.get("name") or entry["id"],
+            **data.get("gateway_auth_status",{}).get(entry["id"],{}),
             "connected": entry["id"] in data.get("connected", []),
             "locally_disconnected": entry["id"] in data.get("gateway_disconnected", []),
             "allowed": policy is None or provider_allowed(policy, entry["id"]),
@@ -152,12 +194,25 @@ def search_index(data, query, policy=None):
                if wanted in entry["id"].casefold() or wanted in (entry.get("name") or "").casefold()]
     matches.sort(key=lambda entry: (entry["id"].casefold() != wanted and (entry.get("name") or "").casefold() != wanted,
                                     entry.get("name") or entry["id"]))
-    return [provider_index(entry, data, policy) for entry in matches[:20]]
+    return [provider_index(entry, data, policy) for entry in matches[:50]]
 
+
+
+def catalog_page(data, policy=None, *, offset=0, limit=50, query=''):
+    wanted=query.strip().casefold()
+    from .policy import provider_visible
+    entries=[r for r in _catalog_entries(data) if (bool(wanted) or policy is None or provider_visible(policy,r['id'])) and (not wanted or wanted in r['id'].casefold() or wanted in (r.get('name') or '').casefold())]
+    connected=set(data.get('connected',[]))
+    entries.sort(key=lambda r:(r['id'] not in connected,r['id'] not in POPULAR_PROVIDER_IDS,(r.get('name') or r['id']).casefold(),r['id']))
+    end=min(offset+limit,len(entries))
+    return {'items':[provider_index(r,data,policy) for r in entries[offset:end]],
+            'connected_items':[provider_index(r,data,policy) for r in _catalog_entries(data) if r['id'] in connected],
+            'total':len(entries),'offset':offset,'limit':limit,
+            'next_offset':end if end<len(entries) else None}
 
 def model_details(data, provider_id, policy=None):
     """Sanitize and annotate models for exactly one runtime-reported provider."""
-    from .policy import provider_allowed, model_allowed
+    from .policy import provider_allowed, model_allowed, model_visible
     if not isinstance(data, dict) or not isinstance(data.get("all"), list):
         raise HTTPException(502, "OpenCode returned an invalid provider catalog")
     entry = next((entry for entry in data["all"] if entry["id"] == provider_id), None)
@@ -167,15 +222,28 @@ def model_details(data, provider_id, policy=None):
     return {"provider_id": provider_id, "connected": provider_id in data.get("connected", []),
             "allowed": allowed, "default_model": data.get("default", {}).get(provider_id),
             "models": [{**public_metadata(model), "id": identifier,
-                        "allowed": allowed and (policy is None or model_allowed(policy, identifier))}
+                        "allowed": allowed and (policy is None or model_allowed(policy, identifier, provider_id)),"visible":policy is None or model_visible(policy,provider_id,identifier)}
                        for identifier, model in entry.get("models", {}).items()]}
 
 
 def auth_methods(service):
-    return service.request("GET", "/provider/auth")
+    # Reuse the runtime's guarded discovery cache instead of repeating an upstream
+    # request for each provider lookup. Credential changes invalidate this cache.
+    return service._core_value("auth_methods", "/provider/auth")
+
 
 
 def connection_methods(service, provider_id):
+    from copy import deepcopy
+    cache=getattr(service,'connection_method_cache',None)
+    if not isinstance(cache,dict):return _discover_connection_methods(service,provider_id)
+    cached=cache.get(provider_id)
+    if cached and time.monotonic()-cached[0]<60:return deepcopy(cached[1])
+    result=_discover_connection_methods(service,provider_id)
+    cache[provider_id]=(time.monotonic(),deepcopy(result))
+    return deepcopy(result)
+
+def _discover_connection_methods(service, provider_id):
     """Discover one provider's real methods without expanding the startup payload.
 
     /provider/auth lists plugin hooks, not the generic key methods. OpenCode's
@@ -193,7 +261,7 @@ def connection_methods(service, provider_id):
     params = {"location[directory]": service.params["directory"]} if "directory" in service.params else {}
     deadline = time.monotonic() + 5
     while True:
-        result = service.request("GET", "/api/integration/" + quote(provider_id, safe=""), params=params)
+        result = service.request("GET", "/api/integration/" + quote(provider_id, safe=""), params=params, timeout=max(.1,min(3,deadline-time.monotonic())))
         if not isinstance(result, dict) or "data" not in result:
             raise HTTPException(502, "OpenCode returned invalid integration authentication data")
         integration = result["data"]
@@ -231,6 +299,15 @@ def restore_credential(service, provider_id, plaintext):
         saved = None
     if isinstance(saved, dict) and saved.get("type") == "api" and isinstance(saved.get("key"), str):
         return set_api_key(service, provider_id, saved["key"], saved.get("metadata"))
+    if isinstance(saved, dict) and saved.get("type") == "oauth":
+        if not isinstance(saved.get("access"),str) or not isinstance(saved.get("refresh"),str) or not isinstance(saved.get("expires"),int):
+            raise HTTPException(422, "Invalid encrypted OAuth credential")
+        payload = {field: saved[field] for field in ("type","access","refresh","expires","accountId","enterpriseUrl")
+                   if field in saved}
+        if service.request("PUT", "/auth/" + quote(provider_id, safe=""), payload) is not True:
+            raise HTTPException(502, "OpenCode did not accept OAuth credential restoration")
+        service.invalidate()
+        return True
     return set_api_key(service, provider_id, plaintext)
 
 
@@ -259,7 +336,7 @@ def validate_model(service, provider_id, model_id=None, policy=None):
         raise HTTPException(422, "OpenCode does not report the selected provider as connected")
     models = entry.get("models", {})
     candidates = [identifier for identifier, model in models.items()
-                  if (policy is None or model_allowed(policy, identifier))
+                  if (policy is None or model_allowed(policy, identifier, provider_id))
                   and "text" in model.get("modalities", {}).get("output", ["text"])]
     if model_id and model_id not in candidates:
         raise HTTPException(422, "Validation model is unavailable or restricted")

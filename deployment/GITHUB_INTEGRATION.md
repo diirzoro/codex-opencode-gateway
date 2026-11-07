@@ -1,3 +1,29 @@
+# Current disconnect policy — 27 October 2026
+
+Explicit customer/admin disconnect removes the target customer's imported GitHub working copies (`Project.source_type == github`), including unpushed local changes, after committed authorization revocation and an idle/safe-path check. The UI warns customers to push/export first. Internal blank/template projects remain, including those later published to GitHub; other customers, remote repositories, project records, conversation history, platform App configuration and Native storage remain intact. Busy/unavailable/unsafe copies are immediately blocked and await the existing maintenance cleanup; do not claim immediate physical erasure. Fresh **New GitHub connection** replaces local credentials/OAuth states without implicitly requesting file removal. See the newest project handoff for test evidence, Native limitations and exact source SHA. Source only until the owner's manual TEST deployment; workflows are unchanged.
+
+---
+
+# Latest owner fallback — registered platform App, Native tools retained — 26 October 2026
+
+Owner accepts the registered platform GitHub App when no reusable official OpenCode credentials are available. The admin form now suggests public App ID5470256, slug`opencode-gateway-test-diirzoro`, client ID`Iv23liGSq3yRR7okVSQJ` **only** when the authenticated diagnostics identify an empty protected-server-environment configuration at the exact TEST URL, without existing App identifiers or secrets. Saved/partial/other-server settings are never replaced. This is an unsaved editable suggestion, not an OAuth connection or an OpenCode-issued credential. No secret/private key/encryption key is prefilled. Unconfigured App settings expand automatically for setup. Existing Gateway customer ownership and separate Native MCP responsibilities remain. No deployment or runtime activation.
+
+---
+
+# Current owner direction — official Native integration, not personal App defaults — 26 October 2026
+
+Use official OpenCode-supported GitHub MCP tools. The admin page shows GitHub's official remote MCP URL (`https://api.githubcopilot.com/mcp/`) and `remote` transport as read-only public information. It does not install, activate, authenticate, or verify a server. No owner App ID/client ID/slug or token is prefilled. Existing saved server settings remain visible in a separate expandable Gateway repository-authorization form, with no change to encrypted data or authorization routes. GitHub platform sign-in remains disabled.
+
+The [official OpenCode installation guide](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-opencode.md) documents remote token authentication and a local official OAuth-enabled distribution. The [official OAuth guide](https://github.com/github/github-mcp-server/blob/main/docs/oauth-login.md) limits that built-in OAuth registration to the local stdio runtime; it is not a reusable Gateway GitHub App client secret. Remote host OAuth needs a host App configuration, as described in the [official README](https://github.com/github/github-mcp-server). Do not extract or substitute public-distribution OAuth credentials into Gateway's server App settings. Do not configure a shared customer token.
+
+Customer connection guidance distinguishes repository authorization from platform sign-in, keeps authorization unavailable while server configuration is missing, provides repository refresh, and explains an empty authorized repository list. Existing owned repository/branch/project endpoints are reused. No Native GitHub AI tools were rebuilt. This source change neither activates MCP nor proves per-user Native credential isolation. Server inspection/activation remains a later operator-terminal task, without restarting shared Native. No automatic deployment.
+
+---
+
+> **Owner scope override — 26 October 2026:** GitHub is for customer-owned repository authorization only. GitHub platform sign-in is disabled in backend and removed from login/account UI; Google is deferred. Earlier social-login callback/email-permission setup descriptions are historical. Review the current master handoff Native/MCP findings before adding another GitHub tool, process or service. No Native MCP activation or GitHub App installation has been performed by this follow-up.
+
+> **Current TEST setup — 25 October 2026:** a new App now exists: `opencode-gateway-test-diirzoro` (App ID5470256, public Client IDIv23liGSq3yRR7okVSQJ). Homepage is https://test.opencode-gateway.codes . Exact redirects are `/api/github/callback` for repository linking and `/api/auth/social/github/callback` for sign-in. Wildcards are off; Any account is selected. Contents read/write, Metadata read and account Email addresses read are the only requested permissions. Credentials have NOT been generated, installed or deployed. Migration0024 and the new admin form save platform App settings encrypted through Gateway; customer-owned connections stay separate. See the latest top entry in docs/PROJECT_HANDOFF_AND_REMAINING_WORK.md. Older IP/port/per-workspace statements below are historical and are NOT a change instruction; preserve the currently running Native architecture.
+
 # GitHub App setup for Gateway customers
 
 The project already includes the Gateway GitHub service and routes in `backend/app/services/github.py` and `backend/app/routes/github.py`. Customer-facing buttons use Gateway APIs; customers authorize their own GitHub account and choose repositories they are allowed to use. The app uses a server-side GitHub App and user authorization flow, not a shared customer PAT. Tokens are kept server-side and encrypted with `CREDENTIALS_ENCRYPTION_KEY`.
@@ -45,7 +71,3 @@ After deployment and migration, sign into a Gateway customer account, choose **C
 This document does not configure GitHub on the VPS or certify the current server deployment. The present source contains connection, repository, branch, clone, commit and push paths, but user tokens expire and require reconnection. The Gateway's OpenCode workspace execution still requires the separate isolation gates in [OPENCODE_INTEGRATION.md](OPENCODE_INTEGRATION.md).
 
 Official GitHub guidance: [user authorization callback URL](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-user-authorization-callback-url), [OAuth during installation](https://docs.github.com/en/apps/maintaining-github-apps/modifying-a-github-app-registration), and [GitHub App best practices](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/best-practices-for-creating-a-github-app).
-
-## Sign-in identity versus repository authorization
-
-GitHub sign-in and GitHub repository authorization are separate security purposes. A verified GitHub sign-in identity may authenticate an account, but it does not by itself authorize repository access. Repository access continues to use the GitHub App installation/authorization flow and the existing repository permission checks. Archived accounts cannot use social sign-in to bypass the reactivation flow.

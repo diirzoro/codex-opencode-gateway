@@ -1,7 +1,7 @@
 """Server-only PayPal Orders bridge. No card details or tokens reach Gateway UI."""
 from decimal import Decimal,InvalidOperation
 from urllib.parse import urlsplit
-import re,json
+import re,json,logging
 import httpx
 from fastapi import HTTPException
 from ..config import settings
@@ -26,7 +26,14 @@ def request(method,path,body=None,request_id=None,negative=False):
     if response.status_code>=400:
         issues={d.get('issue') for d in payload.get('details',[]) if isinstance(d,dict)}
         if 'INSTRUMENT_DECLINED' in issues:raise HTTPException(402,'PayPal declined the payment method. Choose another funding source; your subscription has not been activated.')
-        raise HTTPException(502,'PayPal could not complete the payment. Your subscription has not been activated.')
+        safe_issues=sorted(issue for issue in issues if isinstance(issue,str) and re.fullmatch(r'[A-Z_]{1,80}',issue))
+        debug_id=payload.get('debug_id','')
+        if not isinstance(debug_id,str) or not re.fullmatch(r'[A-Za-z0-9-]{1,100}',debug_id):debug_id=''
+        logging.getLogger(__name__).warning('PayPal request rejected: status=%s issues=%s reference=%s',response.status_code,','.join(safe_issues),debug_id)
+        if issues & {'PAYEE_ACCOUNT_RESTRICTED','PAYEE_ACCOUNT_NOT_VERIFIED','PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING','PAYEE_ACCOUNT_INVALID'}:
+            raise HTTPException(503,'The PayPal merchant account cannot receive this payment. Administration must verify merchant eligibility. No subscription was activated.')
+        suffix=(' Reference: '+debug_id) if debug_id else ''
+        raise HTTPException(502,'PayPal could not complete the payment. Your subscription has not been activated.'+suffix)
     return payload
 
 def create_order(row):

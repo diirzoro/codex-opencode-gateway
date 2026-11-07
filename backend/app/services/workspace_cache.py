@@ -85,7 +85,24 @@ def end_upload(db, success):
 
 
 def runtime_idle(row):
-    from . import opencode
+    from . import native_control_bridge as opencode
+    # Native uses the persistent shared service. A disabled legacy runtime is
+    # never evidence that Native tools have stopped writing these files.
+    from ..routes import native_sessions
+    if native_sessions.enabled():
+        from . import workspaces
+        root = workspaces.root_for(row, allow_expired=True)
+        # Reading status can initialize a Native directory instance. Apply the
+        # same executable-config guard as Native authorization before that read.
+        base = workspaces.settings.workspace_root.resolve()
+        for directory in (root, *root.parents):
+            if any((directory / name).exists() or (directory / name).is_symlink()
+                   for name in ('.opencode', 'opencode.json', 'opencode.jsonc')):
+                raise HTTPException(409, 'Native configuration requires operator review before cleanup')
+            if directory == base:
+                break
+        statuses = native_sessions.metadata('GET', '/session/status', root)
+        return isinstance(statuses, dict) and all(isinstance(value, dict) and value.get('type') == 'idle' for value in statuses.values())
     if opencode.settings.runtime_mode != "local":
         return True
     try:
@@ -116,18 +133,62 @@ def last_file_activity(path):
     return datetime.fromtimestamp(latest, timezone.utc)
 
 
-def sweep(*, now=None):
-    from . import opencode, workspaces
-    if _policy_started is None:
+def expire_github_copies(db, user_id):
+    """Persist access barriers only for this owner's imported GitHub copies.
+
+    A local project later published to GitHub remains a local project. Records,
+    Native history, external repositories and all other owners are preserved.
+    The caller commits this together with credential/state revocation.
+    """
+    ids = list(db.scalars(select(Workspace.id).join(Project).where(
+        Workspace.user_id == user_id, Project.user_id == user_id,
+        Project.source_type == 'github', Workspace.status != 'cache_expired')))
+    if ids:
+        db.execute(update(Workspace).where(Workspace.id.in_(ids), Workspace.user_id == user_id)
+                   .values(status='cache_expiring'))
+    return ids
+
+
+def github_copy_is_saved(row):
+    """Conservative TTL guard: never expire drafts, ignored files or local commits.
+
+    A matching fetched remote ref establishes that this unchanged copy came
+    from GitHub. Missing/unreadable Git metadata is not proof of safe deletion.
+    No provider API calls, token restoration or extra cleanup service.
+    """
+    from . import workspaces
+    if row.project.source_type!='github':return True
+    try:
+        state=workspaces.status(row)
+        if not state['clean'] or not state['head']:return False
+        if workspaces.git(row,'ls-files','--others','--ignored','--exclude-standard','-z').stdout:return False
+        refs=workspaces.git(row,'for-each-ref','--format=%(objectname)','refs/heads','refs/stash').stdout.splitlines()
+        if any(sha!=state['head'] for sha in refs):return False
+        branch=row.project.remote_branch
+        if not workspaces.valid_branch(branch):return False
+        remote=workspaces.git(row,'rev-parse','--verify','refs/remotes/origin/'+branch,check=False)
+        return remote.returncode==0 and remote.stdout.strip()==state['head']
+    except (HTTPException,OSError):return False
+
+
+def sweep(*, now=None, workspace_ids=None):
+    from . import workspaces
+    from . import native_control_bridge as opencode
+    if _policy_started is None and workspace_ids is None:
         initialize()
     now = now or datetime.now(timezone.utc)
     count = 0
     with SessionLocal() as db:
         # At most 100 workspaces per pass; no filesystem scans on request paths.
-        ids = list(db.scalars(select(Workspace.id).join(Project).where(Workspace.status != "cache_expired",
-            or_(and_(Project.source_type == "github", Workspace.last_activity_at <= now - GITHUB_RETENTION),
+        query = select(Workspace.id).join(Project).where(Workspace.status != "cache_expired")
+        if workspace_ids is not None:
+            # Explicit disconnect cleanup cannot sweep unrelated/local files.
+            query = query.where(Workspace.id.in_(workspace_ids), Project.source_type == 'github', Workspace.status == 'cache_expiring')
+        else:
+            query = query.where(or_(Workspace.status == 'cache_expiring',
+                and_(Project.source_type == "github", Workspace.last_activity_at <= now - GITHUB_RETENTION),
                 and_(Project.source_type != "github", Workspace.last_activity_at <= now - LOCAL_RETENTION)))
-            .order_by(Workspace.last_activity_at).limit(100)))
+        ids = list(db.scalars(query.order_by(Workspace.last_activity_at).limit(100)))
     for identifier in ids:
         with SessionLocal() as db:
             row = db.get(Workspace, identifier)
@@ -142,13 +203,16 @@ def sweep(*, now=None):
                 if row is None or row.status == "cache_expired":
                     continue
                 meta = cache_payload(row, now=now)
-                if now < meta["expires_at"]:
+                if row.status != "cache_expiring" and now < meta["expires_at"]:
                     continue
-                if db.scalar(select(WorkspaceSession.id).where(WorkspaceSession.workspace_id == identifier,
+                from ..routes import native_sessions
+                if not native_sessions.enabled() and db.scalar(select(WorkspaceSession.id).where(WorkspaceSession.workspace_id == identifier,
                         WorkspaceSession.status.in_(["submitted", "waiting_approval"])).limit(1)):
                     continue
                 if not runtime_idle(row):
                     continue
+                if row.project.source_type=='github' and row.status!='cache_expiring' and not github_copy_is_saved(row):
+                    continue  # 73 hours is not permission to discard unsaved work.
                 path = workspaces.root_for(row, allow_expired=True)
                 if row.status != "cache_expiring":
                     modified = last_file_activity(path)
@@ -157,7 +221,8 @@ def sweep(*, now=None):
                         if now < cache_payload(row, now=now)["expires_at"]:
                             db.commit()
                             continue
-                opencode.stop_workspace(row)
+                if not native_sessions.enabled():
+                    opencode.stop_workspace(row)
                 # Persist a file-access barrier before deletion; failed cleanup
                 # is retried without recreating missing files or extending TTL.
                 last_activity = row.last_activity_at

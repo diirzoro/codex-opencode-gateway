@@ -30,6 +30,7 @@ REQUIRED_RELEASE_FILES = {
     "backend/app/services/opencode.py",
     "backend/alembic/versions/0012_advanced_trial.py",
     "backend/alembic/versions/0013_login_identity.py",
+    "backend/alembic/versions/0016_checkout_locations.py",
     "deployment/opencode-gateway.service",
     "deployment/.env.production.example",
     "deployment/OPENCODE_INTEGRATION.md",
