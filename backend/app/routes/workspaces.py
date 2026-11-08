@@ -185,17 +185,15 @@ class ConfirmLocalProjectDelete(BaseModel):
 @router.delete("/projects/{project_id}")
 def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
                    user:User=Depends(require_user),db:Session=Depends(get_db)):
-    """Owner-confirmed deletion of one LOCAL project; never remote GitHub.
+    """Delete one confirmed LOCAL project after its Native session is deleted.
 
-    This endpoint refuses projects with Native conversation records. Those
-    belong to OpenCode Native and require their own verified session-deletion
-    workflow before erasing the worktree. Deleting a local project with zero
-    sessions reclaims quota; an imported GitHub working copy is not eligible.
+    Platform removes only administrative links, workspaces and owned files.
+    The browser calls OpenCode Native directly to delete the session first;
+    this route never queries or invokes any Native API.
     """
     import shutil
     from sqlalchemy import delete,inspect
     from ..models import PreviewRuntimeLease
-    from ..services import workspace_cache
     project=db.scalar(select(Project).where(
         Project.id==project_id,Project.user_id==user.id).with_for_update())
     if project is None:raise HTTPException(404,'Project not found')
@@ -212,15 +210,14 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
             PreviewRuntimeLease.workspace_id.in_([w.id for w in rows]),
             PreviewRuntimeLease.state.in_(['queued','starting','running'])).limit(1))
         if live:raise HTTPException(409,'Stop this project preview before deleting local files')
-    # Until the owner approves a reversible deletion workflow for Native history,
-    # do not remove local worktrees before resolving a persistent session binding.
-    if db.get(ProjectNativeSessionBinding,project.id) is not None:
-        raise HTTPException(409,
-            "This project has a persistent Native session; back up and detach its binding before deleting its files")
+    # The user-confirmed browser flow has already removed the Native session.
+    # Retire its Platform-only mapping as part of deleting the Project.
+    binding=db.get(ProjectNativeSessionBinding,project.id)
+    if binding is not None:
+        db.delete(binding)
+        db.flush()
     paths=[]
     for row in rows:
-        if not workspace_cache.runtime_idle(row):
-            raise HTTPException(409,'The agent is still working in this project. Stop the conversation first, then delete the project. / الوكيل ما زال يعمل في هذا المشروع. أوقف المحادثة أولًا ثم احذف المشروع.')
         path=manager.root_for(row,allow_expired=True)
         if path.is_symlink() or path.parent.is_symlink() or path.parent.parent.is_symlink():
             raise HTTPException(403,'Unsafe project worktree; manual review required')
@@ -228,8 +225,6 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
     # Recheck activity just before deleting the directory. Other owners' paths
     # are never derived from user-supplied strings or traversed.
     for row in rows:
-        if not workspace_cache.runtime_idle(row):
-            raise HTTPException(409,'The agent is still working in this project. Stop the conversation first, then delete the project. / الوكيل ما زال يعمل في هذا المشروع. أوقف المحادثة أولًا ثم احذف المشروع.')
     for path in paths:
         if path.exists():
             try:shutil.rmtree(path)
