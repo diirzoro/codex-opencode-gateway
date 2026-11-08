@@ -19,9 +19,9 @@ depends_on = None
 def upgrade():
     op.create_table(
         "project_native_session_bindings",
-        sa.Column("project_id", sa.Uuid(), sa.ForeignKey("projects.id"), primary_key=True),
-        sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("workspace_id", sa.Uuid(), sa.ForeignKey("workspaces.id"), nullable=False),
+        sa.Column("project_id", sa.Uuid(), primary_key=True),
+        sa.Column("user_id", sa.Uuid(), nullable=False),
+        sa.Column("workspace_id", sa.Uuid(), nullable=False),
         sa.Column("native_session_id", sa.String(120), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True),
