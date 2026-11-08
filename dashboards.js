@@ -1370,13 +1370,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const open=btn('project-folder-'+project.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace));open.className='project-folder-link';
     const download=btn('download-project-'+project.id,'Download ZIP','تنزيل ZIP',()=>downloadProjectSource(workspace,project));
     body.append(open,download);
-    if(project.source_type!=='github'){
-      const remove=btn('delete-local-project-'+project.id,'Delete local project','حذف المشروع المحلي',async()=>{
+    {
+      const remove=btn('delete-local-project-'+project.id,'Delete project','حذف المشروع',async()=>{
         const owner=currentUser?.id;
         if(!owner||owner!==projectOwner)return;
         const exact=await window.requestInput(tr(
-          'Delete this LOCAL project permanently? Download ZIP first. Type the exact project name: '+project.name+'. This will NEVER delete the remote GitHub repository; projects with Native conversations cannot be removed until their sessions are deleted.',
-          'حذف المشروع المحلي نهائيًا؟ حمّل ZIP أولًا. اكتب اسم المشروع حرفيًا: '+project.name+'. لن يُحذف مستودع GitHub، ولا يمكن حذف مشروع له محادثات Native قبل حذف جلساته.'
+          'Delete this project and its Native conversation permanently? Download ZIP first. Type the project name: '+project.name+'. Any remote GitHub repository will remain untouched.',
+          'هل تريد حذف المشروع ومحادثته في Native نهائيًا؟ حمّل ZIP أولًا واكتب اسم المشروع حرفيًا: '+project.name+'. لن يُحذف أي مستودع GitHub بعيد.'
         ));
         if(exact!==project.name)return;
         if(!await window.confirmAction(tr(
@@ -1491,12 +1491,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   q('commitButton').onclick=async()=>{if(!activeWorkspace||activeProject?.source_type!=='github')return;const message=await window.requestInput(tr('Commit message','رسالة الالتزام'));if(!message?.trim())return;try{await api('/api/workspaces/'+activeWorkspace.id+'/git/commit',{method:'POST',body:JSON.stringify({message:message.trim()})});await loadChanges();}catch(error){toast(error.message);}};
   const syncGit=btn('syncWorkspaceGit','Pull / Sync (fast-forward only)','Pull / Sync (تقديم سريع فقط)',async()=>{if(!activeWorkspace)return;if(!await window.confirmAction(tr('Fetch the selected GitHub branch and fast-forward only? Uncommitted/divergent work is preserved.','جلب فرع GitHub المختار والتقديم السريع فقط؟ تُحفظ الأعمال غير المحفوظة أو المتباعدة.')))return;await api('/api/workspaces/'+activeWorkspace.id+'/git/sync',{method:'POST'});await loadChanges();await loadFiles();});syncGit.hidden=true;
   exportSource=btn('exportWorkspaceSource','Download ZIP','تنزيل المشروع ZIP',()=>downloadProjectSource(activeWorkspace,activeProject));
-  deleteActiveProject=btn('delete-active-project','Delete local project','حذف المشروع المحلي',async()=>{
+  deleteActiveProject=btn('delete-active-project','Delete project','حذف المشروع',async()=>{
     const owner=currentUser?.id,project=activeProject;
-    if(!owner||!project||project.source_type==='github')return;
+    if(!owner||!project)return;
     const exact=await window.requestInput(tr(
-      'Delete this LOCAL project permanently? Download ZIP first. Type the exact project name: '+project.name+'. The agent must be stopped first; the remote GitHub repository is never deleted.',
-      'حذف المشروع المحلي نهائيًا؟ حمّل ZIP أولًا. اكتب اسم المشروع حرفيًا: '+project.name+'. يجب إيقاف الوكيل أولًا؛ لن يُحذف مستودع GitHub.'
+      'Delete this project and its Native conversation permanently? Download ZIP first. Type the project name: '+project.name+'. Any remote GitHub repository is not deleted.',
+      'هل تريد حذف المشروع ومحادثته في Native نهائيًا؟ حمّل ZIP أولًا واكتب الاسم حرفيًا: '+project.name+'. لن يُحذف مستودع GitHub البعيد.'
     ));
     if(exact!==project.name)return;
     if(!await window.confirmAction(tr('Confirm permanent deletion of local project '+project.name+' and its working files. This cannot be undone.','تأكيد نهائي لحذف المشروع المحلي '+project.name+' وملفاته. لا يمكن التراجع عن ذلك.')))return;
