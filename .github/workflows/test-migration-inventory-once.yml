@@ -55,3 +55,13 @@ jobs:
           print('TEST_MIGRATION_MISSING',','.join(missing))
           print('TEST_RELEASE_MARKER', (root/'.test-full-release-revision').read_text().strip() if (root/'.test-full-release-revision').exists() else 'none')
           PY
+
+      - name: Read existing TEST payment-publications migration source
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.VPS_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          ssh -T -p "${PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'cat /home/tahir/opencode-gateway-test/backend/alembic/versions/0034_payment_profile_publications.py'
