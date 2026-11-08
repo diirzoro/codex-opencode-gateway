@@ -58,5 +58,6 @@ def state(user: User = Depends(require_user)):
     if mode == "local":
         # Administrative filesystem location, not a Native API query.
         account_root = settings.runtime_root / str(user.id) / "native-account"
+        account_root.mkdir(parents=True, exist_ok=True)
         payload["native_account_directory"] = str(account_root)
     return payload
