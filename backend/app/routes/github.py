@@ -240,7 +240,7 @@ class CopyDecision(BaseModel):
 @router.post('/disconnect/workspaces/{workspace_id}')
 def disconnect_copy(workspace_id: uuid.UUID,body: CopyDecision,
                     user: User=Depends(require_user),db: Session=Depends(get_db)):
-    from ..services import workspaces,workspace_cache
+    from ..services import workspaces
     from ..services import platform_locks
     from . import workspaces as git_routes
     row,connection=_disconnect_copy(db,user,workspace_id)
@@ -250,7 +250,6 @@ def disconnect_copy(workspace_id: uuid.UUID,body: CopyDecision,
         row,connection=_disconnect_copy(db,user,workspace_id)
         if connection.id!=body.connection_id:raise HTTPException(409,'Connection changed; review again')
         git_routes._require_git_idle(db,row)
-        if not workspace_cache.runtime_idle(row):raise HTTPException(409,'Stop Native execution before saving or deleting files')
         state,snapshot,ignored=_copy_snapshot(row)
         if snapshot!=body.snapshot:raise HTTPException(409,'Working files changed; review again. Nothing deleted')
         if ignored:raise HTTPException(409,'Ignored files, local branches or stashes are not saved; export or review them first')
@@ -270,7 +269,7 @@ def disconnect_copy(workspace_id: uuid.UUID,body: CopyDecision,
             connection,row.project.repository,row.project.remote_branch,state['head']):
             raise HTTPException(409,'Save and verify all changes on GitHub before deleting this copy')
         checked,latest,ignored=_copy_snapshot(row)
-        if latest!=snapshot or not checked['clean'] or ignored or not workspace_cache.runtime_idle(row):
+        if latest!=snapshot or not checked['clean'] or ignored:
             raise HTTPException(409,'Workspace changed during verification; files preserved')
         root=workspaces.root_for(row)
         row.status='cache_expiring'
