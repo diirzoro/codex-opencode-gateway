@@ -1527,9 +1527,20 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(sessionListPending?.workspaceId===workspaceId&&sessionListPending.owner===owner)return sessionListPending.promise;
     const history=++historyRevision;
     const promise=(async()=>{
-      const rows=await api('/api/workspaces/'+workspaceId+'/sessions');
+      let rows=await api('/api/workspaces/'+workspaceId+'/sessions');
       if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
       if(!Array.isArray(rows)||rows.length>1)throw Error('One Project must have exactly one Native session');
+      if(!rows.length&&window.nativeSession?.active()){
+        // A new Project opens its single Native conversation immediately,
+        // not a second "New chat" flow and not a Python session creator.
+        if(!workAccess)await refreshEntitlement();
+        if(!workAccess)return rows;
+        const created=await api('/api/workspaces/'+workspaceId+'/sessions',{
+          method:'POST',body:JSON.stringify({title:activeProject?.name||'Project'})
+        });
+        if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+        rows=[created];
+      }
       renderRuntimeSessions(rows);
       const current=rows.find(row=>row.id===activeSession?.id);
       if(current)activeSession={...activeSession,...current};
@@ -1672,7 +1683,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(!window.nativeSession?.active()&&(sending||pendingSubmission||sessionRows.some(s=>s.workspace_id===activeWorkspace.id&&['submitted','waiting_approval'].includes(s.execution_status))))throw new Error(tr('Finish or stop running work before creating another conversation.','أكمل التنفيذ الجاري أو أوقفه قبل إنشاء محادثة أخرى.'));
     saveNativeDraft();const workspaceId=activeWorkspace.id,owner=currentUser?.id;
     const promise=(async()=>{if(!checked)await refreshEntitlement();if(!workAccess||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
-      const title=String(conversationTitle).trim().slice(0,120)||q('promptInput').value.trim().slice(0,80)||tr('New session','جلسة جديدة');
+      const title=activeProject?.name||'Project';
       const row=await api('/api/workspaces/'+workspaceId+'/sessions',{method:'POST',body:JSON.stringify({title})});
       if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
       // Creation already opens the session server-side. Select once, without a
