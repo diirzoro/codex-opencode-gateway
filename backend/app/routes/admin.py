@@ -330,9 +330,19 @@ def overview(_: User = Depends(require_admin), db: Session = Depends(get_db)):
         "integrations": {
             "github": {"configured": github.configured(db), "connected_users": github_connected},
             "opencode": settings.runtime_mode,
-            "payments": "not_available",
+            "payments": "managed_in_billing",
         },
-        "payments": {"status": "not_available", "label": "Not available yet"},
+        "payments": {
+            "status": "available",
+            "available": True,
+            "total": _count(db, PaymentOrder),
+            "awaiting_payment": _count(db, PaymentOrder, PaymentOrder.status == "awaiting_payment"),
+            "pending_review": _count(db, PaymentOrder, PaymentOrder.status == "pending_review"),
+            "paid": _count(db, PaymentOrder, PaymentOrder.status == "paid"),
+            "sandbox_paid": _count(db, PaymentOrder, PaymentOrder.status == "sandbox_paid"),
+            "subscriptions_total": _count(db, Subscription),
+            "subscriptions_active": _count(db, Subscription, Subscription.status == "active"),
+        },
         "visitors": {"status": "not_available", "label": "Not available yet"},
     }
 
