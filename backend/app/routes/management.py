@@ -149,17 +149,25 @@ def reset(data:Reset,response:Response,db:Session=Depends(get_db)):
     user.password_hash=hash_password(data.password)
     if finishing_reactivation: user.status='active'
     revoke(db,user)
+    activation_challenge = None
     if activating_legacy:
-        from ..services.entitlements import CORE_TRIAL_DAYS
+        # Email link and password proof are not a replacement for the
+        # registration OTP. Keep the account pending until the fresh code
+        # is verified, then start its ONE 30-day trial.
         from ..models import EmailVerification
+        from ..services import email_verification
+        email_verification.require_code_schema(db)
+        if not email_verification.smtp_ready(db):
+            raise HTTPException(503, 'Email verification delivery is unavailable')
         issued_at=now()
-        user.status='active'
-        user.trial_started_at=issued_at
-        user.trial_ends_at=issued_at+timedelta(days=CORE_TRIAL_DAYS)
         db.execute(update(EmailVerification).where(
-            EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None)
+            EmailVerification.user_id==user.id,
+            EmailVerification.used_at.is_(None)
         ).values(used_at=issued_at))
-        audit(db,user,'account.email_verified_recovery')
+        challenge, code=email_verification.create_code(db,user)
+        activation_challenge=str(challenge)
+        email_verification.send_code(user.email,code,db)
+        audit(db,user,'account.activation_code_sent')
     db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
     audit(db,user,'password.reset')
     if finishing_reactivation: audit(db,user,'account.reactivation_completed')
@@ -167,7 +175,11 @@ def reset(data:Reset,response:Response,db:Session=Depends(get_db)):
     from ..config import settings
     response.delete_cookie(settings.session_cookie_name,path='/',secure=settings.cookie_secure,httponly=True,samesite='strict')
     response.delete_cookie(reactivation_cookie_name(),path='/api',secure=settings.cookie_secure,httponly=True,samesite='strict')
-    return {'message':'Email verified and account activated. Sign in with your new password.' if activating_legacy else 'Password reset. Sign in with your new password.'}
+    if activating_legacy:
+        return {'activation_required':True,'verification_challenge':activation_challenge,
+                'verification_expires_in':60,
+                'message':'New password saved. Verify the six-digit email code to activate your account.'}
+    return {'message':'Password reset. Sign in with your new password.'}
 
 class Lifecycle(BaseModel):
     action: str=Field(pattern='^(suspend|delete)$')
