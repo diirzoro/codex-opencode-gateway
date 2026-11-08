@@ -13,7 +13,6 @@ from ..models import GithubConnection, PaymentOrder, Plan, PlatformPolicy, Proje
 from ..services.storage_policy import PLAN_MB
 from ..models.platform import get_policy
 from ..services import github
-from ..services import native_control_bridge as opencode
 from ..services.accounts import user_payload
 from .dependencies import require_admin
 
@@ -67,13 +66,10 @@ def _count(db, model, *conditions):
     return db.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
 
 def _runtime_health():
-    if settings.runtime_mode != "local":
-        return {"mode": settings.runtime_mode, "healthy": False, "detail": "Local runtime is disabled"}
-    try:
-        health = opencode.shared_health()
-        return {"mode": settings.runtime_mode, "healthy": True, "version": health.get("version")}
-    except HTTPException:
-        return {"mode": settings.runtime_mode, "healthy": False, "detail": "Runtime is not reachable"}
+    # Native health is obtained directly by the browser, not Python.
+    return {"mode": settings.runtime_mode, "healthy": None,
+            "status": "check_native_from_browser"}
+
 
 def plan_payload(row: Plan) -> dict:
     return {"id": row.id, "code": row.code, "name": row.name, "price_cents": row.price_cents, "currency": row.currency, "duration_days": row.duration_days, "active": bool(row.active), "sort_order": row.sort_order, "storage_mb": PLAN_MB.get(row.code,50),
