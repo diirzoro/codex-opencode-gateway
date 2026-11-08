@@ -469,12 +469,6 @@ def bind_native_session(project_id:uuid.UUID,data:BindProjectNativeSession,
                 or current.native_session_id!=data.native_session_id):
             raise HTTPException(409,"This project already has another persistent Native session")
         return _native_binding_payload(current)
-    legacy=db.scalar(select(WorkspaceSession.id).join(
-        Workspace,WorkspaceSession.workspace_id==Workspace.id).where(
-        Workspace.project_id==project.id).limit(1))
-    if legacy is not None:
-        raise HTTPException(409,
-            "Legacy sessions exist: select the main session through an owner-reviewed recovery; no history was changed")
     binding=ProjectNativeSessionBinding(project_id=project.id,user_id=user.id,
         workspace_id=workspace.id,native_session_id=data.native_session_id)
     db.add(binding)
@@ -483,50 +477,6 @@ def bind_native_session(project_id:uuid.UUID,data:BindProjectNativeSession,
         db.rollback()
         raise HTTPException(409,
             "Native session is already bound or another request claimed this project") from None
-    return _native_binding_payload(binding)
-
-
-class RecoverProjectNativeBinding(BaseModel):
-    """Explicit selection of an existing, owner-owned legacy session mapping."""
-    model_config=ConfigDict(extra="forbid")
-    legacy_session_id:uuid.UUID
-
-
-@router.post("/projects/{project_id}/native-binding/recover")
-def recover_project_native_binding(project_id:uuid.UUID,data:RecoverProjectNativeBinding,
-                                   request:Request,user:User=Depends(require_user),
-                                   db:Session=Depends(get_db)):
-    """Bind the selected legacy mapping, preserving every old session and event.
-
-    The owner must first verify the underlying Native session from the browser.
-    Python only reads administrative rows from the Platform database.
-    """
-    if not same_origin(request.headers.get("origin"),settings.public_base_url):
-        raise HTTPException(403,"Project recovery requires the Gateway origin")
-    project=db.scalar(select(Project).where(
-        Project.id==project_id,Project.user_id==user.id).with_for_update())
-    if project is None:raise HTTPException(404,"Project not found")
-    if project.archived_at is not None:
-        raise HTTPException(409,"Restore this project before recovering a conversation")
-    legacy=db.scalar(select(WorkspaceSession).where(
-        WorkspaceSession.id==data.legacy_session_id,
-        WorkspaceSession.user_id==user.id))
-    if legacy is None:raise HTTPException(404,"Legacy session not found")
-    workspace=manager.owned(db,Workspace,legacy.workspace_id,user.id)
-    if workspace.project_id!=project.id:
-        raise HTTPException(404,"Legacy session belongs to another project")
-    current=db.get(ProjectNativeSessionBinding,project.id)
-    if current is not None:
-        if current.workspace_id==workspace.id and current.native_session_id==legacy.opencode_session_id:
-            return _native_binding_payload(current)
-        raise HTTPException(409,"This project already has a different bound session")
-    binding=ProjectNativeSessionBinding(project_id=project.id,user_id=user.id,
-        workspace_id=workspace.id,native_session_id=legacy.opencode_session_id)
-    db.add(binding)
-    try:db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(409,"A concurrent request or another project owns this Native session") from None
     return _native_binding_payload(binding)
 
 
