@@ -530,7 +530,7 @@
           if(!alive()||workspaceId)return;
           // All 50 labels come from OpenCode's own provider catalog.
           // The verified connection section stays separate.
-          snapshot={providers:rows.slice(0,50)};
+          snapshot={providers:rows.filter(p=>p.visible!==false).slice(0,50)};
           view.ready=true;customButton.disabled=false;
           renderOptions();renderConnected();
           message(tr('OpenCode providers ready','مزوّدو OpenCode جاهزون')+' · '+rows.length);
