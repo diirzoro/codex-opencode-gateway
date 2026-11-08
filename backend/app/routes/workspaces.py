@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..security.origins import same_origin
 from ..database import get_db
-from ..models import ExecutionEvent, Project, ProjectNativeSessionBinding, ProviderCredential, User, UserProviderCredential, Workspace, WorkspaceSession
+from ..models import ExecutionEvent, Project, ProjectNativeSessionBinding, User, Workspace, WorkspaceSession
 from ..services import github, policy, preview
 from ..services import workspaces as manager
 from ..services.entitlements import access_payload, require_advanced
@@ -227,8 +227,6 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
         db.execute(delete(ExecutionEvent).where(ExecutionEvent.session_id.in_(
             select(WorkspaceSession.id).where(WorkspaceSession.workspace_id.in_(ids)))))
         db.execute(delete(WorkspaceSession).where(WorkspaceSession.workspace_id.in_(ids)))
-        if inspect(db.connection()).has_table('provider_credentials'):
-            db.execute(delete(ProviderCredential).where(ProviderCredential.workspace_id.in_(ids)))
         if inspect(db.connection()).has_table('preview_runtime_leases'):
             db.execute(delete(PreviewRuntimeLease).where(PreviewRuntimeLease.workspace_id.in_(ids)))
         db.execute(delete(Workspace).where(Workspace.id.in_(ids),Workspace.user_id==user.id))
