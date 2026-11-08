@@ -162,11 +162,24 @@ window.nativeDirectTest=(()=>{
   async function agents({force=false}={}){
     const user=ownerScope();
     if(!force&&agentsSnapshot)return agentsSnapshot;
+    const cacheKey='og-native-agent-metadata-v1:'+user;
+    if(!force)try{
+      const stored=JSON.parse(sessionStorage.getItem(cacheKey)||'null');
+      if(stored?.at>Date.now()-30*60*1000&&Array.isArray(stored.agents)){
+        agentsSnapshot=stored.agents;return agentsSnapshot;
+      }
+    }catch{}
     if(agentsPending)return agentsPending;
     const promise=direct('agent').then(rows=>{
       if(!Array.isArray(rows))throw Error('Invalid OpenCode Native agents');
       if(ownerScope()!==user)throw Error('Account changed during Native agent discovery');
-      agentsSnapshot=rows;return rows;
+      // Public presentation metadata only: never cache agent prompts,
+      // secrets, tools or executable configuration in Gateway/browser state.
+      const safe=rows.filter(p=>p&&typeof p.name==='string').map(p=>
+        ({name:p.name,mode:p.mode,hidden:p.hidden===true}));
+      agentsSnapshot=safe;
+      try{sessionStorage.setItem(cacheKey,JSON.stringify({at:Date.now(),agents:safe}));}catch{}
+      return safe;
     });
     agentsPending=promise;
     try{return await promise;}finally{if(agentsPending===promise)agentsPending=null;}
