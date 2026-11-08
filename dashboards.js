@@ -862,15 +862,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
 
   q('openTools').onclick=()=>window.openConnections('providers');q('openTools').title=tr('Open OpenCode provider and workspace setup','\u0641\u062a\u062d \u0625\u0639\u062f\u0627\u062f \u0645\u0632\u0648\u062f OpenCode \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644');q('chatGithub').onclick=()=>openConnections('github');
-  // Project, conversations and preview have independent panel tabs.
-  const sessionsSection=document.createElement('section');sessionsSection.className='workspace-conversations';sessionsSection.hidden=true;
-  const sessionsSummary=text('h3','Conversations','المحادثات'),sessionsCount=textElement('small','','sidebar-count');sessionsSummary.append(sessionsCount);sessionsSection.append(sessionsSummary);
-  const sessionsBody=textElement('div','','section-body');
-  const search=document.createElement('input');search.type='search';search.id='workspaceSessionSearch';search.placeholder=tr('Search sessions','ابحث في الجلسات');search.setAttribute('aria-label','Search sessions');
-  search.oninput=()=>renderRuntimeSessions(sessionRows);
-  const sessionTabs=textElement('div','','session-filters');let sessionFilter='all',sessionRows=[],sessionListPending=null,sessionCreating=null,sending=false,queuing=false,queueCount=0,queueSignature='',queueRevision=0,historyRevision=0,pendingSubmission=null,cancelRequested=false,statusPending=null;
-  for(const [value,en,ar] of [['all','All','الكل'],['active','Active','نشطة'],['closed','Previous / Closed','سابقة / مغلقة'],['archived','Archived','مؤرشفة']]){const tab=btn('sessions-'+value,en,ar,()=>{sessionFilter=value;for(const b of sessionTabs.children)b.setAttribute('aria-pressed',String(b===tab));renderRuntimeSessions(sessionRows);});tab.setAttribute('aria-pressed',String(value===sessionFilter));sessionTabs.append(tab);}
-  const closeSessionButton=btn('closeActiveSession','Close / Disconnect','إغلاق / فصل',()=>sessionAction(activeSession,'close'));
+  // Project files and preview share the single persistent Project conversation.
+  let sessionRows=[],sessionListPending=null,sessionCreating=null,sending=false,queuing=false,queueCount=0,queueSignature='',queueRevision=0,historyRevision=0,pendingSubmission=null,cancelRequested=false,statusPending=null;
   const submissionStatus=textElement('p','','muted-small');submissionStatus.setAttribute('role','status');q('promptForm').before(submissionStatus);
   const recoverConversation=btn('recoverNativeConversation','Recover Conversation','استعادة المحادثة',async()=>{
     const id=activeSession?.id,owner=currentUser?.id;if(!id||!window.nativeSession?.active())return;
@@ -922,7 +915,6 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   recoveryAction.append(cancelAttachment);
 
   const retrySubmission=btn('retrySubmission','Check / retry same submission','تحقق / أعد نفس الطلب',()=>submitPending());retrySubmission.hidden=true;q('promptForm').before(retrySubmission);
-  sessionsBody.append(sessionTabs,search,q('sessionList'));sessionsSection.append(sessionsBody);
   const filesSection=document.createElement('details');filesSection.className='workspace-side-section workspace-files';filesSection.open=true;
   const filesSummary=text('summary','Project files','ملفات المشروع');
   const filesRefresh=btn('refreshWorkspaceFiles','Refresh files','حدّث الملفات',()=>loadFiles());filesRefresh.classList.add('icon-btn','files-refresh');filesRefresh.title=tr('Refresh files','حدّث الملفات');filesRefresh.setAttribute('aria-label',filesRefresh.title);
@@ -1408,10 +1400,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }catch(error){if(activeWorkspace?.id===id&&revision===projectListRevision)placeCurrentProject();}
   }
   const projectPanelBrand=textElement('div','','workspace-project-brand');projectPanelBrand.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-github"/></svg>';projectPanelBrand.append(text('span','Projects & Preview','المشاريع والمعاينة'));
-  placeCurrentProject();pane.replaceChildren(projectPanelBrand,modes,sessionsSection,projectGroups,previewPanel);
-  const conversationList=sessionsBody.querySelector('#sessionList'),conversationOptions=document.createElement('details');conversationOptions.className='conversation-options';conversationOptions.append(text('summary','Search / filter','بحث / تصفية'),search,sessionTabs);
-  sessionsBody.replaceChildren(conversationOptions,conversationList);
-  sessionsSection.hidden=true;projectGroups.hidden=false;
+  placeCurrentProject();pane.replaceChildren(projectPanelBrand,modes,projectGroups,previewPanel);
+  projectGroups.hidden=false;
   pane.append(paneResizer);
   // Reuse the actual Dashboard navigation and its handlers, never duplicate it.
   const dashboardMenu=document.createElement('dialog');dashboardMenu.className='workspace-dashboard-menu';dashboardMenu.setAttribute('aria-label',tr('Dashboard menu','قائمة لوحة التحكم'));
@@ -1439,7 +1429,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       diffView.textContent=names.size?tr('Select a changed file to review its diff.','اختر ملفًا متغيرًا لمراجعة الفرق.'):tr('No changes in this workspace.','لا توجد تغييرات في مساحة العمل.');
     }catch(error){if(stamp===changesStamp)diffView.textContent=error.message;}
   }
-  async function setPanel(mode){panelMode=mode;sessionsSection.hidden=mode!=='conversations';projectGroups.hidden=mode!=='changes';previewPanel.hidden=mode!=='preview';changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));if(mode==='conversations')await refreshSessions();if(mode==='changes')await Promise.all([loadChanges(),loadProjectGroups()]);}
+  async function setPanel(mode){panelMode=mode;projectGroups.hidden=mode!=='changes';previewPanel.hidden=mode!=='preview';changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));if(mode==='changes')await Promise.all([loadChanges(),loadProjectGroups()]);}
   function drawer(){return matchMedia('(max-width:1100px)').matches;}
   function closePane(){paneDragEnd();pane.classList.remove('open');shell.classList.remove('panel-docked');shell.classList.add('sessions-collapsed');shell.style.gridTemplateColumns='';overlay(false);}
   function togglePane(){const opening=shell.classList.contains('sessions-collapsed')||(drawer()&&!pane.classList.contains('open'));shell.classList.toggle('sessions-collapsed',!opening);pane.classList.toggle('open',opening);shell.classList.toggle('panel-docked',drawer()&&opening);shell.style.gridTemplateColumns='';overlay(false);if(opening){setPanelWidth(panelWidth);if(panelMode==='changes')loadChanges();}}
@@ -1518,7 +1508,6 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     q('sendMessage').disabled=sending||queuing||nativeBusy||(window.nativeSession?.active()&&busy)||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
-    closeSessionButton.disabled=!activeSession||sending||Boolean(pendingSubmission);
     // Unconfirmed Native receipt is still an actionable stop: even an idle
     // runtime needs a verified session-scoped stop to unblock the saved draft.
     q('stopAgent').disabled=(!busy&&!sending&&!pendingSubmission&&!nativeBusy)||Boolean(cancelRequested);
@@ -1526,134 +1515,30 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   // Existing entitlement rendering also updates workspace buttons. Reapply the
   // session/submission guards without changing subscription or billing logic.
   const renderAccess=renderEntitlement;renderEntitlement=function(){renderAccess();updateSend();};
+  // One Project has one Native session: no separate conversation list, search or lifecycle actions.
   let conversationSelection=0;
-  let openingConversation=null;
-  function markConversationOpening(){
-    for(const button of q('sessionList')?.querySelectorAll?.('.conversation-name')||[])
-      button.setAttribute('aria-busy',String(button.id==='conversation-'+openingConversation?.id));
-  }
-  async function openConversation(row){
-    if(row.id===activeSession?.id)return;
-    if(openingConversation?.id===row.id&&openingConversation.owner===currentUser?.id)return;
-    if(sending||pendingSubmission){toast(tr('Finish or confirm the pending submission before changing sessions.','أكمل أو تحقق من الطلب المعلّق قبل تغيير الجلسة.'));return;}
-    const owner=currentUser?.id,revision=++conversationSelection;
-    const current=()=>currentUser?.id===owner&&revision===conversationSelection;
-    openingConversation={id:row.id,owner};markConversationOpening();
-    try{
-      if(row.workspace_id&&row.workspace_id!==activeWorkspace?.id){
-        const workspace=await api('/api/workspaces/'+encodeURIComponent(row.workspace_id));if(!current())return;
-        const project=await api('/api/projects/'+encodeURIComponent(workspace.project_id));if(!current())return;
-        await openWorkspace(project,workspace,{navigate:false});if(!current()||activeWorkspace?.id!==workspace.id)return;
-      }
-      if(row.lifecycle==='archived')await sessionAction(row,'restore');
-      if(!current())return;
-      await selectSession(row);if(!current()||activeSession?.id!==row.id)return;
-      if(!q('workspacePage').classList.contains('active'))await page('workspacePage');
-      await loadFiles();if(current())await loadProjectGroups();
-    }catch(error){if(current())toast(error.message);}
-    finally{if(revision===conversationSelection){openingConversation=null;markConversationOpening();}}
-  }
   function renderRuntimeSessions(rows){
-    if(!rows)return;sessionsCount.textContent=String(rows.length);sessionRows=[...rows].sort((a,b)=>(Date.parse(b.created_at)||0)-(Date.parse(a.created_at)||0)||String(a.id).localeCompare(String(b.id)));const list=q('sessionList');
-    const shown=sessionRows.filter(row=>(sessionFilter==='all'?row.lifecycle!=='archived':(row.lifecycle||'closed')===sessionFilter)&&row.title.toLowerCase().includes(search.value.toLowerCase()));
-    const snapshot=JSON.stringify([currentUser?.id,tr('Conversations','المحادثات'),shown.map(row=>[row.id,row.title,row.lifecycle])]);
-    if(list.conversationSnapshot===snapshot&&list.childElementCount&&list.querySelectorAll('.conversation-row').length===shown.length){
-      for(const item of list.querySelectorAll('.conversation-row')){
-        const current=item.dataset.sessionId===activeSession?.id;item.classList.toggle('current',current);
-        const name=item.querySelector('.conversation-name');if(current)name.setAttribute('aria-current','true');else name.removeAttribute('aria-current');
-      }
-      updateSend();return;
-    }
-    const positions=[];for(let node=list;node&&node!==document.body;node=node.parentElement)positions.push([node,node.scrollTop,node.scrollLeft]);
-    const focused=list.contains(document.activeElement)?document.activeElement?.id:null,fragment=document.createDocumentFragment();
-    if(!shown.length)fragment.append(textElement('p',tr('No sessions in this category.','لا توجد جلسات في هذا القسم.'),'muted-small'));
-    for(const row of shown){
-      const current=row.id===activeSession?.id,item=textElement('div','','conversation-row'+(current?' current':''));
-      item.dataset.sessionId=row.id;
-      const name=btn('conversation-'+row.id,row.title,row.title,()=>openConversation(row));name.className='conversation-name';name.title=row.title;if(current)name.setAttribute('aria-current','true');
-      name.setAttribute('aria-busy',String(typeof openingConversation!=='undefined'&&openingConversation?.id===row.id));
-      const menu=document.createElement('details');menu.className='conversation-menu';const more=textElement('summary','⋯');more.setAttribute('aria-label',tr('Conversation actions: ','خيارات المحادثة: ')+row.title);menu.append(more);const actions=textElement('div','','session-actions');
-      actions.append(btn('rename-session-'+row.id,'Rename','تغيير الاسم',()=>renameConversation(row)));
-      if(row.lifecycle==='active')actions.append(btn('close-session-'+row.id,'Close / Disconnect','إغلاق / فصل',()=>sessionAction(row,'close')));
-      else if(row.lifecycle==='archived')actions.append(btn('restore-session-'+row.id,'Restore','استعادة',()=>sessionAction(row,'restore')));
-      else actions.append(btn('archive-session-'+row.id,'Archive','أرشفة',()=>sessionAction(row,'archive')));
-      if(row.lifecycle!=='active')actions.append(btn('delete-session-'+row.id,'Delete from history','حذف من السجل',()=>sessionAction(row,'delete')));
-      // Float the actions outside the row layout without changing session actions.
-      menu.addEventListener('toggle',()=>{
-        if(!menu.open||!menu.isConnected)return;
-        for(const other of list.querySelectorAll('.conversation-menu[open]'))if(other!==menu)other.open=false;
-        const anchor=more.getBoundingClientRect(),width=190;
-        const left=Math.min(Math.max(8,anchor.right-width),window.innerWidth-width-8);
-        const spaceBelow=window.innerHeight-anchor.bottom;
-        actions.style.left=left+'px';
-        actions.style.right='auto';
-        actions.style.top=spaceBelow>=130?Math.max(8,anchor.bottom+4)+'px':'auto';
-        actions.style.bottom=spaceBelow>=130?'auto':Math.max(8,window.innerHeight-anchor.top+4)+'px';
-      });
-      menu.append(actions);item.append(name,menu);fragment.append(item);
-    }
-    list.replaceChildren(fragment);list.conversationSnapshot=snapshot;
-    if(focused)q(focused)?.focus({preventScroll:true});
-    for(const [node,top,left] of positions){node.scrollTop=top;node.scrollLeft=left;}
+    if(!Array.isArray(rows))return;
+    sessionRows=rows.filter(row=>row.workspace_id===activeWorkspace?.id).slice(0,1);
     updateSend();
   }
-  document.addEventListener('click',event=>{
-    for(const menu of document.querySelectorAll('#workspacePage .conversation-menu[open]')){
-      if(!menu.contains(event.target))menu.open=false;
-    }
-  });
-  document.addEventListener('keydown',event=>{
-    if(event.key==='Escape')for(const menu of document.querySelectorAll('#workspacePage .conversation-menu[open]'))menu.open=false;
-  });
-  q('sessionList').addEventListener('scroll',()=>{
-    for(const menu of q('sessionList').querySelectorAll('.conversation-menu[open]'))menu.open=false;
-  },{passive:true});
   refreshSessions=async function(){
     if(!activeWorkspace)return;
     const workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(sessionListPending?.workspaceId===workspaceId&&sessionListPending.owner===owner)return sessionListPending.promise;
     const history=++historyRevision;
     const promise=(async()=>{
-      const runtime=api('/api/workspaces/'+workspaceId+'/sessions?include_archived=true').then(rows=>({rows}),error=>({error}));
-      const account=api('/api/sessions?include_archived=true').then(accountRows=>{if(currentUser?.id===owner&&history===historyRevision)renderRuntimeSessions(accountRows);},error=>{if(currentUser?.id===owner&&history===historyRevision)throw error;});
-      const [result]=await Promise.all([runtime,account]);if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
-      if(result.error)throw result.error;const rows=result.rows;
-      const current=rows.find(row=>row.id===activeSession?.id);if(current&&current.lifecycle==='active')activeSession={...activeSession,...current};
-      if(!activeSession){const open=rows.find(row=>row.lifecycle==='active');if(open)await selectSession(open);}updateSend();return rows;})();
+      const rows=await api('/api/workspaces/'+workspaceId+'/sessions');
+      if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+      if(!Array.isArray(rows)||rows.length>1)throw Error('One Project must have exactly one Native session');
+      renderRuntimeSessions(rows);
+      const current=rows.find(row=>row.id===activeSession?.id);
+      if(current)activeSession={...activeSession,...current};
+      else if(!activeSession&&rows.length)await selectSession(rows[0]);
+      updateSend();return rows;
+    })();
     sessionListPending={workspaceId,owner,promise};try{return await promise;}finally{if(sessionListPending?.promise===promise)sessionListPending=null;}
   };
-  async function renameConversation(row){
-    const owner=currentUser?.id;
-    if(!row||!owner)return;
-    const result=await window.requestForm(tr('Rename conversation','تغيير اسم المحادثة'),[
-      {name:'title',label:tr('Conversation name','اسم المحادثة'),value:row.title,required:true,maxLength:120}
-    ]);
-    if(!result||currentUser?.id!==owner)return;
-    const title=result.title.trim();if(!title||title===row.title)return;
-    const updated=await api('/api/sessions/'+encodeURIComponent(row.id),{method:'PATCH',body:JSON.stringify({title})});
-    if(currentUser?.id!==owner)return;
-    sessionRows=sessionRows.map(session=>session.id===row.id?{...session,...updated}:session);
-    if(activeSession?.id===row.id)activeSession={...activeSession,...updated};
-    renderRuntimeSessions(sessionRows);
-  }
-  async function sessionAction(row,action){
-    if(!row||sending||pendingSubmission)return;
-    if(action==='delete'&&!await window.confirmAction(tr('Delete from client history? OpenCode history and project files are preserved.','حذف من سجل العميل؟ يبقى سجل OpenCode وملفات المشروع محفوظة.')))return;
-    const workspaceId=activeWorkspace?.id;
-    const result=await api('/api/sessions/'+row.id+(action==='delete'?'':'/'+action),{method:action==='delete'?'DELETE':'POST'});
-    if(activeWorkspace?.id!==workspaceId)return;
-    if(row.id===activeSession?.id&&['close','archive','delete'].includes(action)){stopEvents();sessionSelectionRevision++;activeSession=null;window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);renderWorkspaceEmpty();}
-    sessionRows=action==='delete'?sessionRows.filter(session=>session.id!==row.id):sessionRows.map(session=>session.id===row.id?{...session,...result}:session);
-    renderRuntimeSessions(sessionRows);
-    await refreshSessions();updateSend();
-  }
-  window.addEventListener('workspace-session-lifecycle',event=>{
-    const {sessionId,workspaceId,action,result}=event.detail;
-    if(activeWorkspace?.id!==workspaceId)return;
-    if(activeSession?.id===sessionId&&['close','archive','delete'].includes(action)){stopEvents();sessionSelectionRevision++;activeSession=null;window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);renderWorkspaceEmpty();}
-    sessionRows=action==='delete'?sessionRows.filter(row=>row.id!==sessionId):sessionRows.map(row=>row.id===sessionId?{...row,...result}:row);
-    renderRuntimeSessions(sessionRows);
-  });
   function renderAgents(snapshot){
     agent.title=snapshot.errors?.agents?.detail||tr('Agent','الوكيل');agent.hidden=false;agent.replaceChildren(new Option((snapshot.default_agent==='build'?'Code':snapshot.default_agent==='plan'?'Plan':tr('Agent','الوكيل')),''));
     for(const a of snapshot.agents||[]){const option=new Option((a.name==='build'?'Code':a.name==='plan'?'Plan':a.name)+(a.mode==='subagent'?tr(' · Subagent',' · وكيل فرعي'):''),a.name);option.disabled=Boolean(a.hidden)||!['primary','all'].includes(a.mode);agent.add(option);}
@@ -1757,7 +1642,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   window.refreshWorkspaceSessionStatus=refreshSessionStatus;
   let eventRefreshTimer=null;
   window.addEventListener('authentication-cleared',()=>{
-    historyRevision++;conversationSelection++;openingConversation=null;
+    historyRevision++;openingConversation=null;
     if(drawer())closePane();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);window.refreshWorkspaceQueue?.();clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
     pendingSubmission=null;sending=cancelRequested=false;sessionRows=[];providers=[];chosenAgent=chosenProvider=chosenModel='';
     runtimeReady=agentsReady=modelsReady=workAccess=false;entitlement=null;workspaceDays.hidden=workspaceAccess.hidden=true;workspaceDays.textContent='';workspaceAccess.replaceChildren();homeAccess.replaceChildren();retrySubmission.hidden=retryModels.hidden=true;
