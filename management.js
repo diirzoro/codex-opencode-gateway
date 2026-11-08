@@ -164,13 +164,41 @@
     // The main catalog stays at 50. Every other Native ID/name is available
     // through manual resolution; connected providers have their own section.
     const sameCatalog=data=>data.workspace_id===workspaceId&&data.generation===snapshot?.generation&&data.revision===snapshot?.revision&&data.policy_revision===snapshot?.policy_revision;
+    // Dashboard reads the existing persistent OpenCode process directly.
+    // Native owns and caches the model catalog; no second provider picker store.
+    async function accountCatalogRows(){
+      if(!window.nativeDirectTest?.active())throw Error('OpenCode Native is unavailable');
+      const [native,configured,policy]=await Promise.all([
+        window.nativeDirectTest.catalog(),
+        window.nativeDirectTest.configuredProviders(),
+        window.nativeDirectTest.visibility()
+      ]);
+      const connected=new Set(configured.connected||[]);
+      const preferred=new Set(['opencode','deepseek','openai','anthropic','google']);
+      return (native.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
+        id:p.id,name:p.name||p.id,model_count:Object.keys(p.models||{}).length,
+        connected:connected.has(p.id),public_free:p.id==='opencode',
+        verified:false,
+        visible:!(policy.hidden_providers||[]).includes(p.id),
+        allowed:!(policy.allowed_providers||[]).length||policy.allowed_providers.includes(p.id),
+        default_model:configured.default?.[p.id]
+      })).sort((a,b)=>Number(b.connected)-Number(a.connected)
+        ||Number(preferred.has(b.id))-Number(preferred.has(a.id))
+        ||a.name.localeCompare(b.name));
+    }
     async function lookup(kind,value,signal){
       if(!workspaceId){
-        if(kind==='resolve'){const result=await api('/api/opencode/catalog/providers/resolve?name='+encodeURIComponent(value),{signal});if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');return [result];}
-        const url='/api/opencode/catalog/providers/page?limit=50&query='+encodeURIComponent(value);
-        const result=await api(url,{signal});
-        if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
-        return result.items;
+        const rows=await accountCatalogRows();
+        if(signal?.aborted||!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
+        const term=value.trim().toLowerCase();
+        if(kind==='resolve'){
+          const found=rows.find(p=>p.id.toLowerCase()===term)
+            ||rows.find(p=>p.name.toLowerCase()===term);
+          if(!found)throw Error('Provider not found in OpenCode Native: '+value);
+          return [found];
+        }
+        return rows.filter(p=>p.id.toLowerCase().includes(term)
+          ||p.name.toLowerCase().includes(term)).slice(0,50);
       }
       const data=await api(base+kind+'?'+(kind==='search'?'query':'name')+'='+encodeURIComponent(value),{signal});
       if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
@@ -450,7 +478,7 @@
         });
         catalogList.replaceChildren(...tiles);
         catalogCount.textContent=tr('Available providers from OpenCode Native: ','المزوّدات المتاحة من OpenCode Native: ')+rows.length
-          +(rows.length<50?tr(' · catalog still loading or filtered by admin settings',' · قد يكون الفهرس قيد التحميل أو مُصفّى بإعدادات الإدارة'):'');
+          +(rows.length<50?tr(' · fewer than 50 Native providers available or allowed',' · أقل من 50 مزودًا متاحًا أو مسموحًا في Native'):'');
       }
       options.hidden=!optionsOpen||!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
       window.gatewayProviderTimings={...window.gatewayProviderTimings,render_sync_ms:performance.now()-renderStarted,rendered_options:rows.length};
@@ -498,15 +526,15 @@
         view.ready=false;
         message(tr('Loading account providers…','جارٍ تحميل مزوّدات الحساب…'));
         try{
-          const catalog=await api('/api/opencode/catalog/providers/page?limit=50&offset=0',{signal:controller.signal});
+          const rows=await accountCatalogRows();
           if(!alive()||workspaceId)return;
-          snapshot={providers:[...new Map([...(catalog.items||[]),...(catalog.connected_items||[])].map(p=>[p.id,p])).values()]};
+          // All 50 labels come from OpenCode's own provider catalog.
+          // The verified connection section stays separate.
+          snapshot={providers:rows.slice(0,50)};
           view.ready=true;customButton.disabled=false;
           renderOptions();renderConnected();
-          message(tr('OpenCode providers ready','مزوّدو OpenCode جاهزون')+' · '+catalog.total);
-          const selected=snapshot.providers.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
-          // Search alone can request the full Native provider catalog.
-          // Normal Dashboard and Workspace use the cached /config/providers inventory.
+          message(tr('OpenCode providers ready','مزوّدو OpenCode جاهزون')+' · '+rows.length);
+          const selected=rows.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
       }
@@ -540,18 +568,6 @@
       return refresh(true);
     }
     view.refresh=refresh;
-    // The compact 50-provider Native index may finish after Dashboard's
-    // lightweight first paint. Refresh only this view from the browser cache.
-    document.addEventListener('native-provider-picker-error',event=>{
-      if(!workspaceId&&alive()&&String(event.detail?.owner||'')===String(currentUser?.id||''))
-        message(tr('Could not read OpenCode Native provider catalog: ','تعذر قراءة فهرس مزودي OpenCode Native: ')+(event.detail?.message||'Native request failed'),true);
-    },{signal:controller.signal});
-    document.addEventListener('native-provider-picker-ready',event=>{
-      if(!workspaceId&&alive()&&view.ready&&
-         String(event.detail?.owner||'')===String(currentUser?.id||'')){
-        refresh().catch(()=>{});
-      }
-    },{signal:controller.signal});
     combo.addEventListener('input',()=>{body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
     combo.addEventListener('focus',()=>{optionsOpen=true;scheduleSearch();});
     combo.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}});
