@@ -176,8 +176,9 @@ window.nativeDirectTest=(()=>{
       // secret exists. /provider.connected is authoritative for candidate
       // connections, and its stale cache after DELETE is masked per session.
       // Public zero-cost OpenCode models remain usable without an API key.
-      const candidates=catalogSnapshot?new Set(nativeConnections(catalogSnapshot)):new Set();
-      const usable=all.filter(p=>publicFree(p)||candidates.has(p.id));
+      // Native's configured provider/model inventory is our startup source.
+      // Do not require a full /provider catalog before Dashboard can display it.
+      const usable=all.filter(p=>!deletedAuthSlots.has(p.id));
       const result={all:usable,connected:usable.map(p=>p.id),default:value.default,
         public_free:usable.filter(publicFree).map(p=>p.id)};
       configuredSnapshot=result;
