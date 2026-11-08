@@ -1,11 +1,10 @@
-import json
-import logging
-import time
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, Request
-from fastapi.responses import FileResponse, JSONResponse
+
+
+from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
@@ -15,18 +14,13 @@ from ..config import settings
 from ..security.origins import same_origin
 from ..database import get_db
 from ..models import ExecutionEvent, Project, ProjectNativeSessionBinding, ProviderCredential, User, UserProviderCredential, Workspace, WorkspaceSession
-from ..services import credentials, github, policy, providers, runtime_snapshot, preview, session_lifecycle
-from ..services import native_control_bridge as opencode
+from ..services import github, policy, preview
 from ..services import workspaces as manager
-from ..services import user_provider_credentials
-from ..services import account_provider_sync
 from ..services.entitlements import access_payload, require_advanced
 from .dependencies import require_user, require_workspace_entitlement
 from . import native_sessions
-from ..services import native_provider_accounts
 
 router=APIRouter(prefix="/api",tags=["workspaces"],dependencies=[Depends(require_workspace_entitlement)])
-logger=logging.getLogger(__name__)
 
 class CreateProject(BaseModel):
     model_config=ConfigDict(extra="forbid",str_strip_whitespace=True)
@@ -40,9 +34,6 @@ class CreateProject(BaseModel):
 class RenameProject(BaseModel):
     model_config=ConfigDict(extra="forbid",str_strip_whitespace=True)
     name: str=Field(min_length=1,max_length=120,pattern=r"^[^\r\n\x00]+$")
-
-class CommitRequest(BaseModel):
-    message: str=Field(min_length=1,max_length=500,pattern=r"^[^\x00]+$")
 
 class PublishProject(BaseModel):
     model_config=ConfigDict(extra="forbid",str_strip_whitespace=True)
@@ -67,15 +58,10 @@ def account_provider_display_policy(user: User=Depends(require_user),db: Session
 
 @router.get("/opencode/status")
 def runtime_status(user: User=Depends(require_user)):
-    if native_sessions.enabled():
-        # Platform runtime configuration only. Browser queries Native health
-        # directly through Nginx; Python never calls its /global/health.
-        return {'runtime_mode':'native-'+native_sessions.deployment(),
-                'healthy':None,'status':'check_native_from_browser',
-                'public_multi_user_ready':False}
-    try: health=opencode.shared_health()
-    except HTTPException: health={"healthy":False,"version":None}
-    return {**health,"runtime_mode":settings.runtime_mode,"public_multi_user_ready":False}
+    # Platform runtime mode only. Native health is read by the browser directly.
+    mode=native_sessions.deployment()
+    return {"runtime_mode":"native-"+mode if mode else "disabled",
+            "healthy":None,"status":"check_native_from_browser" if mode else "disabled"}
 
 @router.get("/templates")
 def templates(user: User=Depends(require_user)):
