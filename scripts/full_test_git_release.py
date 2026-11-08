@@ -140,7 +140,7 @@ def rollout(target,mode):
     retired = [(name, check(name)) for name in RETIRED_FILES if name not in source]
     pending_retired = [(name, dest) for name, dest in retired if dest.exists()]
     print("TARGET",target,"FILES_TOTAL",len(source),"CHANGES",len(changes),
-          "RETIRED_FILES_FILES",len(pending_retired),flush=True)
+          "RETIRED_FILES_COUNT",len(pending_retired),flush=True)
     for name,_,_ in changes:print("CHANGE",name,flush=True)
     for name,_ in pending_retired:print("REMOVE_OBSOLETE_FILE",name,flush=True)
     if mode=="audit":return
