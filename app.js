@@ -77,6 +77,14 @@ window.nativeDirectTest=(()=>{
     deletedAuthSlots.delete(id);
     try{localStorage.setItem(revokedKey(String(currentUser?.id||'')),JSON.stringify([...deletedAuthSlots]));}catch{}
   }
+  function acknowledgeNativeCredential(id){
+    clearRevoked(id);
+    clientVerifiedProviders.delete(id); // Saved is not proof of a working key.
+    forget();
+    window.dispatchEvent(new CustomEvent('account-provider-changed',{
+      detail:{owner:currentUser?.id}
+    }));
+  }
   const url=(path,directory=defaultDirectory())=>{
     const resource=new URL(base+path.replace(/^\/+/,''),location.origin);
     resource.searchParams.set('directory',directory);
@@ -448,7 +456,7 @@ window.nativeDirectTest=(()=>{
     }
     throw Error('Unsupported direct OpenCode provider action: '+name);
   }
-  return {active,testHost,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,syncRevoked,matches,route,
+  return {active,testHost,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,syncRevoked,acknowledgeNativeCredential,matches,route,
     providerAllowed,providerVisible,modelAllowed,modelVisible,classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 
