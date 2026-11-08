@@ -1,5 +1,9 @@
 name: TEST | Fast deploy updates (manual audit optional)
 on:
+  push:
+    branches: [updates]
+    paths:
+      - '.github/workflows/deploy-updates-test.yml'
   workflow_dispatch:
     inputs:
       vps_username:
@@ -41,9 +45,13 @@ jobs:
         run: |
           set -euo pipefail
           mode="$(printf '%s' "$CONFIRMATION" | tr -d '[:space:]')"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            [[ "$COMMIT_MESSAGE" == 'deploy(test): sync complete local source' ]] || { echo "One-shot TEST deployment trigger not approved"; exit 1; }
+            mode=deploy-test
+          fi
 
           echo "TEST workflow trigger: event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA"
-          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || { echo "Unsupported TEST trigger"; exit 1; }
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch || "$GITHUB_EVENT_NAME" == push ]] || { echo "Unsupported TEST trigger"; exit 1; }
           [[ "$GITHUB_REF" == "refs/heads/updates" ]] || { echo "Ref is not updates: $GITHUB_REF"; exit 1; }
           [[ "$mode" == "audit-test" || "$mode" == "deploy-test" || "$mode" == "rollback-test" ]]
           printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
