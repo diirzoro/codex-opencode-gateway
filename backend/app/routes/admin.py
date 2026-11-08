@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
-from ..models import GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, ProviderCredential, Subscription, User, Workspace, WorkspaceSession
+from ..models import GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, Subscription, User, Workspace, WorkspaceSession
 from ..services.storage_policy import PLAN_MB
 from ..models.platform import get_policy
 from ..services import github
@@ -320,7 +320,7 @@ def overview(_: User = Depends(require_admin), db: Session = Depends(get_db)):
             "pushed": _count(db, Workspace, Workspace.status == "pushed"),
         },
         "sessions": {"total": _count(db, WorkspaceSession)},
-        "credentials": {"stored": _count(db, ProviderCredential), "users": db.scalar(select(func.count(func.distinct(ProviderCredential.user_id)))) or 0},
+        "credentials": {"stored": 0, "users": 0, "source": "opencode_native_only"},
         "plans": {"total": _count(db, Plan), "active": _count(db, Plan, Plan.active.is_(True))},
         "runtime": _runtime_health(),
         "integrations": {
