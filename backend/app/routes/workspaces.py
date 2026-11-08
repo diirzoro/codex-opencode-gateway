@@ -232,6 +232,7 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
         if inspect(db.connection()).has_table('preview_runtime_leases'):
             db.execute(delete(PreviewRuntimeLease).where(PreviewRuntimeLease.workspace_id.in_(ids)))
         db.execute(delete(Workspace).where(Workspace.id.in_(ids),Workspace.user_id==user.id))
+    source_type=project.source_type
     db.delete(project)
     try:
         # Resolve all FK dependencies before deleting any physical files.
@@ -248,7 +249,7 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
         db.rollback()
         raise HTTPException(503,'Could not remove project worktree; project record was retained') from None
     db.commit()
-    return {'deleted':True,'project_id':str(project_id),'source_type':project.source_type,
+    return {'deleted':True,'project_id':str(project_id),'source_type':source_type,
             'remote_repository_deleted':False,'local_worktrees_removed':len(paths)}
 
 
