@@ -289,7 +289,7 @@
               });
               f.reset();if(!alive()||!contextCurrent())return;
               if(result!==true)throw Error(tr('OpenCode did not confirm storage.','لم يؤكد OpenCode حفظ المفتاح.'));
-              window.nativeDirectTest.forget();
+              window.nativeDirectTest.acknowledgeNativeCredential(p.id);
               dlg.close();
               toast(tr('Saved in OpenCode Native. Key validity has not been tested.',
                 'حُفظ المفتاح في OpenCode Native. لم تُختبر صلاحيته بعد.'));
