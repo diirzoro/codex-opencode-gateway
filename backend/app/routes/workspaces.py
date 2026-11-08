@@ -297,25 +297,6 @@ def delete_workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db
     manager.owned(db,Workspace,workspace_id,user.id)
     raise HTTPException(409,"Workspace preserved: verified push and cleanup policy are not implemented")
 
-def _git_status(db,user,workspace_id):
-    workspace,project=_workspace_and_project(db,user,workspace_id)
-    state=manager.status(workspace)
-    connected=False
-    if project.remote_url:
-        status=github.connection_status(db,user)
-        connected=bool(status.get("connected"))
-    state["push_available"]=bool(project.remote_url and project.remote_branch and connected)
-    state["remote_url"]=project.remote_url
-    state["remote_branch"]=project.remote_branch
-    state["repository"]=project.repository
-    state["github_access"]=access_payload(db,user)["github_access"]
-    state["push_available"]=state["push_available"] and state["github_access"]
-    return workspace,project,state
-
-@router.get("/workspaces/{workspace_id}/changes")
-def changes(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return _git_status(db,user,workspace_id)[2]["changes"]
-
 @router.get("/workspaces/{workspace_id}/preview/capabilities")
 def workspace_preview_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),
                                    db: Session=Depends(get_db)):
