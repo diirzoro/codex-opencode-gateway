@@ -123,9 +123,14 @@ window.nativeDirectTest=(()=>{
     }
     return user;
   }
-  function forget(){
+  function forget({fresh=false}={}){
     catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
     catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
+    if(fresh)try{
+      const user=ownerScope();
+      sessionStorage.removeItem('og-native-model-metadata-v1:'+user);
+      sessionStorage.removeItem('og-native-agent-metadata-v1:'+user);
+    }catch{}
     window.nativeSession?.invalidate();window.workspaceRuntime?.clear();
   }
   function syncRevoked(){
