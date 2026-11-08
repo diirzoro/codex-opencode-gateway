@@ -487,15 +487,8 @@
           renderOptions();renderConnected();
           message(tr('OpenCode providers ready','مزوّدو OpenCode جاهزون')+' · '+catalog.total);
           const selected=snapshot.providers.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
-          // Fast first paint uses /config/providers, then one authoritative
-          // /provider check in the background. No fake Connected state and no
-          // full catalog download on every Workspace opening.
-          if(window.nativeDirectTest?.active()&&!view.nativeCatalogRequested){
-            view.nativeCatalogRequested=true;
-            window.nativeDirectTest.catalog().then(()=>{
-              if(alive()&&!workspaceId)refresh(false).catch(()=>{});
-            }).catch(error=>{if(alive())message(error.message,true);});
-          }
+          // Search alone can request the full Native provider catalog.
+          // Normal Dashboard and Workspace use the cached /config/providers inventory.
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
       }
