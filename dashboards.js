@@ -627,7 +627,9 @@
   const previousOpenGithubProject=window.openGithubProject;
   window.openGithubProject=(...args)=>{initializeWorkspace();if(typeof previousOpenGithubProject!=='function')throw new Error('GitHub project opener is unavailable');return previousOpenGithubProject(...args);};
   function initializeWorkspace(){
-    if(workspaceInitialized)return;workspaceInitialized=true;
+    if(workspaceInitialized)return;
+    workspaceInitialized=true;
+    try {
   const shell=document.querySelector('#workspacePage .workspace-shell'),center=shell.querySelector('.agent-column'),pane=q('sessionSidebar');
   shell.classList.add('workspace-first','reference-workspace');
   q('manageProviders')?.remove();
@@ -1927,6 +1929,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   let workspaceLanguage=lang;const workspacePrefs=applyPrefs;applyPrefs=()=>{workspacePrefs();if(workspaceLanguage!==lang&&activeSession){updateProjectIdentity();renderRuntimeSessions(sessionRows);refreshMessages().catch(()=>{});loadApprovals().catch(()=>{});}workspaceLanguage=lang;};
   createWorkspaceSession=createSession;
   if(activeProject){q('workspaceRepo').textContent=activeProject.name;q('workspaceBranch').textContent=activeProject.branch||'—';}
+    }catch(error){
+      // Avoid a permanently half-initialized Workspace on first-entry errors.
+      // Expose the real failing operation instead of hiding it behind a
+      // generic "initialization did not complete" message.
+      workspaceInitialized=false;
+      const reason=error?.message||String(error);
+      throw new Error('Workspace initialization failed: '+reason,{cause:error});
+    }
   }
   const refundPolicy=text('p','Accepted payments cannot be cancelled or refunded.','المدفوعات المقبولة غير قابلة للإلغاء أو الاسترداد.','refund-policy');refundPolicy.id='subscriptionRefundPolicy';document.querySelector('#landing .pricing').append(refundPolicy);
   const prefs=applyPrefs;applyPrefs=()=>{prefs();for(const [node,en,ar] of texts){if(!node.firstChild)node.textContent=tr(en,ar);else if(node.firstChild.nodeType===3)node.firstChild.textContent=tr(en,ar);}renderEntitlement();renderStorage();if(q('accountLanguage'))q('accountLanguage').value=lang;if(q('accountAppearance'))q('accountAppearance').value=dark?'dark':'light';document.querySelectorAll('[data-account-en]').forEach(node=>node.textContent=lang==='ar'?node.dataset.accountAr:node.dataset.accountEn);};
