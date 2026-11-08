@@ -12,16 +12,11 @@
     const user=owner();if(!user)return false;
     if(identity!==user){clear();identity=user;}
     if(!configuration){
-      if(window.nativeDirectTest?.testHost?.()){
-        // TEST Native execution is independent from Gateway model state.
-        configuration={enabled:true,mode:'native-direct-test',version:'native'};
-      }else{
-        const generation=epoch;configurationPending??=api('/api/native-test/state');let value;
-        try{value=await configurationPending;}catch(error){if(generation===epoch)configurationPending=null;throw error;}
-        if(generation!==epoch||user!==owner())throw Error('Authenticated account changed');
-        configuration=value;configurationPending=null;
-        if(typeof value?.native_account_directory==='string')window.__nativeAccountDir=value.native_account_directory;
-      }
+      const generation=epoch;configurationPending??=api('/api/native-test/state');let value;
+      try{value=await configurationPending;}catch(error){if(generation===epoch)configurationPending=null;throw error;}
+      if(generation!==epoch||user!==owner())throw Error('Authenticated account changed');
+      configuration=value;configurationPending=null;
+      if(typeof value?.native_account_directory==='string')window.__nativeAccountDir=value.native_account_directory;
     }
     if(owner()!==user)throw Error('Authenticated account changed');
     document.getElementById('workspacePage')?.classList.toggle('native-mode',configuration.enabled===true);
@@ -84,19 +79,13 @@
   function remember(row){const saved=selection(row.id);if(saved)row={...row,model:{providerID:saved.providerID,id:saved.modelID,variant:saved.variant},agent:saved.agent};rows.set(row.id,row);return row;}
   async function context(id){
     if(rows.has(id))return rows.get(id);
-    const generation=epoch,user=owner();
-    if(window.nativeDirectTest?.active?.()){
-      const workspace=activeWorkspace?.id;
-      if(!workspace)throw Error('Select the Project before opening its Native session');
-      const list=await localProjectSessionRows(workspace);
-      const selected=list.find(row=>row.id===id);
-      if(selected)return selected;
-      throw Error(label('No registered Native session is available for this Project.',
-        'لا توجد جلسة Native مسجلة لهذا المشروع.'));
-    }
-    const value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});
-    if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');
-    return remember(value);
+    const workspace=activeWorkspace?.id;
+    if(!workspace)throw Error('Select the Project before opening its Native session');
+    const list=await localProjectSessionRows(workspace);
+    const selected=list.find(row=>row.id===id);
+    if(selected)return selected;
+    throw Error(label('No registered Native session is available for this Project.',
+      'لا توجد جلسة Native مسجلة لهذا المشروع.'));
   }
   async function localProjectContext(workspace){
     // Platform returns ownership and directory metadata; no Python Native calls.
@@ -301,9 +290,9 @@
     if(!active())return null;
     const method=options.method||'GET';let match=path.match(/^\/api\/workspaces\/([^/]+)\/sessions(?:\?.*)?$/);
     if(match){
-      const result=window.nativeDirectTest?.active?.()
-        ?(method==='POST'?await localCreateProjectSession(match[1],options):await localProjectSessionRows(match[1]))
-        :await api('/api/native-test/workspaces/'+match[1]+'/sessions',options);
+      const result=method==='POST'
+        ?await localCreateProjectSession(match[1],options)
+        :await localProjectSessionRows(match[1]);
       if(Array.isArray(result))result.forEach(remember);else remember(result);
       return {value:result};
     }
@@ -311,11 +300,9 @@
       const unavailable=[];
       // TEST: a user explicitly opens a project before asking OpenCode for
       // its conversations. Do not let Native enumerate every account project.
-      const workspaces=window.nativeDirectTest?.active?.()
-        ?(activeWorkspace?.id?[{id:activeWorkspace.id}]:[])
-        :await api('/api/workspaces');
+      const workspaces=activeWorkspace?.id?[{id:activeWorkspace.id}]:[];
       const lists=await Promise.all(workspaces.map(async w=>{
-        try{return window.nativeDirectTest?.active?.()?await localProjectSessionRows(w.id):await api('/api/native-test/workspaces/'+w.id+'/sessions');}
+        try{return await localProjectSessionRows(w.id);}
         catch(error){
           if([409,410].includes(error.status)){
             unavailable.push({workspace_id:w.id,status:error.status,reason:error.message});
@@ -350,7 +337,7 @@
     }
     if(!tail||tail==='open'){
       const fresh=tail==='open'
-        ?(window.nativeDirectTest?.active?.()?row:remember(await api('/api/native-test/sessions/'+encodeURIComponent(id))))
+        ?row
         :rows.get(id);
       return {value:{...fresh,status:statuses.get(id)||'idle',execution_status:statuses.get(id)||'idle'}};
     }
