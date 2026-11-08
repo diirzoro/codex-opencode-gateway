@@ -6,6 +6,20 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const assert=require('node:assert/strict');
 const app=fs.readFileSync('app.js','utf8');
+const workspaceUI=fs.readFileSync('dashboards.js','utf8');
+const pageHTML=fs.readFileSync('index.html','utf8');
+const iconStart=workspaceUI.indexOf('const composerIcons=');
+const iconEnd=workspaceUI.indexOf(';\n  for(const [id,markup]',iconStart);
+assert(iconStart>=0&&iconEnd>iconStart,'Workspace composer icons missing');
+const iconNames=[...workspaceUI.slice(iconStart,iconEnd).matchAll(/"([a-zA-Z][a-zA-Z0-9_-]+)":/g)].map(row=>row[1]);
+assert(!iconNames.includes('composerNewTask'),'Removed New Task icon must not be restored');
+for(const id of iconNames){
+  const inHTML=pageHTML.includes('id="'+id+'"')||pageHTML.includes("id='"+id+"'");
+  const inJS=workspaceUI.includes(".id='"+id+"'")||workspaceUI.includes('.id="'+id+'"')||
+    workspaceUI.includes("btn('"+id+"'")||workspaceUI.includes('btn("'+id+'"');
+  assert(inHTML||inJS,'Workspace icon points to missing control: '+id);
+}
+
 const begin=app.indexOf('window.nativeDirectTest=(()=>{');
 const end=app.indexOf('\n})();',begin);
 assert(begin>=0&&end>begin,'Native browser adapter not found');
