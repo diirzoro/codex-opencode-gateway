@@ -1,11 +1,8 @@
-"""Reserve one persistent OpenCode Native session binding per Project.
+"""One fresh Project owns exactly one OpenCode Native session.
 
-The legacy workspace_sessions history is deliberately untouched. Existing
-projects are NOT auto-bound: projects with multiple legacy sessions require an
-explicit, owner-reviewed selection and backup before activating this mapping.
-
-This is Platform ownership metadata ONLY. Python must never query/create/patch
-Native sessions while using this table. Browser -> Nginx -> OpenCode Native.
+This table stores Platform administrative binding metadata only.
+Native session operations go Browser -> Nginx -> OpenCode Native.
+The new binding needs no SQL REFERENCES grants on existing tables.
 """
 from alembic import op
 import sqlalchemy as sa
