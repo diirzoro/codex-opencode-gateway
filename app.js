@@ -61,11 +61,11 @@ window.nativeDirectTest=(()=>{
   const revokedKey=user=>'og-native-revoked-provider-ids:'+user;
   function rememberRevoked(id){
     deletedAuthSlots.add(id);
-    try{localStorage.setItem(revokedKey(owner()),JSON.stringify([...deletedAuthSlots]));}catch{}
+    try{localStorage.setItem(revokedKey(String(currentUser?.id||'')),JSON.stringify([...deletedAuthSlots]));}catch{}
   }
   function clearRevoked(id){
     deletedAuthSlots.delete(id);
-    try{localStorage.setItem(revokedKey(owner()),JSON.stringify([...deletedAuthSlots]));}catch{}
+    try{localStorage.setItem(revokedKey(String(currentUser?.id||'')),JSON.stringify([...deletedAuthSlots]));}catch{}
   }
   const url=(path,directory=defaultDirectory())=>{
     const resource=new URL(base+path.replace(/^\/+/,''),location.origin);
