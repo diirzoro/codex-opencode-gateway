@@ -189,17 +189,47 @@ window.nativeDirectTest=(()=>{
     const [data,agentRows,policy]=await Promise.all([catalog({force}),agents({force}),visibility({force})]);
     return {data,agents:agentRows,policy};
   }
-  // One owner-scoped browser-memory snapshot of Native model definitions.
-  // Dashboard and Workspace share it; no credential DB or Python AI.
-  // The first request reads OpenCode Native; provider mutations call forget().
+  // Cache ONLY public provider/model presentation metadata in this browser tab.
+  // There are no API keys, OAuth tokens, private config, or second Gateway DB.
+  // 30-minute TTL avoids repeated Native catalog reads on project navigation.
+  const providerCacheKey=user=>'og-native-model-metadata-v1:'+user;
+  const providerCacheAge=30*60*1000;
+  function cachedNativeMetadata(user){
+    try{
+      const row=JSON.parse(sessionStorage.getItem(providerCacheKey(user))||'null');
+      if(row?.at>Date.now()-providerCacheAge&&
+        Array.isArray(row.providers)&&row.providers.some(p=>p.id==='opencode')&&
+        row.default&&typeof row.default==='object')return row;
+    }catch{}
+    return null;
+  }
+  function rememberNativeMetadata(user,value){
+    try{
+      const providers=value.providers.filter(p=>p&&typeof p.id==='string').map(p=>({
+        id:p.id,name:String(p.name||p.id).slice(0,180),
+        models:Object.fromEntries(Object.entries(p.models||{}).map(([id,m])=>
+          [id,{name:m?.name||id,cost:m?.cost,limit:m?.limit,
+            reasoning:m?.reasoning,toolcall:m?.toolcall,
+            modalities:m?.modalities,variants:m?.variants,status:m?.status}]))
+      }));
+      const defaults=Object.fromEntries(Object.entries(value.default||{}).filter(
+        ([id,model])=>typeof model==='string'&&providers.some(p=>p.id===id)));
+      const encoded=JSON.stringify({at:Date.now(),providers,default:defaults});
+      if(encoded.length<1800000)sessionStorage.setItem(providerCacheKey(user),encoded);
+    }catch{}
+  }
+  // Dashboard and Workspace share Native's metadata-only cache. Never fetch
+  // its full /provider registry for first paint or for every project opened.
   async function configuredProviders({force=false}={}){
     const user=ownerScope();
     if(!force&&configuredSnapshot)return configuredSnapshot;
     if(configuredPending)return configuredPending;
     const job=(async()=>{
-      let value;
-      try{value=await direct('config/providers');}
-      catch(error){
+      let value=!force?cachedNativeMetadata(user):null;
+      if(!value)try{
+        value=await direct('config/providers');
+        if(Array.isArray(value?.providers))rememberNativeMetadata(user,value);
+      }catch(error){
         // The fallback is still OpenCode Native, never a Gateway provider DB.
         // Keep old TEST transports usable until the lightweight route exists.
         if(error.status!==404&&error.status!==405)throw error;
@@ -218,7 +248,7 @@ window.nativeDirectTest=(()=>{
       // Other providers require a client-verified connection.
       const result={all:usable,
         connected:usable.filter(p=>p.id==='opencode'||connected.has(p.id)).map(p=>p.id),
-        default:value.default,public_free:usable.filter(publicFree).map(p=>p.id)};
+        default:value.default,public_free:usable.filter(p=>p.id==='opencode'||publicFree(p)).map(p=>p.id)};
       configuredSnapshot=result;
       return result;
     })();
