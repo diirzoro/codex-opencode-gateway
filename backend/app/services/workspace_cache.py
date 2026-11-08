@@ -58,61 +58,20 @@ def touch(db, workspace_id, user_id, now=None):
     return row
 
 
-def begin_upload(request, workspace_id):
-    # Acquire before multipart parsing, so a slow in-flight upload is protected
-    # across workers. The upload route performs no second workspace row lock.
-    from ..routes.dependencies import require_user, require_workspace_entitlement
-    db = SessionLocal()
-    try:
-        user = require_user(request, db)
-        require_workspace_entitlement(request, user, db)
-        row = touch(db, workspace_id, user.id)
-        if row.status in {"cache_expiring", "cache_expired"}:
-            raise HTTPException(410, "Workspace files have expired")
-        db.flush()
-        return db
-    except Exception:
-        db.close()
-        raise
-
-
-def end_upload(db, success):
-    try:
-        if success: db.commit()
-        else: db.rollback()
-    finally:
-        db.close()
-
-
 def runtime_idle(row):
-    from . import native_control_bridge as opencode
-    # Native uses the persistent shared service. A disabled legacy runtime is
-    # never evidence that Native tools have stopped writing these files.
+    """Platform may not inspect OpenCode Native status or infer idle from a path.
+
+    Do not delete or archive Native-owned project files while status cannot be
+    verified through a direct Native client-side workflow.
+    """
     from ..routes import native_sessions
     if native_sessions.enabled():
-        from . import workspaces
-        root = workspaces.root_for(row, allow_expired=True)
-        # Reading status can initialize a Native directory instance. Apply the
-        # same executable-config guard as Native authorization before that read.
-        base = workspaces.settings.workspace_root.resolve()
-        for directory in (root, *root.parents):
-            if any((directory / name).exists() or (directory / name).is_symlink()
-                   for name in ('.opencode', 'opencode.json', 'opencode.jsonc')):
-                raise HTTPException(409, 'Native configuration requires operator review before cleanup')
-            if directory == base:
-                break
-        statuses = native_sessions.metadata('GET', '/session/status', root)
-        return isinstance(statuses, dict) and all(isinstance(value, dict) and value.get('type') == 'idle' for value in statuses.values())
-    if opencode.settings.runtime_mode != "local":
-        return True
-    try:
-        service = opencode.for_workspace(row, start=False)
-    except HTTPException as error:
-        if error.status_code == 409:
-            return True
-        raise  # Cannot confirm a living runtime is idle.
-    statuses = service.request("GET", "/session/status")
-    return isinstance(statuses, dict) and all(isinstance(s, dict) and s.get("type") == "idle" for s in statuses.values())
+        return False
+    with SessionLocal() as db:
+        active = db.scalar(select(WorkspaceSession.id).where(
+            WorkspaceSession.workspace_id == row.id,
+            WorkspaceSession.status.in_(["submitted", "waiting_approval"])).limit(1))
+    return active is None
 
 
 def last_file_activity(path):
@@ -173,7 +132,10 @@ def github_copy_is_saved(row):
 
 def sweep(*, now=None, workspace_ids=None):
     from . import workspaces
-    from . import native_control_bridge as opencode
+    from . import platform_locks
+    from ..routes import native_sessions
+    if native_sessions.enabled():
+        return 0  # Platform never probes or deletes Native-owned files.
     if _policy_started is None and workspace_ids is None:
         initialize()
     now = now or datetime.now(timezone.utc)
@@ -192,7 +154,7 @@ def sweep(*, now=None, workspace_ids=None):
     for identifier in ids:
         with SessionLocal() as db:
             row = db.get(Workspace, identifier)
-            lock = opencode.workspace_lock(row)
+            lock = platform_locks.workspace_lock(row)
             # Existing Git mutations take process then row locks. Never invert
             # that order, or wait behind a write/active submission during cleanup.
             if not lock.acquire(blocking=False):
@@ -205,8 +167,7 @@ def sweep(*, now=None, workspace_ids=None):
                 meta = cache_payload(row, now=now)
                 if row.status != "cache_expiring" and now < meta["expires_at"]:
                     continue
-                from ..routes import native_sessions
-                if not native_sessions.enabled() and db.scalar(select(WorkspaceSession.id).where(WorkspaceSession.workspace_id == identifier,
+                if db.scalar(select(WorkspaceSession.id).where(WorkspaceSession.workspace_id == identifier,
                         WorkspaceSession.status.in_(["submitted", "waiting_approval"])).limit(1)):
                     continue
                 if not runtime_idle(row):
@@ -221,8 +182,6 @@ def sweep(*, now=None, workspace_ids=None):
                         if now < cache_payload(row, now=now)["expires_at"]:
                             db.commit()
                             continue
-                if not native_sessions.enabled():
-                    opencode.stop_workspace(row)
                 # Persist a file-access barrier before deletion; failed cleanup
                 # is retried without recreating missing files or extending TTL.
                 last_activity = row.last_activity_at
