@@ -1998,9 +1998,22 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     await oldClientView('billing');await loadPaymentOrders();
   }
   async function beginCheckout(planId,methodId){
-    const [plans]=await Promise.all([api('/api/plans',{cache:'no-store'})]);
+    let plans;
+    try{
+      plans=await api('/api/plans',{cache:'no-store'});
+      if(!Array.isArray(plans))throw Error('Invalid plans response');
+    }catch(error){
+      toast(tr('Cannot load subscription plans: ','تعذر تحميل خطط الاشتراك: ')+(error.message||error));
+      return;
+    }
     const plan=plans.find(p=>p.id===planId);if(!plan)return toast(tr('Plan unavailable','الخطة غير متاحة'));
-    const methods=await api('/api/billing/available-methods?plan_id='+encodeURIComponent(planId)+'&include_unavailable=true');
+    // A failing payment-method inventory must not prevent the checkout dialog
+    // from opening; Stripe TEST readiness is independent of that inventory.
+    let methods=[],methodsError=null;
+    try{
+      methods=await api('/api/billing/available-methods?plan_id='+encodeURIComponent(planId)+'&include_unavailable=true');
+      if(!Array.isArray(methods))throw Error('Invalid payment methods response');
+    }catch(error){methodsError=error;}
     // Restore historical TEST-only Stripe path; backend controls readiness from
     // the existing admin-encrypted dynamic Stripe profile, never client keys.
     const stripeStatus=await api('/api/billing/stripe/status',{cache:'no-store'}).catch(()=>null);
@@ -2012,6 +2025,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const reasonCopy={provider_not_connected:tr('Provider is not connected','المزود غير متصل'),processor_not_connected:tr('Payment processor is not connected','معالج الدفع غير متصل'),details_not_configured:tr('Receiving details are not configured','بيانات الاستلام غير مهيأة')};const PAY_ICONS={paypal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5.8h5.9c2 0 3.3 1.2 3.1 3-.3 2.3-2.1 3.8-4.4 3.8H9.4L8.4 18h-2.6l1-6.4H5L7 5.8Z"/><path d="m12.6 8.6 1.4 1.2c1.8-1.2 4-.3 4.5 1.9.5 2.3-1.2 4.2-3.4 4.2h-1.7l-.5 3.1h-2.4l1.2-7.4h1.6"/></svg>',googlepay:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12a7 7 0 1 1-2.1-4.9"/><path d="M18.2 7.5H11.6"/><path d="M19.6 8.2 17 11.2"/></svg>',binance:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M12 3.5 19.5 7.8v8.4L12 20.5l-7.5-4.3V7.8L12 3.5Z"/><path d="M12 8.8 15 10.5v3L12 15.2 9 13.5v-3l3-1.7Z"/><path d="M9.5 8.5h5"/></svg>',bank:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M3 10h18M5 10l7-6 7 6M6.5 14h1.8v3.5H6.5Zm4.6 0h1.8v3.5h-1.8Zm4.6 0h1.8v3.5h-1.8Z"/></svg>',wallet:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a1 1 0 0 0-1-1h-4m-6-5h6"/></svg>'};PAY_ICONS.stripe=PAY_ICONS.googlepay;const payIcon=kind=>{const s=document.createElement('span');s.className='pay-icon';s.setAttribute('aria-hidden','true');s.innerHTML=PAY_ICONS[kind]||PAY_ICONS.wallet;return s;};
     const dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog checkout-dialog';dialog.setAttribute('aria-label',tr('Subscription checkout','دفع الاشتراك'));
     dialog.append(title('Subscribe / Payment','الاشتراك / الدفع'),btn('checkoutClose','Close','إغلاق',()=>dialog.close()));
+    if(methodsError)dialog.append(textElement('p',
+      tr('Payment methods could not load: ','تعذر تحميل وسائل الدفع: ')+methodsError.message,
+      'api-message show error'));
     const choices=textElement('div','','checkout-plans');for(const p of plans.filter(p=>p.active!==false)){
       const choiceLabel=(window.planDisplayName?window.planDisplayName(p):p.name)+' · '+(window.planDisplayPrice?window.planDisplayPrice(p):(p.currency+' '+(p.price_cents/100).toFixed(2)))+' · '+(window.planDisplayTerm?window.planDisplayTerm(p):(p.duration_days+' days'));const choice=btn('checkoutPlan-'+p.id,choiceLabel,choiceLabel,()=>{dialog.close();beginCheckout(p.id);});choice.setAttribute('aria-pressed',String(p.id===planId));choices.append(choice);
     }dialog.append(choices);
