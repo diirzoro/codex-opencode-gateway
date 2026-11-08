@@ -81,6 +81,7 @@ jobs:
           node --check runtime-client.js
           node --check dashboards.js
           node --check management.js
+          node scripts/test_native_client_cache.cjs
           python3 scripts/validate_migration_chain.py
           # No second AI provider/key registry in the Gateway source tree.
           for retired in account_provider_sync native_provider_accounts user_provider_credentials providers runtime_snapshot archive_storage; do
