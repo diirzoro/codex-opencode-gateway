@@ -371,13 +371,11 @@ def account_oauth_callback(provider_id: str,data: OAuthCallback,
 @router.get("/opencode/status")
 def runtime_status(user: User=Depends(require_user)):
     if native_sessions.enabled():
-        native_sessions.admit(user)
-        try:
-            health=native_sessions.metadata('GET','/global/health',native_provider_accounts.root(user))
-            if not isinstance(health,dict):raise HTTPException(502,'Invalid native health response')
-        except HTTPException:
-            health={'healthy':False,'version':None}
-        return {**health,'runtime_mode':'native-'+native_sessions.deployment(),'public_multi_user_ready':False}
+        # Platform runtime configuration only. Browser queries Native health
+        # directly through Nginx; Python never calls its /global/health.
+        return {'runtime_mode':'native-'+native_sessions.deployment(),
+                'healthy':None,'status':'check_native_from_browser',
+                'public_multi_user_ready':False}
     try: health=opencode.shared_health()
     except HTTPException: health={"healthy":False,"version":None}
     return {**health,"runtime_mode":settings.runtime_mode,"public_multi_user_ready":False}
