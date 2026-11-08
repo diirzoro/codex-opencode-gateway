@@ -1,10 +1,9 @@
 """Archive expired customers; reuse User, AccountAudit and existing token stores."""
 import logging
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import delete, func, inspect, select
+from sqlalchemy import func, select, update
 from ..database import SessionLocal
-from ..models import (AccountAudit, AuthSession, ExecutionEvent, GithubAuthState,
-    GithubConnection, PasswordReset, Subscription, User, Workspace, WorkspaceSession, EmailVerification)
+from ..models import AccountAudit, AuthSession, Subscription, User
 from .entitlements import ACCOUNT_RETENTION_DAYS, aware
 
 POLICY_ACTION = "account.retention_started"
@@ -49,105 +48,54 @@ def consent_payload(db, user_id):
 
 
 def archive_due(*, now=None):
-    from . import platform_locks, workspace_cache
+    """Archive only Gateway account access, never OpenCode runtime data.
+
+    Native owns API credentials, session history, files and process lifetime.
+    Platform keeps project bindings and billing records for account recovery.
+    """
     from .entitlements import access_payload
-    from .archive_storage import StagedRuntime, recover_pending
-    with SessionLocal() as recovery_db:
-        recover_pending(recovery_db)
     if _policy_started is None:
         initialize()
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=ACCOUNT_RETENTION_DAYS)
     if _policy_started > cutoff:
         return 0
-    count = 0
+    archived = 0
     with SessionLocal() as db:
-        ids = list(db.scalars(select(User.id).outerjoin(Subscription, Subscription.user_id == User.id)
+        ids = list(db.scalars(
+            select(User.id).outerjoin(Subscription, Subscription.user_id == User.id)
             .where(User.status == "active", User.role == "customer",
-                func.coalesce(Subscription.current_period_end, User.trial_ends_at) <= cutoff)
-            .order_by(User.trial_ends_at).limit(100)))
+                   func.coalesce(Subscription.current_period_end, User.trial_ends_at) <= cutoff)
+            .order_by(User.trial_ends_at).limit(100)
+        ))
     for identifier in ids:
-        locks = []
-        storage = None
         with SessionLocal() as db:
             try:
-                user = db.scalar(select(User).where(User.id == identifier).with_for_update(skip_locked=True))
-                if user is None or user.status != "active":
+                user = db.scalar(select(User).where(User.id == identifier)
+                    .with_for_update(skip_locked=True))
+                if not user or user.status != "active":
                     continue
-                subscription = db.scalar(select(Subscription).where(Subscription.user_id == identifier))
-                if access_payload(db, user, now=now)["allowed"] or now < archive_deadline(user, subscription):
+                subscription = db.scalar(select(Subscription).where(
+                    Subscription.user_id == identifier))
+                if access_payload(db,user,now=now)["allowed"] or now < archive_deadline(user,subscription):
                     continue
-                # Never wait on a pending activity acknowledgement or execution.
-                for model in (AuthSession, WorkspaceSession):
-                    ids_before = set(db.scalars(select(model.id).where(model.user_id == identifier)))
-                    locked = set(db.scalars(select(model.id).where(model.user_id == identifier).with_for_update(skip_locked=True)))
-                    if ids_before != locked:
-                        raise RuntimeError("Operational activity is in progress")
-                rows = list(db.scalars(select(Workspace).where(Workspace.user_id == identifier)))
-                account_lock = platform_locks.workspace_lock(platform_locks.account_workspace(identifier))
-                if not account_lock.acquire(blocking=False):
-                    raise RuntimeError("Account authentication is in progress")
-                locks.append(account_lock)
-                for row in rows:
-                    lock = platform_locks.workspace_lock(row)
-                    if not lock.acquire(blocking=False):
-                        raise RuntimeError("Workspace write is in progress")
-                    locks.append(lock)
-                    if db.scalar(select(Workspace.id).where(Workspace.id == row.id).with_for_update(skip_locked=True)) is None:
-                        raise RuntimeError("Workspace upload is in progress")
-                if db.scalar(select(WorkspaceSession.id).where(WorkspaceSession.user_id == identifier,
-                    WorkspaceSession.status.in_(["submitted", "waiting_approval"])).limit(1)):
-                    continue
-                if any(not workspace_cache.runtime_idle(row) for row in rows):
-                    continue
+                # No Native service call, file staging, session-history deletion,
+                # provider credential DB, or parallel runtime involvement.
+                db.execute(update(AuthSession).where(AuthSession.user_id == identifier,
+                    AuthSession.revoked_at.is_(None)).values(revoked_at=now))
                 activity = [aware(user.created_at)]
-                if user.last_login_at: activity.append(aware(user.last_login_at))
-                activity.extend(aware(r.last_activity_at) for r in rows)
-                activity.extend(aware(value) for value in db.scalars(select(AuthSession.last_seen_at).where(
-                    AuthSession.user_id == identifier, AuthSession.last_seen_at.is_not(None))))
-                # Project files have their own inactivity policy; account
-                # archival removes only sensitive operational runtime storage.
-                storage = StagedRuntime(identifier)
-                storage.stage()
-                session_ids = select(WorkspaceSession.id).where(WorkspaceSession.user_id == identifier)
-                db.execute(delete(ExecutionEvent).where(ExecutionEvent.session_id.in_(session_ids)))
-                for model in (WorkspaceSession, AuthSession, GithubAuthState, GithubConnection, PasswordReset, EmailVerification):
-                    db.execute(delete(model).where(model.user_id == identifier))
-                # The account-owned credential table is introduced in migration
-                # 0017; archive its secrets too, but support pre-0017 installs.
+                if user.last_login_at:
+                    activity.append(aware(user.last_login_at))
                 user.status = "archived"
-                # Retain identity/contact/billing relationships, not a CRM copy
-                # of the old login secret. A later paid activation permits reset.
                 user.password_hash = "!archived!"
-                user.postal_code = ""; user.region_id = user.city_id = None
-                db.add(AccountAudit(subject_id=identifier, action="account.last_activity", created_at=max(activity)))
-                db.add(AccountAudit(subject_id=identifier, action="account.archived"))
-                db.commit(); count += 1
-                # A failed erase is retried from the committed archived status.
-                try: storage.erase()
-                except Exception:
-                    logger.warning("Archived runtime erasure deferred for %s", identifier)
+                user.postal_code = ""
+                user.region_id = user.city_id = None
+                db.add(AccountAudit(subject_id=identifier,
+                    action="account.last_activity",created_at=max(activity)))
+                db.add(AccountAudit(subject_id=identifier,action="account.archived"))
+                db.commit()
+                archived += 1
             except Exception:
                 db.rollback()
-                recovered = False
-                if storage is not None:
-                    try:
-                        # A lost commit acknowledgement may mean SQL actually
-                        # committed. Never restore secrets to an archived user.
-                        committed_status = db.scalar(select(User.status).where(User.id == identifier))
-                        if committed_status == "archived":
-                            count += 1
-                            storage.erase()
-                            recovered = True
-                        elif committed_status is not None:
-                            storage.restore()
-                    except Exception:
-                        # Unknown database outcome leaves the private staged
-                        # directory for the next status-based recovery pass.
-                        logger.warning("Account runtime restore deferred for %s", identifier)
-                    finally: db.rollback()
-                if not recovered:
-                    logger.warning("Customer archival could not complete for %s", identifier)
-            finally:
-                for lock in reversed(locks): lock.release()
-    return count
+                logger.warning("Platform-only customer archival deferred for %s",identifier)
+    return archived
