@@ -26,6 +26,10 @@ assert(!app.includes('og-native-model-metadata-v1'),'Remove stale browser model 
 assert(!app.includes('og-native-agent-metadata-v1'),'Remove stale browser agent cache');
 assert(!dashboard.includes('/api/opencode/catalog/providers/'),'Dashboard must not use retired provider API paths');
 assert(dashboard.includes('window.nativeDirectTest.catalog()'),'Dashboard must call OpenCode Native catalog');
+const directList=dashboard.slice(dashboard.indexOf('async function accountCatalogRows()'),dashboard.indexOf('async function lookup(',dashboard.indexOf('async function accountCatalogRows()')));
+assert(directList.includes('window.nativeDirectTest.configuredProviders()'),'Dashboard must read Native configured provider state');
+assert(!directList.includes('visibility()')&&!directList.includes('api('),'Dashboard listing must not wait for Python Gateway');
+
 
 const begin=app.indexOf('window.nativeDirectTest=(()=>{');
 const end=app.indexOf('\n})();',begin);
