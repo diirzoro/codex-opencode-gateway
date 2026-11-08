@@ -511,8 +511,8 @@ const api=async(path,options={})=>{
    const target=new URL(path,location.origin);
    const git=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/git\/(status|commit|push|sync)$/i);
    const projectPublish=/^\/api\/projects\/[0-9a-f-]{36}\/publish$/i.test(target.pathname);
-   if(projectPublish||(git&&git[2]!=='status')){
-     throw Error('Git publishing requires authorized OpenCode tools, not Python Git execution');
+   if(projectPublish){
+     throw Error('Project publication must use its separate GitHub administrative flow');
    }
    const ownedDirectory=async workspace=>{
      if(!currentUser)throw Error('Sign in to access project files');
@@ -521,6 +521,39 @@ const api=async(path,options={})=>{
        throw Error('Project directory was not returned by Gateway');
      return record.native_directory;
    };
+   if(git&&git[2]!=='status'){
+     if((options.method||'GET').toUpperCase()!=='POST')
+       throw Error('Git mutations require an explicit POST');
+     const directory=await ownedDirectory(git[1]);
+     const row=activeSession;
+     if(!row||row.workspace_id!==git[1]||!row.runtime_id)
+       throw Error('Open this Project conversation before using Git tools');
+     const action=git[2];
+     const quote=value=>"'"+String(value).replace(/'/g,"'\\''")+"'";
+     let command;
+     if(action==='commit'){
+       const message=JSON.parse(options.body||'{}').message;
+       if(typeof message!=='string'||!message.trim()||message.length>500)
+         throw Error('Enter a commit message (maximum 500 characters)');
+       command='git add -A && git commit -m '+quote(message.trim());
+     }else if(action==='push')command='git push';
+     else if(action==='sync')command='git pull --ff-only';
+     else throw Error('Unsupported Git operation');
+     // Git executes only through the OpenCode Native shell for this Project.
+     // No Python Git execution, Gateway proxy, or duplicate chat engine.
+     const output=await window.nativeDirectTest.direct(
+       'session/'+encodeURIComponent(row.runtime_id)+'/shell',
+       {method:'POST',directory,
+        value:{agent:row.agent||'build',command},signal:options.signal});
+     if(!output?.info||!Array.isArray(output.parts))
+       throw Error('OpenCode did not return a Git command receipt; inspect Native history before retrying');
+     if(output.info.error||output.parts.some(part=>
+       part.type==='tool'&&(part.state?.status==='error'||part.state?.status==='failed')))
+       throw Error('OpenCode reported a Git tool failure; review its tool output');
+     const vcs=await window.nativeDirectTest.direct('vcs',{directory}).catch(()=>({}));
+     return {native_receipt:true,verified:false,action,branch:vcs?.branch||activeProject?.branch||'',
+       output_message_id:output.info.id};
+   }
    const nativeRead=async(workspace,resource)=>{
      const directory=await ownedDirectory(workspace);
      return window.nativeDirectTest.direct(resource,{directory,signal:options.signal});
@@ -535,7 +568,7 @@ const api=async(path,options={})=>{
        .map(x=>({path:x.path,status:x.status||'modified'})),
        clean:changes.length===0,branch:vcs?.branch||activeProject?.branch||null,
        repository:activeProject?.repository||null,remote_branch:activeProject?.branch||null,
-       github_access:false,push_available:false,source:'opencode-native'};
+       github_access:Boolean(activeProject?.remote_url),push_available:Boolean(activeProject?.source_type==='github'&&(activeProject?.remote_url||activeProject?.repository)),source:'opencode-native'};
    }
    const workspaceDiff=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/diff$/i);
    if(workspaceDiff){
