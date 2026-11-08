@@ -77,34 +77,46 @@ app.include_router(payment_gateways.router)
 app.include_router(management.router)
 app.include_router(homepage.router)
 
-# Legacy OpenCode provider/catalog/session-execution routes are retired in every
-# Native deployment (TEST, LOCAL, LIVE) so no provider/credential/session request
-# reaches Python. Project file/Git routes remain Platform-owned and are NOT retired
-# here (the TEST UI handles files via Native, but LOCAL keeps the Python handlers).
+# In Native mode the Gateway exposes only Platform account/project/file metadata.
+# Every OpenCode API request goes from the browser through Nginx to Native.
+# Do not register legacy Python Native session/provider/attachment endpoints.
 if native_sessions.enabled():
     from fastapi.routing import APIRoute
-    def _retired_open_code_route(route):
-        if not isinstance(route,APIRoute):return False
-        path=route.path
-        return (path.startswith('/api/opencode/connections')
-            or path.startswith('/api/opencode/catalog/providers')
-            or path == '/api/opencode/catalog/agents'
-            or path.startswith('/api/workspaces/{workspace_id}/providers')
-            or path in {'/api/workspaces/{workspace_id}/runtime',
-                        '/api/workspaces/{workspace_id}/runtime/state',
-                        '/api/workspaces/{workspace_id}/runtime/agents',
-                        '/api/workspaces/{workspace_id}/agents'}
-            or path.startswith('/api/sessions/{session_id}/messages')
-            or path.startswith('/api/sessions/{session_id}/queue')
-            or path.startswith('/api/sessions/{session_id}/submissions')
-            or path in {'/api/sessions/{session_id}/stop',
-                        '/api/sessions/{session_id}/events',
-                        '/api/sessions/{session_id}/todos',
-                        '/api/sessions/{session_id}/diff'}
-            or path.startswith('/api/sessions/{session_id}/questions')
-            or path.startswith('/api/sessions/{session_id}/permissions')
-            or path in {'/api/projects/{project_id}/publish'})
-    app.router.routes[:]=[route for route in app.router.routes if not _retired_open_code_route(route)]
+
+    def _legacy_native_route(route):
+        if not isinstance(route, APIRoute):
+            return False
+        path = route.path
+        if path.startswith("/api/native-test/sessions/"):
+            return True
+        if path.startswith("/api/native-test/workspaces/"):
+            return True
+        if path.startswith("/api/admin/native/"):
+            return True
+        if path.startswith("/api/opencode/connections"):
+            return True
+        if path.startswith("/api/opencode/catalog/"):
+            return True
+        if path == "/api/opencode/health":
+            return True
+        if path.startswith("/api/workspaces/{workspace_id}/providers"):
+            return True
+        if path.startswith("/api/workspaces/{workspace_id}/agents"):
+            return True
+        if path.startswith("/api/workspaces/{workspace_id}/attachments"):
+            return True
+        if path.startswith("/api/workspaces/{workspace_id}/sessions"):
+            return True
+        if path.startswith("/api/workspaces/{workspace_id}/runtime"):
+            return True
+        if path.startswith("/api/sessions"):
+            return True
+        # Historical Python-side Native actions are not part of the new app.
+        return False
+
+    app.router.routes[:] = [
+        route for route in app.router.routes if not _legacy_native_route(route)
+    ]
 
 # TEST-only: the TEST UI reads files/Git through OpenCode Native directly.
 if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes':
