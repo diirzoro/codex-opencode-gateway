@@ -222,9 +222,7 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
         if path.is_symlink() or path.parent.is_symlink() or path.parent.parent.is_symlink():
             raise HTTPException(403,'Unsafe project worktree; manual review required')
         paths.append(path)
-    # Recheck activity just before deleting the directory. Other owners' paths
-    # are never derived from user-supplied strings or traversed.
-    for row in rows:
+    # Delete only the owned project worktree paths computed by the Platform.
     for path in paths:
         if path.exists():
             try:shutil.rmtree(path)
