@@ -68,10 +68,10 @@ jobs:
 
       - name: Read-only TEST database revision and privilege diagnosis via existing sudo
         env:
-          HOST: \${{ secrets.STAGING_HOST }}
-          USER: \${{ secrets.VPS_USER }}
-          PORT: \${{ secrets.TEST_VPS_SSH_PORT }}
-          SUDO_PASSWORD: \${{ secrets.VPS_SUDO_PASSWORD }}
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.VPS_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
         run: |
           set -euo pipefail
           script="$(base64 -w0 <<'PYTHON'
@@ -103,5 +103,5 @@ jobs:
           PYTHON
           )"
           printf '%s\n' "$SUDO_PASSWORD" |
-            ssh -T -p "\${PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            ssh -T -p "${PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
               "read -r password; printf '%s\n' \"\$password\" | sudo -S -p '' bash -c 'printf %s $script | base64 -d | /home/tahir/opencode-gateway-test/.venv/bin/python -'"
