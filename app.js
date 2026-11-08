@@ -56,7 +56,11 @@ window.nativeDirectTest=(()=>{
   const defaultDirectory=()=>window.__nativeAccountDir||'/var/lib/opencode-native-test/workspace';
   let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
   let deletedAuthSlots=new Set();
-  const url=(path,directory=defaultDirectory())=>base+path.replace(/^\/+/,'')+'?directory='+encodeURIComponent(directory);
+  const url=(path,directory=defaultDirectory())=>{
+    const resource=new URL(base+path.replace(/^\/+/,''),location.origin);
+    resource.searchParams.set('directory',directory);
+    return resource.pathname+resource.search;
+  };
   const rootFromFile=file=>{
     if(typeof file!=='string'||!file.startsWith('file:'))return null;
     try{return decodeURIComponent(new URL(file).pathname).replace(/\/+$/,'');}catch{return null;}
@@ -501,34 +505,32 @@ window.nativeDirectTest=(()=>{
 })();
 
 const api=async(path,options={})=>{
- // TEST file reads: Python authorizes workspace ownership and path only.
- // Nginx's X-Accel internal redirect transports the bytes directly from
- // OpenCode /file and /file/content; no Python file listing or content handler.
+ // On TEST, file and VCS read operations go directly to OpenCode Native.
+ // Python Gateway contributes only existing administrative workspace metadata.
  if(location.hostname==='test.opencode-gateway.codes'){
    const target=new URL(path,location.origin);
    const git=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/git\/(status|commit|push|sync)$/i);
    const projectPublish=/^\/api\/projects\/[0-9a-f-]{36}\/publish$/i.test(target.pathname);
    if(projectPublish||(git&&git[2]!=='status')){
-     // Native OpenCode has no unrestricted Git publish endpoint. Never
-     // silently fall back to Python subprocess for code execution or push.
-     throw Error('TEST code changes and publishing must run through authorized OpenCode tools; legacy Python Git execution is disabled');
+     throw Error('Git publishing requires authorized OpenCode tools, not Python Git execution');
    }
-   const nativeGitRead=async(workspace,resource)=>{
-     if(!currentUser)throw Error('Sign in before using Native VCS');
-     const response=await fetch('/native-session/'+workspace+'/'+resource,{
-       credentials:'same-origin',cache:'no-store',signal:options.signal});
-     const body=await response.json().catch(()=>({detail:'Invalid OpenCode response'}));
-     if(!response.ok)throw Error(body.detail||'OpenCode VCS request failed: '+response.status);
-     return body;
+   const ownedDirectory=async workspace=>{
+     if(!currentUser)throw Error('Sign in to access project files');
+     const record=await api('/api/workspaces/'+encodeURIComponent(workspace));
+     if(record.id!==workspace||typeof record.native_directory!=='string'||!record.native_directory)
+       throw Error('Project directory was not returned by Gateway');
+     return record.native_directory;
+   };
+   const nativeRead=async(workspace,resource)=>{
+     const directory=await ownedDirectory(workspace);
+     return window.nativeDirectTest.direct(resource,{directory,signal:options.signal});
    };
    if(git&&git[2]==='status'){
      const [changes,vcs]=await Promise.all([
-       nativeGitRead(git[1],'file/status'),
-       nativeGitRead(git[1],'vcs').catch(error=>{
-         if(error.message.includes('404'))return {};
-         throw error;
-       })]);
-     if(!Array.isArray(changes))throw Error('Invalid OpenCode file status');
+       nativeRead(git[1],'file/status'),
+       nativeRead(git[1],'vcs').catch(error=>error.status===404?{}:Promise.reject(error))
+     ]);
+     if(!Array.isArray(changes))throw Error('Invalid Native file status');
      return {changes:changes.filter(x=>x&&typeof x.path==='string')
        .map(x=>({path:x.path,status:x.status||'modified'})),
        clean:changes.length===0,branch:vcs?.branch||activeProject?.branch||null,
@@ -540,31 +542,34 @@ const api=async(path,options={})=>{
      if(!currentUser||!activeSession||activeSession.workspace_id!==workspaceDiff[1])
        return {diff:''};
      const items=await api('/api/sessions/'+activeSession.id+'/diff');
-     const name=target.searchParams.get('path')||'';
      if(!Array.isArray(items))throw Error('Invalid OpenCode session diff');
+     const name=target.searchParams.get('path')||'';
      const found=items.find(x=>x.file===name||x.path===name);
      return {diff:typeof found?.patch==='string'?found.patch:''};
    }
    const match=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/files(\/content)?$/i);
    if(match){
-     if((options.method||'GET').toUpperCase()!=='GET')
-       throw Error('TEST files are OpenCode Native read-only through this route');
-     if(!currentUser)throw Error('Sign in before reading a Native workspace');
-     const nativePath=match[2]?'file/content':'file';
+     if((options.method||'GET').toUpperCase()!=='GET')throw Error('Native file reads require GET');
      const requested=target.searchParams.get('path')||'';
-     if(target.searchParams.size>1||requested.length>1000)throw Error('Invalid Native file path');
-     const forwarded='/native-session/'+match[1]+'/'+nativePath+'?path='+encodeURIComponent(requested);
-     const response=await fetch(forwarded,{credentials:'same-origin',cache:'no-store',signal:options.signal});
-     const result=await response.json().catch(()=>({detail:'Invalid OpenCode response'}));
-     if(!response.ok)throw Error(result.detail||'OpenCode file request rejected: '+response.status);
+     if(target.searchParams.size>1||requested.length>1000||
+        requested.startsWith('/')||requested.includes('\\')||
+        requested.split('/').some(part=>part==='..'))
+       throw Error('Invalid project file path');
+     const directory=await ownedDirectory(match[1]);
+     const resource=(match[2]?'file/content':'file')+
+       (requested?'?path='+encodeURIComponent(directory.replace(/\/$/,'')+'/'+requested):'');
+     const result=await window.nativeDirectTest.direct(resource,{directory,signal:options.signal});
      if(match[2]){
-       if(typeof result?.content!=='string')throw Error('Invalid OpenCode file content');
-       return {path:requested,content:result.content};
+       const content=typeof result==='string'?result:result?.content;
+       if(typeof content!=='string')throw Error('Invalid Native file content');
+       return {path:requested,content};
      }
      if(!Array.isArray(result))throw Error('Invalid OpenCode file listing');
-     return result.filter(v=>v&&typeof v.path==='string'&&
-         !v.path.startsWith('/')&&!v.path.includes('\\')&&
-         !v.path.split('/').includes('..'))
+     const root=directory.replace(/\/$/,'')+'/';
+     return result.filter(v=>v&&typeof v.path==='string').map(v=>({
+       ...v,path:v.path.startsWith(root)?v.path.slice(root.length):v.path
+     })).filter(v=>v.path&&!v.path.startsWith('/')&&
+       !v.path.includes('\\')&&!v.path.split('/').includes('..'))
        .map(v=>({name:String(v.name||v.path.split('/').at(-1)),path:v.path,
          type:v.type==='directory'?'directory':'file'}));
    }
