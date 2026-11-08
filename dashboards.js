@@ -2072,6 +2072,27 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         }catch(error){host.replaceChildren();go2.hidden=false;body.append(text('p','PayPal buttons could not load. Continue through the official payment page.','تعذر تحميل أزرار PayPal. يمكنك المتابعة إلى صفحة الدفع الرسمية.','checkout-lead'));}})();
       }
     };
+    const renderStripeTestForm=method=>{
+      // TEST-only Stripe hosted checkout. Do not ask for PayPal/bank payer
+      // details, or create a Gateway PaymentOrder/paid entitlement.
+      body.replaceChildren(
+        textElement('strong',tr('Stripe secure test checkout','دفع Stripe التجريبي الآمن')),
+        text('p','Stripe TEST payments are for validation only. They do not activate a paid subscription.',
+          'مدفوعات Stripe التجريبية للاختبار فقط، ولا تفعّل اشتراكًا مدفوعًا.','checkout-lead')
+      );
+      const launch=btn('stripeTestCheckout','Open Stripe TEST checkout','فتح دفع Stripe التجريبي',async()=>{
+        launch.disabled=true;
+        try{
+          const result=await api('/api/billing/stripe/test-checkout',{
+            method:'POST',body:JSON.stringify({plan_id:planId})});
+          const url=new URL(result.checkout_url);
+          if(url.protocol!=='https:'||!['checkout.stripe.com','checkout.stripe.dev'].includes(url.hostname))
+            throw Error('Unexpected Stripe checkout URL');
+          window.location.assign(url.href);
+        }catch(error){showError(error);launch.disabled=false;}
+      });
+      body.append(launch);
+    };
     const renderManualForm=method=>{
       const mhead=textElement('strong',method.label);mhead.prepend(payIcon(method.kind));body.replaceChildren(mhead);
       if(method.kind==='bank')body.append(text('p','Transfer to the account holder below, then upload your proof of transfer.','حوّل إلى صاحب الحساب أدناه، ثم ارفع إثبات التحويل.','checkout-lead'));
@@ -2105,7 +2126,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const method=methods.find(m=>m.id===select.value);
       if(!method){toast(tr('Choose a payment method first.','اختر وسيلة الدفع أولاً.'));return;}
       rows.hidden=true;choices.hidden=true;go.hidden=true;noteWrap.hidden=true;
-      if(['paypal','link','stripe_test'].includes(method.details.checkout_mode))renderProviderForm(method);
+      if(method.details.checkout_mode==='stripe_test')renderStripeTestForm(method);
+      else if(['paypal','link'].includes(method.details.checkout_mode))renderProviderForm(method);
       else renderManualForm(method);
     });go.disabled=!methods.length;
     if(!methods.length)dialog.append(text('p','No payment method is configured for this plan yet.','لم تُعدّ وسيلة دفع لهذه الخطة بعد.'));
