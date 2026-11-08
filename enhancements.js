@@ -42,6 +42,23 @@ window.disconnectGithubWithReview=async function(){
   if(window.githubDisconnectReviewOpen)return false;
   const owner=currentUser?.id,tr=(en,ar)=>lang==='ar'?ar:en;
   if(!owner)return false;
+  async function ensureOwnedNativeIdle(copy){
+    // Native session status belongs to the browser/direct Native route.
+    // Python validates GitHub ownership and snapshots, never Native status.
+    if(!window.nativeDirectTest?.active?.())
+      throw Error(tr('OpenCode Native must be available before deleting local project copies.','يجب أن يكون OpenCode Native متصلًا قبل حذف النسخ المحلية.'));
+    const workspace=await api('/api/workspaces/'+encodeURIComponent(copy.id));
+    if(workspace.id!==copy.id||!workspace.native_directory)
+      throw Error(tr('Owned project directory is unavailable.','مجلد المشروع المملوك غير متاح.'));
+    const association=await api('/api/projects/'+encodeURIComponent(workspace.project_id)+'/native-binding');
+    if(!association?.binding)return;
+    if(association.binding.workspace_id!==workspace.id)
+      throw Error('Project Native binding does not match the selected workspace');
+    const statuses=await window.nativeDirectTest.direct('session/status',{directory:workspace.native_directory});
+    const current=statuses?.[association.binding.native_session_id];
+    if(!statuses||typeof statuses!=='object'||(current&&current.type!=='idle'))
+      throw Error(tr('Stop the Native conversation before GitHub disconnect.','أوقف تنفيذ محادثة Native قبل فصل GitHub.'));
+  }
   window.githubDisconnectReviewOpen=true;
   let dialog;
   try{
@@ -90,10 +107,12 @@ window.disconnectGithubWithReview=async function(){
           for(const copy of remove?copies:[]){
             if(currentUser?.id!==owner)throw Error(tr('Account changed; operation stopped.','تغير الحساب؛ توقفت العملية.'));
             feedback.textContent=tr('Saving and verifying: ','حفظ والتحقق: ')+copy.name;
+            await ensureOwnedNativeIdle(copy);
             const path='/api/github/disconnect/workspaces/'+encodeURIComponent(copy.id);
             const saved=await api(path,{method:'POST',body:JSON.stringify({connection_id:plan.connection_id,snapshot:copy.snapshot,action:'save'})});
             if(!saved.verified||!saved.snapshot)throw Error(tr('Remote save was not verified. Files preserved.','لم يُثبت الحفظ البعيد؛ الملفات محفوظة.'));
             if(currentUser?.id!==owner)throw Error(tr('Account changed; files preserved.','تغير الحساب؛ الملفات محفوظة.'));
+            await ensureOwnedNativeIdle(copy);
             const result=await api(path,{method:'POST',body:JSON.stringify({connection_id:plan.connection_id,snapshot:saved.snapshot,action:'delete'})});
             if(!result.deleted)throw Error(tr('Local cleanup was not confirmed.','لم يُؤكد حذف النسخة المحلية.'));deleted++;
           }
