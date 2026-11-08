@@ -1388,7 +1388,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           const result=await deleteOwnedProject(project,workspace);
           if(currentUser?.id!==owner)return;
           if(result.deleted!==true)throw Error(tr('Project deletion was not confirmed.','لم يؤكد الخادم حذف المشروع.'));
-          toast(tr('Local project deleted. Your account storage was released.','حُذف المشروع المحلي وتحررت مساحته من حصة الحساب.'));
+          toast(tr('Project deleted. Its Native session and local worktree were removed.','حُذف المشروع وجلسة Native وملفات العمل المحلية.'));
           if(activeProject?.id===project.id){
             stopEvents();activeProject=activeWorkspace=activeSession=null;
             try{localStorage.removeItem('og-workspace');localStorage.removeItem('og-context:'+owner);}catch(error){}
@@ -1505,7 +1505,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const result=await deleteOwnedProject(project,activeWorkspace);
       if(currentUser?.id!==owner)return;
       if(result.deleted!==true)throw Error(tr('Project deletion was not confirmed.','لم يؤكد الخادم حذف المشروع.'));
-      toast(tr('Local project deleted. Your account storage was released.','حُذف المشروع المحلي وتحررت مساحته من حصة الحساب.'));
+      toast(tr('Project deleted. Its Native session and local worktree were removed.','حُذف المشروع وجلسة Native وملفات العمل المحلية.'));
       stopEvents();activeProject=activeWorkspace=activeSession=null;
       try{localStorage.removeItem('og-workspace');localStorage.removeItem('og-context:'+owner);}catch(error){}
       await page('workspaceHomePage');
