@@ -38,27 +38,15 @@ async def retention_maintenance():
         # and manages its own source-of-truth cache, conversations and history.
         # Existing account, project and upload housekeeping above remains.
 
-async def provider_maintenance():
-    from .services import account_provider_sync
-    while True:
-        await asyncio.sleep(5)
-        if not native_sessions.enabled():
-            await asyncio.to_thread(account_provider_sync.sweep)
-
 @asynccontextmanager
 async def lifespan(app):
     cleanup = asyncio.create_task(retention_maintenance())
-    provider_sync = None if native_sessions.enabled() else asyncio.create_task(provider_maintenance())
     try:
         yield
     finally:
         cleanup.cancel()
-        if provider_sync is not None:provider_sync.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup
-        if provider_sync is not None:
-            with suppress(asyncio.CancelledError):
-                await provider_sync
 
 preview_access.install_access_log_redaction()
 
@@ -76,63 +64,6 @@ app.include_router(billing.router)
 app.include_router(payment_gateways.router)
 app.include_router(management.router)
 app.include_router(homepage.router)
-
-# In Native mode the Gateway exposes only Platform account/project/file metadata.
-# Every OpenCode API request goes from the browser through Nginx to Native.
-# Do not register legacy Python Native session/provider/attachment endpoints.
-if native_sessions.enabled():
-    from fastapi.routing import APIRoute
-
-    def _legacy_native_route(route):
-        if not isinstance(route, APIRoute):
-            return False
-        path = route.path
-        if path.startswith("/api/native-test/sessions/"):
-            return True
-        if path.startswith("/api/native-test/workspaces/"):
-            return True
-        if path.startswith("/api/admin/native/"):
-            return True
-        if path.startswith("/api/opencode/connections"):
-            return True
-        if path.startswith("/api/opencode/catalog/"):
-            return True
-        if path == "/api/opencode/health":
-            return True
-        if path.startswith("/api/workspaces/{workspace_id}/providers"):
-            return True
-        if path.startswith("/api/workspaces/{workspace_id}/agents"):
-            return True
-        if path.startswith("/api/workspaces/{workspace_id}/attachments"):
-            return True
-        if path.startswith("/api/workspaces/{workspace_id}/sessions"):
-            return True
-        if path.startswith("/api/workspaces/{workspace_id}/runtime"):
-            return True
-        if path.startswith("/api/sessions"):
-            return True
-        # Historical Python-side Native actions are not part of the new app.
-        return False
-
-    app.router.routes[:] = [
-        route for route in app.router.routes if not _legacy_native_route(route)
-    ]
-
-# TEST-only: the TEST UI reads files/Git through OpenCode Native directly.
-if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes':
-    from fastapi.routing import APIRoute
-    def _retired_test_file_route(route):
-        if not isinstance(route,APIRoute):return False
-        path=route.path
-        return path in {'/api/workspaces/{workspace_id}/files',
-                        '/api/workspaces/{workspace_id}/files/content',
-                        '/api/workspaces/{workspace_id}/git/status',
-                        '/api/workspaces/{workspace_id}/git/commit',
-                        '/api/workspaces/{workspace_id}/git/push',
-                        '/api/workspaces/{workspace_id}/git/sync',
-                        '/api/workspaces/{workspace_id}/diff'}
-    app.router.routes[:]=[route for route in app.router.routes if not _retired_test_file_route(route)]
-
 
 @app.get("/api/health")
 def health(): return {"status": "ok"}
