@@ -510,10 +510,6 @@ const api=async(path,options={})=>{
  if(location.hostname==='test.opencode-gateway.codes'){
    const target=new URL(path,location.origin);
    const git=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/git\/(status|commit|push|sync)$/i);
-   const projectPublish=/^\/api\/projects\/[0-9a-f-]{36}\/publish$/i.test(target.pathname);
-   if(projectPublish){
-     throw Error('Project publication must use its separate GitHub administrative flow');
-   }
    const ownedDirectory=async workspace=>{
      if(!currentUser)throw Error('Sign in to access project files');
      const record=await api('/api/workspaces/'+encodeURIComponent(workspace));
