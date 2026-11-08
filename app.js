@@ -478,10 +478,13 @@ window.nativeDirectTest=(()=>{
       const connected=[...nativeData.all.filter(p=>p.id==='opencode'||nativeData.connected.includes(p.id)),...otherNative];
       const listData={...nativeData,connected:[...new Set([...nativeData.connected,...otherNative.map(p=>p.id)])],
         default:{...(catalogSnapshot?.default||{}),...nativeData.default}};
-      const items=connected.slice(0,50).map(p=>idx(p,listData));
+      // Show up to 50 REAL Native definitions, including disconnected providers
+      // available to connect. A configured model is NOT proof of an API key.
+      const first=ordered(listData).slice(0,50);
+      const items=first.map(p=>idx(p,listData));
       return {items,connected_items:connected.map(p=>idx(p,listData)),
-        total:connected.length,offset:0,limit:50,
-        next_offset:connected.length>50?50:null,native_configured_only:false};
+        total:nativeData.all.length,offset:0,limit:50,
+        next_offset:nativeData.all.length>50?50:null,native_configured_only:true};
     }
     const [data]=await Promise.all([catalog(),visibility()]);
     if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
