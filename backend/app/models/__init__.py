@@ -5,6 +5,7 @@ from .workspace import (
     GithubAuthState,
     GithubConnection,
     Project,
+    ProjectNativeSessionBinding,
     ProviderCredential,
     UserProviderCredential,
     Workspace,
@@ -12,7 +13,7 @@ from .workspace import (
 )
 __all__ = [
     "PendingRegistration", "EmailVerification", "AuthSession", "City", "Country", "Region", "User", "Plan", "PlatformPolicy", "Subscription", "HomepageItem",
-    "ExecutionEvent", "GithubAuthState", "GithubConnection", "Project",
+    "ExecutionEvent", "GithubAuthState", "GithubConnection", "Project", "ProjectNativeSessionBinding",
     "ProviderCredential", "UserProviderCredential", "Workspace", "WorkspaceSession",
 ]
 
