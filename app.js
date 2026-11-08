@@ -254,8 +254,8 @@ window.nativeDirectTest=(()=>{
   const idx=(p,data)=>({
     id:p.id,name:p.name||p.id,visible:providerVisible(p.id),allowed:providerAllowed(p.id),
     connected:publicFree(p)||nativeConnections(data).includes(p.id),public_free:publicFree(p),
-    auth_status:publicFree(p)?'free_native':nativeConnections(data).includes(p.id)?'configured':undefined,
-    verified:false,model_count:Object.keys(p.models||{}).length,
+    auth_status:publicFree(p)?'free_native':nativeConnections(data).includes(p.id)?'verified_native':undefined,
+    verified:clientVerifiedProviders.has(p.id),model_count:Object.keys(p.models||{}).length,
     default_model:data.default?.[p.id]
   });
   function ordered(data,query=''){
@@ -449,7 +449,7 @@ window.nativeDirectTest=(()=>{
       return name.startsWith('/api/workspaces/')?{native:true,providers:[item]}:item;
     }
     if(name==='/api/opencode/connections')return nativeConnections(data).map(provider_id=>({
-      provider_id,auth_status:'configured',verified:false}));
+      provider_id,auth_status:'verified_native',verified:true}));
     const isAccount=segments[0]==='api'&&segments[1]==='opencode'&&segments[2]==='connections';
     const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
     if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
