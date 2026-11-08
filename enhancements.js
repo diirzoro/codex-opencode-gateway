@@ -282,7 +282,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     var state = await api('/api/workspaces/' + activeWorkspace.id + '/git/status');
     document.getElementById('commitButton').disabled = state.clean;
     var button = document.getElementById('pushButton');
-    button.disabled = !(state.push_available && !state.clean);
+    button.disabled = !state.push_available;
     button.title = state.push_available ? ('Push to ' + (state.remote_branch || 'remote')) : 'This project has no connected GitHub remote';
     document.getElementById('gitSummary').textContent = state.changes.length + ' ' + t('changedFiles') + ' · ' +
       (state.head ? state.head.slice(0, 8) : t('noCommits')) + (state.remote_branch ? (' · ' + state.remote_branch) : '');
@@ -294,7 +294,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     pushButton.disabled = true;
     try {
       var result = await api('/api/workspaces/' + activeWorkspace.id + '/git/push', { method: 'POST' });
-      toast('Pushed ' + result.branch + ' · verified ' + result.head.slice(0, 8));
+      toast(result.verified ? ('Pushed ' + result.branch) : ('OpenCode processed the Git push request for ' + (result.branch || 'this project') + '. Review Native tool output and remote status.'));
       await refreshGit();
     } catch (error) { toast(error.message); pushButton.disabled = false; }
   };
