@@ -65,3 +65,43 @@ jobs:
           set -euo pipefail
           ssh -T -p "${PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             'cat /home/tahir/opencode-gateway-test/backend/alembic/versions/0034_payment_profile_publications.py'
+
+      - name: Read-only TEST database revision and schema privileges
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ secrets.VPS_USER }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          ssh -T -p "${PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" 'bash -s' <<'SHELL'
+          set -eu
+          cd /home/tahir/opencode-gateway-test
+          .venv/bin/python - <<'PY'
+          import re,shlex
+          from pathlib import Path
+          import sqlalchemy as sa
+          from sqlalchemy import text
+          matches=[x for x in Path('.env').read_text().splitlines()
+                   if re.match(r'^\s*(?:export\s+)?DATABASE_URL\s*=',x)]
+          if not matches:raise SystemExit('TEST_DATABASE_URL_NOT_FOUND')
+          raw=re.sub(r'^\s*(?:export\s+)?DATABASE_URL\s*=\s*','',matches[-1])
+          url=shlex.split(raw,comments=True,posix=True)[0]
+          engine=sa.create_engine(url)
+          with engine.connect() as conn:
+              database=conn.execute(text('SELECT current_database()')).scalar()
+              assert database=='opencode_gateway_test','Wrong database; no query continued'
+              rev=conn.execute(text('SELECT version_num FROM alembic_version')).scalars().all()
+              print('TEST_DB_CURRENT_REVISIONS',','.join(rev))
+              print('TEST_DB_SCHEMA_CREATE',conn.execute(text("SELECT has_schema_privilege(current_user,current_schema(),'CREATE')")).scalar())
+              for table in ['users','projects','workspaces','payment_provider_profiles',
+                            'payment_profile_publications','project_native_session_bindings']:
+                  present=conn.execute(text('SELECT to_regclass(:name) IS NOT NULL'),{'name':table}).scalar()
+                  print('TEST_TABLE_EXISTS',table,present)
+                  if present:
+                      for privilege in ['REFERENCES','SELECT','INSERT','UPDATE']:
+                          allowed=conn.execute(text('SELECT has_table_privilege(current_user,:name,:privilege)'),
+                                               {'name':table,'privilege':privilege}).scalar()
+                          print('TEST_TABLE_PRIVILEGE',table,privilege,allowed)
+          engine.dispose()
+          PY
+          SHELL
