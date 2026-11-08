@@ -34,6 +34,11 @@ RETIRED_FILES = (
     "backend/app/services/session_recovery.py",
     "backend/app/services/native_control_bridge.py",
     "backend/app/services/chat_attachments.py",
+    "backend/app/services/account_provider_sync.py",
+    "backend/app/services/native_provider_accounts.py",
+    "backend/app/services/user_provider_credentials.py",
+    "backend/app/services/providers.py",
+    "backend/app/services/runtime_snapshot.py",
     # The failed TEST rollout left this uncommitted, unapplied sibling of 0034.
     # New project binding is 0035 after the pre-existing 0034 payment migration.
     "backend/alembic/versions/0034_project_native_session_binding.py",
