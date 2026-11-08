@@ -63,7 +63,7 @@ async function fetchMock(address){
 }
 const platformPolicy={allowed_providers:[],hidden_providers:[],allowed_models:[],hidden_models:{},updated_at:'test'};
 function createClient(){
-  const window={nativeSession:null,workspaceRuntime:{clear(){}}};
+  const window={nativeSession:null,workspaceRuntime:{clear(){}},dispatchEvent(){}};
   const context={
     window,currentUser:{id:'test-user'},
     location:{hostname:'test.opencode-gateway.codes',origin:'https://test.opencode-gateway.codes'},
@@ -72,7 +72,8 @@ function createClient(){
       assert.equal(path,'/api/opencode/display-policy');
       return platformPolicy;
     },
-    URL,AbortSignal,AbortController,setTimeout,clearTimeout
+    URL,AbortSignal,AbortController,setTimeout,clearTimeout,
+    CustomEvent:class CustomEvent{constructor(name,options){this.type=name;this.detail=options?.detail;}}
   };
   vm.runInNewContext(adapter,context,{timeout:3000});
   return window.nativeDirectTest;
