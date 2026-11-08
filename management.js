@@ -239,8 +239,8 @@
       dlg.showModal();setFeedback(feedback,tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
       let choices,accountOptions=null;
       try{
-        if(!workspaceId){const authStarted=performance.now();accountOptions=await api("/api/opencode/connections/"+encodeURIComponent(p.id)+"/options",{signal:discovery.signal});window.gatewayProviderTimings={...window.gatewayProviderTimings,auth_request_ms:performance.now()-authStarted};}
-        else {if(!resolved)p=(await lookup('resolve',p.id,discovery.signal))[0];if(snapshot?.native)accountOptions=await api('/api/opencode/connections/'+encodeURIComponent(p.id)+'/options',{signal:discovery.signal});}
+        if(!workspaceId){const authStarted=performance.now();const nativeMethods=await window.nativeDirectTest.direct('provider/auth',{signal:discovery.signal});accountOptions={auth_methods:Array.isArray(nativeMethods?.[p.id])&&nativeMethods[p.id].length?nativeMethods[p.id]:[{type:'api',label:'API key'}],native:true,credential_storage_ready:true};window.gatewayProviderTimings={...window.gatewayProviderTimings,auth_request_ms:performance.now()-authStarted};}
+        else {if(!resolved)p=(await lookup('resolve',p.id,discovery.signal))[0];if(window.nativeDirectTest?.active()){const nativeMethods=await window.nativeDirectTest.direct('provider/auth',{signal:discovery.signal});accountOptions={auth_methods:Array.isArray(nativeMethods?.[p.id])&&nativeMethods[p.id].length?nativeMethods[p.id]:[{type:'api',label:'API key'}],native:true,credential_storage_ready:true};}}
         if(!currentDialog())return;
         if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
         choices=accountOptions?accountOptions.auth_methods:p.auth_methods;
@@ -283,12 +283,13 @@
               // The key is sent to OpenCode Native /auth directly, never to Python.
               // A successful PUT confirms storage, not remote key validity.
               setFeedback(feedback,tr('Saving in OpenCode Native…','جارٍ الحفظ في OpenCode Native…'));
-              const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/credentials',{
-                method:'POST',body:JSON.stringify({api_key:values.api_key})
+              if(!window.nativeDirectTest?.active())throw Error('OpenCode Native connection is unavailable');
+              const result=await window.nativeDirectTest.direct('auth/'+encodeURIComponent(p.id),{
+                method:'PUT',value:{type:'api',key:values.api_key}
               });
               f.reset();if(!alive()||!contextCurrent())return;
-              if(result.native_acknowledged!==true||result.persisted!==true)
-                throw Error(tr('OpenCode did not confirm storage.','لم يؤكد OpenCode حفظ المفتاح.'));
+              if(result!==true)throw Error(tr('OpenCode did not confirm storage.','لم يؤكد OpenCode حفظ المفتاح.'));
+              window.nativeDirectTest.forget();
               dlg.close();
               toast(tr('Saved in OpenCode Native. Key validity has not been tested.',
                 'حُفظ المفتاح في OpenCode Native. لم تُختبر صلاحيته بعد.'));
