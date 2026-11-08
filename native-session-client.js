@@ -124,6 +124,15 @@
       return remember({...nativeRow,...legacy,id,workspace_id:workspace,
         runtime_id:legacy.runtime_id,native:true});
     }
+    if(window.nativeDirectTest?.active?.()){
+      const workspace=activeWorkspace?.id;
+      if(!workspace)throw Error('Select the Project before opening its Native session');
+      const list=await localProjectSessionRows(workspace);
+      const selected=list.find(row=>row.id===id);
+      if(selected)return selected;
+      throw Error(label('This Project requires an explicit Native session recovery; no replacement was created.',
+        'يحتاج المشروع إلى استعادة جلسة Native مقصودة؛ لم تُنشأ جلسة بديلة.'));
+    }
     const value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});
     if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');
     return remember(value);
@@ -159,12 +168,16 @@
     const info=await api('/api/workspaces/'+encodeURIComponent(workspace));
     if(!info?.project_id||!info?.native_directory)
       throw Error('The owned Native workspace directory is unavailable');
-    const association=await api('/api/projects/'+encodeURIComponent(info.project_id)+'/native-binding');
-    return {projectId:info.project_id,root:info.native_directory,binding:association?.binding||null};
+    const [association,project]=await Promise.all([
+      api('/api/projects/'+encodeURIComponent(info.project_id)+'/native-binding'),
+      api('/api/projects/'+encodeURIComponent(info.project_id))
+    ]);
+    return {projectId:info.project_id,name:project.name,root:info.native_directory,
+      binding:association?.binding||null};
   }
   function localProjectRow(workspace,context,live){
     return remember({id:context.projectId,workspace_id:workspace,project_id:context.projectId,
-      runtime_id:live.id,title:live.title||activeProject?.name||'Project',
+      runtime_id:live.id,title:context.name||live.title||'Project',
       status:'idle',lifecycle:'active',native:true,
       native_directory:context.root,file_base:'file://'+context.root.replace(/\\\\/g,'/')+'/',
       tool_access:{project_manager:true,shell_authorized:false,shell_enabled:false}});
@@ -197,7 +210,7 @@
     const data=JSON.parse(options.body||'{}');
     const live=await window.nativeDirectTest.direct('session',{
       method:'POST',directory:ctx.root,
-      value:{title:activeProject?.name||data.title||'Project'}
+      value:{title:ctx.name||data.title||'Project'}
     });
     if(!live?.id||live.directory!==ctx.root)
       throw Error('Native returned an invalid Project session');
@@ -394,6 +407,10 @@
         const value=remember({...row,title:changed?.title||payload.title});
         return {value};
       }
+      if(window.nativeDirectTest?.active?.()){
+        throw Error(label('Rename the Project, not its separate Native session.',
+          'غيّر اسم المشروع، وليس اسم جلسة Native مستقلة.'));
+      }
       const value=await api('/api/native-test/sessions/'+id,options);remember({...row,...value});return {value};
     }
     if((!tail&&method==='DELETE')||['close','archive','restore','reopen'].includes(tail)){
@@ -414,11 +431,14 @@
         const value=remember({...row,lifecycle});
         return {value};
       }
+      if(window.nativeDirectTest?.active?.())
+        throw Error(label('Manage the conversation through its Project. Native session history was preserved.',
+          'أدر المحادثة من خلال المشروع. تم الحفاظ على سجل جلسة Native.'));
       return {value:await api('/api/native-test/sessions/'+id+'/visibility/'+(tail||'delete'),{method:'POST'})};
     }
     if(!tail||tail==='open'){
       const fresh=tail==='open'
-        ?(window.nativeDirectTest?.testHost?.()?row:remember(await api('/api/native-test/sessions/'+encodeURIComponent(id))))
+        ?(window.nativeDirectTest?.active?.()?row:remember(await api('/api/native-test/sessions/'+encodeURIComponent(id))))
         :rows.get(id);
       return {value:{...fresh,status:statuses.get(id)||'idle',execution_status:statuses.get(id)||'idle'}};
     }
