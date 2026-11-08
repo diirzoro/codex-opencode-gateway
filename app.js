@@ -278,8 +278,10 @@ window.nativeDirectTest=(()=>{
   // resulting 50 choices across browser sessions for up to seven days.
   // This is NOT a provider database, model registry or API-key cache in Gateway.
   const pickerKey=user=>'og-native-provider-picker-v1:'+user;
+  let pickerPending=null;
   async function pickerProviders({force=false}={}){
     const user=ownerScope();
+    if(!force&&pickerPending)return pickerPending;
     if(!force)try{
       const saved=JSON.parse(localStorage.getItem(pickerKey(user))||'null');
       if(saved?.at>Date.now()-7*24*60*60*1000&&Array.isArray(saved.items)&&saved.items.length){
@@ -288,14 +290,18 @@ window.nativeDirectTest=(()=>{
         }));
       }
     }catch{}
-    const native=await catalog({force});
-    if(ownerScope()!==user)throw Error('Account changed during Native provider index loading');
-    const items=native.all.filter(p=>p&&typeof p.id==='string').map(p=>({
-      id:p.id,name:String(p.name||p.id).slice(0,160),
-      model_count:Object.keys(p.models||{}).length
-    }));
-    try{localStorage.setItem(pickerKey(user),JSON.stringify({at:Date.now(),items}));}catch{}
-    return items.map(row=>({...row,models:{}}));
+    const job=(async()=>{
+      const native=await catalog({force});
+      if(ownerScope()!==user)throw Error('Account changed during Native provider index loading');
+      const items=native.all.filter(p=>p&&typeof p.id==='string').map(p=>({
+        id:p.id,name:String(p.name||p.id).slice(0,160),
+        model_count:Object.keys(p.models||{}).length
+      }));
+      try{localStorage.setItem(pickerKey(user),JSON.stringify({at:Date.now(),items}));}catch{}
+      return items.map(row=>({...row,models:{}}));
+    })();
+    pickerPending=job;
+    try{return await job;}finally{if(pickerPending===job)pickerPending=null;}
   }
   // Workspace never downloads the full catalog just to open a conversation.
   // Provider/model visibility is Gateway *control-plane* metadata only; Native
@@ -510,11 +516,26 @@ window.nativeDirectTest=(()=>{
       let indexRows=nativeData.all;
       if(indexRows.length<50){
         try{
-          const nativeIndex=await pickerProviders();
+          // Never hold Dashboard's first paint while Native builds the larger
+          // catalog index. A warm seven-day browser cache resolves immediately.
+          // On a cold cache, publish the lightweight inventory now, then
+          // re-render from the Native-derived compact index once it arrives.
+          const pendingIndex=pickerProviders();
+          const nativeIndex=await Promise.race([
+            pendingIndex,
+            new Promise(resolve=>setTimeout(()=>resolve(null),120))
+          ]);
+          if(nativeIndex===null){
+            pendingIndex.then(()=>window.dispatchEvent(new CustomEvent(
+              'native-provider-picker-ready',{detail:{owner:ownerScope()}}
+            ))).catch(()=>{});
+          }
+          if(nativeIndex){
           if(ownerScope()!==String(currentUser?.id||''))throw Error('Account changed');
           const names=new Map(nativeIndex.map(p=>[p.id,p]));
           for(const p of nativeData.all)names.set(p.id,p);
           indexRows=[...names.values()];
+          }
         }catch(error){
           if(error.message==='Account changed')throw error;
           // Native config already gives a useful, safe fallback. Retry search
