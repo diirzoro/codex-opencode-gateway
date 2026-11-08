@@ -148,7 +148,7 @@ window.nativeDirectTest=(()=>{
     const promise=direct('provider').then(data=>{
       if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid OpenCode Native provider response');
       if(ownerScope()!==user)throw Error('Account changed during Native provider discovery');
-      catalogSnapshot=data;configuredSnapshot=workspaceSnapshot=null;
+      catalogSnapshot=data;workspaceSnapshot=null;
       window.dispatchEvent(new CustomEvent('native-provider-inventory-updated',{detail:{owner:user}}));
       return data;
     });
@@ -207,23 +207,24 @@ window.nativeDirectTest=(()=>{
     if(!force&&configuredSnapshot)return configuredSnapshot;
     if(configuredPending)return configuredPending;
     const job=(async()=>{
-      // Reuse this tab's in-memory snapshot; Native owns the persistent
-      // catalog and refresh lifecycle. Never create another browser registry.
-      const value=await direct('config/providers');
-      if(!Array.isArray(value?.providers)||!value?.default||typeof value.default!=='object')
-        throw Error('Invalid OpenCode Native /config/providers response');
-      const all=value.providers.filter(p=>p&&typeof p.id==='string');
+      // This OpenCode installation exposes /provider, not /config/providers.
+      // Reuse the running Native server's own provider/model catalog.  Both
+      // Workspace and Dashboard share one in-memory request; no Python or
+      // additional catalog/cache/database participates.
+      const value=await catalog({force});
       if(ownerScope()!==user)throw Error('Account changed during Native provider loading');
-      // This inventory describes Native model definitions, not account auth.
-      // Never promote unverified entries from Native's process-global catalog.
-      const connected=new Set(nativeConnections(value));
-      const usable=all.filter(p=>p.id==='opencode'||!deletedAuthSlots.has(p.id));
-      // OpenCode is the built-in no-key provider. Its availability MUST NOT
-      // depend on a client adding an API key or Native's shared auth list.
-      // Other providers require a client-verified connection.
-      const result={all:usable,
-        connected:usable.filter(p=>p.id==='opencode'||connected.has(p.id)).map(p=>p.id),
-        default:value.default,public_free:usable.filter(p=>p.id==='opencode'||publicFree(p)).map(p=>p.id)};
+      const all=value.all.filter(p=>p&&typeof p.id==='string'&&!deletedAuthSlots.has(p.id));
+      const available=new Set([
+        'opencode',
+        ...(Array.isArray(value.connected)?value.connected:[]),
+        ...nativeConnections(value)
+      ]);
+      const result={
+        all,
+        connected:all.filter(p=>available.has(p.id)).map(p=>p.id),
+        default:value.default&&typeof value.default==='object'?value.default:{},
+        public_free:all.filter(p=>p.id==='opencode'||publicFree(p)).map(p=>p.id)
+      };
       configuredSnapshot=result;
       return result;
     })();
@@ -285,11 +286,6 @@ window.nativeDirectTest=(()=>{
     return {provider_id:p.id,connected:p.id==='opencode'||publicFree(p)||nativeConnections(data).includes(p.id),allowed:providerAllowed(p.id),
       default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
         allowed:modelAllowed(p.id,id),visible:modelVisible(p.id,id)}))};
-  }
-  function configuredListing(){
-    // First paint is lightweight. Do not claim credentials exist just because
-    // Native listed a model definition in /config/providers.
-    return configuredProviders().then(data=>data);
   }
   // Credential acceptance and provider authentication are different outcomes.
   // Verify through a real model request in the EXISTING OpenCode Native process.
