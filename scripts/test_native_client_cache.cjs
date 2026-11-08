@@ -27,8 +27,9 @@ assert(!app.includes('og-native-agent-metadata-v1'),'Remove stale browser agent 
 assert(!dashboard.includes('/api/opencode/catalog/providers/'),'Dashboard must not use retired provider API paths');
 assert(dashboard.includes('window.nativeDirectTest.catalog()'),'Dashboard must call OpenCode Native catalog');
 const directList=dashboard.slice(dashboard.indexOf('async function accountCatalogRows()'),dashboard.indexOf('async function lookup(',dashboard.indexOf('async function accountCatalogRows()')));
-assert(directList.includes('window.nativeDirectTest.configuredProviders()'),'Dashboard must read Native configured provider state');
+assert(!directList.includes('configuredProviders()'),'Dashboard must not wait for absent /config/providers');
 assert(!directList.includes('visibility()')&&!directList.includes('api('),'Dashboard listing must not wait for Python Gateway');
+assert(!app.includes("direct('config/providers')"),'Do not call absent Native /config/providers route');
 
 
 const begin=app.indexOf('window.nativeDirectTest=(()=>{');
@@ -55,8 +56,7 @@ const policy={allowed_providers:[],hidden_providers:[],allowed_models:[],hidden_
 async function fetchMock(address){
   const pathname=new URL(address,'https://test.opencode-gateway.codes').pathname;
   requests.push(pathname);
-  const payload=pathname.endsWith('/config/providers')?metadata:
-    pathname.endsWith('/agent')?agentMetadata:
+  const payload=pathname.endsWith('/agent')?agentMetadata:
     pathname.endsWith('/provider')?fullProviderCatalog:null;
   assert(payload!==null,'Unexpected Native route '+pathname);
   return {ok:true,status:200,text:async()=>JSON.stringify(payload)};
@@ -79,10 +79,10 @@ function createClient(){
 (async()=>{
   const native=createClient();
   const ws=await native.workspaceRegistry();
-  assert.deepEqual([...ws.data.connected],['opencode']);
+  assert.deepEqual([...ws.data.connected],['opencode','deepseek','google']);
   assert(ws.data.all.some(p=>p.id==='deepseek'));
-  assert.equal(requests.length,2,'Workspace should call only /config/providers and /agent');
-  assert(requests.every(path=>!path.endsWith('/provider')),'Workspace must not load full catalog');
+  assert.equal(requests.length,2,'Workspace should call /provider and /agent only');
+  assert(requests.filter(path=>path.endsWith('/provider')).length===1,'Native catalog should be fetched once');
   await native.workspaceRegistry();
   assert.equal(requests.length,2,'Workspace must reuse current-page Native snapshots');
   const full=await native.catalog();
