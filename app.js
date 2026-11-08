@@ -538,8 +538,12 @@ window.nativeDirectTest=(()=>{
           }
         }catch(error){
           if(error.message==='Account changed')throw error;
-          // Native config already gives a useful, safe fallback. Retry search
-          // separately if Native's full index is temporarily unavailable.
+          // Never mask a failed Native catalog request as "one provider".
+          // Preserve the usable Native /config/providers list and report the
+          // failed full index request to Dashboard, without Python fallback.
+          window.dispatchEvent(new CustomEvent('native-provider-picker-error',{
+            detail:{owner:ownerScope(),message:error.message||'Native catalog unavailable'}
+          }));
         }
       }
       const first=ordered({...listData,all:indexRows}).slice(0,50);
