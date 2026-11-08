@@ -43,7 +43,13 @@ function invalidateProviderMutation(path,method='GET'){
  }
 }
 window.addEventListener('storage',event=>{
- if(currentUser&&event.key==='og-native-provider-revision:'+currentUser.id){window.nativeDirectTest?.forget();window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser.id}}));}
+ if(!currentUser)return;
+ if(event.key==='og-native-revoked-provider-ids:'+currentUser.id)
+   window.nativeDirectTest?.syncRevoked();
+ if(event.key==='og-native-provider-revision:'+currentUser.id){
+   window.nativeDirectTest?.syncRevoked();
+   window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser.id}}));
+ }
 });
 
 /* TEST Native provider adapter: Native is the only model/credential registry.
@@ -117,6 +123,9 @@ window.nativeDirectTest=(()=>{
     catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
     catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
     window.nativeSession?.invalidate();window.workspaceRuntime?.clear();
+  }
+  function syncRevoked(){
+    scopeOwner='';ownerScope();forget();
   }
   async function catalog({force=false}={}){
     const user=ownerScope();
@@ -518,7 +527,7 @@ window.nativeDirectTest=(()=>{
     }
     throw Error('Unsupported direct OpenCode provider action: '+name);
   }
-  return {active,testHost,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,matches,route,
+  return {active,testHost,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,syncRevoked,matches,route,
     providerAllowed,providerVisible,modelAllowed,modelVisible,classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 
