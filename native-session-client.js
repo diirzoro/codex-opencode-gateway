@@ -136,12 +136,31 @@
       const list=await localProjectSessionRows(workspace);
       return list[0];
     }
-    // Do not silently replace historical Native sessions or lose their history.
+    // A previous TEST conversation may predate the Platform binding table.
+    // If its directory uniquely identifies one existing Native session, reuse it
+    // and persist the binding instead of starting another conversation.
     const existing=await window.nativeDirectTest.direct('session',{directory:ctx.root});
     if(!Array.isArray(existing))throw Error('Native session inventory is unavailable');
-    if(existing.some(row=>row?.id&&row.directory===ctx.root))
-      throw Error(label('Native already contains a session for this project directory. Do not create a duplicate.',
-        'توجد جلسة Native بالفعل في مجلد المشروع. لن ننشئ جلسة مكررة.'));
+    const candidates=existing.filter(row=>row?.id&&row.directory===ctx.root);
+    if(candidates.length){
+      const named=candidates.filter(row=>row.title===ctx.name);
+      const selected=candidates.length===1?candidates[0]:named.length===1?named[0]:null;
+      if(!selected)
+        throw Error(label('Several conversations exist in this Project directory. Select the correct Native session before binding; no new session was created.',
+          'يوجد أكثر من محادثة في مجلد المشروع. يجب تحديد الجلسة الصحيحة قبل الربط؛ لم تُنشأ جلسة جديدة.'));
+      try{
+        await api('/api/projects/'+encodeURIComponent(ctx.projectId)+'/native-binding',{
+          method:'POST',body:JSON.stringify({workspace_id:workspace,native_session_id:selected.id})
+        });
+      }catch(error){
+        // Concurrent tabs may have bound the same project first.
+        const current=await localProjectContext(workspace);
+        if(current.binding?.workspace_id===workspace&&current.binding.native_session_id===selected.id)
+          return localProjectRow(workspace,current,selected);
+        throw error;
+      }
+      return localProjectRow(workspace,ctx,selected);
+    }
     const data=JSON.parse(options.body||'{}');
     const live=await window.nativeDirectTest.direct('session',{
       method:'POST',directory:ctx.root,
