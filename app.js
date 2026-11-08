@@ -55,7 +55,18 @@ window.nativeDirectTest=(()=>{
   const base='/native-direct/api/';
   const defaultDirectory=()=>window.__nativeAccountDir||'/var/lib/opencode-native-test/workspace';
   let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
+  // Browser-only revoked-ID hints guard against Native 1.19.x's stale
+  // /provider.connected cache. No API keys or OAuth tokens are stored here.
   let deletedAuthSlots=new Set();
+  const revokedKey=user=>'og-native-revoked-provider-ids:'+user;
+  function rememberRevoked(id){
+    deletedAuthSlots.add(id);
+    try{localStorage.setItem(revokedKey(owner()),JSON.stringify([...deletedAuthSlots]));}catch{}
+  }
+  function clearRevoked(id){
+    deletedAuthSlots.delete(id);
+    try{localStorage.setItem(revokedKey(owner()),JSON.stringify([...deletedAuthSlots]));}catch{}
+  }
   const url=(path,directory=defaultDirectory())=>{
     const resource=new URL(base+path.replace(/^\/+/,''),location.origin);
     resource.searchParams.set('directory',directory);
@@ -91,7 +102,13 @@ window.nativeDirectTest=(()=>{
   function ownerScope(){
     const user=String(currentUser?.id||'');
     if(scopeOwner!==user){
-      scopeOwner=user;deletedAuthSlots=new Set();catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
+      scopeOwner=user;deletedAuthSlots=new Set();
+      try{
+        const saved=JSON.parse(localStorage.getItem(revokedKey(user))||'[]');
+        if(Array.isArray(saved))for(const id of saved)
+          if(typeof id==='string'&&/^[a-z0-9][a-z0-9._-]{0,119}$/i.test(id))deletedAuthSlots.add(id);
+      }catch{}
+      catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
       catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
     }
     return user;
@@ -378,7 +395,7 @@ window.nativeDirectTest=(()=>{
       // Native's DELETE response, not a catalog entry, acknowledges removal.
       const result=await direct('auth/'+encodeURIComponent(providerId),{method:'DELETE'});
       if(result!==true)throw Error('OpenCode did not acknowledge removal of this credential');
-      deletedAuthSlots.add(providerId);
+      rememberRevoked(providerId);
       forget();
       invalidateProviderMutation(path,'DELETE');
       return {native_acknowledged:true,credential_deleted:true,
@@ -469,7 +486,7 @@ window.nativeDirectTest=(()=>{
         if(inserted!==true)throw Error('لم يؤكد OpenCode التخزين المؤقت للمفتاح.');
         options.onNativePhase?.('verifying');
         const checked=await verifyProviderModel(p.id,selected);
-        deletedAuthSlots.delete(p.id);
+        clearRevoked(p.id);
         forget();invalidateProviderMutation(path,'POST');
         return {connected:true,persisted:true,verified:true,
           provider_id:p.id,verified_model_id:checked.model_id};
@@ -481,7 +498,7 @@ window.nativeDirectTest=(()=>{
         try{
           const undone=await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
           if(undone!==true)throw Error('OpenCode did not acknowledge removal of the pending key');
-          deletedAuthSlots.add(p.id);
+          rememberRevoked(p.id);
           // Native 1.19.x may cache /provider.connected after deleting auth.
           // Do not call a stale catalog proof that the key still exists.
         }catch(rollbackError){
