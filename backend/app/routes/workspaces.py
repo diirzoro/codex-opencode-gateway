@@ -314,15 +314,6 @@ def delete_workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db
     manager.owned(db,Workspace,workspace_id,user.id)
     raise HTTPException(409,"Workspace preserved: verified push and cleanup policy are not implemented")
 
-@router.get("/workspaces/{workspace_id}/files")
-def files(workspace_id: uuid.UUID,path: str="",user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return manager.files(manager.owned(db,Workspace,workspace_id,user.id),path)
-
-@router.get("/workspaces/{workspace_id}/files/content")
-def file_content(workspace_id: uuid.UUID,path: str=Query(...,max_length=1000),user: User=Depends(require_user),db: Session=Depends(get_db)):
-    row=manager.owned(db,Workspace,workspace_id,user.id)
-    return {"path":path,"content":manager.content(row,path)}
-
 def _git_status(db,user,workspace_id):
     workspace,project=_workspace_and_project(db,user,workspace_id)
     state=manager.status(workspace)
@@ -338,17 +329,9 @@ def _git_status(db,user,workspace_id):
     state["push_available"]=state["push_available"] and state["github_access"]
     return workspace,project,state
 
-@router.get("/workspaces/{workspace_id}/git/status")
-def git_status(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return _git_status(db,user,workspace_id)[2]
-
 @router.get("/workspaces/{workspace_id}/changes")
 def changes(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return git_status(workspace_id,user,db)["changes"]
-
-@router.get("/workspaces/{workspace_id}/diff")
-def diff(workspace_id: uuid.UUID,path: str|None=Query(default=None,max_length=1000),user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return manager.diff(manager.owned(db,Workspace,workspace_id,user.id),path)
+    return _git_status(db,user,workspace_id)[2]["changes"]
 
 @router.get("/workspaces/{workspace_id}/preview/capabilities")
 def workspace_preview_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),
@@ -416,92 +399,12 @@ def logs(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=De
     rows=db.scalars(select(ExecutionEvent).join(WorkspaceSession,ExecutionEvent.session_id==WorkspaceSession.id).where(WorkspaceSession.workspace_id==workspace_id,WorkspaceSession.user_id==user.id).order_by(ExecutionEvent.id.desc()).limit(200))
     return [{"id":r.id,"type":r.kind,"created_at":r.created_at} for r in rows]
 
-@router.post("/workspaces/{workspace_id}/git/commit")
-def commit(workspace_id: uuid.UUID,data: CommitRequest,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    workspace=manager.owned(db,Workspace,workspace_id,user.id)
-    with opencode.workspace_lock(workspace):
-        _require_git_idle(db,workspace)
-        result=manager.commit(workspace,user,data.message)
-        workspace.last_activity_at=datetime.now(timezone.utc);db.commit()
-        return result
-
-def _require_git_idle(db,workspace):
-    session_lifecycle.lock_workspace(db,workspace)
-    if db.scalar(select(WorkspaceSession.id).where(WorkspaceSession.workspace_id==workspace.id,
-        WorkspaceSession.status.in_(["submitted","waiting_approval"]))):
-        raise HTTPException(409,"Stop active workspace work before changing Git history")
-
-def _github_remote(db,user,project):
-    require_advanced(db,user)
-    connection=github.connection_for(db,user)
-    repo=github.authorized_repository(connection,project.repository)
-    if project.github_repository_id and repo["id"]!=project.github_repository_id:
-        raise HTTPException(409,"GitHub repository identity changed; explicitly reconnect this project")
-    return connection,repo
-
-@router.post("/workspaces/{workspace_id}/git/push")
-def push(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    workspace,project=_workspace_and_project(db,user,workspace_id)
-    if not project.remote_url or not project.remote_branch:
-        raise HTTPException(503,"This project has no GitHub remote; publish or create it from a GitHub repository first")
-    connection,repo=_github_remote(db,user,project)
-    with opencode.workspace_lock(workspace):
-        _require_git_idle(db,workspace)
-        state=manager.status(workspace)
-        if not state["head"]: raise HTTPException(409,"There is no commit to push")
-        if not state["clean"]: raise HTTPException(409,"Review and commit your working tree before pushing")
-        token=github.installation_token(connection)
-        manager.push_remote(workspace,repo["clone_url"],project.remote_branch,token)
-        verified=github.verify_remote_commit(connection,project.repository,project.remote_branch,state["head"])
-        if not verified:
-            raise HTTPException(502,"Push finished but the expected commit was not verified on the remote branch")
-        require_advanced(db,user,start=True)
-        workspace.status="pushed"; db.commit()
-    return {"pushed":True,"branch":project.remote_branch,"head":state["head"],"verified":True}
-
-@router.post("/workspaces/{workspace_id}/git/sync")
-def sync(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    workspace,project=_workspace_and_project(db,user,workspace_id)
-    if not project.remote_branch: raise HTTPException(409,"This project has no GitHub remote")
-    connection,repo=_github_remote(db,user,project)
-    with opencode.workspace_lock(workspace):
-        _require_git_idle(db,workspace)
-        state=manager.sync_remote(workspace,repo['clone_url'],project.remote_branch,github.installation_token(connection))
-        require_advanced(db,user,start=True)
-        workspace.base_commit_sha=state['head']; db.commit()
-        return state
-
 @router.get("/workspaces/{workspace_id}/export")
 def export_workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     workspace=manager.owned(db,Workspace,workspace_id,user.id)
-    with opencode.workspace_lock(workspace):
-        _require_git_idle(db,workspace)
-        path=manager.export(workspace)
+    path=manager.export(workspace)
     return FileResponse(path,media_type="application/zip",filename="workspace-source.zip",
                         background=BackgroundTask(path.unlink,missing_ok=True))
-
-@router.post("/workspaces/{workspace_id}/files/upload",status_code=201)
-def upload_workspace_file(workspace_id: uuid.UUID,file: UploadFile=File(...),path: str=Form(default=""),user: User=Depends(require_user),db: Session=Depends(get_db)):
-    import re
-    row=manager.owned(db,Workspace,workspace_id,user.id)
-    name=(file.filename or "").replace("\\","/").split("/")[-1].strip()
-    if not name or name in {".",".."} or "\x00" in name or len(name)>200: raise HTTPException(422,"A valid file name is required")
-    if name==".env" or name.endswith((".pem",".key")) or name.startswith("."): raise HTTPException(403,"This file type is not allowed in the workspace")
-    folder=(path or "").strip().strip("/")
-    if '__gateway_chat_attachments' in folder.split('/'): raise HTTPException(403,'Temporary attachments use the owned conversation upload flow')
-    if folder and not re.fullmatch(r"[A-Za-z0-9._/-]{1,500}",folder): raise HTTPException(422,"Invalid folder path")
-    storage=manager.storage_payload(row,db)
-    content=file.file.read(storage['remaining_bytes']+1)
-    if len(content)>storage['remaining_bytes']: raise HTTPException(413,"Workspace storage limit reached. Remove files before uploading.")
-    manager.require_account_local_headroom(db,user.id,len(content))
-    target=manager.safe_path(row,(folder+"/" if folder else "")+name)
-    target.parent.mkdir(parents=True,exist_ok=True)
-    # Never replace an existing project file via a general upload endpoint.
-    # Conversation attachments use their own owned, single-use temporary slots.
-    try:
-        with target.open('xb') as output: output.write(content)
-    except FileExistsError:raise HTTPException(409,'File already exists; choose a new name or use Native editing') from None
-    return {"path":(folder+"/" if folder else "")+name,"size":len(content),"storage":manager.storage_payload(row,db)}
 
 @router.get("/workspaces/{workspace_id}/storage")
 def storage(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
