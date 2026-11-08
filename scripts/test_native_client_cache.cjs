@@ -30,6 +30,7 @@ const directList=dashboard.slice(dashboard.indexOf('async function accountCatalo
 assert(!directList.includes('configuredProviders()'),'Dashboard must not wait for absent /config/providers');
 assert(!directList.includes('visibility()')&&!directList.includes('api('),'Dashboard listing must not wait for Python Gateway');
 assert(!app.includes("direct('config/providers')"),'Do not call absent Native /config/providers route');
+assert(app.includes("path==='provider'?90000"),'7MB Native provider transfer must not use generic 18s deadline');
 
 
 const begin=app.indexOf('window.nativeDirectTest=(()=>{');
