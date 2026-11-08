@@ -151,6 +151,10 @@
     const options=node('div','','provider-combo-options');options.hidden=true;comboWrap.append(combo,options);box.append(comboWrap);
     const progress=node('p','','provider-loading');progress.setAttribute('role','status');progress.setAttribute('aria-live','polite');box.append(progress);
     const status=node('p',tr('Choose a provider to inspect its connection.','اختر مزوّدًا لفحص اتصاله.'),'provider-combo-status');box.append(status);
+    // The provider catalog is visible without opening the search popover.
+    // These names come exclusively from the existing Native provider inventory.
+    const catalogCount=node('p','','provider-catalog-count');box.append(catalogCount);
+    const catalogList=node('div','','provider-catalog-grid');box.append(catalogList);
     const connectedBox=section(body,tr('Native credential inventory','مخزن مفاتيح OpenCode Native'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
     let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
@@ -434,6 +438,20 @@
         options.append(o);
       }
       for(const old of previous.values())old.remove();
+      // Keep the same fifty Native records accessible on the main Dashboard,
+      // even when the search field has not received focus.
+      if(!query){
+        const tiles=rows.map(p=>{
+          const tile=node('button','','provider-catalog-tile');
+          tile.type='button';tile.textContent=p.name||p.id;
+          tile.title=(p.connected?tr('Connected','متصل'):tr('Available to connect','متاح للربط'))+' · '+(p.name||p.id);
+          tile.onclick=()=>{selectedProviderId=p.id;renderSelected(p);};
+          return tile;
+        });
+        catalogList.replaceChildren(...tiles);
+        catalogCount.textContent=tr('Available providers from OpenCode Native: ','المزوّدات المتاحة من OpenCode Native: ')+rows.length
+          +(rows.length<50?tr(' · catalog still loading or filtered by admin settings',' · قد يكون الفهرس قيد التحميل أو مُصفّى بإعدادات الإدارة'):'');
+      }
       options.hidden=!optionsOpen||!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
       window.gatewayProviderTimings={...window.gatewayProviderTimings,render_sync_ms:performance.now()-renderStarted,rendered_options:rows.length};
     };
@@ -524,6 +542,10 @@
     view.refresh=refresh;
     // The compact 50-provider Native index may finish after Dashboard's
     // lightweight first paint. Refresh only this view from the browser cache.
+    document.addEventListener('native-provider-picker-error',event=>{
+      if(!workspaceId&&alive()&&String(event.detail?.owner||'')===String(currentUser?.id||''))
+        message(tr('Could not read OpenCode Native provider catalog: ','تعذر قراءة فهرس مزودي OpenCode Native: ')+(event.detail?.message||'Native request failed'),true);
+    },{signal:controller.signal});
     document.addEventListener('native-provider-picker-ready',event=>{
       if(!workspaceId&&alive()&&view.ready&&
          String(event.detail?.owner||'')===String(currentUser?.id||'')){
