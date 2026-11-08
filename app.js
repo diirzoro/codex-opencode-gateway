@@ -97,7 +97,11 @@ window.nativeDirectTest=(()=>{
   const direct=async(path,{method='GET',value,signal,directory=defaultDirectory()}={})=>{
     // Timebox each Native control request. The larger verification deadline
     // cannot stop a single fetch stuck at Nginx/upstream otherwise.
-    const timeout=method==='GET'?18000:30000;
+    // Native /provider can return 7+ MB from the server's already-persisted
+    // model catalog. Allow transfer time over slower connections without
+    // changing OpenCode's cache, requesting an external refresh, or adding
+    // a Gateway registry. Other GET endpoints retain their original budget.
+    const timeout=method==='GET'&&path==='provider'?90000:method==='GET'?18000:30000;
     const deadline=AbortSignal.timeout(timeout);
     const effectiveSignal=signal?AbortSignal.any([signal,deadline]):deadline;
     const options={method,cache:'no-store',credentials:'same-origin',signal:effectiveSignal};
