@@ -381,20 +381,13 @@ window.nativeDirectTest=(()=>{
     // TEST provider operations are Native-only even before auth is ready.
     // They MUST NOT fall back to Python if the user session/direct link fails.
     if(!nativeMode())return false;
-    if(/^\/api\/opencode\/(?:connections(?:\/|$)|catalog\/agents(?:$|\?))/.test(path))return true;
+    if(/^\/api\/opencode\/connections(?:\/|$)/.test(path))return true;
     return /^\/api\/workspaces\/[^/]+\/providers(?:\/|$|\?)/.test(path);
   };
   async function route(path,options={}){
     if(!active())throw Error('TEST OpenCode Native connection requires sign-in; Gateway provider fallback is disabled');
     const method=(options.method||'GET').toUpperCase();
     const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
-    // Agent discovery is its own Native endpoint: opening the agent selector
-    // must not download and parse the ~7 MB model/provider catalog.
-    if(name==='/api/opencode/catalog/agents'){
-      const agentRows=await agents();
-      return agentRows.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode))
-        .map(a=>({id:a.name,name:a.name,mode:a.mode}));
-    }
     // Disconnect uses only the OpenCode Native /auth and /provider endpoints.
     // Do not block it on policy, models, agents, or the 7 MB catalog presentation.
     const directDelete=/^\/api\/(?:opencode\/connections|workspaces\/[^/]+\/providers)\/([^/]+)$/.exec(name);
