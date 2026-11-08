@@ -50,9 +50,9 @@ class ProjectNativeSessionBinding(Base):
     __table_args__ = (
         UniqueConstraint("native_session_id", name="uq_project_native_binding_native_session"),
     )
-    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id"), primary_key=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
-    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"))
+    project_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column()
+    workspace_id: Mapped[uuid.UUID] = mapped_column()
     native_session_id: Mapped[str] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
