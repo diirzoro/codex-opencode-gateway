@@ -212,8 +212,12 @@ window.nativeDirectTest=(()=>{
       // This inventory describes Native model definitions, not account auth.
       // Never promote unverified entries from Native's process-global catalog.
       const connected=new Set(nativeConnections(value));
-      const usable=all.filter(p=>!deletedAuthSlots.has(p.id));
-      const result={all:usable,connected:usable.filter(p=>connected.has(p.id)).map(p=>p.id),
+      const usable=all.filter(p=>p.id==='opencode'||!deletedAuthSlots.has(p.id));
+      // OpenCode is the built-in no-key provider. Its availability MUST NOT
+      // depend on a client adding an API key or Native's shared auth list.
+      // Other providers require a client-verified connection.
+      const result={all:usable,
+        connected:usable.filter(p=>p.id==='opencode'||connected.has(p.id)).map(p=>p.id),
         default:value.default,public_free:usable.filter(publicFree).map(p=>p.id)};
       configuredSnapshot=result;
       return result;
@@ -253,7 +257,7 @@ window.nativeDirectTest=(()=>{
   }
   const idx=(p,data)=>({
     id:p.id,name:p.name||p.id,visible:providerVisible(p.id),allowed:providerAllowed(p.id),
-    connected:publicFree(p)||nativeConnections(data).includes(p.id),public_free:publicFree(p),
+    connected:p.id==='opencode'||publicFree(p)||nativeConnections(data).includes(p.id),public_free:p.id==='opencode'||publicFree(p),
     auth_status:publicFree(p)?'free_native':nativeConnections(data).includes(p.id)?'verified_native':undefined,
     verified:clientVerifiedProviders.has(p.id),model_count:Object.keys(p.models||{}).length,
     default_model:data.default?.[p.id]
@@ -273,7 +277,7 @@ window.nativeDirectTest=(()=>{
   }
   function methods(auth,pid){const list=auth?.[pid];return Array.isArray(list)&&list.length?list:[{type:'api',label:'API key'}];}
   function modelDetails(p,data){
-    return {provider_id:p.id,connected:publicFree(p)||nativeConnections(data).includes(p.id),allowed:providerAllowed(p.id),
+    return {provider_id:p.id,connected:p.id==='opencode'||publicFree(p)||nativeConnections(data).includes(p.id),allowed:providerAllowed(p.id),
       default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
         allowed:modelAllowed(p.id,id),visible:modelVisible(p.id,id)}))};
   }
@@ -423,7 +427,7 @@ window.nativeDirectTest=(()=>{
       const configuredIds=new Set(nativeData.all.map(p=>p.id));
       const otherNative=catalogSnapshot?catalogSnapshot.all.filter(p=>
         nativeConnections(catalogSnapshot).includes(p.id)&&!configuredIds.has(p.id)):[];
-      const connected=[...nativeData.all.filter(p=>nativeData.connected.includes(p.id)||publicFree(p)),...otherNative];
+      const connected=[...nativeData.all.filter(p=>p.id==='opencode'||nativeData.connected.includes(p.id)),...otherNative];
       const listData={...nativeData,connected:[...new Set([...nativeData.connected,...otherNative.map(p=>p.id)])],
         default:{...(catalogSnapshot?.default||{}),...nativeData.default}};
       const items=connected.slice(0,50).map(p=>idx(p,listData));
@@ -454,7 +458,7 @@ window.nativeDirectTest=(()=>{
     const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
     if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
     if(isWorkspace&&segments.length===4)
-      return ordered(data).filter(p=>(publicFree(p)||nativeConnections(data).includes(p.id))&&providerAllowed(p.id)&&providerVisible(p.id))
+      return ordered(data).filter(p=>(p.id==='opencode'||nativeConnections(data).includes(p.id))&&providerAllowed(p.id)&&providerVisible(p.id))
         .map(p=>idx(p,data));
     const providerId=isAccount?segments[3]:segments[4];
     if(!providerId)throw Error('Missing Native provider ID');
