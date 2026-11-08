@@ -23,10 +23,9 @@ async def retention_maintenance():
             logging.getLogger(__name__).warning("Retention policy initialization could not complete")
     while True:
         await asyncio.sleep(300)
-        from .services import email_notifications, github as github_service, chat_attachments, registration_drafts
-        for job in (workspace_cache.sweep, customer_lifecycle.archive_due, email_notifications.sweep,
-                    github_service.expire_pending_authorizations, chat_attachments.sweep,
-                    registration_drafts.sweep):
+        from .services import email_notifications, github as github_service, registration_drafts
+        for job in (customer_lifecycle.archive_due, email_notifications.sweep,
+                    github_service.expire_pending_authorizations, registration_drafts.sweep):
             try:
                 await asyncio.to_thread(job)
             except Exception:
