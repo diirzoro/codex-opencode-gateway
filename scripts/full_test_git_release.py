@@ -23,15 +23,18 @@ FRONT={"app.js","index.html","styles.css","dashboards.js","enhancements.js",
 ALLOWED_ROOTS=("backend/app/","backend/alembic/versions/","assets/")
 ALLOWED_EXACT={"backend/alembic.ini","backend/alembic/env.py","backend/alembic/script.py.mako"}
 PROTECTED=("backend/app/services/preview_", "backend/app/routes/preview_", "backend/app/models/preview.py")
-# Exact obsolete AI-only Python files; these were removed from updates and are
+# Exact obsolete runtime files and a proven unapplied TEST-only migration; these were
 # pruned only inside /home/tahir/opencode-gateway-test after source reconciliation.
-RETIRED_AI = (
+RETIRED_FILES = (
     "backend/app/routes/agent.py",
     "backend/app/services/message_queue.py",
     "backend/app/services/opencode.py",
     "backend/app/services/opencode_catalog.py",
     "backend/app/services/account_provider_runtime.py",
     "backend/app/services/session_recovery.py",
+    # The failed TEST rollout left this uncommitted, unapplied sibling of 0034.
+    # New project binding is 0035 after the pre-existing 0034 payment migration.
+    "backend/alembic/versions/0034_project_native_session_binding.py",
 )
 
 def run(*argv,timeout=90,cwd=None,env=None):
@@ -134,12 +137,12 @@ def rollout(target,mode):
         if expected!=old:changes.append((name,dest,expected))
     # Deleted files are not returned by files(target). Remove only this
     # explicit legacy AI allowlist; never prune arbitrary untracked files.
-    retired = [(name, check(name)) for name in RETIRED_AI if name not in source]
+    retired = [(name, check(name)) for name in RETIRED_FILES if name not in source]
     pending_retired = [(name, dest) for name, dest in retired if dest.exists()]
     print("TARGET",target,"FILES_TOTAL",len(source),"CHANGES",len(changes),
-          "RETIRED_AI_FILES",len(pending_retired),flush=True)
+          "RETIRED_FILES_FILES",len(pending_retired),flush=True)
     for name,_,_ in changes:print("CHANGE",name,flush=True)
-    for name,_ in pending_retired:print("REMOVE_LEGACY_AI",name,flush=True)
+    for name,_ in pending_retired:print("REMOVE_OBSOLETE_FILE",name,flush=True)
     if mode=="audit":return
     oldrev=active_revision()
     if mode=="rollback" and not oldrev:raise RuntimeError("No prior GitHub release marker; rollback unavailable")
@@ -147,7 +150,7 @@ def rollout(target,mode):
     for name,dest,data in changes:replace(dest,data);print("UPDATED",name,flush=True)
     for name, dest in pending_retired:
         dest.unlink()
-        print("DELETED_LEGACY_AI",name,flush=True)
+        print("DELETED_OBSOLETE_FILE",name,flush=True)
         # Remove only Python's compiled artifacts of this exact retired module.
         cached=dest.parent/"__pycache__"
         if cached.is_dir() and not cached.is_symlink():
