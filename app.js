@@ -273,36 +273,6 @@ window.nativeDirectTest=(()=>{
     configuredPending=job;
     try{return await job;}finally{if(configuredPending===job)configuredPending=null;}
   }
-  // Compact, non-secret Native provider index (IDs, display names and counts).
-  // One native /provider discovery when this picker is first opened; reuse the
-  // resulting 50 choices across browser sessions for up to seven days.
-  // This is NOT a provider database, model registry or API-key cache in Gateway.
-  const pickerKey=user=>'og-native-provider-picker-v1:'+user;
-  let pickerPending=null;
-  async function pickerProviders({force=false}={}){
-    const user=ownerScope();
-    if(!force&&pickerPending)return pickerPending;
-    if(!force)try{
-      const saved=JSON.parse(localStorage.getItem(pickerKey(user))||'null');
-      if(saved?.at>Date.now()-7*24*60*60*1000&&Array.isArray(saved.items)&&saved.items.length){
-        return saved.items.filter(row=>row&&typeof row.id==='string').map(row=>({
-          id:row.id,name:row.name||row.id,model_count:row.model_count||0,models:{}
-        }));
-      }
-    }catch{}
-    const job=(async()=>{
-      const native=await catalog({force});
-      if(ownerScope()!==user)throw Error('Account changed during Native provider index loading');
-      const items=native.all.filter(p=>p&&typeof p.id==='string').map(p=>({
-        id:p.id,name:String(p.name||p.id).slice(0,160),
-        model_count:Object.keys(p.models||{}).length
-      }));
-      try{localStorage.setItem(pickerKey(user),JSON.stringify({at:Date.now(),items}));}catch{}
-      return items.map(row=>({...row,models:{}}));
-    })();
-    pickerPending=job;
-    try{return await job;}finally{if(pickerPending===job)pickerPending=null;}
-  }
   // Workspace never downloads the full catalog just to open a conversation.
   // Provider/model visibility is Gateway *control-plane* metadata only; Native
   // remains the sole source of AI model definitions, keys and execution.
@@ -462,7 +432,7 @@ window.nativeDirectTest=(()=>{
     // TEST provider operations are Native-only even before auth is ready.
     // They MUST NOT fall back to Python if the user session/direct link fails.
     if(!nativeMode())return false;
-    if(/^\/api\/opencode\/(?:connections(?:\/|$)|catalog\/providers(?:\/|$)|catalog\/agents(?:$|\?))/.test(path))return true;
+    if(/^\/api\/opencode\/(?:connections(?:\/|$)|catalog\/agents(?:$|\?))/.test(path))return true;
     return /^\/api\/workspaces\/[^/]+\/providers(?:\/|$|\?)/.test(path);
   };
   async function route(path,options={}){
@@ -496,75 +466,15 @@ window.nativeDirectTest=(()=>{
       return {native_acknowledged:true,credential_deleted:true,
         provider_may_remain_available:true};
     }
-    // First paint shows only OpenCode free models and this client's actually
-    // verified connections. All other Native catalog providers remain searchable.
-    if(name==='/api/opencode/catalog/providers/page' &&
-       !parsed.searchParams.get('query') &&
-       Number(parsed.searchParams.get('offset')||0)===0){
-      const [nativeData]=await Promise.all([configuredListing(),visibility()]);
-      const configuredIds=new Set(nativeData.all.map(p=>p.id));
-      const otherNative=catalogSnapshot?catalogSnapshot.all.filter(p=>
-        nativeConnections(catalogSnapshot).includes(p.id)&&!configuredIds.has(p.id)):[];
-      const connected=[...nativeData.all.filter(p=>p.id==='opencode'||nativeData.connected.includes(p.id)),...otherNative];
-      const listData={...nativeData,connected:[...new Set([...nativeData.connected,...otherNative.map(p=>p.id)])],
-        default:{...(catalogSnapshot?.default||{}),...nativeData.default}};
-      // Show up to 50 REAL Native definitions, including disconnected providers
-      // available to connect. A configured model is NOT proof of an API key.
-      // The configured inventory can contain only OpenCode when no client has
-      // connected a paid provider. Fill the picker from Native's catalog once,
-      // but NEVER label those extra entries as connected.
-      let indexRows=nativeData.all;
-      if(indexRows.length<50){
-        try{
-          // Never hold Dashboard's first paint while Native builds the larger
-          // catalog index. A warm seven-day browser cache resolves immediately.
-          // On a cold cache, publish the lightweight inventory now, then
-          // re-render from the Native-derived compact index once it arrives.
-          const pendingIndex=pickerProviders();
-          const nativeIndex=await Promise.race([
-            pendingIndex,
-            new Promise(resolve=>setTimeout(()=>resolve(null),120))
-          ]);
-          if(nativeIndex===null){
-            pendingIndex.then(()=>window.dispatchEvent(new CustomEvent(
-              'native-provider-picker-ready',{detail:{owner:ownerScope()}}
-            ))).catch(()=>{});
-          }
-          if(nativeIndex){
-          if(ownerScope()!==String(currentUser?.id||''))throw Error('Account changed');
-          const names=new Map(nativeIndex.map(p=>[p.id,p]));
-          for(const p of nativeData.all)names.set(p.id,p);
-          indexRows=[...names.values()];
-          }
-        }catch(error){
-          if(error.message==='Account changed')throw error;
-          // Never mask a failed Native catalog request as "one provider".
-          // Preserve the usable Native /config/providers list and report the
-          // failed full index request to Dashboard, without Python fallback.
-          window.dispatchEvent(new CustomEvent('native-provider-picker-error',{
-            detail:{owner:ownerScope(),message:error.message||'Native catalog unavailable'}
-          }));
-        }
-      }
-      const first=ordered({...listData,all:indexRows}).slice(0,50);
-      const items=first.map(p=>idx(p,listData));
-      return {items,connected_items:connected.map(p=>idx(p,listData)),
-        total:indexRows.length,offset:0,limit:50,
-        next_offset:indexRows.length>50?50:null,native_configured_only:false};
-    }
+    // Native /provider is the one catalog source. Dashboard reads it directly;
+    // Workspace still reads Native /config/providers and /agent only.
     const [data]=await Promise.all([catalog(),visibility()]);
-    if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
-      const query=parsed.searchParams.get('query')||'',offset=Number(parsed.searchParams.get('offset')||0);
-      const limit=Math.min(50,Math.max(1,Number(parsed.searchParams.get('limit')||50)));
-      const list=ordered(data,query),items=list.slice(offset,offset+limit).map(p=>idx(p,data));
-      return name.endsWith('/page')?{items,connected_items:data.all.filter(p=>publicFree(p)||nativeConnections(data).includes(p.id)).map(p=>idx(p,data)),total:list.length,offset,limit,next_offset:offset+limit<list.length?offset+limit:null}:items;
-    }
-    if(name.endsWith('/catalog/providers/search')||name.endsWith('/providers/search')){
+    if(name.endsWith('/providers/search')){
       const query=parsed.searchParams.get('query')||'';
       const items=ordered(data,query).slice(0,50).map(p=>idx(p,data));
       return name.startsWith('/api/workspaces/')?{native:true,providers:items}:items;
     }
-    if(name.endsWith('/catalog/providers/resolve')||name.endsWith('/providers/resolve')){
+    if(name.endsWith('/providers/resolve')){
       const p=find(data,parsed.searchParams.get('name')||'');
       const item=idx(p,data);
       return name.startsWith('/api/workspaces/')?{native:true,providers:[item]}:item;
