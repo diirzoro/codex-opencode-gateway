@@ -789,11 +789,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   async function cancelUpload(item){
     if(item.cancelling)return;item.cancelling=true;item.cancelled=true;item.controller?.abort();
     try{
-      if(item.nativeInline){item.state='cancelled';item.error=tr('Attachment removed','تم حذف المرفق');releasePreview(item);return;}
-      if(item.id&&item.owner===currentUser?.id){
-        const result=await api('/api/workspaces/'+item.workspaceId+'/attachments/'+item.id,{method:'DELETE',signal:AbortSignal.timeout(10000)});
-        if(!result.removed)throw Error(tr('Removal was not confirmed.','لم يُؤكد حذف المرفق.'));
-      }
+      item.state='cancelled';item.error=tr('Attachment removed','تم حذف المرفق');releasePreview(item);return;
       item.state=item.id?'cancelled':'cancelling';item.error=item.id?tr('Upload cancelled; temporary attachment removed','تم إلغاء الرفع وحذف المرفق المؤقت'):tr('Upload cancelled; waiting to confirm temporary cleanup','أُلغي الرفع؛ ننتظر تأكيد تنظيف الملف المؤقت');releasePreview(item);
     }catch(error){item.error=tr('Transfer stopped; cleanup unconfirmed: ','توقف النقل؛ لم يُؤكد الحذف: ')+error.message;}
     finally{item.cancelling=false;renderAttachments();saveNativeDraft();}
@@ -804,9 +800,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       item.controller?.abort();
       // Moving to another conversation must not leave an active partial upload
       // behind. Do not remove a ready draft or a Native-leased attachment.
-      if(item.temporary&&!item.nativeInline&&item.id&&item.state==='uploading'&&item.owner===currentUser?.id)
-        api('/api/workspaces/'+item.workspaceId+'/attachments/'+item.id,{
-          method:'DELETE',signal:AbortSignal.timeout(10000)}).catch(()=>{});
+
       releasePreview(item);
     }
     attachments=[];attachmentList.replaceChildren();
@@ -828,51 +822,38 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const sentAttachments=payload=>{const paths=new Set((payload?.attachments||[]).map(a=>a.path));for(const item of attachments.filter(a=>paths.has(a.path)))releasePreview(item);attachments=attachments.filter(a=>!paths.has(a.path));renderAttachments();};
   async function openAttachPicker(){
     if(!activeWorkspace||window.workspaceSubmissionBlocked?.())return;
-    if(window.nativeSession?.active()&&!activeSession)await createSession();
+    if(!window.nativeSession?.active()){toast(tr('OpenCode Native is unavailable; no file was sent.','اتصال OpenCode Native غير متاح؛ لم يُرسل أي ملف.'));return;}
+    if(!activeSession)await createSession();
     const picker=document.createElement('input');picker.type='file';picker.multiple=true;picker.hidden=true;
     picker.oncancel=()=>picker.remove();picker.onchange=async()=>{
       const files=[...(picker.files||[])],workspaceId=activeWorkspace.id,sessionId=activeSession?.id,owner=currentUser?.id,revision=attachmentRevision;picker.remove();
       if(files.length+attachments.length>10){toast(tr('Attach up to 10 files per message.','أرفق حتى 10 ملفات لكل رسالة.'));return;}
       for(const file of files){
         if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)break;
-        const temporary=Boolean(window.nativeSession?.active());
+        const temporary=true;
         // File capability and size acceptance are decided by the installed OpenCode Native and selected model.
         const item={name:file.name,size:file.size,type:file.type||'application/octet-stream',temporary,owner,workspaceId,state:'uploading',preview:['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)?URL.createObjectURL(file):null};attachments.push(item);renderAttachments();
         const valid=()=>revision===attachmentRevision&&workspaceId===activeWorkspace?.id&&sessionId===activeSession?.id&&owner===currentUser?.id&&!item.cancelled;
         let timer;
         try{
           let data;
-          if(temporary){
-            // Browser → Nginx → OpenCode Native: inline file parts, no Python upload API.
-            // Data URL bytes exist only in this draft and are not persisted to localStorage.
-            const dataUrl=await new Promise((resolve,reject)=>{
-              const reader=new FileReader();
-              reader.onload=()=>resolve(reader.result);
-              reader.onerror=()=>reject(reader.error||Error('Cannot read attachment'));
-              reader.readAsDataURL(file);
-            });
-            if(!valid())continue;
-            data={path:'__native_inline__/'+crypto.randomUUID()+'/'+file.name,
-              url:dataUrl,size:file.size,mime:item.type,name:file.name};
-            item.nativeInline=true;
-          }else{
-            const fd=new FormData();fd.append('file',file);
-            data=await api('/api/workspaces/'+workspaceId+'/files/upload',{method:'POST',body:fd,signal:AbortSignal.timeout(120000)});
-          }
+          // Native message parts include the browser file bytes directly.
+          const dataUrl=await new Promise((resolve,reject)=>{
+            const reader=new FileReader();
+            reader.onload=()=>resolve(reader.result);
+            reader.onerror=()=>reject(reader.error||Error('Cannot read attachment'));
+            reader.readAsDataURL(file);
+          });
+          if(!valid())continue;
+          data={path:'__native_inline__/'+crypto.randomUUID()+'/'+file.name,
+            url:dataUrl,size:file.size,mime:item.type,name:file.name};
+          item.nativeInline=true;
           if(!valid())continue;item.path=data.path;item.url=data.url;item.size=data.size;item.type=data.mime||item.type;item.state='ready';
         }catch(error){
           if(valid()){
             item.state='failed';
             item.error=tr('Upload failed: ','فشل رفع الملف: ')+error.message;
-            if(item.temporary&&!item.nativeInline&&item.id&&!item.cancelled){
-              try{
-                const removed=await api('/api/workspaces/'+workspaceId+'/attachments/'+item.id,{
-                  method:'DELETE',signal:AbortSignal.timeout(10000)});
-                if(removed.removed)item.cancelled=true;
-              }catch(_cleanupError){
-                item.error+=' '+tr('Temporary cleanup is unconfirmed; use Clear stalled uploads.','لم يُؤكد تنظيف الملف المؤقت؛ استخدم زر تنظيف الرفع العالق.');
-              }
-            }
+
           }
         }
         finally{clearTimeout(timer);delete item.controller;if(revision===attachmentRevision){renderAttachments();saveNativeDraft();}}
@@ -1827,15 +1808,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const nativeDraftKey=()=>currentUser&&activeWorkspace?'og-native-draft:'+currentUser.id+':'+activeWorkspace.id+':'+(activeSession?.id||'new'):'';
   function saveNativeDraft(){if(!window.nativeSession?.active()||!nativeDraftContext)return;try{localStorage.setItem(nativeDraftContext,JSON.stringify({text:q('promptInput').value,attachments:attachments.filter(a=>a.path&&!a.error&&!a.cancelled&&!a.nativeInline).map(({name,path,size,type,temporary,id})=>({name,path,size,type,temporary,id}))}));}catch{}}
   function restoreNativeDraft(){if(!window.nativeSession?.active())return;const key=nativeDraftKey();if(key===nativeDraftContext)return;nativeDraftContext=key;let value=null;try{value=JSON.parse(localStorage.getItem(key)||'null');}catch{}q('promptInput').value=value?.text||'';clearAttachments();attachments=Array.isArray(value?.attachments)?value.attachments.map(item=>({...item,owner:currentUser?.id,workspaceId:activeWorkspace?.id,state:'ready'})):[];composerDraftRevision++;window.resizeWorkspaceComposer?.();renderAttachments();
-    const revision=attachmentRevision,owner=currentUser?.id;
-    for(const item of attachments.filter(a=>a.temporary&&a.id)){
-      item.error=tr('Checking temporary attachment…','جارٍ التحقق من المرفق المؤقت…');
-      api('/api/workspaces/'+item.workspaceId+'/attachments/'+item.id,{signal:AbortSignal.timeout(10000)}).then(result=>{
-        if(revision!==attachmentRevision||currentUser?.id!==owner)return;
-        item.state=result.state;item.error=result.state==='ready'?null:result.state==='removed'||result.state==='cancelled'?tr('Temporary attachment removed','تم حذف المرفق المؤقت'):tr('Attachment is unavailable for a new prompt. Recover or remove it.','المرفق غير متاح لطلب جديد. استعد المحادثة أو أزله.');
-        renderAttachments();
-      }).catch(()=>{if(revision===attachmentRevision&&currentUser?.id===owner){item.error=tr('Temporary attachment unavailable; remove it or upload again.','المرفق المؤقت غير متاح؛ أزله أو ارفعه مجددًا.');renderAttachments();}});
-    }
+
   }
   q('promptInput').addEventListener('input',()=>{composerDraftRevision++;saveNativeDraft();});
   window.addEventListener('beforeunload',saveNativeDraft);
