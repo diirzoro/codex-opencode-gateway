@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..security.origins import same_origin
 from ..database import get_db
-from ..models import ExecutionEvent, Project, ProviderCredential, User, UserProviderCredential, Workspace, WorkspaceSession
+from ..models import ExecutionEvent, Project, ProjectNativeSessionBinding, ProviderCredential, User, UserProviderCredential, Workspace, WorkspaceSession
 from ..services import credentials, github, policy, providers, runtime_snapshot, preview, session_lifecycle
 from ..services import native_control_bridge as opencode
 from ..services import workspaces as manager
@@ -420,6 +420,72 @@ def projects(user: User=Depends(require_user),db: Session=Depends(get_db)):
 def project(project_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     return manager.project_payload(manager.owned(db,Project,project_id,user.id))
 
+class BindProjectNativeSession(BaseModel):
+    """The browser already created the Native session directly through Nginx."""
+    model_config=ConfigDict(extra="forbid")
+    workspace_id:uuid.UUID
+    native_session_id:str=Field(min_length=1,max_length=120,pattern=r"^[A-Za-z0-9_-]+$")
+
+
+def _native_binding_payload(binding):
+    return {"project_id":str(binding.project_id),
+            "workspace_id":str(binding.workspace_id),
+            "native_session_id":binding.native_session_id}
+
+
+@router.get("/projects/{project_id}/native-binding")
+def native_binding(project_id:uuid.UUID,user:User=Depends(require_user),
+                   db:Session=Depends(get_db)):
+    """Read Platform-owned binding only. NEVER contact the Native service."""
+    manager.owned(db,Project,project_id,user.id)
+    binding=db.get(ProjectNativeSessionBinding,project_id)
+    if binding is None:return {"project_id":str(project_id),"binding":None}
+    if binding.user_id!=user.id:raise HTTPException(404,"Project not found")
+    return {"project_id":str(project_id),"binding":_native_binding_payload(binding)}
+
+
+@router.post("/projects/{project_id}/native-binding")
+def bind_native_session(project_id:uuid.UUID,data:BindProjectNativeSession,
+                        request:Request,user:User=Depends(require_user),
+                        db:Session=Depends(get_db)):
+    """Persist an immutable project-to-session reference; no Native API calls.
+
+    A legacy multi-session Project needs an explicit owner-reviewed recovery
+    instead of silently choosing the newest session and losing history.
+    """
+    if not same_origin(request.headers.get("origin"),settings.public_base_url):
+        raise HTTPException(403,"Project binding requires the Gateway origin")
+    project=db.scalar(select(Project).where(
+        Project.id==project_id,Project.user_id==user.id).with_for_update())
+    if project is None:raise HTTPException(404,"Project not found")
+    if project.archived_at is not None:
+        raise HTTPException(409,"Restore this project before binding a conversation")
+    workspace=manager.owned(db,Workspace,data.workspace_id,user.id)
+    if workspace.project_id!=project.id:
+        raise HTTPException(404,"Workspace does not belong to this project")
+    current=db.get(ProjectNativeSessionBinding,project.id)
+    if current is not None:
+        if (current.user_id!=user.id or current.workspace_id!=workspace.id
+                or current.native_session_id!=data.native_session_id):
+            raise HTTPException(409,"This project already has another persistent Native session")
+        return _native_binding_payload(current)
+    legacy=db.scalar(select(WorkspaceSession.id).join(
+        Workspace,WorkspaceSession.workspace_id==Workspace.id).where(
+        Workspace.project_id==project.id).limit(1))
+    if legacy is not None:
+        raise HTTPException(409,
+            "Legacy sessions exist: select the main session through an owner-reviewed recovery; no history was changed")
+    binding=ProjectNativeSessionBinding(project_id=project.id,user_id=user.id,
+        workspace_id=workspace.id,native_session_id=data.native_session_id)
+    db.add(binding)
+    try:db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409,
+            "Native session is already bound or another request claimed this project") from None
+    return _native_binding_payload(binding)
+
+
 @router.patch("/projects/{project_id}")
 def rename(project_id: uuid.UUID,data: RenameProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Project,project_id,user.id); row.name=data.name
@@ -471,6 +537,11 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
             PreviewRuntimeLease.workspace_id.in_([w.id for w in rows]),
             PreviewRuntimeLease.state.in_(['queued','starting','running'])).limit(1))
         if live:raise HTTPException(409,'Stop this project preview before deleting local files')
+    # Until the owner approves a reversible deletion workflow for Native history,
+    # do not remove local worktrees before resolving a persistent session binding.
+    if db.get(ProjectNativeSessionBinding,project.id) is not None:
+        raise HTTPException(409,
+            "This project has a persistent Native session; back up and detach its binding before deleting its files")
     paths=[]
     for row in rows:
         if not workspace_cache.runtime_idle(row):
