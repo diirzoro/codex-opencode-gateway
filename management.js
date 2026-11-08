@@ -637,6 +637,36 @@
     clearAuthenticatedState('authPage');resetRecovery();window.openAuthLogin();
     apiMessage('loginMessage',tr('Password reset. Sign in with your username or email and new password.','تم تعيين كلمة المرور. ادخل باسم المستخدم أو البريد وكلمة المرور الجديدة.'));
   }
+  function showRecoveredAccountCode(data){
+    // Pending accounts remain inactive until this fresh OTP is verified.
+    resetToken=null;window.passwordRecoveryActive=true;
+    document.getElementById('authDialog')?.close();
+    showPage('authPage');$('#authPage .auth-shell').hidden=true;recovery.hidden=false;
+    recovery.replaceChildren(
+      node('h2',tr('Confirm your email','تأكيد البريد الإلكتروني')),
+      node('p',tr('Enter the six-digit code sent to your email. Your 30-day trial begins only after verification.',
+        'أدخل رمز التفعيل المكون من ستة أرقام المرسل إلى بريدك. تبدأ التجربة المجانية لمدة 30 يومًا بعد التحقق.'))
+    );
+    let challenge=data.verification_challenge;
+    form(recovery,f=>{
+      const code=input(f,tr('Six-digit activation code','رمز التفعيل المكون من 6 أرقام'),'code','text');
+      code.required=true;code.minLength=6;code.maxLength=6;code.pattern='[0-9]{6}';
+      code.inputMode='numeric';code.autocomplete='one-time-code';
+    },tr('Verify and activate account','التحقق وتفعيل الحساب'),async(values,f)=>{
+      const result=await api('/api/auth/verify-email-code',{
+        method:'POST',body:JSON.stringify({challenge_id:challenge,code:values.code})});
+      f.elements.code.value='';
+      resetRecovery();renderProfile(result);
+      await openWorkspaceAfterLogin();
+    });
+    recovery.append(button(tr('Resend activation code','إعادة إرسال رمز التفعيل'),async()=>{
+      const result=await api('/api/auth/resend-verification-code',{
+        method:'POST',body:JSON.stringify({challenge_id:challenge})});
+      challenge=result.verification_challenge;
+      toast(tr('A new code was sent to your email.','تم إرسال رمز جديد إلى بريدك المسجّل.'));
+    }));
+    recovery.append(button(tr('Back to login','العودة لتسجيل الدخول'),()=>closeRecovery().catch(error=>toast(error.message))));
+  }
   async function closeRecovery(){
     if(window.reactivationAccount)await window.logoutSession();
     resetToken=null;resetRecovery();window.openAuthLogin();window.scrollTo(0,0);
@@ -689,7 +719,7 @@
       )));
       form(recovery,f=>{const i=input(f,tr(reset?'New password: 8+, number and symbol':'Account email',reset?'كلمة جديدة: 8 أحرف ورقم ورمز':'بريد الحساب'),reset?'password':'email',reset?'password':'email');i.required=true;if(reset){i.minLength=8;i.maxLength=128;i.autocomplete='new-password';}},tr(reset?'Reset':'Send recovery link',reset?'إعادة تعيين':'إرسال رابط الاستعادة'),async(values,f)=>{
         const data=await api(reset?'/api/auth/reset-password':'/api/auth/forgot-password',{method:'POST',body:JSON.stringify(reset?{token:resetToken,password:values.password}:values)});
-        if(reset){finishPasswordReset(f);}
+        if(reset){if(data?.activation_required)showRecoveredAccountCode(data);else finishPasswordReset(f);}
         else toast(tr('If an eligible account matches, a recovery link will be emailed. Archived customers can verify ownership to renew.','إذا وُجد حساب مؤهل، سيُرسل رابط استعادة إلى البريد. يمكن للعميل المؤرشف إثبات الملكية للتجديد.'));
       });
     }
