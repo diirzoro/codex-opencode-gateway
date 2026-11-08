@@ -45,11 +45,19 @@ const metadata={
   default:{opencode:'free-test'}
 };
 const agentMetadata=[{name:'build',mode:'primary',prompt:'DO_NOT_CACHE_THIS'}];
+const fullProviderCatalog={
+  all:[...metadata.providers,...Array.from({length:75},(_,i)=>({
+    id:'native-provider-'+i,name:'Native Provider '+i,
+    models:{['model-'+i]:{name:'Model '+i}}
+  }))],
+  connected:['deepseek','google'],default:{opencode:'free-test'}
+};
 async function fetchMock(address){
   const pathname=new URL(address,'https://test.opencode-gateway.codes').pathname;
   requests.push(pathname);
   const payload=pathname.endsWith('/config/providers')?metadata:
-    pathname.endsWith('/agent')?agentMetadata:null;
+    pathname.endsWith('/agent')?agentMetadata:
+    pathname.endsWith('/provider')?fullProviderCatalog:null;
   assert(payload!==null,'Unexpected Native route '+pathname);
   return {ok:true,status:200,text:async()=>JSON.stringify(payload)};
 }
@@ -88,8 +96,22 @@ function createClient(){
   const cached=sessionStorage.getItem('og-native-model-metadata-v1:test-user');
   assert(cached&&cached.includes('free-test'),'Native metadata must be cached');
   assert(!cached.includes('DO_NOT_CACHE_THIS'),'Agent prompts must not be cached');
+  const page=await reopened.route('/api/opencode/catalog/providers/page?limit=50&offset=0');
+  assert.equal(page.items.length,50,'Connections must show 50 Native provider choices');
+  assert.equal(page.items.filter(p=>p.connected).length,1,
+    'Native shared credentials must not mark unverified client providers connected');
+  assert(page.items.some(p=>p.id==='opencode'),'Default OpenCode must be visible');
+  assert(page.items.some(p=>p.id==='deepseek'),'Unconnected DeepSeek must remain selectable');
+  assert.equal(requests.filter(path=>path.endsWith('/provider')).length,1,
+    'Native full catalog should load once for the first 50-provider picker');
+  const nextClient=createClient();
+  const cachedPage=await nextClient.route('/api/opencode/catalog/providers/page?limit=50&offset=0');
+  assert.equal(cachedPage.items.length,50,'50-provider picker metadata must survive reload');
+  assert.equal(requests.filter(path=>path.endsWith('/provider')).length,1,
+    'Browser provider picker cache should prevent repeated full Native catalog requests');
   reopened.forget({fresh:true});
   await reopened.workspaceRegistry();
-  assert.equal(requests.length,4,'Explicit refresh must bypass both Native metadata caches');
+  assert.equal(requests.filter(path=>path.endsWith('/config/providers')).length,2,
+    'Explicit refresh must bypass Native configuration cache');
   console.log('NATIVE_BROWSER_CATALOG_CACHE_REGRESSION_PASS');
 })().catch(error=>{console.error(error);process.exitCode=1;});
