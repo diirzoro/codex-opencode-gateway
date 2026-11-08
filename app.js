@@ -556,8 +556,11 @@ const api=async(path,options={})=>{
         requested.split('/').some(part=>part==='..'))
        throw Error('Invalid project file path');
      const directory=await ownedDirectory(match[1]);
+     const selectedPath=requested
+       ?directory.replace(/\/$/,'')+'/'+requested
+       :directory;
      const resource=(match[2]?'file/content':'file')+
-       (requested?'?path='+encodeURIComponent(directory.replace(/\/$/,'')+'/'+requested):'');
+       '?path='+encodeURIComponent(selectedPath);
      const result=await window.nativeDirectTest.direct(resource,{directory,signal:options.signal});
      if(match[2]){
        const content=typeof result==='string'?result:result?.content;
