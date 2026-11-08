@@ -14,10 +14,11 @@ def verify_connection(db):
     secret = config.get("secret_key") or ""
     publishable = config.get("publishable_key") or ""
     mode = config.get("mode")
-    if mode not in ("test", "live") or not secret.startswith(("sk_" + mode + "_", "rk_" + mode + "_")):
-        raise HTTPException(409, "Stripe requires a saved test-mode secret key")
-    if not publishable.startswith("pk_" + mode + "_"):
-        raise HTTPException(409, "Stripe requires a saved test-mode publishable key")
+    # Diagnostics are TEST-only. Never probe the real Stripe account here.
+    if mode != "test" or not secret.startswith("sk_test_"):
+        raise HTTPException(409, "Stripe TEST check requires an sk_test_ secret key")
+    if not publishable.startswith("pk_test_"):
+        raise HTTPException(409, "Stripe TEST check requires a pk_test_ publishable key")
     try:
         with httpx.Client(timeout=12, follow_redirects=False, trust_env=False) as client:
             result = client.get(
