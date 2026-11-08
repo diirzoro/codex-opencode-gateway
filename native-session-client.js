@@ -524,7 +524,7 @@
       // Resolve the exact Native message ID against authoritative history
       // before reporting uncertainty. Never send the prompt a second time.
       let confirmed=Boolean(pending.accepted);
-      if(!confirmed&&!error.nativeNotForwarded&&owner()===user&&epoch===sendEpoch){
+      if(!confirmed&&owner()===user&&epoch===sendEpoch){
         try{
           const messages=await freshHistory(id);
           confirmed=Boolean(pending.accepted)||messages.some(message=>message.info?.id===messageID);
@@ -535,10 +535,7 @@
       if(epoch!==sendEpoch||owner()!==user)throw Error('Authenticated account changed');
       if((sendGenerations.get(id)||0)!==sendGeneration)throw Error(label('Submission interrupted by Stop. Review history before sending again.','قوطع الطلب بالإيقاف. راجع السجل قبل الإرسال مجددًا.'));
       if(!confirmed){
-        if(error.nativeNotForwarded){
-          uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
-          error.message=label('Gateway rejected the request before sending it to OpenCode. Draft preserved.','رفض Gateway الطلب قبل إرساله إلى OpenCode. المسودة محفوظة.')+' (HTTP '+error.status+') '+error.message;
-        }else if(owner()===user&&(!error.status||error.status===408||error.status>=500))
+        if(owner()===user&&(!error.status||error.status===408||error.status>=500))
           error.message=label('OpenCode receipt could not be confirmed. Your draft is saved; check session status.','تعذر تأكيد استلام OpenCode للطلب. المسودة محفوظة؛ تحقق من حالة الجلسة.')+(error.status?' (HTTP '+error.status+')':'');
         else if(owner()===user){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}
         throw error;
