@@ -644,22 +644,27 @@
   window.addEventListener('authentication-cleared',()=>{window.reactivationAccount=null;resetRecovery();});
   window.openReactivation=async()=>{
     await authReady;
-    const state=await api('/api/auth/reactivation',{allowAnonymous:true});window.reactivationAccount=state;window.passwordRecoveryActive=true;
-    document.getElementById('authDialog')?.close();showPage('authPage');$('#authPage .auth-shell').hidden=true;recovery.hidden=false;
-    restoreBilling();recovery.replaceChildren(node('h2',tr('Reactivate your account','إعادة تفعيل حسابك')),
-      node('p',tr('Email ownership verified. This short-lived session allows renewal only; workspace access remains unavailable.','تم إثبات ملكية البريد. تسمح هذه الجلسة القصيرة بالتجديد فقط؛ الوصول لمساحة العمل غير متاح.')));
-    if(state.payment_verified){
-      recovery.append(node('p',tr('Payment verified. Set a fresh password, then sign in normally.','تم التحقق من الدفع. عيّن كلمة مرور جديدة ثم سجّل الدخول بالطريقة المعتادة.')));
-      form(recovery,f=>{const i=input(f,tr('New password: 8+, number and symbol','كلمة جديدة: 8 أحرف ورقم ورمز'),'password','password');i.required=true;i.minLength=8;i.maxLength=128;i.autocomplete='new-password';},tr('Set password','تعيين كلمة المرور'),async(values,f)=>{
-        await api('/api/auth/reactivation/password',{method:'POST',body:JSON.stringify(values)});f.elements.password.value='';
-        await window.logoutSession();resetRecovery();toast(tr('Account reactivated. Sign in with your fresh password.','تمت إعادة تفعيل الحساب. سجّل الدخول بكلمة المرور الجديدة.'));
-      });
-    }else{
-      billingPanel.classList.add('active');$('#billingCancel').hidden=true;recovery.append(billingPanel);
-      await window.loadReactivationBilling();await window.loadReactivationOrders();
-      recovery.append(button(tr('Check payment status','التحقق من حالة الدفع'),()=>window.openReactivation().catch(error=>{apiMessage('billingMessage',error.message,true)})));
-    }
-    recovery.append(button(tr('Exit / request a new recovery link','خروج / طلب رابط استعادة جديد'),()=>closeRecovery().catch(error=>toast(error.message))));
+    const state=await api('/api/auth/reactivation',{allowAnonymous:true});
+    window.reactivationAccount=state;window.passwordRecoveryActive=true;
+    document.getElementById('authDialog')?.close();
+    showPage('authPage');$('#authPage .auth-shell').hidden=true;recovery.hidden=false;
+    // Email verification is complete. Billing is never part of activation.
+    restoreBilling();
+    recovery.replaceChildren(
+      node('h2',tr('Reactivate your account','إعادة تفعيل حسابك')),
+      node('p',tr('Email verified. Set a new password to activate your account. Subscription and payment are separate after login.',
+        'تم التحقق من البريد. عيّن كلمة مرور جديدة لتفعيل الحساب. الاشتراك والدفع عمليتان منفصلتان بعد الدخول.'))
+    );
+    form(recovery,f=>{
+      const i=input(f,tr('New password: 8+, number and symbol','كلمة مرور جديدة: 8 أحرف ورقم ورمز'),'password','password');
+      i.required=true;i.minLength=8;i.maxLength=128;i.autocomplete='new-password';
+    },tr('Activate account','تفعيل الحساب'),async(values,f)=>{
+      await api('/api/auth/reactivation/password',{method:'POST',body:JSON.stringify(values)});
+      f.elements.password.value='';
+      window.reactivationAccount=null;
+      finishPasswordReset(f);
+    });
+    recovery.append(button(tr('Back to login','رجوع للدخول'),()=>closeRecovery().catch(error=>toast(error.message))));
   };
   async function recover(reset=false){
     await authReady;window.passwordRecoveryActive=true;document.getElementById('authDialog')?.close();showPage('authPage');$('#authPage .auth-shell').hidden=true;recovery.hidden=false;
@@ -673,8 +678,8 @@
       catch(error){status.textContent=error.message;status.setAttribute('role','alert');recovery.append(button(tr('Back to recovery','العودة للاستعادة'),()=>recover()));return;}
     }
     if(archived){
-      recovery.append(node('p',tr('Your preserved account is archived. Verify ownership to renew; normal access requires verified payment and a fresh password.','حسابك المحفوظ مؤرشف. أثبت الملكية للتجديد؛ يتطلب الدخول العادي دفعًا موثّقًا وكلمة مرور جديدة.')));
-      form(recovery,()=>{},tr('Verify email and renew','إثبات البريد والتجديد'),async()=>{
+      recovery.append(node('p',tr('Verify ownership using this email link, then set a new password. Payment is not required for activation.','أثبت ملكية الحساب باستخدام رابط البريد، ثم عيّن كلمة مرور جديدة. الدفع ليس شرطًا للتفعيل.')));
+      form(recovery,()=>{},tr('Verify email and continue','إثبات البريد والمتابعة'),async()=>{
         const state=await api('/api/auth/reactivation/verify',{method:'POST',body:JSON.stringify({token:resetToken})});resetToken=null;clearAuthenticatedState();window.reactivationAccount=state;await window.openReactivation();
       });
     }else{
