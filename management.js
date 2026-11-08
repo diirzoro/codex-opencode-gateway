@@ -168,20 +168,17 @@
     // Native owns and caches the model catalog; no second provider picker store.
     async function accountCatalogRows(){
       if(!window.nativeDirectTest?.active())throw Error('OpenCode Native is unavailable');
-      // Both sources are OpenCode Native; never wait for a Gateway Python
-      // display-policy request just to list or connect a provider.
-      const [native,configured]=await Promise.all([
-        window.nativeDirectTest.catalog(),
-        window.nativeDirectTest.configuredProviders()
-      ]);
-      const connected=new Set(configured.connected||[]);
+      // Read the already-running OpenCode Native server once. This
+      // installation does not implement /config/providers (404).
+      const native=await window.nativeDirectTest.catalog();
+      const connected=new Set(['opencode',...(native.connected||[])]);
       const preferred=new Set(['opencode','deepseek','openai','anthropic','google']);
       return (native.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
         id:p.id,name:p.name||p.id,model_count:Object.keys(p.models||{}).length,
         connected:connected.has(p.id),public_free:p.id==='opencode',
         verified:false,
         visible:true,allowed:true,
-        default_model:configured.default?.[p.id]
+        default_model:native.default?.[p.id]
       })).sort((a,b)=>Number(b.connected)-Number(a.connected)
         ||Number(preferred.has(b.id))-Number(preferred.has(a.id))
         ||a.name.localeCompare(b.name));
