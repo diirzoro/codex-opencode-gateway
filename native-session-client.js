@@ -130,8 +130,8 @@
       const list=await localProjectSessionRows(workspace);
       const selected=list.find(row=>row.id===id);
       if(selected)return selected;
-      throw Error(label('This Project requires an explicit Native session recovery; no replacement was created.',
-        'يحتاج المشروع إلى استعادة جلسة Native مقصودة؛ لم تُنشأ جلسة بديلة.'));
+      throw Error(label('No registered Native session is available for this Project.',
+        'لا توجد جلسة Native مسجلة لهذا المشروع.'));
     }
     const value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});
     if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');
@@ -205,8 +205,8 @@
     const existing=await window.nativeDirectTest.direct('session',{directory:ctx.root});
     if(!Array.isArray(existing))throw Error('Native session inventory is unavailable');
     if(existing.some(row=>row?.id&&row.directory===ctx.root))
-      throw Error(label('Existing Native conversations need explicit Project recovery. No history was deleted.',
-        'توجد محادثات Native قديمة تتطلب استعادة مقصودة للمشروع. لم يُحذف التاريخ.'));
+      throw Error(label('Native already contains a session for this project directory. Do not create a duplicate.',
+        'توجد جلسة Native بالفعل في مجلد المشروع. لن ننشئ جلسة مكررة.'));
     const data=JSON.parse(options.body||'{}');
     const live=await window.nativeDirectTest.direct('session',{
       method:'POST',directory:ctx.root,
