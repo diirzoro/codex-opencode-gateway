@@ -177,20 +177,19 @@
     return window.nativeDirectTest?.rootFromFile(record?.file_base)
       ||window.nativeDirectTest?.defaultDirectory?.();
   }
-  const url=(workspace,path)=>window.nativeDirectTest?.active?.()
-    ?window.nativeDirectTest.url(path,nativeRoot(workspace))
-    :'/native-session/'+encodeURIComponent(workspace)+'/'+path;
+  const url=(workspace,path)=>window.nativeDirectTest.url(path,nativeRoot(workspace));
   async function native(workspace,path,body,{signal,timeout=30000}={}){
+    // No Python or legacy /native-session fallback. Native is the only engine.
+    if(!window.nativeDirectTest?.active?.())throw Error('OpenCode Native is unavailable');
     const controller=new AbortController(),cancel=()=>controller.abort();
-    if(signal?.aborted)controller.abort();else signal?.addEventListener('abort',cancel,{once:true});
+    if(signal?.aborted)controller.abort();
+    else signal?.addEventListener('abort',cancel,{once:true});
     const timer=setTimeout(cancel,timeout);
     try{
-      if(window.nativeDirectTest?.active?.())
-        return await window.nativeDirectTest.direct(path,{
-          method:body===undefined?'GET':'POST',value:body,
-          directory:nativeRoot(workspace),signal:controller.signal
-        });
-      return await api(url(workspace,path),{...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)}),signal:controller.signal});
+      return await window.nativeDirectTest.direct(path,{
+        method:body===undefined?'GET':'POST',value:body,
+        directory:nativeRoot(workspace),signal:controller.signal
+      });
     }finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
   }
   async function sessionRequest(id,suffix,body){const row=await context(id);return native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+(suffix?'/'+suffix:''),body);}
