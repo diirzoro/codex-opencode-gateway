@@ -1516,7 +1516,6 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   // session/submission guards without changing subscription or billing logic.
   const renderAccess=renderEntitlement;renderEntitlement=function(){renderAccess();updateSend();};
   // One Project has one Native session: no separate conversation list, search or lifecycle actions.
-  let conversationSelection=0;
   function renderRuntimeSessions(rows){
     if(!Array.isArray(rows))return;
     sessionRows=rows.filter(row=>row.workspace_id===activeWorkspace?.id).slice(0,1);
@@ -1642,7 +1641,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   window.refreshWorkspaceSessionStatus=refreshSessionStatus;
   let eventRefreshTimer=null;
   window.addEventListener('authentication-cleared',()=>{
-    historyRevision++;openingConversation=null;
+    historyRevision++;
     if(drawer())closePane();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);window.refreshWorkspaceQueue?.();clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
     pendingSubmission=null;sending=cancelRequested=false;sessionRows=[];providers=[];chosenAgent=chosenProvider=chosenModel='';
     runtimeReady=agentsReady=modelsReady=workAccess=false;entitlement=null;workspaceDays.hidden=workspaceAccess.hidden=true;workspaceDays.textContent='';workspaceAccess.replaceChildren();homeAccess.replaceChildren();retrySubmission.hidden=retryModels.hidden=true;
