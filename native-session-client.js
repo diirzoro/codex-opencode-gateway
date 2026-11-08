@@ -520,7 +520,7 @@
       url:f.url||row.file_base+String(f.path).split('/').map(encodeURIComponent).join('/'),
       filename:f.name||String(f.path).split('/').at(-1)
     }))];
-    const pending={messageID,text,files,providerID,modelID,agent,variant};uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}
+    const pending={messageID,text,files:files.map(f=>({path:f.path,mime:f.mime,name:f.name})),providerID,modelID,agent,variant};uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}
     const submissionController=new AbortController();submissionsInFlight.set(id,submissionController);
     try{await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
       messageID,model:{providerID,modelID},...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,timeout:30000});}
