@@ -880,35 +880,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       if(revision===attachmentRevision)loadStorage().catch(()=>{});
     };document.body.append(picker);picker.click();
   }
-  const clearStalled=btn('clearStalledChatUploads','Clear stalled uploads','تنظيف المرفقات العالقة',async()=>{
-    if(!activeWorkspace||!window.nativeSession?.active())return;
-    const workspaceId=activeWorkspace.id,owner=currentUser?.id;
-    const found=await api('/api/workspaces/'+workspaceId+'/attachments/pending',{signal:AbortSignal.timeout(15000)});
-    if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
-    const removable=(found.items||[]).filter(item=>item.state==='uploading'||item.state==='ready');
-    const processing=(found.items||[]).filter(item=>item.state==='processing').length;
-    if(!removable.length){
-      toast(processing?tr('Only Native-processing attachments remain. Stop their conversation first; no files were deleted.','تبقت مرفقات يستخدمها OpenCode حاليًا. أوقف المحادثة أولًا؛ لم تُحذف ملفات.'):tr('No stalled or unsent attachments found.','لا توجد مرفقات معلقة أو غير مرسلة.'));
-      return;
-    }
-    const approved=await window.confirmAction(tr(
-      'Delete '+removable.length+' unsubmitted/unfinished temporary uploads across this Workspace? This includes unsent drafts in other conversations. Native-processing attachments, chat history and project files are preserved.',
-      'هل تريد حذف '+removable.length+' من المرفقات المؤقتة غير المرسلة أو غير المكتملة في مساحة العمل هذه، بما فيها مسودات المحادثات الأخرى؟ ستبقى مرفقات OpenCode النشطة وسجل المحادثات وملفات المشاريع محفوظة.'));
-    if(!approved||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
-    const result=await api('/api/workspaces/'+workspaceId+'/attachments/clear-pending',{method:'POST',
-      signal:AbortSignal.timeout(30000)});
-    if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
-    const removed=new Set(result.removed_ids||[]);
-    for(const item of attachments)if(removed.has(item.id))item.controller?.abort();
-    for(const item of attachments.filter(item=>removed.has(item.id)))releasePreview(item);
-    attachments=attachments.filter(item=>!removed.has(item.id));
-    renderAttachments();saveNativeDraft();
-    toast(tr('Removed '+result.removed+' temporary upload(s). '+result.skipped_processing+' Native-processing file(s) preserved.',
-      'حُذف '+result.removed+' من المرفقات المؤقتة. تم الاحتفاظ بـ'+result.skipped_processing+' ملف يستخدمه OpenCode حاليًا.'));
-  });
-  clearStalled.title=tr('Clean only owned temporary uploads, never Native chat history or project files','تنظيف المرفقات المؤقتة المملوكة فقط دون حذف المحادثات أو ملفات المشاريع');
-  clearStalled.hidden=true; // No legacy Python temporary-upload queue in Native mode.
-  controls.insertBefore(clearStalled,attach.nextSibling);
+
   q('openTools').onclick=()=>window.openConnections('providers');q('openTools').title=tr('Open OpenCode provider and workspace setup','\u0641\u062a\u062d \u0625\u0639\u062f\u0627\u062f \u0645\u0632\u0648\u062f OpenCode \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644');q('chatGithub').onclick=()=>openConnections('github');
   // Project, conversations and preview have independent panel tabs.
   const sessionsSection=document.createElement('section');sessionsSection.className='workspace-conversations';sessionsSection.hidden=true;
