@@ -111,26 +111,7 @@ async def browser_boundary(request: Request, call_next):
             return JSONResponse({"detail": "Cross-site request denied"}, status_code=403)
         if origin and (urlsplit(origin).scheme, urlsplit(origin).netloc) != (request.url.scheme, request.url.netloc):
             return JSONResponse({"detail": "Cross-site request denied"}, status_code=403)
-    upload_db = None
-    match = re.fullmatch(r"/api/workspaces/([0-9a-f-]{36})/files/upload", request.url.path)
-    if request.method == "POST" and match:
-        import uuid
-        try:
-            identifier = uuid.UUID(match[1])
-        except ValueError:
-            return JSONResponse({"detail": "Invalid workspace ID"}, status_code=422)
-        try:
-            upload_db = await asyncio.to_thread(workspace_cache.begin_upload, request, identifier)
-        except HTTPException as error:
-            return JSONResponse({"detail": error.detail}, status_code=error.status_code)
-    try:
-        response = await call_next(request)
-    except BaseException:
-        if upload_db is not None:
-            await asyncio.to_thread(workspace_cache.end_upload, upload_db, False)
-        raise
-    if upload_db is not None:
-        await asyncio.to_thread(workspace_cache.end_upload, upload_db, response.status_code < 400)
+    response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
     # Correlate failed Preview documents/assets without recording URLs, query
