@@ -49,7 +49,7 @@ def consent_payload(db, user_id):
 
 
 def archive_due(*, now=None):
-    from . import opencode, workspace_cache
+    from . import platform_locks, workspace_cache
     from .entitlements import access_payload
     from .archive_storage import StagedRuntime, recover_pending
     with SessionLocal() as recovery_db:
@@ -84,12 +84,12 @@ def archive_due(*, now=None):
                     if ids_before != locked:
                         raise RuntimeError("Operational activity is in progress")
                 rows = list(db.scalars(select(Workspace).where(Workspace.user_id == identifier)))
-                account_lock = opencode.workspace_lock(opencode.account_workspace(identifier))
+                account_lock = platform_locks.workspace_lock(platform_locks.account_workspace(identifier))
                 if not account_lock.acquire(blocking=False):
                     raise RuntimeError("Account authentication is in progress")
                 locks.append(account_lock)
                 for row in rows:
-                    lock = opencode.workspace_lock(row)
+                    lock = platform_locks.workspace_lock(row)
                     if not lock.acquire(blocking=False):
                         raise RuntimeError("Workspace write is in progress")
                     locks.append(lock)
@@ -105,11 +105,6 @@ def archive_due(*, now=None):
                 activity.extend(aware(r.last_activity_at) for r in rows)
                 activity.extend(aware(value) for value in db.scalars(select(AuthSession.last_seen_at).where(
                     AuthSession.user_id == identifier, AuthSession.last_seen_at.is_not(None))))
-                # The account runtime exists even when no project was created.
-                # Stop it before erasing auth files so secrets do not survive in memory.
-                opencode.stop_workspace(opencode.account_workspace(identifier))
-                for row in rows:
-                    opencode.stop_workspace(row)
                 # Project files have their own inactivity policy; account
                 # archival removes only sensitive operational runtime storage.
                 storage = StagedRuntime(identifier)
