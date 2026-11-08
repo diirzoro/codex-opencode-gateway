@@ -241,11 +241,11 @@ class CopyDecision(BaseModel):
 def disconnect_copy(workspace_id: uuid.UUID,body: CopyDecision,
                     user: User=Depends(require_user),db: Session=Depends(get_db)):
     from ..services import workspaces,workspace_cache
-    from ..services import native_control_bridge as opencode
+    from ..services import platform_locks
     from . import workspaces as git_routes
     row,connection=_disconnect_copy(db,user,workspace_id)
     if connection.id!=body.connection_id:raise HTTPException(409,'Connection changed; review again')
-    with opencode.workspace_lock(row):
+    with platform_locks.workspace_lock(row):
         github.lock_owner(db,user)
         row,connection=_disconnect_copy(db,user,workspace_id)
         if connection.id!=body.connection_id:raise HTTPException(409,'Connection changed; review again')
