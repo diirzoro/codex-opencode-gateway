@@ -66,42 +66,42 @@ jobs:
           ssh -T -p "${PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             'cat /home/tahir/opencode-gateway-test/backend/alembic/versions/0034_payment_profile_publications.py'
 
-      - name: Read-only TEST database revision and schema privileges
+      - name: Read-only TEST database revision and privilege diagnosis via existing sudo
         env:
-          HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ secrets.VPS_USER }}
-          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          HOST: \${{ secrets.STAGING_HOST }}
+          USER: \${{ secrets.VPS_USER }}
+          PORT: \${{ secrets.TEST_VPS_SSH_PORT }}
+          SUDO_PASSWORD: \${{ secrets.VPS_SUDO_PASSWORD }}
         run: |
           set -euo pipefail
-          ssh -T -p "${PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" 'bash -s' <<'SHELL'
-          set -eu
-          cd /home/tahir/opencode-gateway-test
-          .venv/bin/python - <<'PY'
-          import re,shlex
+          script="$(base64 -w0 <<'PYTHON'
+          import re, shlex
           from pathlib import Path
           import sqlalchemy as sa
           from sqlalchemy import text
-          matches=[x for x in Path('.env').read_text().splitlines()
-                   if re.match(r'^\s*(?:export\s+)?DATABASE_URL\s*=',x)]
-          if not matches:raise SystemExit('TEST_DATABASE_URL_NOT_FOUND')
-          raw=re.sub(r'^\s*(?:export\s+)?DATABASE_URL\s*=\s*','',matches[-1])
-          url=shlex.split(raw,comments=True,posix=True)[0]
+          root=Path('/home/tahir/opencode-gateway-test')
+          values=[line for line in (root/'.env').read_text().splitlines()
+                  if re.match(r'^\s*(?:export\s+)?DATABASE_URL\s*=',line)]
+          if len(values)!=1:raise RuntimeError('Expected exactly one TEST database URL')
+          url=shlex.split(re.sub(r'^\s*(?:export\s+)?DATABASE_URL\s*=\s*','',values[0]),comments=True,posix=True)[0]
           engine=sa.create_engine(url)
-          with engine.connect() as conn:
-              database=conn.execute(text('SELECT current_database()')).scalar()
-              assert database=='opencode_gateway_test','Wrong database; no query continued'
-              rev=conn.execute(text('SELECT version_num FROM alembic_version')).scalars().all()
-              print('TEST_DB_CURRENT_REVISIONS',','.join(rev))
-              print('TEST_DB_SCHEMA_CREATE',conn.execute(text("SELECT has_schema_privilege(current_user,current_schema(),'CREATE')")).scalar())
-              for table in ['users','projects','workspaces','payment_provider_profiles',
-                            'payment_profile_publications','project_native_session_bindings']:
-                  present=conn.execute(text('SELECT to_regclass(:name) IS NOT NULL'),{'name':table}).scalar()
-                  print('TEST_TABLE_EXISTS',table,present)
-                  if present:
-                      for privilege in ['REFERENCES','SELECT','INSERT','UPDATE']:
-                          allowed=conn.execute(text('SELECT has_table_privilege(current_user,:name,:privilege)'),
-                                               {'name':table,'privilege':privilege}).scalar()
-                          print('TEST_TABLE_PRIVILEGE',table,privilege,allowed)
+          with engine.connect() as c:
+              if c.execute(text('select current_database()')).scalar_one()!='opencode_gateway_test':
+                  raise RuntimeError('Wrong TEST database')
+              versions=list(c.execute(text('select version_num from alembic_version')).scalars())
+              print('TEST_DB_VERSIONS',','.join(versions))
+              print('TEST_SCHEMA_CREATE',c.execute(text("select has_schema_privilege(current_user,current_schema(),'CREATE')")).scalar())
+              for name in ('users','projects','workspaces','billing_methods','payment_provider_profiles','payment_profile_publications','project_native_session_bindings'):
+                  exists=c.execute(text('select to_regclass(:table) is not null'),{'table':name}).scalar()
+                  print('TEST_DB_TABLE',name,'exists',exists)
+                  if exists:
+                      for privilege in ('REFERENCES','SELECT','INSERT','UPDATE'):
+                          allowed=c.execute(text('select has_table_privilege(current_user,:table,:permission)'),
+                                            {'table':name,'permission':privilege}).scalar()
+                          print('TEST_DB_PRIVILEGE',name,privilege,allowed)
           engine.dispose()
-          PY
-          SHELL
+          PYTHON
+          )"
+          printf '%s\n' "$SUDO_PASSWORD" |
+            ssh -T -p "\${PORT:-22}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+              "read -r password; printf '%s\n' \"\$password\" | sudo -S -p '' bash -c 'printf %s $script | base64 -d | /home/tahir/opencode-gateway-test/.venv/bin/python -'"
