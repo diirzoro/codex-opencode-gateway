@@ -545,14 +545,16 @@ const api=async(path,options={})=>{
        'session/'+encodeURIComponent(row.runtime_id)+'/shell',
        {method:'POST',directory,
         value:{agent:row.agent||'build',command},signal:options.signal});
-     if(!output?.info||!Array.isArray(output.parts))
-       throw Error('OpenCode did not return a Git command receipt; inspect Native history before retrying');
-     if(output.info.error||output.parts.some(part=>
+     // Installed Native versions may return a message or HTTP 204 for shell.
+     // HTTP acceptance is not proof of command completion or Git push success.
+     if(output!==null&&(!output?.info||!Array.isArray(output.parts)))
+       throw Error('Unexpected Native shell response; inspect session history before retrying');
+     if(output?.info?.error||output?.parts?.some(part=>
        part.type==='tool'&&(part.state?.status==='error'||part.state?.status==='failed')))
        throw Error('OpenCode reported a Git tool failure; review its tool output');
      const vcs=await window.nativeDirectTest.direct('vcs',{directory}).catch(()=>({}));
      return {native_receipt:true,verified:false,action,branch:vcs?.branch||activeProject?.branch||'',
-       output_message_id:output.info.id};
+       output_message_id:output?.info?.id||null};
    }
    const nativeRead=async(workspace,resource)=>{
      const directory=await ownedDirectory(workspace);
