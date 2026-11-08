@@ -123,51 +123,6 @@
           submit.disabled = false;
         }
       });
-      if (stripe) {
-        const tools=el('section','','payment-provider-diagnostics');
-        const output=el('p',tr('Tests have not been run.','لم تُشغّل الاختبارات بعد.'));
-        output.setAttribute('aria-live','polite');
-        const verify=el('button',tr('Verify Stripe API','فحص اتصال Stripe'),'button ghost small');
-        verify.type='button';
-        verify.onclick=async()=>{
-          verify.disabled=true;
-          output.textContent=tr('Checking with Stripe...','جارٍ الاتصال بـ Stripe...');
-          try {
-            const r=await api('/api/admin/payment-gateways/stripe/verify',{method:'POST'});
-            output.textContent=tr('Stripe accepted API credentials. Checkout not verified yet.','قبل Stripe مفاتيح API. لم يتم اختبار الدفع بعد.')+' ('+r.environment+')';
-          } catch(e) {output.textContent=tr('Connection failed: ','فشل الاتصال: ')+e.message;}
-          finally {verify.disabled=false;}
-        };
-        tools.append(verify);
-        if(current.mode==='test'){
-          const checkout=el('button',tr('Open Stripe test checkout','فتح الدفع التجريبي Stripe'),'button ghost small');
-          checkout.type='button';
-          checkout.onclick=async()=>{
-            checkout.disabled=true;
-            try {
-              const r=await api('/api/admin/payment-gateways/stripe/test-checkout',{method:'POST'});
-              if(!r.checkout_url)throw new Error('Stripe returned no checkout URL');
-              const link=el('a',tr('Open official Stripe test payment page','فتح صفحة الدفع التجريبي الرسمية'));
-              link.href=r.checkout_url;link.target='_blank';link.rel='noopener noreferrer';
-              output.replaceChildren(el('span',tr('Session created: ','تم إنشاء الجلسة: ')+r.session_id+' '),link);
-              const status=el('button',tr('Check Stripe payment result','فحص نتيجة الدفع'),'button ghost small');
-              status.type='button';
-              status.onclick=async()=>{
-                status.disabled=true;
-                try{
-                  const result=await api('/api/admin/payment-gateways/stripe/test-checkout/'+encodeURIComponent(r.session_id));
-                  output.append(el('p',JSON.stringify({status:result.status,payment_status:result.payment_status,currency:result.currency,amount:result.amount_total,subscription_activated:false})));
-                }catch(e){output.append(el('p',e.message));}
-                finally{status.disabled=false;}
-              };
-              tools.append(status);
-            }catch(e){output.textContent=e.message;}
-            finally{checkout.disabled=false;}
-          };
-          tools.append(checkout);
-        }
-        tools.append(output);card.append(tools);
-      }
       host.append(card);
     }
   }
