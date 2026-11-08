@@ -176,15 +176,16 @@ window.nativeDirectTest=(()=>{
         throw Error('Invalid OpenCode Native /config/providers response');
       const all=value.providers.filter(p=>p&&typeof p.id==='string');
       if(ownerScope()!==user)throw Error('Account changed during Native provider loading');
-      // /config/providers lists configured model definitions, NOT proof that a
-      // secret exists. /provider.connected is authoritative for candidate
-      // connections, and its stale cache after DELETE is masked per session.
-      // Public zero-cost OpenCode models remain usable without an API key.
-      // Native's configured provider/model inventory is our startup source.
-      // Do not require a full /provider catalog before Dashboard can display it.
+      // /config/providers is a model-definition inventory, never credential
+      // evidence. A provider can remain here after Native DELETE /auth/:id.
+      // Use Native /provider.connected for candidate account connections.
+      // It is cached once in this browser session, not fetched per prompt.
+      const authoritative=await catalog({force});
+      if(ownerScope()!==user)throw Error('Account changed during provider loading');
+      const connected=new Set(nativeConnections(authoritative));
       const usable=all.filter(p=>!deletedAuthSlots.has(p.id));
-      const result={all:usable,connected:usable.map(p=>p.id),default:value.default,
-        public_free:usable.filter(publicFree).map(p=>p.id)};
+      const result={all:usable,connected:usable.filter(p=>connected.has(p.id)).map(p=>p.id),
+        default:value.default,public_free:usable.filter(publicFree).map(p=>p.id)};
       configuredSnapshot=result;
       return result;
     })();
@@ -393,13 +394,13 @@ window.nativeDirectTest=(()=>{
       const configuredIds=new Set(nativeData.all.map(p=>p.id));
       const otherNative=catalogSnapshot?catalogSnapshot.all.filter(p=>
         nativeConnections(catalogSnapshot).includes(p.id)&&!configuredIds.has(p.id)):[];
-      const connected=[...nativeData.all,...otherNative];
+      const connected=[...nativeData.all.filter(p=>nativeData.connected.includes(p.id)||publicFree(p)),...otherNative];
       const listData={...nativeData,connected:[...new Set([...nativeData.connected,...otherNative.map(p=>p.id)])],
         default:{...(catalogSnapshot?.default||{}),...nativeData.default}};
       const items=connected.slice(0,50).map(p=>idx(p,listData));
       return {items,connected_items:connected.map(p=>idx(p,listData)),
         total:connected.length,offset:0,limit:50,
-        next_offset:connected.length>50?50:null,native_configured_only:true};
+        next_offset:connected.length>50?50:null,native_configured_only:false};
     }
     const [data]=await Promise.all([catalog(),visibility()]);
     if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
