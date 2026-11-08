@@ -773,9 +773,23 @@ window.renderGithubConfirmation=function(root,status,refresh){
         if(id){search.value=id;await loadPage(0);status.textContent=t('Choose a discovered provider below. Custom engine configuration is protected; connect your own key in Connections.','اختر مزوّدًا مكتشفًا أدناه. إعداد المحرك المخصص محمي؛ اربط مفتاح حسابك من الاتصالات.');}
       });
       host.append(toolbar,list,pager,details,add,save,status);
+      // Provider/model discovery is performed only in the browser via Native.
+      let nativeCatalogPromise=null;
+      async function nativeCatalog(){
+        nativeCatalogPromise??=window.nativeDirectTest.direct('provider');
+        try{
+          const data=await nativeCatalogPromise;
+          if(!Array.isArray(data?.all))throw Error('Invalid Native provider catalog');
+          return data;
+        }catch(error){nativeCatalogPromise=null;throw error;}
+      }
       async function openModels(provider){
-        const result=await api('/api/admin/native/providers?provider_id='+encodeURIComponent(provider.id));if(!valid())return;
-        let modelOffset=0;const all=result.models;details.hidden=false;details.replaceChildren(textElement('h3',provider.name));
+        const catalog=await nativeCatalog();if(!valid())return;
+        const entry=catalog.all.find(item=>item.id===provider.id);
+        if(!entry)throw Error('Provider not found in Native catalog');
+        let modelOffset=0;
+        const all=Object.entries(entry.models||{}).map(([id,model])=>({id,name:model?.name||id}));
+        details.hidden=false;details.replaceChildren(textElement('h3',provider.name));
         const find=document.createElement('input');find.type='search';find.placeholder=t('Search models of this provider','ابحث في نماذج هذا المزوّد');find.setAttribute('aria-label',find.placeholder);
         const body=textElement('div','','policy-model-list'),nav=textElement('div','','manage-actions');
         function visible(m){const changes=changedModels.get(provider.id);return changes?.has(m.id)?changes.get(m.id):!(draft.hidden_models?.[provider.id]||[]).includes(m.id);}
@@ -797,8 +811,17 @@ window.renderGithubConfirmation=function(root,status,refresh){
       }
       async function loadPage(value,announce=true){
         if(value===null)return;const sequence=++pageRevision;offset=value;
-        const result=await api('/api/admin/native/providers?limit=6&offset='+offset+'&query='+encodeURIComponent(search.value));if(!valid()||sequence!==pageRevision)return;
-        rows=result.items;next=result.next_offset;selected.clear();renderRows();previous.disabled=offset===0;following.disabled=next===null;pageInfo.textContent=(rows.length?offset+1:0)+'–'+(offset+rows.length)+' / '+result.total;if(announce)status.textContent=t('Native catalog · six providers per page','كتالوج Native · ستة مزوّدين في الصفحة');
+        const catalog=await nativeCatalog();if(!valid()||sequence!==pageRevision)return;
+        const query=search.value.trim().toLowerCase();
+        const matches=catalog.all.filter(p=>!query||(String(p.id)+' '+String(p.name||'')).toLowerCase().includes(query))
+          .sort((a,b)=>String(a.id).localeCompare(String(b.id)));
+        const page=matches.slice(offset,offset+6);
+        rows=page.map(p=>({id:p.id,name:p.name||p.id,model_count:Object.keys(p.models||{}).length,
+          allowed:true,visible:!(draft.hidden_providers||[]).includes(p.id)}));
+        next=offset+6<matches.length?offset+6:null;
+        selected.clear();renderRows();previous.disabled=offset===0;following.disabled=next===null;
+        pageInfo.textContent=(rows.length?offset+1:0)+'–'+(offset+rows.length)+' / '+matches.length;
+        if(announce)status.textContent=t('Native catalog · six providers per page','كتالوج Native · ستة مزوّدين في الصفحة');
       }
       search.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();loadPage(0).catch(error=>status.textContent=error.message);}};
       await loadPage(0);

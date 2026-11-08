@@ -85,45 +85,6 @@
   async function context(id){
     if(rows.has(id))return rows.get(id);
     const generation=epoch,user=owner();
-    if(window.nativeDirectTest?.testHost?.()){
-      // A session is opened only by the user's currently selected workspace.
-      // Do not enumerate or probe every project in the account.
-      const selected=activeSession?.id===id&&activeSession.workspace_id===activeWorkspace?.id
-        ?activeSession:null;
-      if(selected?.runtime_id){
-        if(generation!==epoch||user!==owner())throw Error('Authenticated account changed');
-        return remember(selected);
-      }
-      const workspace=activeWorkspace?.id;
-      if(!workspace)throw Error(label('Select your project before opening a Native conversation.',
-        'اختر مشروعك أولًا لفتح محادثة OpenCode.'));
-      const currentRows=await directSessionRows(workspace);
-      const found=currentRows.find(row=>row.id===id||row.runtime_id===id);
-      if(found)return found;
-      // Old Gateway UUIDs need a one-time owner-scoped ID translation.
-      // Python returns metadata only; prompts, history, SSE and model
-      // execution always use the original OpenCode Native endpoint.
-      let legacy;
-      try{legacy=await api('/api/native-test/sessions/'+encodeURIComponent(id),{
-        signal:AbortSignal.timeout(12000)
-      });}catch(error){
-        throw Error(label('This older conversation is not available in the selected project. Open a Native conversation from its project list.',
-          'المحادثة القديمة غير متاحة في المشروع المحدد. افتحها من قائمة محادثات المشروع.'));
-      }
-      if(generation!==epoch||user!==owner()||legacy.workspace_id!==workspace||!legacy.runtime_id)
-        throw Error(label('The selected conversation belongs to a different project.',
-          'المحادثة المحددة تخص مشروعًا آخر.'));
-      const nativeRow=currentRows.find(row=>row.runtime_id===legacy.runtime_id);
-      if(!nativeRow)throw Error(label('The Native conversation is no longer present in this project.',
-        'المحادثة لم تعد موجودة في OpenCode لهذا المشروع.'));
-      const ids=directSessionIds(workspace);
-      delete ids.map[legacy.runtime_id];
-      ids.map[legacy.runtime_id]=id;
-      try{localStorage.setItem(ids.key,JSON.stringify(ids.map));}catch{}
-      rows.delete(nativeRow.id);
-      return remember({...nativeRow,...legacy,id,workspace_id:workspace,
-        runtime_id:legacy.runtime_id,native:true});
-    }
     if(window.nativeDirectTest?.active?.()){
       const workspace=activeWorkspace?.id;
       if(!workspace)throw Error('Select the Project before opening its Native session');
@@ -136,32 +97,6 @@
     const value=await api('/api/native-test/sessions/'+encodeURIComponent(id),{signal:AbortSignal.timeout(15000)});
     if(generation!==epoch||owner()!==user)throw Error('Authenticated account changed');
     return remember(value);
-  }
-  function directWorkspaceRoot(workspace){
-    if(!/^[0-9a-f-]{36}$/i.test(String(workspace))||!/^[0-9a-f-]{36}$/i.test(owner()))
-      throw Error('Invalid TEST workspace identity');
-    return '/var/lib/opencode-workspaces-test/'+owner()+'/'+workspace+'/repo';
-  }
-  function directSessionIds(workspace){
-    const key='og-test-native-sessions:'+owner()+':'+workspace;
-    let map={};
-    try{map=JSON.parse(localStorage.getItem(key)||'{}')||{};}catch{}
-    if(typeof map!=='object'||Array.isArray(map))map={};
-    return {key,map};
-  }
-  function directSessionRow(workspace,live){
-    const root=directWorkspaceRoot(workspace);
-    const ids=directSessionIds(workspace);
-    if(!ids.map[live.id]){
-      ids.map[live.id]=crypto.randomUUID();
-      try{localStorage.setItem(ids.key,JSON.stringify(ids.map));}catch{}
-    }
-    const id=ids.map[live.id];
-    const row={id,workspace_id:workspace,runtime_id:live.id,
-      title:live.title||'OpenCode Native session',status:'idle',lifecycle:'active',
-      native:true,file_base:'file://'+root+'/',tool_access:{project_manager:true,shell_authorized:false,shell_enabled:false}};
-    const previous=rows.get(id);
-    return remember({...row,...(previous?{status:previous.status,lifecycle:previous.lifecycle}:{} )});
   }
   async function localProjectContext(workspace){
     // Platform returns ownership and directory metadata; no Python Native calls.
@@ -224,29 +159,13 @@
     }
     return localProjectRow(workspace,ctx,live);
   }
-  async function directSessionRows(workspace){
-    const root=directWorkspaceRoot(workspace);
-    const list=await window.nativeDirectTest.direct('session',{directory:root});
-    if(!Array.isArray(list))throw Error('OpenCode Native session list unavailable');
-    return list.filter(row=>row?.id&&row.directory===root).map(row=>directSessionRow(workspace,row));
-  }
-  async function directCreateSession(workspace,options={}){
-    const root=directWorkspaceRoot(workspace);
-    const body=JSON.parse(options.body||'{}');
-    const session=await window.nativeDirectTest.direct('session',{
-      method:'POST',directory:root,value:{title:body.title||'New session'}
-    });
-    if(!session?.id||session.directory!==root)throw Error('OpenCode returned an invalid workspace session');
-    return directSessionRow(workspace,session);
-  }
   // Native executes and streams directly through the TEST Nginx endpoint.
   // Workspace session metadata remains in the existing application DB;
   // no Python code processes the prompt or response body.
   function nativeRoot(workspace){
     const record=[...rows.values()].find(row=>String(row.workspace_id)===String(workspace));
     if(record?.native_directory)return record.native_directory;
-    if(window.nativeDirectTest?.testHost?.())return window.nativeDirectTest.rootFromFile(record?.file_base)
-      ||directWorkspaceRoot(workspace);
+
     return window.nativeDirectTest?.rootFromFile(record?.file_base)
       ||window.nativeDirectTest?.defaultDirectory?.();
   }
@@ -363,11 +282,9 @@
     if(!active())return null;
     const method=options.method||'GET';let match=path.match(/^\/api\/workspaces\/([^/]+)\/sessions(?:\?.*)?$/);
     if(match){
-      const result=window.nativeDirectTest?.testHost?.()
-        ?(method==='POST'?await directCreateSession(match[1],options):await directSessionRows(match[1]))
-        :window.nativeDirectTest?.active?.()
-          ?(method==='POST'?await localCreateProjectSession(match[1],options):await localProjectSessionRows(match[1]))
-          :await api('/api/native-test/workspaces/'+match[1]+'/sessions',options);
+      const result=window.nativeDirectTest?.active?.()
+        ?(method==='POST'?await localCreateProjectSession(match[1],options):await localProjectSessionRows(match[1]))
+        :await api('/api/native-test/workspaces/'+match[1]+'/sessions',options);
       if(Array.isArray(result))result.forEach(remember);else remember(result);
       return {value:result};
     }
@@ -375,11 +292,11 @@
       const unavailable=[];
       // TEST: a user explicitly opens a project before asking OpenCode for
       // its conversations. Do not let Native enumerate every account project.
-      const workspaces=window.nativeDirectTest?.testHost?.()
+      const workspaces=window.nativeDirectTest?.active?.()
         ?(activeWorkspace?.id?[{id:activeWorkspace.id}]:[])
         :await api('/api/workspaces');
       const lists=await Promise.all(workspaces.map(async w=>{
-        try{return window.nativeDirectTest?.testHost?.()?await directSessionRows(w.id):window.nativeDirectTest?.active?.()?await localProjectSessionRows(w.id):await api('/api/native-test/workspaces/'+w.id+'/sessions');}
+        try{return window.nativeDirectTest?.active?.()?await localProjectSessionRows(w.id):await api('/api/native-test/workspaces/'+w.id+'/sessions');}
         catch(error){
           if([409,410].includes(error.status)){
             unavailable.push({workspace_id:w.id,status:error.status,reason:error.message});
@@ -399,42 +316,18 @@
     match=path.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/(.*?))?(?:\?.*)?$/);if(!match)return null;
     const id=match[1],tail=match[2]||'',row=await context(id),user=owner();
     if(!tail&&method==='PATCH'){
-      if(window.nativeDirectTest?.testHost?.()){
-        const payload=JSON.parse(options.body||'{}');
-        const changed=await window.nativeDirectTest.direct('session/'+encodeURIComponent(row.runtime_id),{
-          method:'PATCH',directory:directWorkspaceRoot(row.workspace_id),value:{title:payload.title}
-        });
-        const value=remember({...row,title:changed?.title||payload.title});
-        return {value};
-      }
-      if(window.nativeDirectTest?.active?.()){
-        throw Error(label('Rename the Project, not its separate Native session.',
-          'غيّر اسم المشروع، وليس اسم جلسة Native مستقلة.'));
-      }
-      const value=await api('/api/native-test/sessions/'+id,options);remember({...row,...value});return {value};
+      if(!window.nativeDirectTest?.active?.())throw Error('OpenCode Native is unavailable');
+      const payload=JSON.parse(options.body||'{}');
+      const projectId=row.project_id||row.id;
+      const result=await api('/api/projects/'+encodeURIComponent(projectId),{
+        method:'PATCH',body:JSON.stringify({name:payload.title})
+      });
+      const value=remember({...row,title:result.name||payload.title});
+      return {value};
     }
     if((!tail&&method==='DELETE')||['close','archive','restore','reopen'].includes(tail)){
-      if(window.nativeDirectTest?.testHost?.()){
-        const act=tail||'delete';
-        if(act==='delete'){
-          const result=await window.nativeDirectTest.direct('session/'+encodeURIComponent(row.runtime_id),{
-            method:'DELETE',directory:directWorkspaceRoot(row.workspace_id)
-          });
-          if(result!==true)throw Error('OpenCode did not confirm session deletion');
-          rows.delete(id);histories.delete(id);
-          const ids=directSessionIds(row.workspace_id);
-          delete ids.map[row.runtime_id];
-          try{localStorage.setItem(ids.key,JSON.stringify(ids.map));}catch{}
-          return {value:{...row,lifecycle:'deleted'}};
-        }
-        const lifecycle=({close:'closed',archive:'archived',restore:'closed',reopen:'active'})[act];
-        const value=remember({...row,lifecycle});
-        return {value};
-      }
-      if(window.nativeDirectTest?.active?.())
-        throw Error(label('Manage the conversation through its Project. Native session history was preserved.',
-          'أدر المحادثة من خلال المشروع. تم الحفاظ على سجل جلسة Native.'));
-      return {value:await api('/api/native-test/sessions/'+id+'/visibility/'+(tail||'delete'),{method:'POST'})};
+      throw Error(label('Project conversations have no separate deletion or archive. Use Project actions.',
+        'لا توجد إدارة منفصلة لحذف أو أرشفة المحادثة. استخدم إجراءات المشروع.'));
     }
     if(!tail||tail==='open'){
       const fresh=tail==='open'
@@ -749,7 +642,7 @@
           button.disabled=permissionReplies.has(actionKey)||reply==='once'&&!names[permission];
           button.onclick=async()=>{
             if(!current(id,user)||permissionReplies.has(actionKey))return;permissionReplies.add(actionKey);card.dataset.sending='1';card.setAttribute('aria-busy','true');card.querySelectorAll('button').forEach(n=>n.disabled=true);
-            try{if(reply==='remember')await api('/api/native-test/sessions/'+id+'/permissions/'+encodeURIComponent(item.id)+'/remember',{method:'POST'});if(!current(id,user))return;await api('/api/sessions/'+id+'/permissions/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({reply:reply==='remember'?'once':reply})});if(!current(id,user))return;permissionReplies.delete(actionKey);box.nativeSignature='';await refreshPermissions();}
+            try{if(!current(id,user))return;await api('/api/sessions/'+id+'/permissions/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({reply})});if(!current(id,user))return;permissionReplies.delete(actionKey);box.nativeSignature='';await refreshPermissions();}
             catch(error){permissionReplies.delete(actionKey);if(!current(id,user))return;delete card.dataset.sending;card.removeAttribute('aria-busy');card.querySelectorAll('button').forEach(n=>n.disabled=n.dataset.reply==='once'&&!names[permission]);toast(error.message);}
           };controls.append(button);
         }card.append(controls);section.append(card);
@@ -763,7 +656,7 @@
     try{return await job;}finally{if(discoveryReads.get(id)===job)discoveryReads.delete(id);}
   }
   async function loadDiscovery(id){
-    const directMode=window.nativeDirectTest?.active?.() ?? window.nativeDirectTest?.testHost?.();
+    const directMode=Boolean(window.nativeDirectTest?.active?.());
     // The connection dashboard owns one shared account inventory, backed by
     // OpenCode's actual Native catalog. Opening a project must not reload it.
     // Use the configured/connected Native providers (cached) for the composer,
