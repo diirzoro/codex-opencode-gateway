@@ -273,6 +273,30 @@ window.nativeDirectTest=(()=>{
     configuredPending=job;
     try{return await job;}finally{if(configuredPending===job)configuredPending=null;}
   }
+  // Compact, non-secret Native provider index (IDs, display names and counts).
+  // One native /provider discovery when this picker is first opened; reuse the
+  // resulting 50 choices across browser sessions for up to seven days.
+  // This is NOT a provider database, model registry or API-key cache in Gateway.
+  const pickerKey=user=>'og-native-provider-picker-v1:'+user;
+  async function pickerProviders({force=false}={}){
+    const user=ownerScope();
+    if(!force)try{
+      const saved=JSON.parse(localStorage.getItem(pickerKey(user))||'null');
+      if(saved?.at>Date.now()-7*24*60*60*1000&&Array.isArray(saved.items)&&saved.items.length){
+        return saved.items.filter(row=>row&&typeof row.id==='string').map(row=>({
+          id:row.id,name:row.name||row.id,model_count:row.model_count||0,models:{}
+        }));
+      }
+    }catch{}
+    const native=await catalog({force});
+    if(ownerScope()!==user)throw Error('Account changed during Native provider index loading');
+    const items=native.all.filter(p=>p&&typeof p.id==='string').map(p=>({
+      id:p.id,name:String(p.name||p.id).slice(0,160),
+      model_count:Object.keys(p.models||{}).length
+    }));
+    try{localStorage.setItem(pickerKey(user),JSON.stringify({at:Date.now(),items}));}catch{}
+    return items.map(row=>({...row,models:{}}));
+  }
   // Workspace never downloads the full catalog just to open a conversation.
   // Provider/model visibility is Gateway *control-plane* metadata only; Native
   // remains the sole source of AI model definitions, keys and execution.
@@ -307,7 +331,7 @@ window.nativeDirectTest=(()=>{
     id:p.id,name:p.name||p.id,visible:providerVisible(p.id),allowed:providerAllowed(p.id),
     connected:p.id==='opencode'||publicFree(p)||nativeConnections(data).includes(p.id),public_free:p.id==='opencode'||publicFree(p),
     auth_status:publicFree(p)?'free_native':nativeConnections(data).includes(p.id)?'verified_native':undefined,
-    verified:clientVerifiedProviders.has(p.id),model_count:Object.keys(p.models||{}).length,
+    verified:clientVerifiedProviders.has(p.id),model_count:p.model_count??Object.keys(p.models||{}).length,
     default_model:data.default?.[p.id]
   });
   function ordered(data,query=''){
@@ -480,11 +504,28 @@ window.nativeDirectTest=(()=>{
         default:{...(catalogSnapshot?.default||{}),...nativeData.default}};
       // Show up to 50 REAL Native definitions, including disconnected providers
       // available to connect. A configured model is NOT proof of an API key.
-      const first=ordered(listData).slice(0,50);
+      // The configured inventory can contain only OpenCode when no client has
+      // connected a paid provider. Fill the picker from Native's catalog once,
+      // but NEVER label those extra entries as connected.
+      let indexRows=nativeData.all;
+      if(indexRows.length<50){
+        try{
+          const nativeIndex=await pickerProviders();
+          if(ownerScope()!==String(currentUser?.id||''))throw Error('Account changed');
+          const names=new Map(nativeIndex.map(p=>[p.id,p]));
+          for(const p of nativeData.all)names.set(p.id,p);
+          indexRows=[...names.values()];
+        }catch(error){
+          if(error.message==='Account changed')throw error;
+          // Native config already gives a useful, safe fallback. Retry search
+          // separately if Native's full index is temporarily unavailable.
+        }
+      }
+      const first=ordered({...listData,all:indexRows}).slice(0,50);
       const items=first.map(p=>idx(p,listData));
       return {items,connected_items:connected.map(p=>idx(p,listData)),
-        total:nativeData.all.length,offset:0,limit:50,
-        next_offset:nativeData.all.length>50?50:null,native_configured_only:true};
+        total:indexRows.length,offset:0,limit:50,
+        next_offset:indexRows.length>50?50:null,native_configured_only:false};
     }
     const [data]=await Promise.all([catalog(),visibility()]);
     if(name==='/api/opencode/catalog/providers'||name==='/api/opencode/catalog/providers/page'){
