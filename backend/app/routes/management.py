@@ -14,7 +14,6 @@ from ..security.passwords import hash_password, verify_password
 from ..security.sessions import (hash_session_token, new_reactivation_token,
     reactivation_cookie_name, reactivation_eligible)
 from ..services import credentials, recovery, paypal, github
-from ..services import native_control_bridge as opencode
 from ..services.billing_methods import method_payload
 from ..services.accounts import user_payload
 from .dependencies import require_user, require_admin, require_billing_user, require_reactivation_user
@@ -25,9 +24,6 @@ def aware(date): return date if date.tzinfo else date.replace(tzinfo=timezone.ut
 def audit(db,user,action,subject=None): db.add(AccountAudit(actor_id=user.id if user else None,subject_id=subject or (user.id if user else None),action=action))
 def revoke(db,user):
     db.execute(update(AuthSession).where(AuthSession.user_id==user.id,AuthSession.revoked_at.is_(None)).values(revoked_at=now()))
-def stop_work(db,user):
-    for workspace in db.scalars(select(Workspace).where(Workspace.user_id==user.id)): opencode.stop_workspace(workspace)
-
 class PasswordInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
     current_password: str=Field(min_length=1,max_length=128)
@@ -182,7 +178,7 @@ class Lifecycle(BaseModel):
 def lifecycle(data:Lifecycle,user:User=Depends(require_user),db:Session=Depends(get_db)):
     if user.role in {'admin','owner'}: raise HTTPException(409,'Transfer administration before closing this account')
     if data.confirmation!=user.username or not verify_password(data.password,user.password_hash): raise HTTPException(400,'Account confirmation failed')
-    stop_work(db,user); user.status='suspended' if data.action=='suspend' else 'deletion_requested'; revoke(db,user)
+    user.status='suspended' if data.action=='suspend' else 'deletion_requested'; revoke(db,user)
     connection=db.scalar(select(GithubConnection).where(GithubConnection.user_id==user.id))
     if connection: db.delete(connection)
     audit(db,user,'account.'+user.status); db.commit()
