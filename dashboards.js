@@ -789,6 +789,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   async function cancelUpload(item){
     if(item.cancelling)return;item.cancelling=true;item.cancelled=true;item.controller?.abort();
     try{
+      if(item.nativeInline){item.state='cancelled';item.error=tr('Attachment removed','تم حذف المرفق');releasePreview(item);return;}
       if(item.id&&item.owner===currentUser?.id){
         const result=await api('/api/workspaces/'+item.workspaceId+'/attachments/'+item.id,{method:'DELETE',signal:AbortSignal.timeout(10000)});
         if(!result.removed)throw Error(tr('Removal was not confirmed.','لم يُؤكد حذف المرفق.'));
@@ -803,7 +804,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       item.controller?.abort();
       // Moving to another conversation must not leave an active partial upload
       // behind. Do not remove a ready draft or a Native-leased attachment.
-      if(item.temporary&&item.id&&item.state==='uploading'&&item.owner===currentUser?.id)
+      if(item.temporary&&!item.nativeInline&&item.id&&item.state==='uploading'&&item.owner===currentUser?.id)
         api('/api/workspaces/'+item.workspaceId+'/attachments/'+item.id,{
           method:'DELETE',signal:AbortSignal.timeout(10000)}).catch(()=>{});
       releasePreview(item);
@@ -823,7 +824,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       };card.append(label,remove);attachmentList.append(card);
     }
   };
-  window.restoreComposerAttachments=files=>{if(sending||pendingSubmission)return;clearAttachments();attachments=(files||[]).slice(0,10).map(file=>({name:file.name,path:file.path,size:file.size,type:file.mime||file.type||tr('File','ملف'),temporary:file.temporary,id:file.id,owner:currentUser?.id,workspaceId:activeWorkspace?.id,state:'ready'}));renderAttachments();};
+  window.restoreComposerAttachments=files=>{if(sending||pendingSubmission)return;clearAttachments();attachments=(files||[]).slice(0,10).filter(file=>!file.nativeInline).map(file=>({name:file.name,path:file.path,size:file.size,type:file.mime||file.type||tr('File','ملف'),temporary:file.temporary,id:file.id,owner:currentUser?.id,workspaceId:activeWorkspace?.id,state:'ready'}));renderAttachments();};
   const sentAttachments=payload=>{const paths=new Set((payload?.attachments||[]).map(a=>a.path));for(const item of attachments.filter(a=>paths.has(a.path)))releasePreview(item);attachments=attachments.filter(a=>!paths.has(a.path));renderAttachments();};
   async function openAttachPicker(){
     if(!activeWorkspace||window.workspaceSubmissionBlocked?.())return;
@@ -842,20 +843,28 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         try{
           let data;
           if(temporary){
-            // The slot is authenticated before any bytes are transferred. A
-            // cancellation racing slot creation deletes that exact slot later.
-            const slot=await api('/api/workspaces/'+workspaceId+'/attachments',{method:'POST',body:JSON.stringify({session_id:sessionId,name:file.name,size:file.size,mime:item.type}),signal:AbortSignal.timeout(15000)});
-            item.id=slot.id;
-            if(!valid()){if(currentUser?.id===owner){const removed=await api('/api/workspaces/'+workspaceId+'/attachments/'+item.id,{method:'DELETE',signal:AbortSignal.timeout(10000)});if(removed.removed){item.state='cancelled';item.error=tr('Upload cancelled; temporary attachment removed','تم إلغاء الرفع وحذف المرفق المؤقت');}}continue;}
-            item.controller=new AbortController();timer=setTimeout(()=>item.controller.abort(),900000);
-            data=await api('/api/workspaces/'+workspaceId+'/attachments/'+item.id,{method:'PUT',body:file,headers:{'Content-Type':'application/octet-stream'},signal:item.controller.signal});
-          }else{const fd=new FormData();fd.append('file',file);data=await api('/api/workspaces/'+workspaceId+'/files/upload',{method:'POST',body:fd,signal:AbortSignal.timeout(120000)});}
-          if(!valid())continue;item.path=data.path;item.size=data.size;item.type=data.mime||item.type;item.state='ready';
+            // Browser → Nginx → OpenCode Native: inline file parts, no Python upload API.
+            // Data URL bytes exist only in this draft and are not persisted to localStorage.
+            const dataUrl=await new Promise((resolve,reject)=>{
+              const reader=new FileReader();
+              reader.onload=()=>resolve(reader.result);
+              reader.onerror=()=>reject(reader.error||Error('Cannot read attachment'));
+              reader.readAsDataURL(file);
+            });
+            if(!valid())continue;
+            data={path:'__native_inline__/'+crypto.randomUUID()+'/'+file.name,
+              url:dataUrl,size:file.size,mime:item.type,name:file.name};
+            item.nativeInline=true;
+          }else{
+            const fd=new FormData();fd.append('file',file);
+            data=await api('/api/workspaces/'+workspaceId+'/files/upload',{method:'POST',body:fd,signal:AbortSignal.timeout(120000)});
+          }
+          if(!valid())continue;item.path=data.path;item.url=data.url;item.size=data.size;item.type=data.mime||item.type;item.state='ready';
         }catch(error){
           if(valid()){
             item.state='failed';
             item.error=tr('Upload failed: ','فشل رفع الملف: ')+error.message;
-            if(item.temporary&&item.id&&!item.cancelled){
+            if(item.temporary&&!item.nativeInline&&item.id&&!item.cancelled){
               try{
                 const removed=await api('/api/workspaces/'+workspaceId+'/attachments/'+item.id,{
                   method:'DELETE',signal:AbortSignal.timeout(10000)});
@@ -898,7 +907,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       'حُذف '+result.removed+' من المرفقات المؤقتة. تم الاحتفاظ بـ'+result.skipped_processing+' ملف يستخدمه OpenCode حاليًا.'));
   });
   clearStalled.title=tr('Clean only owned temporary uploads, never Native chat history or project files','تنظيف المرفقات المؤقتة المملوكة فقط دون حذف المحادثات أو ملفات المشاريع');
-  clearStalled.hidden=!window.nativeSession?.active();
+  clearStalled.hidden=true; // No legacy Python temporary-upload queue in Native mode.
   controls.insertBefore(clearStalled,attach.nextSibling);
   q('openTools').onclick=()=>window.openConnections('providers');q('openTools').title=tr('Open OpenCode provider and workspace setup','\u0641\u062a\u062d \u0625\u0639\u062f\u0627\u062f \u0645\u0632\u0648\u062f OpenCode \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644');q('chatGithub').onclick=()=>openConnections('github');
   // Project, conversations and preview have independent panel tabs.
@@ -1844,7 +1853,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   let composerDraftRevision=0;
   let nativeDraftContext='';
   const nativeDraftKey=()=>currentUser&&activeWorkspace?'og-native-draft:'+currentUser.id+':'+activeWorkspace.id+':'+(activeSession?.id||'new'):'';
-  function saveNativeDraft(){if(!window.nativeSession?.active()||!nativeDraftContext)return;try{localStorage.setItem(nativeDraftContext,JSON.stringify({text:q('promptInput').value,attachments:attachments.filter(a=>a.path&&!a.error&&!a.cancelled).map(({name,path,size,type,temporary,id})=>({name,path,size,type,temporary,id}))}));}catch{}}
+  function saveNativeDraft(){if(!window.nativeSession?.active()||!nativeDraftContext)return;try{localStorage.setItem(nativeDraftContext,JSON.stringify({text:q('promptInput').value,attachments:attachments.filter(a=>a.path&&!a.error&&!a.cancelled&&!a.nativeInline).map(({name,path,size,type,temporary,id})=>({name,path,size,type,temporary,id}))}));}catch{}}
   function restoreNativeDraft(){if(!window.nativeSession?.active())return;const key=nativeDraftKey();if(key===nativeDraftContext)return;nativeDraftContext=key;let value=null;try{value=JSON.parse(localStorage.getItem(key)||'null');}catch{}q('promptInput').value=value?.text||'';clearAttachments();attachments=Array.isArray(value?.attachments)?value.attachments.map(item=>({...item,owner:currentUser?.id,workspaceId:activeWorkspace?.id,state:'ready'})):[];composerDraftRevision++;window.resizeWorkspaceComposer?.();renderAttachments();
     const revision=attachmentRevision,owner=currentUser?.id;
     for(const item of attachments.filter(a=>a.temporary&&a.id)){
@@ -1982,7 +1991,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
       try{await refreshEntitlement();if(!workAccess)return;if(!activeSession)await createSession({checked:true});
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
-        const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type}));
+        const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type,url:a.url,name:a.name}));
         await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});sentAttachments({attachments:nativeFiles});draft.confirm();
         submissionStatus.textContent=tr('Accepted by native OpenCode','قبله OpenCode الأصلي');
         // OpenCode SSE owns reply presentation. No blocking Gateway history
