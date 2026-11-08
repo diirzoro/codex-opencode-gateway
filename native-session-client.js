@@ -443,6 +443,16 @@
           if(credentialAlerts.size>20)credentialAlerts.delete(credentialAlerts.values().next().value);
           toast(readable);
         }
+        // A model/provider error may be delivered as assistant.message.error
+        // without a matching session.error event. Ask Native for the true
+        // execution state instead of leaving the composer stuck on "working".
+        void synchronizeStatus(row,id,()=>stream===source&&current(id,user))
+          .then(()=>{
+            if(stream!==source||!current(id,user))return;
+            if(statuses.get(id)==='idle')statuses.set(id,'failed');
+            if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'failed';
+            return window.refreshWorkspaceSessionStatus?.();
+          }).catch(()=>{});
       }
       if(['session.status','session.idle','session.error'].includes(e.type))statusEvents.set(id,(statusEvents.get(id)||0)+1);
       if(e.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
