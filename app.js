@@ -388,6 +388,33 @@ window.nativeDirectTest=(()=>{
     if(!active())throw Error('TEST OpenCode Native connection requires sign-in; Gateway provider fallback is disabled');
     const method=(options.method||'GET').toUpperCase();
     const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
+    // Credential setup is a direct Native operation. It must not wait for the
+    // entire provider/model catalog, Gateway policy, or a model prompt.
+    const accountCredential=name.match(/^\/api\/opencode\/connections\/([a-z0-9._-]+)\/credentials$/i);
+    const workspaceCredential=name.match(/^\/api\/workspaces\/[^/]+\/providers\/([a-z0-9._-]+)\/credentials$/i);
+    const credentialId=accountCredential?.[1]||workspaceCredential?.[1];
+    if(credentialId&&method==='POST'){
+      const input=JSON.parse(options.body||'{}');
+      if(typeof input.api_key!=='string'||!input.api_key.trim())throw Error('API key is required');
+      const accepted=await direct('auth/'+encodeURIComponent(credentialId),{
+        method:'PUT',value:{type:'api',key:input.api_key}
+      });
+      if(accepted!==true)throw Error('OpenCode Native did not acknowledge the key');
+      clearRevoked(credentialId);
+      // Native accepted the stored credential, not a validated model response.
+      forget();invalidateProviderMutation(path,'POST');
+      return {provider_id:credentialId,connected:true,persisted:true,
+        verified:false,native_acknowledged:true};
+    }
+    const accountOptions=name.match(/^\/api\/opencode\/connections\/([a-z0-9._-]+)\/options$/i);
+    const workspaceOptions=name.match(/^\/api\/workspaces\/[^/]+\/providers\/([a-z0-9._-]+)\/options$/i);
+    if((accountOptions||workspaceOptions)&&method==='GET'){
+      // OpenCode announces its own auth methods. No model catalog required.
+      const id=(accountOptions||workspaceOptions)[1];
+      const auth=await direct('provider/auth');
+      return {provider_id:id,auth_methods:methods(auth,id),models:[],
+        native:true,credential_storage_ready:true};
+    }
     // Disconnect uses only the OpenCode Native /auth and /provider endpoints.
     // Do not block it on policy, models, agents, or the 7 MB catalog presentation.
     const directDelete=/^\/api\/(?:opencode\/connections|workspaces\/[^/]+\/providers)\/([^/]+)$/.exec(name);
@@ -437,63 +464,6 @@ window.nativeDirectTest=(()=>{
       // Never turn a full Native catalogue lookup into an unconnected model picker.
       const item=modelDetails(p,data);
       return isWorkspace&&!item.connected?{...item,models:[]}:item;
-    }
-    if(tail.length===1&&tail[0]==='options'){
-      const auth=await direct('provider/auth');
-      return {provider_id:p.id,auth_methods:methods(auth,p.id),models:modelDetails(p,data).models,
-        native:true,credential_storage_ready:true};
-    }
-    if(tail.length===1&&tail[0]==='credentials'&&method==='POST'){
-      const value=JSON.parse(options.body||'{}');
-      if(typeof value.api_key!=='string'||!value.api_key.trim())throw Error('API key is required');
-      // /provider.connected only reports Native availability; it cannot
-      // prove that a valid API key is saved. A provider may be free, configured
-      // through environment, or be listed in stale Native state.
-      // Do not mistake it for a credential and reject valid new keys.
-      // The form requires explicit consent because Native auth is process-global.
-      if(value.replace_existing!==true){
-        const error=new Error('يتطلب حفظ مفتاح Native المشترك تأكيدًا صريحًا من المستخدم.');
-        error.status=409;throw error;
-      }
-      const currentCatalog=await catalog({force:true});
-      const choices=Object.keys(p.models||{}).filter(mid=>modelAllowed(p.id,mid));
-      const selected=typeof value.model_id==='string'&&choices.includes(value.model_id)
-        ?value.model_id
-        :choices.includes(currentCatalog.default?.[p.id])?currentCatalog.default[p.id]:choices[0];
-      if(!selected)throw Error('لم يجد OpenCode نموذجًا صالحًا لاختبار مفتاح هذا المزود.');
-      options.onNativePhase?.('saving');
-      // The Native PUT itself can fail after writing the auth slot (network
-      // disconnect or nonstandard acknowledgement). Include it in rollback.
-      // This slot was checked as empty before we started the transaction.
-      try{
-        const inserted=await direct('auth/'+encodeURIComponent(p.id),{method:'PUT',
-          value:{type:'api',key:value.api_key}});
-        if(inserted!==true)throw Error('لم يؤكد OpenCode التخزين المؤقت للمفتاح.');
-        options.onNativePhase?.('verifying');
-        const checked=await verifyProviderModel(p.id,selected);
-        clearRevoked(p.id);
-        clientVerifiedProviders.add(p.id);
-        forget();invalidateProviderMutation(path,'POST');
-        return {connected:true,persisted:true,verified:true,
-          provider_id:p.id,verified_model_id:checked.model_id};
-      }catch(error){
-        options.onNativePhase?.('failed');
-        // No unverified key may remain configured after this attempted
-        // connection. The slot was empty before this operation; do not retain
-        // a bogus Connected state on auth, quota, timeout or model failure.
-        try{
-          const undone=await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
-          if(undone!==true)throw Error('OpenCode did not acknowledge removal of the pending key');
-          clientVerifiedProviders.delete(p.id);
-          rememberRevoked(p.id);
-          // Native 1.19.x may cache /provider.connected after deleting auth.
-          // Do not call a stale catalog proof that the key still exists.
-        }catch(rollbackError){
-          error.message+=' تعذّر إلغاء الاعتماد المؤقت من OpenCode؛ افصل المزود قبل المحاولة مرة أخرى.';
-        }
-        forget();invalidateProviderMutation(path,'DELETE');
-        throw error;
-      }
     }
     if(tail[0]==='oauth'&&method==='POST'){
       const request=JSON.parse(options.body||'{}');
