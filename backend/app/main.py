@@ -77,24 +77,20 @@ app.include_router(payment_gateways.router)
 app.include_router(management.router)
 app.include_router(homepage.router)
 
-# TEST-only route retirement: legacy AI/provider and file-read handlers are
-# not mounted at all. Login, project/workspace ownership, subscriptions,
-# GitHub account linking and administrative control routes remain intact.
-# The TEST UI uses OpenCode Native, with the ownership-only Nginx transport
-# for file reads; source definitions remain for non-TEST deployments.
-if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes':
+# Legacy OpenCode provider/catalog/session-execution routes are retired in every
+# Native deployment (TEST, LOCAL, LIVE) so no provider/credential/session request
+# reaches Python. Project file/Git routes remain Platform-owned and are NOT retired
+# here (the TEST UI handles files via Native, but LOCAL keeps the Python handlers).
+if native_sessions.enabled():
     from fastapi.routing import APIRoute
-    def _retired_test_data_route(route):
+    def _retired_open_code_route(route):
         if not isinstance(route,APIRoute):return False
         path=route.path
-        return (path.startswith('/api/admin/native/catalog-maintenance')
-            or path.startswith('/api/opencode/connections')
+        return (path.startswith('/api/opencode/connections')
             or path.startswith('/api/opencode/catalog/providers')
             or path == '/api/opencode/catalog/agents'
             or path.startswith('/api/workspaces/{workspace_id}/providers')
-            or path in {'/api/workspaces/{workspace_id}/files',
-                        '/api/workspaces/{workspace_id}/files/content',
-                        '/api/workspaces/{workspace_id}/runtime',
+            or path in {'/api/workspaces/{workspace_id}/runtime',
                         '/api/workspaces/{workspace_id}/runtime/state',
                         '/api/workspaces/{workspace_id}/runtime/agents',
                         '/api/workspaces/{workspace_id}/agents'}
@@ -107,13 +103,24 @@ if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes'
                         '/api/sessions/{session_id}/diff'}
             or path.startswith('/api/sessions/{session_id}/questions')
             or path.startswith('/api/sessions/{session_id}/permissions')
-            or path in {'/api/workspaces/{workspace_id}/git/status',
+            or path in {'/api/projects/{project_id}/publish'})
+    app.router.routes[:]=[route for route in app.router.routes if not _retired_open_code_route(route)]
+
+# TEST-only: the TEST UI reads files/Git through OpenCode Native directly.
+if settings.public_base_url.rstrip('/') == 'https://test.opencode-gateway.codes':
+    from fastapi.routing import APIRoute
+    def _retired_test_file_route(route):
+        if not isinstance(route,APIRoute):return False
+        path=route.path
+        return path in {'/api/workspaces/{workspace_id}/files',
+                        '/api/workspaces/{workspace_id}/files/content',
+                        '/api/workspaces/{workspace_id}/git/status',
                         '/api/workspaces/{workspace_id}/git/commit',
                         '/api/workspaces/{workspace_id}/git/push',
                         '/api/workspaces/{workspace_id}/git/sync',
-                        '/api/workspaces/{workspace_id}/diff',
-                        '/api/projects/{project_id}/publish'})
-    app.router.routes[:]=[route for route in app.router.routes if not _retired_test_data_route(route)]
+                        '/api/workspaces/{workspace_id}/diff'}
+    app.router.routes[:]=[route for route in app.router.routes if not _retired_test_file_route(route)]
+
 
 @app.get("/api/health")
 def health(): return {"status": "ok"}
@@ -124,6 +131,18 @@ _CROSS_SITE_EXEMPT = {"/api/github/webhook"}
 
 @app.middleware("http")
 async def browser_boundary(request: Request, call_next):
+    # The Gateway is an internal admin service on its own port; the single user
+    # entry is Nginx. Reject direct requests addressed to the Gateway port so
+    # the app is not served as a second standalone frontend. Nginx forwards the
+    # browser Host (8080) so the internal proxy is unaffected.
+    host = request.headers.get("host", "")
+    try:
+        direct_port = urlsplit("http://" + host).port
+    except ValueError:
+        direct_port = None
+    if direct_port == settings.app_port:
+        return JSONResponse({"detail": "Not found"}, status_code=404,
+                            headers={"Cache-Control": "no-store"})
     # TEST OpenCode provider operations must never enter Python Gateway.
     # The browser uses /native-direct/api/* -> Nginx -> OpenCode Native.
     # Reject every legacy/catch-all account/workspace provider route here,

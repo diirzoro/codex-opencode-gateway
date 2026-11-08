@@ -329,6 +329,19 @@ dialog .session-idle-warning{position:sticky;inset:auto;margin:12px;flex:none;ma
 #authDialog .field-control .reveal .eye-closed{display:none}
 #authDialog .field-control .reveal[aria-pressed="true"] .eye-open{display:none}
 #authDialog .field-control .reveal[aria-pressed="true"] .eye-closed{display:block}
+/* Email verification (OTP) step — clear, professional action layout. */
+#authDialog #verifyEmailForm h2{margin:0;font-size:22px;font-weight:650;letter-spacing:-.4px}
+#authDialog .verify-destination{display:flex;align-items:center;gap:8px;margin:0;padding:10px 13px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);font-size:14px;font-weight:600;color:var(--text);overflow-wrap:anywhere;unicode-bidi:plaintext}
+#authDialog .verify-hint{margin:0;font-size:13.5px;line-height:1.6;color:var(--muted)}
+#authDialog .verify-code-field{margin:0}
+#authDialog .verify-code-field input{height:58px;font-size:26px;font-weight:700;letter-spacing:14px;text-align:center;border-radius:12px;border:1.5px solid var(--line);background:var(--bg)}
+#authDialog .verify-code-field input:focus{border-color:var(--primary)}
+#authDialog .verify-countdown{margin:0;font-size:12.5px;font-weight:600;color:var(--muted)}
+#authDialog .verify-primary{height:50px;font-size:15.5px;margin-top:2px}
+#authDialog .verify-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;margin:4px 0 0;padding-top:14px;border-top:1px solid var(--line)}
+#authDialog .verify-action{border:0;background:transparent;color:var(--primary);font-size:13.5px;font-weight:600;padding:6px 10px;border-radius:8px;cursor:pointer}
+#authDialog .verify-action:hover:not(:disabled){background:var(--panel2)}
+#authDialog .verify-action-divider{width:1px;height:16px;background:var(--line)}
 @media(max-width:820px){#authDialog{width:calc(100vw - 28px)}#authDialog .auth-dialog-columns{grid-template-columns:1fr}#authDialog .auth-workflow{display:none}#authDialog .auth-card{padding:24px 20px}}
 @media(max-width:520px){#authDialog .auth-social{grid-template-columns:1fr}#authDialog .row-between{align-items:flex-start;flex-direction:column}}
 
@@ -990,6 +1003,14 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 .admin-service-table input[type=checkbox]{display:inline-block;width:17px;height:17px;margin:0;accent-color:var(--primary);cursor:pointer}
 .admin-service-table input:disabled{cursor:not-allowed}
 .admin-service-table td:last-child{white-space:normal;min-width:180px}
+
+/* Saved provider API keys list (admin email providers tab). */
+.saved-keys-list{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.saved-key-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.saved-key-row strong{display:block;font-size:14px}
+.saved-key-row small{display:block;color:var(--muted);overflow-wrap:anywhere;unicode-bidi:plaintext}
+.saved-key-actions{display:flex;gap:6px;flex-shrink:0}
+.saved-keys-empty{color:var(--muted)}
 
 
 /* TEST: one horizontal row of all four Gateway plans under the homepage carousel.

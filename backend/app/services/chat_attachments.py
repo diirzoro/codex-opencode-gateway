@@ -5,7 +5,6 @@ and partial file are unlinked; unknown files, project files and Native history
 are never recursively removed. Existing maintenance performs conservative reap.
 """
 import asyncio
-import fcntl
 import json
 import os
 import stat
@@ -18,6 +17,24 @@ from sqlalchemy import select
 from ..config import settings
 from ..models import Workspace, WorkspaceSession
 from . import workspaces
+
+try:
+    import fcntl
+
+    def _exclusive_lock(fd):
+        fcntl.flock(fd, fcntl.LOCK_EX)
+except ImportError:  # Windows: no fcntl; byte-range lock via msvcrt.
+    import msvcrt
+
+    def _exclusive_lock(fd):
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b"\x00")
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_HAVE_DIR_FD = hasattr(os, "supports_dir_fd") and os.supports_dir_fd
 
 DIRECTORY = '__gateway_chat_attachments'
 TTL = 24 * 3600
@@ -42,9 +59,9 @@ def _area(workspace):
 @contextmanager
 def _guard(workspace):
     area=_area(workspace)
-    fd=os.open(area/'.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    fd=os.open(area/'.lock',os.O_CREAT|os.O_RDWR|_NOFOLLOW,0o600)
     try:
-        fcntl.flock(fd,fcntl.LOCK_EX)
+        _exclusive_lock(fd)
         yield area
     finally: os.close(fd)
 
@@ -63,7 +80,7 @@ def locked(workspace, identifier):
 def _save(path, value):
     # Held under a stable per-workspace flock, including across workers.
     temp = path.with_suffix('.new')
-    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w') as stream: json.dump(value, stream)
     os.replace(temp, path)
 
@@ -75,16 +92,25 @@ def _directory(workspace, value):
 def _remove(workspace, value):
     directory = _directory(workspace, value)
     if not directory.exists(): return
-    # Pin the directory: symlink swaps cannot redirect unlink into projects.
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
+    if _HAVE_DIR_FD:
+        # Pin the directory: symlink swaps cannot redirect unlink into projects.
+        fd = os.open(directory, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+        try:
+            for name in (value['name'], 'upload.part'):
+                try:
+                    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    if not stat.S_ISREG(info.st_mode): raise HTTPException(409, 'Temporary file requires review')
+                    os.unlink(name, dir_fd=fd)
+                except FileNotFoundError: pass
+        finally: os.close(fd)
+    else:
+        if directory.is_symlink(): raise HTTPException(409, 'Temporary file requires review')
         for name in (value['name'], 'upload.part'):
+            path = directory / name
             try:
-                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
-                if not stat.S_ISREG(info.st_mode): raise HTTPException(409, 'Temporary file requires review')
-                os.unlink(name, dir_fd=fd)
+                if path.is_symlink() or not path.is_file(): raise HTTPException(409, 'Temporary file requires review')
+                path.unlink()
             except FileNotFoundError: pass
-    finally: os.close(fd)
     # Never remove unknown intermediate files: classification must be explicit.
     try: directory.rmdir()
     except OSError: pass
@@ -127,7 +153,7 @@ def _create(db,workspace,session_id,name,size,mime):
     if reserved.exists() and not (area/'managed').is_file():
         raise HTTPException(409,'Reserved attachment directory already exists; all files preserved')
     reserved.mkdir(mode=0o700,exist_ok=True)
-    fd=os.open(area/'managed',os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW,0o600);os.close(fd)
+    fd=os.open(area/'managed',os.O_WRONLY|os.O_CREAT|_NOFOLLOW,0o600);os.close(fd)
     identifier = str(uuid.uuid4())
     value = {'id':identifier, 'session_id':str(session.id), 'runtime_id':session.opencode_session_id,
              'name':name, 'size':size, 'mime':mime, 'created':time.time(), 'state':'uploading', 'started':False}
@@ -155,7 +181,7 @@ async def upload(workspace, identifier, request, db=None):
             if not value: raise HTTPException(404, 'Attachment not found')
             if value['state'] != 'uploading' or value['started']: raise HTTPException(409, 'Upload cannot be restarted')
             value['started'] = True; _save(path,value);owns_transfer=True
-            fd = os.open(_directory(workspace,value)/'upload.part', os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
+            fd = os.open(_directory(workspace,value)/'upload.part', os.O_WRONLY|os.O_CREAT|os.O_EXCL|_NOFOLLOW, 0o600)
         async with asyncio.timeout(900):
             async for chunk in request.stream():
                 with locked(workspace,identifier) as (value,path):
@@ -173,9 +199,13 @@ async def upload(workspace, identifier, request, db=None):
             if db is not None and workspaces.account_storage(db,workspace.user_id) > workspaces.quota_bytes(workspace,db):
                 raise HTTPException(413, 'Gateway shared account storage limit reached')
             directory=_directory(workspace,value)
-            directory_fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-            try: os.rename('upload.part',value['name'],src_dir_fd=directory_fd,dst_dir_fd=directory_fd)
-            finally: os.close(directory_fd)
+            if _HAVE_DIR_FD:
+                directory_fd=os.open(directory,os.O_RDONLY|_DIRECTORY|_NOFOLLOW)
+                try: os.rename('upload.part',value['name'],src_dir_fd=directory_fd,dst_dir_fd=directory_fd)
+                finally: os.close(directory_fd)
+            else:
+                if directory.is_symlink(): raise HTTPException(409, 'Temporary file requires review')
+                os.rename(directory/'upload.part', directory/value['name'])
             value['state']='ready'; _save(path,value)
             return public(value)
     except BaseException:

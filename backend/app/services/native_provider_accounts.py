@@ -127,7 +127,9 @@ def catalog(db,user,directory=None,*,full=False):
 
 def require_model(db,user,directory,provider_id,model_id):
     if not policy.model_allowed(policy.load(db),model_id,provider_id):raise HTTPException(403,'Model disabled by policy')
-    data=request('GET','/provider',directory)
+    # Provider credentials are account-level in the shared Native store; read the
+    # authoritative /provider state at the account directory, never a workspace.
+    data=request('GET','/provider',root(user))
     entry=next((p for p in data.get('all',[]) if p.get('id')==provider_id),None)
     if entry is None or provider_id not in data.get('connected',[]) or model_id not in entry.get('models',{}):raise HTTPException(403,'Native model is not configured')
     if public_free(entry):

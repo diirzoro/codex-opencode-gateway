@@ -19,25 +19,6 @@ from .dependencies import require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-class NativeCatalogSchedule(BaseModel):
-    model_config=ConfigDict(extra='forbid')
-    interval_days:Literal[7,14]
-
-@router.get('/native/catalog-maintenance')
-def native_catalog_status(_:User=Depends(require_admin)):
-    from ..services import native_catalog_maintenance
-    return native_catalog_maintenance.status()
-
-@router.put('/native/catalog-maintenance')
-def native_catalog_schedule(data:NativeCatalogSchedule,_:User=Depends(require_admin)):
-    from ..services import native_catalog_maintenance
-    return native_catalog_maintenance.configure(data.interval_days)
-
-@router.post('/native/catalog-maintenance/refresh')
-def native_catalog_refresh(_:User=Depends(require_admin)):
-    from ..services import native_catalog_maintenance
-    return native_catalog_maintenance.refresh()
-
 class PlanIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=120)
@@ -388,19 +369,6 @@ def admin_workspaces(_: User = Depends(require_admin), db: Session = Depends(get
                        "created_at": workspace.created_at, "last_activity_at": workspace.last_activity_at})
     return output
 
-@router.get("/sessions")
-def admin_sessions(_: User = Depends(require_admin), db: Session = Depends(get_db)):
-    owners = _user_index(db)
-    workspaces = {w.id: w for w in db.scalars(select(Workspace))}
-    projects = {p.id: p for p in db.scalars(select(Project))}
-    output = []
-    for session in db.scalars(select(WorkspaceSession).order_by(WorkspaceSession.created_at.desc())):
-        owner = owners.get(session.user_id); workspace = workspaces.get(session.workspace_id)
-        project = projects.get(workspace.project_id) if workspace else None
-        output.append({"id": str(session.id), "owner": owner.username if owner else None, "workspace": workspace.status if workspace else None,
-                       "project": project.name if project else None, "title": session.title, "status": session.status, "created_at": session.created_at})
-    return output
-
 @router.get("/subscriptions")
 def admin_subscriptions(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     owners = _user_index(db)
@@ -552,6 +520,32 @@ class EmailDeliveryUpdate(BaseModel):
     sender_name: str | None = Field(default=None,min_length=1,max_length=120)
     api_key: str | None = Field(default=None,min_length=5,max_length=4096)
 
+def _mask_secret(value):
+    if not isinstance(value,str) or not value:return None
+    if len(value)<=8:return '\u2022'*4
+    return value[:3]+'\u2022\u2022\u2022\u2022'+value[-4:]
+
+def _saved_provider_keys(saved, mail):
+    """List every saved provider credential with a masked key, for admin review."""
+    from ..services import email_delivery
+    accounts=dict((saved or {}).get('provider_accounts') or {})
+    active=mail.get('provider','resend')
+    if active in email_delivery.PROVIDERS and active not in accounts:
+        accounts[active]=mail
+    keys=[]
+    for pid in email_delivery.PROVIDERS:
+        acct=accounts.get(pid,{})
+        secret=acct.get('api_key') if pid=='brevo' else acct.get('smtp_password')
+        keys.append({
+            'provider':pid,
+            'sender':acct.get('smtp_from') or email_delivery.DEFAULT_SENDER,
+            'sender_name':acct.get('sender_name') or email_delivery.DEFAULT_NAME,
+            'configured':bool(secret),
+            'key_masked':_mask_secret(secret),
+            'active':pid==active,
+        })
+    return keys
+
 @router.put("/service-integrations/email")
 def save_email_delivery(data: EmailDeliveryUpdate, actor: User = Depends(require_admin), db: Session = Depends(get_db)):
     from ..services import admin_email_config, email_delivery
@@ -568,6 +562,12 @@ def save_email_delivery(data: EmailDeliveryUpdate, actor: User = Depends(require
     if any(c in name for c in '\r\n'):raise HTTPException(422,'Invalid sender name')
     key=data.api_key or selected.get('api_key' if data.provider=='brevo' else 'smtp_password')
     if not key:raise HTTPException(422,'Enter an API key for the selected email provider')
+    # Verify this API key is not already saved under another provider.
+    duplicate_of=None
+    for pid,acct in accounts.items():
+        if pid==data.provider:continue
+        other=acct.get('api_key') if pid=='brevo' else acct.get('smtp_password')
+        if other and other==key:duplicate_of=pid;break
     cfg={'provider':data.provider,'smtp_from':sender,'sender_name':name}
     if data.provider=='brevo':cfg['api_key']=key
     else:cfg.update(smtp_host='smtp.resend.com',smtp_port=587,smtp_username='resend',smtp_password=key)
@@ -577,7 +577,40 @@ def save_email_delivery(data: EmailDeliveryUpdate, actor: User = Depends(require
     if existing.get('inbox_api_key'):cfg['inbox_api_key']=existing['inbox_api_key']
     elif data.provider=='resend' and data.api_key:cfg['inbox_api_key']=data.api_key
     admin_email_config.save(db,actor.id,cfg)
-    return {**email_delivery.public_config(cfg),'credentials_configured':True,'delivery_verified':False}
+    return {**email_delivery.public_config(cfg),'credentials_configured':True,'delivery_verified':False,'duplicate_of':duplicate_of}
+
+@router.delete("/service-integrations/provider-keys/{provider}")
+def delete_provider_key(provider: str, actor: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Remove one saved provider credential completely; never leaves a copy behind."""
+    from ..services import admin_email_config, email_delivery
+    if provider not in email_delivery.PROVIDERS:
+        raise HTTPException(422,'Unknown email provider')
+    existing=admin_email_config.read(db) or {}
+    accounts=dict(existing.get('provider_accounts') or {})
+    # A credential may live in provider_accounts, at the top level (legacy/active),
+    # or both. Detect any real saved secret for this provider.
+    acct=accounts.get(provider) or {}
+    had_secret=bool(acct.get('api_key') or acct.get('smtp_password'))
+    if existing.get('provider')==provider:
+        had_secret=had_secret or bool(existing.get('api_key') or existing.get('smtp_password'))
+    if not had_secret:
+        raise HTTPException(404,'No saved API key for this provider')
+    # Remove this provider's credential everywhere it could be stored.
+    accounts.pop(provider,None)
+    if existing.get('provider')==provider:
+        # Choose the next active provider that still holds a key, else Resend (empty).
+        new_active=next((pid for pid in email_delivery.PROVIDERS
+                         if pid in accounts and (accounts[pid].get('api_key') or accounts[pid].get('smtp_password'))),
+                        'resend')
+        # Rebuild a flattened top-level config so smtp_settings/ready stay correct.
+        inbox=existing.get('inbox_api_key')
+        existing={'provider':new_active}
+        if new_active in accounts:
+            existing.update(accounts[new_active])
+        if inbox:existing['inbox_api_key']=inbox
+    existing['provider_accounts']=accounts
+    admin_email_config.save(db,actor.id,existing)
+    return {'deleted':True,'provider':provider}
 
 class SupportInboxCredential(BaseModel):
     model_config=ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -822,7 +855,8 @@ def service_integrations(_: User = Depends(require_admin), db: Session = Depends
           "receiving_configured":bool((saved or {}).get("inbox_api_key")),"delivery_verified":False,
           "credentials_configured":bool(mail.get('api_key') if mail.get('provider')=='brevo' else mail.get('smtp_password')),
           "message_provider":"resend",
-          "provider_configurations":{pid:email_delivery.public_config(accounts.get(pid,{'provider':pid})) for pid in email_delivery.PROVIDERS}},
+          "provider_configurations":{pid:email_delivery.public_config(accounts.get(pid,{'provider':pid})) for pid in email_delivery.PROVIDERS},
+          "saved_provider_keys":_saved_provider_keys(saved,mail)},
        "services":[
          {"id":"registration_verification","enabled":required,"available":True,"editable":True,
           "reason":"" if mail_ready else "Selected email provider API key is missing"},

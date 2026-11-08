@@ -8,12 +8,11 @@
   function btn(id,en,ar,action,cls='button ghost small'){const node=text('button',en,ar,cls);node.id=id;node.type='button';node.onclick=async()=>{try{await action();}catch(error){toast(error.message);}};return node;}
   function title(en,ar){return text('h2',en,ar);}
   const home=document.createElement('main');home.id='workspaceHomePage';home.className='page portal-page';
-  home.innerHTML='<div class="workspace-home portal-content"><div class="work-home-heading"></div><div class="home-actions"></div><label class="session-search"><input id="homeSessionSearch" type="search"></label><section><h2 id="homeProjectsTitle"></h2><div id="homeProjects"><p role="status">Loading projects… / جارٍ تحميل المشاريع…</p></div></section><section><h2 id="homeSessionsTitle"></h2><div id="homeSessions"><p role="status">Loading conversations… / جارٍ تحميل المحادثات…</p></div></section></div>';
+  home.innerHTML='<div class="workspace-home portal-content"><div class="work-home-heading"></div><div class="home-actions"></div><section><h2 id="homeProjectsTitle"></h2><div id="homeProjects"><p role="status">Loading projects… / جارٍ تحميل المشاريع…</p></div></section></div>';
   q('app-main').append(home);
   home.querySelector('.work-home-heading').append(text('span','YOUR WORKSPACE','مساحة عملك','eyebrow'),text('h1','What will you build today?','ماذا ستبني اليوم؟'),text('p','Open a project, continue a conversation, or start something new.','افتح مشروعًا، أكمل محادثة، أو ابدأ فكرة جديدة.','lead'));
   home.querySelector('.home-actions').append(btn('homeNewProject','New project','مشروع جديد',()=>page('onboarding'),'button'),btn('homeConnections','Settings · Connections','الإعدادات · الاتصالات',()=>openConnections()));
-  texts.push([q('homeProjectsTitle'),'Projects / workspaces','المشاريع / مساحات العمل'],[q('homeSessionsTitle'),'Recent conversations','المحادثات الأخيرة']);
-  q('homeSessionSearch').setAttribute('aria-label','Search sessions');
+  texts.push([q('homeProjectsTitle'),'Projects / workspaces','المشاريع / مساحات العمل']);
   const settings=document.createElement('main');settings.id='connectionsPage';settings.className='page portal-page';
   settings.innerHTML='<div class="portal-content connections-content"><div class="connections-heading"></div><div id="connectionsProviders"></div><div id="connectionsGithub"></div><div id="connectionsRuntime"></div><section id="connectionsWorkspace" class="manage-card"></section></div>';
   q('app-main').append(settings);q('connectionsProviders').innerHTML='<section class="manage-card"><label>Workspace / مساحة العمل<select disabled><option>Restoring workspace… / جارٍ استعادة مساحة العمل…</option></select></label><label>Search providers / البحث عن المزوّدات<input type="search" role="combobox" placeholder="Search providers…"></label><p role="status">Loading OpenCode providers… / جارٍ تحميل مزوّدي OpenCode…</p></section>';settings.querySelector('.connections-heading').append(text('h1','Settings · Connections','الإعدادات · الاتصالات'),text('p','Choose a workspace provider and use its OpenCode authentication method.','اختر مزوّد مساحة العمل واستخدم طريقة المصادقة المتاحة في OpenCode.','lead'),btn('connectionsReturn','Return to workspace','العودة لمساحة العمل',()=>activeWorkspace?page('workspacePage'):page('workspaceHomePage')));
@@ -57,6 +56,43 @@
       tr('Resend SMTP defaults are ready. Add the API key and save. Sending-only keys cannot read mail; mailbox access requires an appropriately authorized read key.','إعدادات Resend SMTP جاهزة. أضف مفتاح API واحفظ. مفتاح الإرسال فقط لا يقرأ البريد؛ القراءة تحتاج مفتاحًا بالصلاحية المناسبة.');
   }
 
+  function renderSavedKeys(keys){
+    const host=q('adminSavedKeys');if(!host)return;
+    host.replaceChildren();
+    const labels={resend:'Resend',brevo:'Brevo'};
+    const rows=keys||[];
+    for(const k of rows){
+      const row=document.createElement('div');row.className='saved-key-row';row.setAttribute('role','listitem');
+      const info=textElement('div');
+      const name=textElement('strong',(labels[k.provider]||k.provider)+(k.active?tr(' · active',' · نشط'):''));
+      const detail=textElement('small',k.configured?tr('Key: ','المفتاح: ')+(k.key_masked||'')+' · '+(k.sender||''):tr('Not configured','غير مهيّأ'));
+      info.append(name,detail);
+      const actions=textElement('div','','saved-key-actions');
+      const edit=document.createElement('button');edit.type='button';edit.className='button ghost small';edit.textContent=tr('Edit','تعديل');
+      edit.onclick=()=>{
+        q('adminEmailProvider').value=k.provider;showEmailProvider(k.provider);
+        q('adminSmtpSecret').focus();
+        q('adminServiceNotice').textContent=tr('Enter a new key to replace the saved '+(labels[k.provider]||k.provider)+' key, then save.','أدخل مفتاحًا جديدًا لاستبدال مفتاح '+(labels[k.provider]||k.provider)+' المحفوظ، ثم احفظ.');
+      };
+      const del=document.createElement('button');del.type='button';del.className='button ghost small';del.textContent=tr('Delete','حذف');del.disabled=!k.configured;
+      del.onclick=async()=>{
+        const owner=currentUser.id;
+        const approved=await window.confirmAction(tr('Delete the saved '+(labels[k.provider]||k.provider)+' API key?','حذف مفتاح API المحفوظ لمزوّد '+(labels[k.provider]||k.provider)+'؟'));
+        if(!approved||!admin()||currentUser.id!==owner)return;
+        del.disabled=true;
+        try{
+          await api('/api/admin/service-integrations/provider-keys/'+encodeURIComponent(k.provider),{method:'DELETE'});
+          if(!admin()||currentUser.id!==owner)return;
+          q('adminServiceNotice').textContent=tr('Deleted the saved '+(labels[k.provider]||k.provider)+' key.','حُذف مفتاح '+(labels[k.provider]||k.provider)+' المحفوظ.');
+          await loadServiceCenter();
+        }catch(error){if(admin()&&currentUser.id===owner)q('adminServiceNotice').textContent=error.message;}
+        finally{if(admin()&&currentUser.id===owner)del.disabled=false;}
+      };
+      actions.append(edit,del);row.append(info,actions);host.append(row);
+    }
+    if(!rows.length)host.append(textElement('p',tr('No saved provider keys yet.','لا توجد مفاتيح مزوّد محفوظة بعد.'),'saved-keys-empty'));
+  }
+
   async function loadServiceCenter(){
     if(!admin())return;
     const notice=q('adminServiceNotice');if(!notice)return;
@@ -74,6 +110,7 @@
       notice.textContent=e.configured?tr('Email configured · delivery not yet tested','البريد مهيّأ · لم يُختبر التسليم بعد'):tr('Email delivery is not configured','إرسال البريد غير مهيّأ');if(e.settings_schema_ready===false)notice.textContent+=' · '+tr('Apply TEST migration 0021 before saving settings','يلزم تطبيق ترحيل TEST رقم 0021 قبل حفظ الإعدادات');
       emailStatus=e;emailProviderConfig=e.provider_configurations||{[e.provider||'resend']:e};
       q('adminEmailProvider').value=['resend','brevo'].includes(e.provider)?e.provider:'smtp';showEmailProvider(q('adminEmailProvider').value);
+      renderSavedKeys(e.saved_provider_keys||[]);
       q('adminSmtpTest').title=e.configured?tr('Sends one real test email to the specified recipient','يرسل رسالة اختبار حقيقية واحدة إلى العنوان المحدد'):tr('Save the selected provider API key first','احفظ مفتاح API للمزوّد المختار أولاً');
       if(!e.credentials_configured)notice.textContent+=' · '+tr('Selected provider API key is missing. Verification messages cannot be sent.','مفتاح API للمزوّد المختار غير موجود. لا يمكن إرسال رسائل التفعيل.');
       if(e.credential_storage_ready===false)notice.textContent+=' · '+tr('Gateway credential encryption is not configured.','تشفير اعتمادات Gateway غير مُعدّ.');
@@ -336,6 +373,7 @@
         });
         key.value='';
         q('adminServiceNotice').textContent=result.configured?'حُفظ مزوّد الإرسال المختار بأمان · Saved securely':'Configuration not ready';
+        if(result.duplicate_of)q('adminServiceNotice').textContent+=' · '+tr('This API key is already saved for provider "'+result.duplicate_of+'".','مفتاح API هذا محفوظ مسبقًا للمزوّد "'+result.duplicate_of+'".');
         await loadServiceCenter();
       }catch(error){q('adminServiceNotice').textContent=error.message;}
       finally{key.value='';button.disabled=false;}
@@ -347,13 +385,9 @@
   }
   async function loadHome(){
     const data=await api('/api/dashboard');const projects=q('homeProjects');projects.replaceChildren();
-    for(const project of data.projects){for(const workspace of project.workspaces){const row=textElement('div','','home-project-row');row.append(textElement('strong',project.name),textElement('small',(project.repository||tr('Local project','مشروع محلي'))+' · '+workspace.status));if(workspace.cache?.warning||workspace.cache?.expired)row.append(textElement('small',window.workspaceRetentionNotice(workspace.cache),'project-retention-warning'));row.append(btn('home-open-'+workspace.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace)),btn('home-session-'+workspace.id,'New session','جلسة جديدة',async()=>{await openWorkspace(project,workspace);await createWorkspaceSession();}));projects.append(row);}}
+    for(const project of data.projects){for(const workspace of project.workspaces){const row=textElement('div','','home-project-row');row.append(textElement('strong',project.name),textElement('small',(project.repository||tr('Local project','مشروع محلي'))+' · '+workspace.status));if(workspace.cache?.warning||workspace.cache?.expired)row.append(textElement('small',window.workspaceRetentionNotice(workspace.cache),'project-retention-warning'));row.append(btn('home-open-'+workspace.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace)));projects.append(row);}}
     if(!projects.children.length)projects.append(text('p','No projects yet. Create your first workspace.','لا توجد مشاريع بعد. أنشئ مساحة عملك الأولى.','home-empty'));
-    const sessions=q('homeSessions');sessions.replaceChildren();
-    for(const session of data.recent_sessions){const project=data.projects.find(p=>p.workspaces.some(w=>w.id===session.workspace_id));const workspace=project?.workspaces.find(w=>w.id===session.workspace_id);if(!workspace)continue;const row=btn('home-recent-'+session.id,session.title,session.title,async()=>{await openWorkspace(project,workspace);await selectSession(session);},'home-session-row');row.append(textElement('small',project.name+' · '+session.status));row.dataset.search=(session.title+' '+project.name).toLowerCase();sessions.append(row);}
-    if(!sessions.children.length)sessions.append(text('p','No conversations yet. Open a project and start a session.','لا توجد محادثات بعد. افتح مشروعًا وابدأ جلسة.','home-empty'));
-    q('homeSessionSearch').placeholder=tr('Search recent sessions…','ابحث في الجلسات الأخيرة…');
-    renderEntitlement();q('homeSessionSearch').oninput=()=>sessions.querySelectorAll('[data-search]').forEach(row=>row.hidden=!row.dataset.search.includes(q('homeSessionSearch').value.trim().toLowerCase()));
+    renderEntitlement();
   }
   async function openConnections(focus){await page('connectionsPage');if(focus)q(focus==='github'?'connectionsGithub':'connectionsProviders').scrollIntoView({block:'start',behavior:'smooth'});}
   window.openConnections=openConnections;
@@ -519,7 +553,7 @@
       workspaceAccess.append(textElement('span',tr('Advanced integrations expired. Core access and free platform models remain available.','انتهت تجربة التكاملات المتقدمة. يبقى الوصول الأساسي ونماذج المنصة المجانية متاحين.')),btn('workspaceAdvancedUpgrade','View plans','عرض الخطط',subscribe));
     }
     q('homeNewProject').disabled=!workAccess;q('promptInput').disabled=!workAccess;
-    document.querySelectorAll('#workspacePage .new-session,#homeProjects [id^=home-session-],#sessionList .session,#homeSessions [id^=home-recent-]').forEach(n=>n.disabled=!workAccess);
+    document.querySelectorAll('#workspacePage .new-session,#sessionList .session').forEach(n=>n.disabled=!workAccess);
     if(!workAccess){q('sendMessage').disabled=true;q('commitButton').disabled=true;q('pushButton').disabled=true;}
   }
   async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/profile/access');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();}
@@ -818,7 +852,6 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const sessionsSection=document.createElement('section');sessionsSection.className='workspace-conversations';sessionsSection.hidden=true;
   const sessionsSummary=text('h3','Conversations','المحادثات'),sessionsCount=textElement('small','','sidebar-count');sessionsSummary.append(sessionsCount);sessionsSection.append(sessionsSummary);
   const sessionsBody=textElement('div','','section-body');
-  const newSessionButton=pane.querySelector('.new-session');
   const search=document.createElement('input');search.type='search';search.id='workspaceSessionSearch';search.placeholder=tr('Search sessions','ابحث في الجلسات');search.setAttribute('aria-label','Search sessions');
   search.oninput=()=>renderRuntimeSessions(sessionRows);
   const sessionTabs=textElement('div','','session-filters');let sessionFilter='all',sessionRows=[],sessionListPending=null,sessionCreating=null,sending=false,queuing=false,queueCount=0,queueSignature='',queueRevision=0,historyRevision=0,pendingSubmission=null,cancelRequested=false,statusPending=null;
@@ -875,7 +908,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   recoveryAction.append(cancelAttachment);
 
   const retrySubmission=btn('retrySubmission','Check / retry same submission','تحقق / أعد نفس الطلب',()=>submitPending());retrySubmission.hidden=true;q('promptForm').before(retrySubmission);
-  sessionsBody.append(newSessionButton,sessionTabs,search,q('sessionList'));sessionsSection.append(sessionsBody);
+  sessionsBody.append(sessionTabs,search,q('sessionList'));sessionsSection.append(sessionsBody);
   const filesSection=document.createElement('details');filesSection.className='workspace-side-section workspace-files';filesSection.open=true;
   const filesSummary=text('summary','Project files','ملفات المشروع');
   const filesRefresh=btn('refreshWorkspaceFiles','Refresh files','حدّث الملفات',()=>loadFiles());filesRefresh.classList.add('icon-btn','files-refresh');filesRefresh.title=tr('Refresh files','حدّث الملفات');filesRefresh.setAttribute('aria-label',filesRefresh.title);
@@ -947,9 +980,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   window.refreshNativeFiles=({workspaceId,owner})=>{if(activeWorkspace?.id===workspaceId&&String(currentUser?.id)===String(owner))return loadFiles();};
   const modes=textElement('nav','','workspace-panel-modes');modes.setAttribute('aria-label',tr('Workspace panel','لوحة مساحة العمل'));
   const changesMode=btn('workspaceChanges','Project files','ملفات المشروع',()=>setPanel('changes'));
-  const conversationsMode=btn('workspaceConversations','Conversations','المحادثات',()=>setPanel('conversations'));
   const previewMode=btn('workspacePreview','Preview','المعاينة',()=>setPanel('preview'));
-  modes.append(conversationsMode,changesMode,previewMode);
+  modes.append(changesMode,previewMode);
   const close=q('closeSessions');modes.append(close);
   const changesPanel=textElement('section','','workspace-changes'),previewPanel=textElement('section','','workspace-preview');
   changesPanel.id='workspaceChangesPanel';previewPanel.id='workspacePreviewPanel';previewPanel.hidden=true;
@@ -1233,7 +1265,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const projectIcon=textElement('span','','sidebar-project-icon');projectIcon.innerHTML=FILE_ICONS.directory;const projectIdentity=textElement('span','','sidebar-project-identity');projectIdentity.append(projectName,projectKind);projectSummary.append(projectIcon,projectIdentity);projectRoot.append(projectSummary,projectBranch);
   const changesSection=document.createElement('details');changesSection.className='workspace-side-section workspace-change-group';changesSection.open=false;changesSection.append(text('summary','Project changes','تغييرات المشروع'),changesPanel);
   projectRoot.append(filesSection,changesSection);
-  let exportSource;
+  let exportSource,deleteActiveProject;
   const sourceDownloads=new Set();
   async function downloadProjectSource(workspace,project){
     const owner=currentUser?.id,id=workspace?.id;
@@ -1251,7 +1283,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
     }finally{sourceDownloads.delete(id);}
   }
-  function projectKindControls(){const github=activeProject?.source_type==='github';changesSection.hidden=!github;if(exportSource){exportSource.hidden=!activeWorkspace;exportSource.disabled=!activeWorkspace;}gitActions.hidden=!github;gitActions.querySelector('#commitButton').hidden=!github;gitActions.querySelector('#pushButton').hidden=!github;}
+  function projectKindControls(){const github=activeProject?.source_type==='github';changesSection.hidden=!github;if(exportSource){exportSource.hidden=!activeWorkspace;exportSource.disabled=!activeWorkspace;}if(deleteActiveProject){deleteActiveProject.hidden=github||!activeProject;}gitActions.hidden=!github;gitActions.querySelector('#commitButton').hidden=!github;gitActions.querySelector('#pushButton').hidden=!github;}
 
   function updateProjectIdentity(){updatePreviewIdentity();projectKindControls();projectName.textContent=activeProject?.repository||activeProject?.name||tr('Project','المشروع');projectKind.textContent=activeProject?.source_type==='github'?tr('GitHub working copy','نسخة عمل GitHub'):tr('Local project','مشروع محلي');projectBranch.textContent=tr('Branch: ','الفرع: ')+(activeProject?.branch||'—');projectBranch.hidden=!activeProject?.branch;}
   const projectGroups=textElement('div','','workspace-project-groups'),projectBuckets=new Map();
@@ -1265,6 +1297,18 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const linkGithub=btn('linkWorkspaceGithubProject','Open a GitHub project','فتح مشروع GitHub',()=>window.openGithubProject(),'icon-btn');
   linkGithub.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';linkGithub.title=tr('Open a GitHub project','فتح مشروع GitHub');linkGithub.setAttribute('aria-label',linkGithub.title);
   linkGithub.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});projectBuckets.get('github').summary.append(linkGithub);
+  const linkLocal=btn('linkWorkspaceLocalProject','New project','مشروع جديد',async()=>{
+    const owner=currentUser?.id;
+    const result=await window.requestForm(tr('New project','مشروع جديد'),[{name:'name',label:tr('Project name','اسم المشروع'),required:true,maxLength:120}],tr('Create project','إنشاء مشروع'));
+    if(!result||currentUser?.id!==owner)return;
+    const name=String(result.name||'').trim();if(!name)return;
+    try{
+      const created=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'blank',project_name:name})});
+      if(currentUser?.id===owner)await openWorkspace(created.project,created.workspace);
+    }catch(error){toast(error.message);}
+  },'icon-btn');
+  linkLocal.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';linkLocal.title=tr('New project','مشروع جديد');linkLocal.setAttribute('aria-label',linkLocal.title);
+  linkLocal.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});projectBuckets.get('local').summary.append(linkLocal);
   function projectFileFolder(project,workspace){
     const folder=document.createElement('details');folder.className='sidebar-project-root';
     const summary=document.createElement('summary'),icon=textElement('span','','sidebar-project-icon');icon.innerHTML=FILE_ICONS.directory;
@@ -1354,7 +1398,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   placeCurrentProject();pane.replaceChildren(projectPanelBrand,modes,sessionsSection,projectGroups,previewPanel);
   const conversationList=sessionsBody.querySelector('#sessionList'),conversationOptions=document.createElement('details');conversationOptions.className='conversation-options';conversationOptions.append(text('summary','Search / filter','بحث / تصفية'),search,sessionTabs);
   sessionsBody.replaceChildren(conversationOptions,conversationList);
-  newSessionButton.textContent='+';newSessionButton.title=tr('New conversation','محادثة جديدة');newSessionButton.setAttribute('aria-label',newSessionButton.title);sessionsSummary.append(newSessionButton);sessionsSection.hidden=false;conversationsMode.hidden=false;projectGroups.hidden=true;
+  sessionsSection.hidden=true;projectGroups.hidden=false;
   pane.append(paneResizer);
   // Reuse the actual Dashboard navigation and its handlers, never duplicate it.
   const dashboardMenu=document.createElement('dialog');dashboardMenu.className='workspace-dashboard-menu';dashboardMenu.setAttribute('aria-label',tr('Dashboard menu','قائمة لوحة التحكم'));
@@ -1367,7 +1411,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   dashboardNav.addEventListener('click',event=>{if(event.target.closest('button')&&dashboardMenu.open)dashboardMenu.close();});
   const dashboardToggle=btn('openWorkspaceDashboard','Dashboard','لوحة التحكم',()=>{if(!currentUser)return;dashboardMenu.append(dashboardNav);dashboardMenu.showModal();},'workspace-dashboard-toggle');dashboardToggle.innerHTML='<svg class="ui-icon" aria-hidden="true"><use href="#icon-menu"/></svg>';dashboardToggle.setAttribute('aria-label',tr('Open dashboard menu','فتح قائمة لوحة التحكم'));dashboardToggle.title=tr('Dashboard','لوحة التحكم');projectbar.prepend(dashboardToggle);dashboardNavReady=true;placeDashboardNav();
 
-  let panelMode='conversations',changesStamp=0;
+  let panelMode='changes',changesStamp=0;
   async function loadChanges(){
     if(!activeWorkspace)return;updateProjectIdentity();const id=activeWorkspace.id,stamp=++changesStamp;diffView.textContent=tr('Loading changes…','جارٍ تحميل التغييرات…');
     try{const [state,sessionDiff]=await Promise.all([api('/api/workspaces/'+id+'/git/status'),activeSession?api('/api/sessions/'+activeSession.id+'/diff'):Promise.resolve([])]);if(stamp!==changesStamp||activeWorkspace?.id!==id)return;
@@ -1382,7 +1426,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       diffView.textContent=names.size?tr('Select a changed file to review its diff.','اختر ملفًا متغيرًا لمراجعة الفرق.'):tr('No changes in this workspace.','لا توجد تغييرات في مساحة العمل.');
     }catch(error){if(stamp===changesStamp)diffView.textContent=error.message;}
   }
-  async function setPanel(mode){panelMode=mode;sessionsSection.hidden=mode!=='conversations';projectGroups.hidden=mode!=='changes';previewPanel.hidden=mode!=='preview';conversationsMode.setAttribute('aria-pressed',String(mode==='conversations'));changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));if(mode==='conversations')await refreshSessions();if(mode==='changes')await Promise.all([loadChanges(),loadProjectGroups()]);}
+  async function setPanel(mode){panelMode=mode;sessionsSection.hidden=mode!=='conversations';projectGroups.hidden=mode!=='changes';previewPanel.hidden=mode!=='preview';changesMode.setAttribute('aria-pressed',String(mode==='changes'));previewMode.setAttribute('aria-pressed',String(mode==='preview'));if(mode==='conversations')await refreshSessions();if(mode==='changes')await Promise.all([loadChanges(),loadProjectGroups()]);}
   function drawer(){return matchMedia('(max-width:1100px)').matches;}
   function closePane(){paneDragEnd();pane.classList.remove('open');shell.classList.remove('panel-docked');shell.classList.add('sessions-collapsed');shell.style.gridTemplateColumns='';overlay(false);}
   function togglePane(){const opening=shell.classList.contains('sessions-collapsed')||(drawer()&&!pane.classList.contains('open'));shell.classList.toggle('sessions-collapsed',!opening);pane.classList.toggle('open',opening);shell.classList.toggle('panel-docked',drawer()&&opening);shell.style.gridTemplateColumns='';overlay(false);if(opening){setPanelWidth(panelWidth);if(panelMode==='changes')loadChanges();}}
@@ -1390,12 +1434,34 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   copy.en.spaceReadyBody='Start a session to work with OpenCode. Review changes or preview your project in the side panel.';
   copy.ar.spaceReadyBody='ابدأ جلسة للعمل مع OpenCode. راجع التغييرات أو عاين مشروعك في اللوحة الجانبية.';
   q('openSessions').onclick=togglePane;q('openSessions').setAttribute('aria-label',tr('Projects and preview','المشاريع والمعاينة'));q('openSessions').title=tr('Projects and preview','المشاريع والمعاينة');close.onclick=closePane;q('backdrop').addEventListener('click',()=>{pane.classList.remove('open');});
-  const events=textElement('div');previewPanel.hidden=true;conversationsMode.setAttribute('aria-pressed','true');changesMode.setAttribute('aria-pressed','false');previewMode.setAttribute('aria-pressed','false');
+  const events=textElement('div');previewPanel.hidden=true;changesMode.setAttribute('aria-pressed','true');previewMode.setAttribute('aria-pressed','false');
   refreshGit=async()=>{await loadChanges();q('manageProviders')?.remove();};
   q('commitButton').onclick=async()=>{if(!activeWorkspace||activeProject?.source_type!=='github')return;const message=await window.requestInput(tr('Commit message','رسالة الالتزام'));if(!message?.trim())return;try{await api('/api/workspaces/'+activeWorkspace.id+'/git/commit',{method:'POST',body:JSON.stringify({message:message.trim()})});await loadChanges();}catch(error){toast(error.message);}};
   const syncGit=btn('syncWorkspaceGit','Pull / Sync (fast-forward only)','Pull / Sync (تقديم سريع فقط)',async()=>{if(!activeWorkspace)return;if(!await window.confirmAction(tr('Fetch the selected GitHub branch and fast-forward only? Uncommitted/divergent work is preserved.','جلب فرع GitHub المختار والتقديم السريع فقط؟ تُحفظ الأعمال غير المحفوظة أو المتباعدة.')))return;await api('/api/workspaces/'+activeWorkspace.id+'/git/sync',{method:'POST'});await loadChanges();await loadFiles();});syncGit.hidden=true;
   exportSource=btn('exportWorkspaceSource','Download ZIP','تنزيل المشروع ZIP',()=>downloadProjectSource(activeWorkspace,activeProject));
-  projectRoot.insertBefore(exportSource,filesSection);projectKindControls();
+  deleteActiveProject=btn('delete-active-project','Delete local project','حذف المشروع المحلي',async()=>{
+    const owner=currentUser?.id,project=activeProject;
+    if(!owner||!project||project.source_type==='github')return;
+    const exact=await window.requestInput(tr(
+      'Delete this LOCAL project permanently? Download ZIP first. Type the exact project name: '+project.name+'. The agent must be stopped first; the remote GitHub repository is never deleted.',
+      'حذف المشروع المحلي نهائيًا؟ حمّل ZIP أولًا. اكتب اسم المشروع حرفيًا: '+project.name+'. يجب إيقاف الوكيل أولًا؛ لن يُحذف مستودع GitHub.'
+    ));
+    if(exact!==project.name)return;
+    if(!await window.confirmAction(tr('Confirm permanent deletion of local project '+project.name+' and its working files. This cannot be undone.','تأكيد نهائي لحذف المشروع المحلي '+project.name+' وملفاته. لا يمكن التراجع عن ذلك.')))return;
+    deleteActiveProject.disabled=true;
+    try{
+      const result=await api('/api/projects/'+project.id,{method:'DELETE',body:JSON.stringify({confirm_name:project.name,confirmation:'DELETE LOCAL PROJECT'})});
+      if(currentUser?.id!==owner)return;
+      if(result.deleted!==true)throw Error(tr('Project deletion was not confirmed.','لم يؤكد الخادم حذف المشروع.'));
+      toast(tr('Local project deleted. Your account storage was released.','حُذف المشروع المحلي وتحررت مساحته من حصة الحساب.'));
+      stopEvents();activeProject=activeWorkspace=activeSession=null;
+      try{localStorage.removeItem('og-workspace');localStorage.removeItem('og-context:'+owner);}catch(error){}
+      await page('workspaceHomePage');
+    }catch(error){toast(error.message);}
+    finally{deleteActiveProject.disabled=false;}
+  });
+  deleteActiveProject.classList.add('danger');
+  projectRoot.insertBefore(exportSource,filesSection);projectRoot.insertBefore(deleteActiveProject,filesSection);projectKindControls();
   const reviewPR=textElement('a',tr('Review PR / Merge in GitHub','مراجعة PR / Merge في GitHub'),'button ghost small');reviewPR.target='_blank';reviewPR.rel='noopener noreferrer';reviewPR.hidden=true;
   gitActions.append(syncGit,reviewPR,textElement('small',tr('Commit saves locally. Push updates GitHub. PR and merge are reviewed in GitHub; nothing is sent automatically.','Commit يحفظ محليًا. Push يحدّث GitHub. تُراجع PR وMerge في GitHub؛ لا إرسال تلقائي.')));
   let providers=[],chosenAgent='',chosenProvider='',chosenModel='',discovery=0,modelRequest=0,runtimeReady=false,agentsReady=false,modelsReady=false;
@@ -1439,7 +1505,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     q('sendMessage').disabled=sending||queuing||nativeBusy||(window.nativeSession?.active()&&busy)||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
-    newSessionButton.disabled=newTask.disabled=!workAccess||(!window.nativeSession?.active()&&busy)||sending||Boolean(sessionCreating)||Boolean(pendingSubmission);
+    newTask.disabled=!workAccess||(!window.nativeSession?.active()&&busy)||sending||Boolean(sessionCreating)||Boolean(pendingSubmission);
     closeSessionButton.disabled=!activeSession||sending||Boolean(pendingSubmission);
     // Unconfirmed Native receipt is still an actionable stop: even an idle
     // runtime needs a verified session-scoped stop to unblock the saved draft.
@@ -1718,61 +1784,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       await originalSession(row);if(window.nativeSession?.active()){if(sending)nativeDraftContext=nativeDraftKey();else restoreNativeDraft();}await refreshSessions();return activeSession;
     })();sessionCreating=promise;updateSend();try{return await promise;}finally{if(sessionCreating===promise)sessionCreating=null;updateSend();}
   }
-  async function chooseNewConversation(initialKind=null,anchor=newSessionButton){
-    if(!currentUser||sending||pendingSubmission)return;
-    document.querySelector('.new-conversation-dialog')?.close();
-    const owner=currentUser.id,dialog=document.createElement('dialog');dialog.className='new-conversation-dialog';dialog.setAttribute('aria-label',tr('New conversation project','مشروع المحادثة الجديدة'));
-    const head=textElement('div','','new-conversation-head'),choices=textElement('div','','new-conversation-kinds'),body=textElement('div','','new-conversation-body'),feedback=textElement('p','','api-message');feedback.setAttribute('role','status');
-    const close=btn('newConversationClose','Cancel','إلغاء',()=>dialog.close(),'new-conversation-close');head.append(title('New conversation','محادثة جديدة'),close);dialog.append(head,choices,body,feedback);document.body.append(dialog);let revision=0;
-    function position(){const rect=anchor.getBoundingClientRect(),box=dialog.getBoundingClientRect();dialog.style.left=Math.max(12,Math.min(rect.right-box.width,window.innerWidth-box.width-12))+'px';dialog.style.top=Math.max(12,Math.min(rect.bottom+6,window.innerHeight-box.height-12))+'px';}
-    const outside=event=>{if(!dialog.contains(event.target)&&!anchor.contains(event.target)&&!sessionSourceMenu.contains(event.target))dialog.close();};
-    const escape=event=>{if(event.key==='Escape'){event.preventDefault();dialog.close();anchor.focus();}};
-    const signedOut=()=>dialog.close();
-    dialog.addEventListener('close',()=>{document.removeEventListener('click',outside);document.removeEventListener('keydown',escape);window.removeEventListener('resize',position);window.removeEventListener('authentication-cleared',signedOut);dialog.remove();},{once:true});
-    dialog.show();position();window.addEventListener('resize',position);window.addEventListener('authentication-cleared',signedOut);
-    const valid=()=>dialog.open&&currentUser?.id===owner;
-    async function start(project,workspace,conversationTitle=''){if(!valid())return;choices.querySelectorAll('button').forEach(b=>b.disabled=true);body.querySelectorAll('button').forEach(b=>b.disabled=true);
-      try{if(sending||pendingSubmission)throw new Error(tr('Finish the pending submission first.','أكمل الطلب المعلّق أولًا.'));if(activeWorkspace?.id!==workspace.id)await openWorkspace(project,workspace,{navigate:false});if(!valid()||activeWorkspace?.id!==workspace.id)return;const result=await createSession({title:conversationTitle.trim()||project.name||project.repository});if(result&&valid()){dialog.close();await page('workspacePage');}}
-      catch(error){if(valid())feedback.textContent=error.message;}finally{if(valid()){choices.querySelectorAll('button').forEach(b=>b.disabled=false);body.querySelectorAll('button').forEach(b=>b.disabled=false);}}
-    }
-    async function show(kind){const stamp=++revision;body.replaceChildren();feedback.textContent=tr('Loading projects…','جارٍ تحميل المشاريع…');for(const button of choices.querySelectorAll('button'))button.setAttribute('aria-pressed',String(button.id==='conversation-kind-'+kind));
-      if(kind==='github')body.append(btn('newConversationGithubImport','Open GitHub repository…','فتح مستودع GitHub…',()=>{dialog.close();return openRepositoryPicker(async(project,workspace)=>{if(currentUser?.id===owner&&activeWorkspace?.id===workspace.id)await createSession({title:project.name||project.repository});});},'new-conversation-submit'));
-      else{const form=document.createElement('form'),label=textElement('label',tr('Project and conversation name','اسم المشروع والمحادثة')),name=document.createElement('input');name.id='newConversationProjectName';name.required=true;name.maxLength=120;label.append(name);const submit=textElement('button',tr('Create project and conversation','إنشاء مشروع ومحادثة'),'new-conversation-submit');submit.type='submit';form.append(label,submit);body.append(form);
-        form.onsubmit=async event=>{event.preventDefault();if(!valid()||!form.reportValidity()||submit.disabled||!name.value.trim())return;submit.disabled=true;const requestedName=name.value.trim();try{const result=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'blank',project_name:requestedName})});if(valid())await start(result.project,result.workspace,requestedName);}catch(error){if(valid())feedback.textContent=error.message;}finally{submit.disabled=false;}};
-      }
-      try{const data=await api('/api/dashboard');if(!valid()||stamp!==revision)return;feedback.textContent='';
-        const projects=(data.projects||[]).filter(project=>(project.source_type==='github')===(kind==='github')&&project.workspaces?.length);
-        if(projects.length){const form=document.createElement('form');form.className='new-conversation-existing';const label=textElement('label',tr('Existing project','مشروع موجود')),select=document.createElement('select');select.id='newConversationExistingProject';select.required=true;const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=tr('Choose a project','اختر مشروعًا');select.append(placeholder);
-          for(const project of projects){const option=document.createElement('option');option.value=project.id;option.textContent=project.repository||project.name;select.append(option);}label.append(select);
-          const nameLabel=textElement('label',tr('Conversation name (optional)','اسم المحادثة (اختياري)')),name=document.createElement('input');name.id='newConversationTitle';name.maxLength=120;name.placeholder=tr('Use project name','استخدام اسم المشروع');nameLabel.append(name);
-          const submit=textElement('button',tr('Open conversation','فتح محادثة'),'new-conversation-submit');submit.type='submit';form.append(label,nameLabel,submit);body.append(form);
-          form.onsubmit=async event=>{event.preventDefault();if(!valid()||!form.reportValidity()||submit.disabled)return;const project=projects.find(p=>p.id===select.value);if(!project)return;const workspace=project.workspaces.find(w=>w.status==='ready')||project.workspaces[0];await start(project,workspace,name.value);};
-        }else body.append(textElement('p',tr('No existing projects in this section.','لا توجد مشاريع سابقة في هذا القسم.'),'new-conversation-empty'));
-      }catch(error){if(valid()&&stamp===revision)feedback.textContent=error.message;}
-      if(valid())position();
-    }
-    for(const [kind,en,ar] of [['local','Local','محلي'],['github','GitHub','GitHub']])choices.append(btn('conversation-kind-'+kind,en,ar,()=>show(kind),'button ghost small'));
-    if(initialKind==='github'||initialKind==='local')await show(initialKind);
-    if(valid()){document.addEventListener('click',outside);document.addEventListener('keydown',escape);dialog.querySelector('input,select')?.focus();}
-  }
-  // Compact source picker; keep existing project/session creation functions unchanged.
-  const sessionSourceMenu=document.createElement('div');sessionSourceMenu.className='session-source-menu';sessionSourceMenu.hidden=true;
-  sessionSourceMenu.setAttribute('role','group');sessionSourceMenu.setAttribute('aria-label',tr('New conversation source','مصدر المحادثة الجديدة'));
-  for(const [kind,en,ar] of [['local','Local project','مشروع محلي'],['github','GitHub','GitHub']]){
-    const item=btn('conversation-source-'+kind,en,ar,()=>{sessionSourceMenu.hidden=true;newSessionButton.setAttribute('aria-expanded','false');chooseNewConversation(kind).catch(error=>toast(error.message));},'session-source-option');
-    sessionSourceMenu.append(item);
-  }
-  sessionsSummary.append(sessionSourceMenu);
-  newSessionButton.setAttribute('aria-haspopup','true');newSessionButton.setAttribute('aria-expanded','false');
-  newSessionButton.onclick=()=>{if(newSessionButton.disabled)return;sessionSourceMenu.hidden=!sessionSourceMenu.hidden;newSessionButton.setAttribute('aria-expanded',String(!sessionSourceMenu.hidden));};
-  document.addEventListener('click',event=>{if(!sessionsSummary.contains(event.target)){sessionSourceMenu.hidden=true;newSessionButton.setAttribute('aria-expanded','false');}});
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!sessionSourceMenu.hidden){sessionSourceMenu.hidden=true;newSessionButton.setAttribute('aria-expanded','false');newSessionButton.focus();}});
 
 
-  const projectMenu=document.createElement('details');projectMenu.className='composer-project-menu';projectMenu.id='composerProjectMenu';
-  const projectMenuToggle=document.createElement('summary');projectMenuToggle.setAttribute('aria-label',tr('Projects and connections','المشاريع والربط'));projectMenuToggle.title=tr('Projects and connections','المشاريع والربط');projectMenuToggle.innerHTML='<svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg>';const projectMenuItems=textElement('div');projectMenu.append(projectMenuToggle,projectMenuItems);
-  for(const [kind,en,ar,icon] of [['local','Local project','مشروع محلي','icon-folder'],['github','GitHub','GitHub','icon-github']]){const button=btn('composer-project-'+kind,en,ar,()=>{projectMenu.open=false;return chooseNewConversation(kind,projectMenuToggle).catch(error=>toast(error.message));});button.prepend(textElement('span'));button.firstChild.innerHTML='<svg class="ui-icon" aria-hidden="true"><use href="#'+icon+'"/></svg>';projectMenuItems.append(button);}
-  utilities.append(projectMenu);document.addEventListener('click',event=>{if(projectMenu.open&&!projectMenu.contains(event.target))projectMenu.open=false;});document.addEventListener('keydown',event=>{if(event.key==='Escape')projectMenu.open=false;});window.addEventListener('authentication-cleared',()=>{projectMenu.open=false;});
 
   // Separate the submitted text from the next draft before any network wait.
   // Input revisions protect even an identical new draft (or deliberate deletion).
@@ -2017,7 +2030,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   if(activeProject){q('workspaceRepo').textContent=activeProject.name;q('workspaceBranch').textContent=activeProject.branch||'—';}
   }
   const refundPolicy=text('p','Accepted payments cannot be cancelled or refunded.','المدفوعات المقبولة غير قابلة للإلغاء أو الاسترداد.','refund-policy');refundPolicy.id='subscriptionRefundPolicy';document.querySelector('#landing .pricing').append(refundPolicy);
-  const prefs=applyPrefs;applyPrefs=()=>{prefs();for(const [node,en,ar] of texts){if(!node.firstChild)node.textContent=tr(en,ar);else if(node.firstChild.nodeType===3)node.firstChild.textContent=tr(en,ar);}q('homeSessionSearch').placeholder=tr('Search recent sessions…','ابحث في الجلسات الأخيرة…');renderEntitlement();renderStorage();if(q('accountLanguage'))q('accountLanguage').value=lang;if(q('accountAppearance'))q('accountAppearance').value=dark?'dark':'light';document.querySelectorAll('[data-account-en]').forEach(node=>node.textContent=lang==='ar'?node.dataset.accountAr:node.dataset.accountEn);};
+  const prefs=applyPrefs;applyPrefs=()=>{prefs();for(const [node,en,ar] of texts){if(!node.firstChild)node.textContent=tr(en,ar);else if(node.firstChild.nodeType===3)node.firstChild.textContent=tr(en,ar);}renderEntitlement();renderStorage();if(q('accountLanguage'))q('accountLanguage').value=lang;if(q('accountAppearance'))q('accountAppearance').value=dark?'dark':'light';document.querySelectorAll('[data-account-en]').forEach(node=>node.textContent=lang==='ar'?node.dataset.accountAr:node.dataset.accountEn);};
   // The wordmark is a landing-page navigation control for every role.
   const brand=document.querySelector('#app-header .header-brand');if(brand){brand.setAttribute('role','button');brand.tabIndex=0;brand.setAttribute('aria-label','OpenCode Gateway — Home');brand.style.cursor='pointer';brand.onclick=()=>page('landing');brand.onkeydown=event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();page('landing');}};}
   const paymentOrders=document.createElement('section');paymentOrders.id='clientPaymentOrders';document.querySelector('[data-client-panel=billing]').append(paymentOrders);

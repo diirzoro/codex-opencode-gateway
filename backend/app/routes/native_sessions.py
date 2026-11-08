@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..config import settings
+from ..security.origins import same_origin
 from ..database import get_db
 from ..models import User, Workspace, WorkspaceSession, Project
 from ..services import workspaces, session_lifecycle, policy
@@ -25,20 +26,49 @@ router=APIRouter(tags=['native-test'])
 ID=r'[A-Za-z0-9_-]{1,120}'
 _metadata_request=ContextVar('native_metadata_request',default=None)
 
+def _native_ports():
+    """Loopback metadata proxy origins (discovery, session).
+
+    TEST/LIVE stay fixed on the VPS Nginx 18097/18098. LOCAL uses configurable
+    origins because Windows can reserve those ports; both remain loopback-only.
+    """
+    from urllib.parse import urlparse
+    if deployment()=='local':
+        discovery=os.getenv('OPENCODE_NATIVE_LOCAL_DISCOVERY_URL','http://127.0.0.1:19097').rstrip('/')
+        session=os.getenv('OPENCODE_NATIVE_LOCAL_SESSION_URL','http://127.0.0.1:19098').rstrip('/')
+        for label,value in (('OPENCODE_NATIVE_LOCAL_DISCOVERY_URL',discovery),('OPENCODE_NATIVE_LOCAL_SESSION_URL',session)):
+            parsed=urlparse(value)
+            try:
+                valid_port=parsed.port is None or 1<=parsed.port<=65535
+            except ValueError:
+                valid_port=False
+            if (parsed.scheme!='http' or parsed.hostname not in {'127.0.0.1','localhost','::1'}
+                or parsed.username is not None or parsed.password is not None
+                or parsed.path or parsed.query or parsed.fragment or not valid_port):
+                raise RuntimeError(label+' must be a loopback HTTP origin without credentials')
+        return discovery,session
+    return 'http://127.0.0.1:18097','http://127.0.0.1:18098'
+
+
 def deployment():
     """Select one exact deployment boundary; a wrong environment fails closed.
 
     TEST retains its original opt-in flag. LIVE needs its own deliberate opt-in;
-    neither the public Host header nor a browser flag selects the environment.
+    LOCAL is a loopback-only development transport (same Nginx 18097/18098 +
+    X-Accel layout as TEST) to a locally running `opencode serve`. Neither the
+    public Host header nor a browser flag selects the environment.
     """
     truth={'1','true','yes'}
     test=os.getenv('OPENCODE_NATIVE_TEST_ENABLED','').lower() in truth
     live=os.getenv('OPENCODE_NATIVE_LIVE_ENABLED','').lower() in truth
-    if test and live:raise RuntimeError('Native TEST and LIVE cannot both be enabled in one Gateway')
-    if not test and not live:return None
+    local=os.getenv('OPENCODE_NATIVE_LOCAL_ENABLED','').lower() in truth
+    if sum((test,live,local))>1:
+        raise RuntimeError('Native TEST, LIVE and LOCAL are mutually exclusive in one Gateway')
+    if not (test or live or local):return None
+    if local:
+        return 'local'
     environment='test' if test else 'live'
-    expected_origin=('https://test.opencode-gateway.codes' if test
-                     else 'https://opencode-gateway.codes')
+    expected_origin=('https://test.opencode-gateway.codes' if test else 'https://opencode-gateway.codes')
     expected_db='opencode_gateway_test' if test else 'opencode_gateway'
     actual_db=settings.database_url.rsplit('/',1)[-1].split('?',1)[0]
     if settings.public_base_url.rstrip('/')!=expected_origin or actual_db!=expected_db:
@@ -161,7 +191,7 @@ def confirm_native_session_restrictions(session_id,root,expected):
 
 @router.post('/api/native-test/sessions/{session_id}/permissions/{permission_id}/remember')
 def remember_file_permission(session_id:uuid.UUID,permission_id:str,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
-    if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
+    if not same_origin(request.headers.get('origin'),settings.public_base_url):raise HTTPException(403,'Native writes require the Gateway origin')
     admit(user);row=workspaces.owned(db,WorkspaceSession,session_id,user.id)
     workspace,root,_,_=context(db,user,row.workspace_id)
     session_lifecycle.lock_workspace(db,workspace)
@@ -204,7 +234,8 @@ def metadata(method,path,root,data=None):
         else:
             if state['client'] is None:state['client']=httpx.Client(trust_env=False,timeout=15)
             client=state['client']
-        response=client.request(method,'http://127.0.0.1:'+('18097' if discovery else '18098')+path,
+        discovery_base,session_base=_native_ports()
+        response=client.request(method,(discovery_base if discovery else session_base)+path,
                                 params={'directory':str(root)},json=data,timeout=min(15,remaining))
         response.raise_for_status()
         if not response.headers.get('content-type','').startswith('application/json') or len(response.content)>(16 if path=='/provider' else 4)*1024*1024:raise ValueError()
@@ -303,34 +334,51 @@ class Create(BaseModel):
 def state(user:User=Depends(require_user)):
     if not enabled():return {'enabled':False}
     admit(user)
-    return {'enabled':True,'mode':'authenticated-development-test' if deployment()=='test' else 'authenticated-native-live','version':'1.19.4','public_multi_user_ready':False}
+    mode={'test':'authenticated-development-test','live':'authenticated-native-live','local':'authenticated-native-local'}[deployment()]
+    payload={'enabled':True,'mode':mode,'version':'1.19.4','public_multi_user_ready':False}
+    if deployment()=='local':
+        from ..services.native_provider_accounts import root
+        payload['native_account_directory']=str(root(user))
+    return payload
 
 @router.api_route('/api/native-test/workspaces/{workspace_id}/sessions',methods=['GET','POST'])
 def sessions(workspace_id:uuid.UUID,request:Request,data:Create|None=None,user:User=Depends(require_user),db:Session=Depends(get_db)):
     workspace,root,_,_=context(db,user,workspace_id)
+    # ONE project = ONE conversation = ONE persistent Native session.
+    # A workspace has exactly one active session; legacy extra sessions are
+    # preserved in the database but never exposed or re-created.
+    live_list=metadata('GET','/session',root)
+    live_index={r['id']:r for r in (live_list if isinstance(live_list,list) else [])
+                if isinstance(r,dict) and r.get('directory')==str(root)}
+    rows=list(db.scalars(select(WorkspaceSession).where(
+        WorkspaceSession.user_id==user.id,WorkspaceSession.workspace_id==workspace.id)
+        .order_by(WorkspaceSession.created_at.desc())))
+    primary=None
+    for row in rows:
+        if row.opencode_session_id not in live_index:continue
+        if session_lifecycle.state(db,row)=='deleted':continue
+        primary=row;break
     if request.method=='POST':
-        if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
+        if not same_origin(request.headers.get('origin'),settings.public_base_url):raise HTTPException(403,'Native writes require the Gateway origin')
         if not access_payload(db,user)['allowed']:raise HTTPException(402,'Workspace access has expired')
+        if primary is not None:
+            lifecycle=session_lifecycle.state(db,primary)
+            return {**session_lifecycle.payload(primary,lifecycle),'runtime_id':primary.opencode_session_id,
+                    'native':True,'file_base':root.as_uri()+'/','tool_access':workspace._native_tool_access}
         workspaces.require_quota_headroom(workspace,db)
         permissions=policy.native_session_permissions(policy.load(db),root)
-        live=metadata('POST','/session',root,{'title':(data or Create()).title,'permission':permissions})
+        title=str(getattr(workspace,'project',None) and workspace.project.name or (data or Create()).title).strip()[:120]
+        live=metadata('POST','/session',root,{'title':title,'permission':permissions})
         if not isinstance(live,dict) or not re.fullmatch('ses'+ID,str(live.get('id',''))) or not isinstance(live.get('title'),str) or live.get('directory')!=str(root):raise HTTPException(502,'Invalid native session metadata')
-        row=WorkspaceSession(id=uuid.uuid4(),user_id=user.id,workspace_id=workspace.id,opencode_session_id=live['id'],title=live['title'][:120],status='idle')
+        row=WorkspaceSession(id=uuid.uuid4(),user_id=user.id,workspace_id=workspace.id,opencode_session_id=live['id'],title=title or live['title'][:120],status='idle')
         db.add(row);db.flush();session_lifecycle.set_state(db,row,'active');db.commit()
         return {**session_lifecycle.payload(row,'active'),'runtime_id':live['id'],'native':True,'file_base':root.as_uri()+'/','tool_access':workspace._native_tool_access}
-    live=metadata('GET','/session',root)
-    if not isinstance(live,list):raise HTTPException(502,'Invalid native session list')
-    # Never adopt arbitrary IDs from the shared engine. Existing map is authority.
-    index={r['id']:r for r in live if isinstance(r,dict) and r.get('directory')==str(root)}
-    rows=db.scalars(select(WorkspaceSession).where(WorkspaceSession.user_id==user.id,WorkspaceSession.workspace_id==workspace.id))
-    result=[]
-    for row in rows:
-        if row.opencode_session_id not in index:continue
-        lifecycle=session_lifecycle.state(db,row)
-        if lifecycle=='deleted':continue
-        row.title=str(index[row.opencode_session_id].get('title',row.title))[:120]
-        result.append({**session_lifecycle.payload(row,lifecycle),'runtime_id':row.opencode_session_id,'native':True,'file_base':root.as_uri()+'/'})
-    db.commit();return result
+    if primary is None:
+        db.commit();return []
+    lifecycle=session_lifecycle.state(db,primary)
+    primary.title=str(live_index[primary.opencode_session_id].get('title',primary.title))[:120]
+    db.commit()
+    return [{**session_lifecycle.payload(primary,lifecycle),'runtime_id':primary.opencode_session_id,'native':True,'file_base':root.as_uri()+'/'}]
 
 @router.get('/api/native-test/sessions/{session_id}')
 def session(session_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depends(get_db)):
@@ -340,7 +388,7 @@ def session(session_id:uuid.UUID,user:User=Depends(require_user),db:Session=Depe
 
 @router.patch('/api/native-test/sessions/{session_id}')
 def rename(session_id:uuid.UUID,data:Create,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
-    if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
+    if not same_origin(request.headers.get('origin'),settings.public_base_url):raise HTTPException(403,'Native writes require the Gateway origin')
     admit(user);row=workspaces.owned(db,WorkspaceSession,session_id,user.id)
     _,root,row,_=context(db,user,row.workspace_id,session_id)
     live=metadata('PATCH','/session/'+row.opencode_session_id,root,{'title':data.title})
@@ -349,7 +397,7 @@ def rename(session_id:uuid.UUID,data:Create,request:Request,user:User=Depends(re
 
 @router.post('/api/native-test/sessions/{session_id}/visibility/{action}')
 def visibility(session_id:uuid.UUID,action:str,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
-    if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
+    if not same_origin(request.headers.get('origin'),settings.public_base_url):raise HTTPException(403,'Native writes require the Gateway origin')
     admit(user);row=workspaces.owned(db,WorkspaceSession,session_id,user.id)
     _,root,row,_=context(db,user,row.workspace_id,session_id)
     value={'close':'closed','archive':'archived','restore':'closed','reopen':'active','delete':'deleted'}.get(action)
@@ -359,191 +407,6 @@ def visibility(session_id:uuid.UUID,action:str,request:Request,user:User=Depends
     session_lifecycle.set_state(db,row,value);db.commit()
     return session_lifecycle.payload(row,value)
 
-@router.api_route('/native-session/{workspace_id}/{resource:path}',methods=['GET','POST'])
-async def transport(workspace_id:uuid.UUID,resource:str,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
-    try:
-        admit(user)
-        raw=bytearray()
-        if request.method=='POST':
-            async for chunk in request.stream():
-                raw.extend(chunk)
-                if len(raw)>2*1024*1024:raise HTTPException(413,'Native request is too large')
-        response=await run_in_threadpool(authorize_native,workspace_id,resource,request,user,db,bytes(raw))
-        if request.method=='POST' and await request.is_disconnected():
-            raise HTTPException(408,'Native request cancelled before forwarding')
-        return response
-    except HTTPException as error:
-        # No X-Accel response has been returned to Nginx yet. Unlike an
-        # upstream timeout, this rejection proves the prompt was not sent.
-        # Preserve the real status/detail and never mark forwarded responses.
-        error.headers={**(error.headers or {}),'X-Native-Request-Outcome':'not-forwarded'}
-        raise
-
-def authorize_native(workspace_id,resource,request,user,db,raw):
-    # Reuse an HTTP connection only within this authorization, never cache a
-    # permission/provider/session decision across requests. Budget is shorter
-    # than the browser prompt receipt timeout, including checks after metadata.
-    state={'deadline':time.monotonic()+(5 if resource.endswith('/abort') else 20),'client':None}
-    token=_metadata_request.set(state)
-    try:
-        response=_authorize_native(workspace_id,resource,request,user,db,raw)
-        if time.monotonic()>=state['deadline']:
-            raise HTTPException(504,'Native authorization timed out before forwarding')
-        import logging
-        logging.getLogger(__name__).debug('Native authorization allowed')
-        return response
-    except HTTPException as error:
-        import logging
-        logging.getLogger(__name__).info('Native authorization refused status=%d',error.status_code)
-        raise
-    finally:
-        try:
-            if state['client'] is not None:state['client'].close()
-        finally:_metadata_request.reset(token)
-
-
-def _authorize_native(workspace_id,resource,request,user,db,raw):
-    if any(k.lower() in {'x-native-uri','x-accel-redirect','x-opencode-directory','x-native-upstream'} for k in request.headers):raise HTTPException(403,'Caller routing headers are not allowed')
-    file_read=request.method=='GET' and resource in {'file','file/content','file/status','vcs'}
-    if request.query_params and not file_read:
-        raise HTTPException(403,'Caller routing parameters are not allowed')
-    if file_read and (set(request.query_params)-{'path'} or len(request.query_params)>1):
-        raise HTTPException(403,'Unsupported Native file query')
-    write=request.method=='POST'
-    if write and request.headers.get('origin')!=settings.public_base_url.rstrip('/'):raise HTTPException(403,'Native writes require the Gateway origin')
-    workspace,root,_,_=context(db,user,workspace_id)
-    discovery=request.method=='GET' and resource in {'provider','agent'}
-    # Discovery is an authenticated, workspace-scoped control-plane response.
-    # Native is the source for provider/model definitions; only safe metadata
-    # is returned. Python does not perform inference or forward model prompts.
-    if discovery:
-        # Provider definitions contain an optional plaintext key and options.
-        # This is management metadata, not an AI response. Never transport it
-        # verbatim to a browser, even through an authenticated Nginx redirect.
-        if resource=='provider':
-            from ..services.native_provider_accounts import catalog
-            data=catalog(db,user,root)
-        else:
-            data=[{k:r[k] for k in ('name','mode','hidden','description') if k in r} for r in metadata('GET','/agent',root) if isinstance(r,dict)]
-        return JSONResponse(data,headers={'Cache-Control':'no-store'})
-    if file_read:
-        # The body goes Nginx -> OpenCode /file*, never through Python.
-        # Gateway checks only project ownership and safe relative paths.
-        relative=request.query_params.get('path','')
-        if resource in {'file/status','vcs'}:
-            if relative:raise HTTPException(422,'Native status has no path parameter')
-        else:
-            if len(relative)>1000:raise HTTPException(422,'Invalid file path')
-            target=workspaces.safe_path(workspace,relative)
-            if resource=='file' and not target.is_dir():raise HTTPException(404,'Directory unavailable')
-            if resource=='file/content' and not target.is_file():raise HTTPException(404,'File unavailable')
-        params={'directory':str(root)}
-        if resource not in {'file/status','vcs'}:params['path']=relative
-        return Response(headers={'X-Accel-Redirect':'@native_session_'+deployment(),
-            'X-Native-URI':'/'+resource+'?'+urlencode(params),
-            'Cache-Control':'no-store'})
-    match=re.fullmatch(r'session/('+ID+r')(?:/(message|todo|diff|prompt_async|abort))?',resource)
-    if resource=='session/status':match=None
-    if not discovery and resource not in {'event','permission','question','session/status'} and not match and not re.fullmatch(r'(permission|question)/'+ID+r'/(reply|reject)',resource):
-        raise HTTPException(403,'Unsupported native route')
-    if match:
-        row=db.scalar(select(WorkspaceSession).where(WorkspaceSession.workspace_id==workspace.id,WorkspaceSession.user_id==user.id,WorkspaceSession.opencode_session_id==match.group(1)))
-        if row is None:raise HTTPException(404,'Conversation is not owned')
-        session_live=owned_native_session(db,user,workspace,root,row)
-        if write and match.group(2) not in {'prompt_async','abort'}:raise HTTPException(403,'Unsupported native write')
-        if not write and match.group(2) in {'prompt_async','abort'}:raise HTTPException(403,'Unsupported native method')
-    elif write:
-        action=re.fullmatch(r'(permission|question)/('+ID+r')/(reply|reject)',resource)
-        if action and action.group(1)=='permission' and action.group(3)!='reply':raise HTTPException(403,'Unsupported permission operation')
-        if not action:raise HTTPException(403,'Unsupported native write')
-        items=metadata('GET','/'+action.group(1),root)
-        if not isinstance(items,list):raise HTTPException(502,'Invalid native request metadata')
-        item=next((i for i in items if i.get('id')==action.group(2)),None)
-        row=None if item is None else db.scalar(select(WorkspaceSession).where(WorkspaceSession.user_id==user.id,WorkspaceSession.workspace_id==workspace.id,WorkspaceSession.opencode_session_id==item.get('sessionID')))
-        if row is None:raise HTTPException(404,'Native request is not owned')
-        owned_native_session(db,user,workspace,root,row)
-    if write:
-        if raw and request.headers.get('content-type','').split(';')[0]!='application/json':raise HTTPException(415,'Native writes require JSON')
-        if not resource.endswith(('/abort','/reject')) and not access_payload(db,user)['allowed']:raise HTTPException(402,'Workspace access has expired')
-        if not match:
-            try:body=json.loads(raw or b'{}')
-            except (ValueError,UnicodeError):raise HTTPException(400,'Invalid native JSON') from None
-            if not isinstance(body,dict):raise HTTPException(422,'Invalid native reply')
-            if action.group(1)=='permission':
-                if set(body)!={'reply'} or body['reply'] not in {'once','reject'}:raise HTTPException(422,'Only one-time approval or rejection is allowed')
-                if body['reply']!='reject':
-                    if item.get('permission') not in policy.NATIVE_REVIEW_TOOLS:raise HTTPException(403,'This execution capability is prohibited; it cannot be approved')
-                    allowed=policy.provider_sets(policy.load(db))[2]
-                    if allowed and item['permission'] not in allowed:raise HTTPException(403,'Tool disabled by policy')
-                    # Validate native file-permission patterns too; an old pending
-                    # request must not authorize a foreign file or a symlink.
-                    if item['permission'] in {'read','edit','write','apply_patch','glob','grep','list'}:
-                        location=metadata('GET','/path',root)
-                        if not isinstance(location,dict) or location.get('directory')!=str(root) or not isinstance(location.get('worktree'),str):raise HTTPException(503,'Native file-permission context is unavailable')
-                        worktree=Path(location['worktree'])
-                        if not worktree.is_absolute() or not root.is_relative_to(worktree):raise HTTPException(403,'Native file-permission context is outside this Workspace')
-                        # Native read/edit patterns are relative to worktree,
-                        # which is '/' for a non-Git project, NOT to directory.
-                        # Search metadata.path, conversely, is directory-relative.
-                        search=item['permission'] in {'glob','grep','list'}
-                        patterns=([item.get('metadata',{}).get('path') or str(root)] if item['permission'] in {'glob','grep','list'} else item.get('patterns',[]))
-                        if not patterns:raise HTTPException(403,'File permission has no owned path')
-                        for pattern in patterns:
-                            try:
-                                path=Path(pattern)
-                                absolute=path if path.is_absolute() else (root if search else worktree)/path
-                                relative=absolute.relative_to(root).as_posix()
-                            except (TypeError,ValueError):raise HTTPException(403,'File permission is outside this Workspace') from None
-                            if any(p in {'.opencode','opencode.json','opencode.jsonc'} or p.startswith('.env') for p in Path(relative).parts):raise HTTPException(403,'Runtime configuration and secrets are protected')
-                            workspaces.safe_path(workspace,relative)
-            elif action.group(3)=='reply':
-                answers=body.get('answers')
-                if set(body)!={'answers'} or not isinstance(answers,list) or len(answers)>30 or any(not isinstance(a,list) or not a or len(a)>50 or any(not isinstance(v,str) or not 1<=len(v)<=2000 for v in a) or len(set(a))!=len(a) for a in answers):raise HTTPException(422,'Invalid native question answers')
-                if len(answers)!=len(item.get('questions',[])):raise HTTPException(422,'Answer every native question')
-        if match and match.group(2)=='prompt_async':
-            try:body=json.loads(raw)
-            except (ValueError,UnicodeError):raise HTTPException(400,'Invalid native JSON') from None
-            # Native schema validates models, variants and agents. Only file URIs
-            # need Gateway ownership validation before tools may read them.
-            if not isinstance(body,dict) or not isinstance(body.get('parts'),list) or any(not isinstance(p,dict) for p in body['parts']):raise HTTPException(422,'Invalid native prompt parts')
-            if set(body)-{'messageID','model','agent','variant','parts'}:raise HTTPException(422,'Unsupported native prompt fields')
-            if not 1<=len(body['parts'])<=25 or any(p.get('type') not in {'text','file'} for p in body['parts']):raise HTTPException(422,'Only text and owned attachments are supported')
-            model=body.get('model')
-            if not isinstance(model,dict) or set(model)!={'providerID','modelID'} or any(not isinstance(v,str) or not 1<=len(v)<=200 for v in model.values()):raise HTTPException(422,'Select a native provider and model')
-            current_policy=policy.load(db)
-            # PATCH the supported Native session permission field before any new
-            # execution, including sessions created under the older ask-all rules.
-            # Never alter a running session and pretend its old tools were revoked.
-            permissions=session_permissions(db,workspace,root,session_live)
-            if not native_restrictions_persisted(session_live,permissions):
-                statuses=metadata('GET','/session/status',root)
-                if statuses.get(row.opencode_session_id,{}).get('type','idle')!='idle':raise HTTPException(409,'Stop this conversation before applying its new tool restrictions')
-                # Native may return a stale/minimal PATCH acknowledgement. The
-                # authoritative safety gate is a subsequent GET of the rules
-                # actually stored by the SAME Native session. Never infer
-                # success from HTTP 200/PATCH acknowledgement alone.
-                confirm_native_session_restrictions(row.opencode_session_id,root,permissions)
-            tools=metadata('GET','/experimental/tool/ids',root)
-            builtins={'invalid','question','bash','shell','terminal','read','glob','grep','list','edit','write','task','webfetch','todowrite','todoread','websearch','codesearch','skill','apply_patch','execute','lsp','plan_enter','plan_exit'}
-            if not isinstance(tools,list) or any(not isinstance(t,str) or t not in builtins for t in tools) or len(tools)!=len(set(tools)):raise HTTPException(503,'Custom Native tool execution requires verified restrictions; execution is blocked')
-            if not policy.provider_allowed(current_policy,model['providerID']) or not policy.model_allowed(current_policy,model['modelID'],model['providerID']):raise HTTPException(403,'Model disabled by policy')
-            from ..services.native_provider_accounts import require_model
-            require_model(db,user,root,model['providerID'],model['modelID'])
-            for part in body['parts']:
-                if part.get('type')=='file':
-                    from urllib.parse import urlsplit,unquote
-                    uri=urlsplit(str(part.get('url','')))
-                    if uri.scheme!='file' or uri.netloc or uri.query or uri.fragment:raise HTTPException(403,'Only owned uploaded files are supported')
-                    try:relative=Path(unquote(uri.path)).relative_to(root).as_posix()
-                    except ValueError:raise HTTPException(403,'Attachment is outside this Workspace') from None
-                    if not workspaces.safe_path(workspace,relative).is_file():raise HTTPException(403,'Attachment is unavailable')
-            workspaces.require_quota_headroom(workspace,db)
-            # Lease only after every authorization check. Nginx still forwards
-            # the original prompt; Gateway neither executes nor stores it.
-            from ..services import chat_attachments
-            for part in body['parts']:
-                if part.get('type')=='file':
-                    relative=Path(unquote(urlsplit(part['url']).path)).relative_to(root).as_posix()
-                    chat_attachments.lease(workspace,row,relative,body.get('messageID'))
-    query=urlencode({'directory':str(root)})
-    return Response(headers={'X-Accel-Redirect':'@native_discovery_'+deployment() if discovery else '@native_session_'+deployment(),'X-Native-URI':'/'+resource+'?'+query,'Cache-Control':'no-store'})
+# Native prompt/message/SSE/tools/todo/questions/permissions/files transport REMOVED.
+# These operations now go Browser -> Nginx -> OpenCode Native directly (no Python).
+# Session LIST/CREATE/metadata remain here via /api/native-test/* (Platform-owned).

@@ -12,8 +12,9 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..config import settings
+from ..security.origins import same_origin
 from ..database import get_db
-from ..models import ExecutionEvent, Project, ProviderCredential, User, UserProviderCredential, Workspace, WorkspaceSession
+from ..models import ExecutionEvent, Project, ProjectNativeSessionBinding, ProviderCredential, User, UserProviderCredential, Workspace, WorkspaceSession
 from ..services import credentials, github, policy, providers, runtime_snapshot, preview, session_lifecycle
 from ..services import native_control_bridge as opencode
 from ..services import workspaces as manager
@@ -419,6 +420,66 @@ def projects(user: User=Depends(require_user),db: Session=Depends(get_db)):
 def project(project_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     return manager.project_payload(manager.owned(db,Project,project_id,user.id))
 
+class BindProjectNativeSession(BaseModel):
+    """The browser already created the Native session directly through Nginx."""
+    model_config=ConfigDict(extra="forbid")
+    workspace_id:uuid.UUID
+    native_session_id:str=Field(min_length=1,max_length=120,pattern=r"^[A-Za-z0-9_-]+$")
+
+
+def _native_binding_payload(binding):
+    return {"project_id":str(binding.project_id),
+            "workspace_id":str(binding.workspace_id),
+            "native_session_id":binding.native_session_id}
+
+
+@router.get("/projects/{project_id}/native-binding")
+def native_binding(project_id:uuid.UUID,user:User=Depends(require_user),
+                   db:Session=Depends(get_db)):
+    """Read Platform-owned binding only. NEVER contact the Native service."""
+    manager.owned(db,Project,project_id,user.id)
+    binding=db.get(ProjectNativeSessionBinding,project_id)
+    if binding is None:return {"project_id":str(project_id),"binding":None}
+    if binding.user_id!=user.id:raise HTTPException(404,"Project not found")
+    return {"project_id":str(project_id),"binding":_native_binding_payload(binding)}
+
+
+@router.post("/projects/{project_id}/native-binding")
+def bind_native_session(project_id:uuid.UUID,data:BindProjectNativeSession,
+                        request:Request,user:User=Depends(require_user),
+                        db:Session=Depends(get_db)):
+    """Persist an immutable project-to-session reference; no Native API calls.
+
+    A legacy multi-session Project needs an explicit owner-reviewed recovery
+    instead of silently choosing the newest session and losing history.
+    """
+    if not same_origin(request.headers.get("origin"),settings.public_base_url):
+        raise HTTPException(403,"Project binding requires the Gateway origin")
+    project=db.scalar(select(Project).where(
+        Project.id==project_id,Project.user_id==user.id).with_for_update())
+    if project is None:raise HTTPException(404,"Project not found")
+    if project.archived_at is not None:
+        raise HTTPException(409,"Restore this project before binding a conversation")
+    workspace=manager.owned(db,Workspace,data.workspace_id,user.id)
+    if workspace.project_id!=project.id:
+        raise HTTPException(404,"Workspace does not belong to this project")
+    current=db.get(ProjectNativeSessionBinding,project.id)
+    if current is not None:
+        if (current.user_id!=user.id or current.workspace_id!=workspace.id
+                or current.native_session_id!=data.native_session_id):
+            raise HTTPException(409,"This project already has another persistent Native session")
+        return _native_binding_payload(current)
+    binding=ProjectNativeSessionBinding(project_id=project.id,user_id=user.id,
+        workspace_id=workspace.id,native_session_id=data.native_session_id)
+    db.add(binding)
+    try:db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409,
+            "Native session is already bound or another request claimed this project") from None
+    return _native_binding_payload(binding)
+
+
 @router.patch("/projects/{project_id}")
 def rename(project_id: uuid.UUID,data: RenameProject,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Project,project_id,user.id); row.name=data.name
@@ -463,9 +524,6 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
         raise HTTPException(400,'Type the project name exactly to confirm local deletion')
     rows=list(db.scalars(select(Workspace).where(
         Workspace.project_id==project.id,Workspace.user_id==user.id).with_for_update()))
-    if db.scalar(select(WorkspaceSession.id).where(
-        WorkspaceSession.workspace_id.in_([w.id for w in rows])).limit(1)) if rows else None:
-        raise HTTPException(409,'This project has OpenCode conversations. Delete its Native sessions first; files and history were preserved.')
     # Preview leases may be running or contain tasks outside the Native
     # conversation path; refuse rather than stopping unrelated runtimes.
     if inspect(db.connection()).has_table('preview_runtime_leases') and rows:
@@ -473,10 +531,15 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
             PreviewRuntimeLease.workspace_id.in_([w.id for w in rows]),
             PreviewRuntimeLease.state.in_(['queued','starting','running'])).limit(1))
         if live:raise HTTPException(409,'Stop this project preview before deleting local files')
+    # Until the owner approves a reversible deletion workflow for Native history,
+    # do not remove local worktrees before resolving a persistent session binding.
+    if db.get(ProjectNativeSessionBinding,project.id) is not None:
+        raise HTTPException(409,
+            "This project has a persistent Native session; back up and detach its binding before deleting its files")
     paths=[]
     for row in rows:
         if not workspace_cache.runtime_idle(row):
-            raise HTTPException(409,'OpenCode must confirm all project tools are idle before deletion')
+            raise HTTPException(409,'The agent is still working in this project. Stop the conversation first, then delete the project. / الوكيل ما زال يعمل في هذا المشروع. أوقف المحادثة أولًا ثم احذف المشروع.')
         path=manager.root_for(row,allow_expired=True)
         if path.is_symlink() or path.parent.is_symlink() or path.parent.parent.is_symlink():
             raise HTTPException(403,'Unsafe project worktree; manual review required')
@@ -485,7 +548,7 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
     # are never derived from user-supplied strings or traversed.
     for row in rows:
         if not workspace_cache.runtime_idle(row):
-            raise HTTPException(409,'Project became active; nothing was deleted')
+            raise HTTPException(409,'The agent is still working in this project. Stop the conversation first, then delete the project. / الوكيل ما زال يعمل في هذا المشروع. أوقف المحادثة أولًا ثم احذف المشروع.')
     for path in paths:
         if path.exists():
             try:shutil.rmtree(path)
@@ -493,6 +556,11 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
                 raise HTTPException(503,'Local worktree could not be removed safely; project record retained') from None
     ids=[w.id for w in rows]
     if ids:
+        # One project = one conversation: remove the session + event rows with
+        # the project (Native still owns the actual session history/state).
+        db.execute(delete(ExecutionEvent).where(ExecutionEvent.session_id.in_(
+            select(WorkspaceSession.id).where(WorkspaceSession.workspace_id.in_(ids)))))
+        db.execute(delete(WorkspaceSession).where(WorkspaceSession.workspace_id.in_(ids)))
         if inspect(db.connection()).has_table('provider_credentials'):
             db.execute(delete(ProviderCredential).where(ProviderCredential.workspace_id.in_(ids)))
         if inspect(db.connection()).has_table('preview_runtime_leases'):
@@ -535,11 +603,16 @@ def restore_workspace_context(workspace_id: uuid.UUID|None=None,session_id: uuid
 
 @router.get("/workspaces")
 def workspaces(user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return [manager.workspace_payload(w) for w in db.scalars(select(Workspace).join(Project,Project.id==Workspace.project_id).where(Workspace.user_id==user.id,Project.user_id==user.id,manager.visible_project_predicate(user.id)).order_by(Workspace.created_at.desc()))]
+    return [manager.workspace_payload(w) for w in db.scalars(select(Workspace).join(Project,Project.id==Workspace.project_id).where(Workspace.user_id==user.id,Project.user_id==user.id,Project.archived_at.is_(None),manager.visible_project_predicate(user.id)).order_by(Workspace.created_at.desc()))]
 
 @router.get("/workspaces/{workspace_id}")
 def workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return manager.workspace_payload(manager.owned(db,Workspace,workspace_id,user.id))
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    payload=manager.workspace_payload(row)
+    # Platform-owned filesystem metadata only. Never query the OpenCode API.
+    if native_sessions.enabled():
+        payload["native_directory"]=str(manager.root_for(row,allow_expired=True))
+    return payload
 
 @router.delete("/workspaces/{workspace_id}")
 def delete_workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
@@ -785,7 +858,7 @@ def pending_chat_attachments(workspace_id:uuid.UUID,user:User=Depends(require_us
 def clear_pending_chat_attachments(workspace_id:uuid.UUID,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
     from ..services import chat_attachments
     native_sessions.admit(user)
-    if request.headers.get('origin')!=settings.public_base_url.rstrip('/'):
+    if not same_origin(request.headers.get('origin'),settings.public_base_url):
         raise HTTPException(403,'Cleanup requires the Gateway origin')
     row=manager.owned(db,Workspace,workspace_id,user.id)
     # Explicit owned cleanup across conversation drafts, not an OpenCode abort
@@ -893,7 +966,7 @@ def workspace_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_us
 def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     if native_sessions.enabled():
         _,root,_,_=native_sessions.context(db,user,workspace_id)
-        return providers.catalog_index(native_provider_accounts.catalog(db,user,root),policy.load(db))
+        return providers.catalog_index(native_provider_accounts.catalog(db,user),policy.load(db))
     row,service=_workspace_service(db,user,workspace_id)
     return providers.catalog(providers.client_catalog(db,row,service._core_value("provider_data","/provider")),
                              providers.auth_methods(service),policy.load(db))
@@ -902,7 +975,7 @@ def available_providers(workspace_id: uuid.UUID,user: User=Depends(require_user)
 def provider_models(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
     if native_sessions.enabled():
         row,root,_,_=native_sessions.context(db,user,workspace_id)
-        return {'workspace_id':str(row.id),'native':True,**providers.model_details(native_provider_accounts.catalog(db,user,root,full=True),provider_id,policy.load(db))}
+        return {'workspace_id':str(row.id),'native':True,**providers.model_details(native_provider_accounts.catalog(db,user,full=True),provider_id,policy.load(db))}
     row,service=_workspace_service(db,user,workspace_id)
     with service.state_lock:
         return runtime_snapshot.public_models(service,row,provider_id,db)
@@ -924,7 +997,7 @@ def search_providers(workspace_id: uuid.UUID,query: str=Query(min_length=2,max_l
 
 def _native_provider_lookup(db,user,workspace_id,*,name=None,query=None):
     row,root,_,_=native_sessions.context(db,user,workspace_id)
-    data=native_provider_accounts.catalog(db,user,root,full=True);rules=policy.load(db)
+    data=native_provider_accounts.catalog(db,user,full=True);rules=policy.load(db)
     rows=[providers.provider_index(providers.resolve_provider(data,name),data,rules)] if name is not None else providers.search_index(data,query,rules)
     # Native discovery's revision denotes the current client projection; no
     # legacy runtime or catalog copy is created to service a manual lookup.
@@ -1202,7 +1275,7 @@ def remove_provider_credential(workspace_id: uuid.UUID,provider_id: str,user: Us
 def test_provider(workspace_id: uuid.UUID,provider_id: str,user: User=Depends(require_user),db: Session=Depends(get_db)):
     if native_sessions.enabled():
         _,root,_,_=native_sessions.context(db,user,workspace_id)
-        data=native_provider_accounts.catalog(db,user,root)
+        data=native_provider_accounts.catalog(db,user)
         return {'configured':provider_id in data['connected'],'connected':provider_id in data['connected'],'verified':False,'connection_test':'Submit a native prompt to verify provider access'}
     row,service=_workspace_service(db,user,workspace_id)
     return {"connected":not providers.is_locally_disconnected(db,row,provider_id) and providers.is_connected(service,provider_id)}

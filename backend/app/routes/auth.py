@@ -108,8 +108,13 @@ def signup_ticket(request:Request):
 
 
 def check_signup_origin(request:Request):
+    # Accept loopback aliases (localhost vs 127.0.0.1 vs ::1) only in local
+    # development; production HTTPS origins still compare strictly.
+    from ..security.origins import same_origin
     origin=request.headers.get('origin')
-    if origin and origin.rstrip('/')!=settings.public_base_url.rstrip('/'):
+    if not origin:
+        return
+    if not same_origin(origin,settings.public_base_url):
         raise HTTPException(403,'Invalid registration origin')
 
 
@@ -203,6 +208,22 @@ def resend_code_for_user(db,user):
     for record in db.scalars(select(EmailVerification).where(EmailVerification.user_id==user.id,EmailVerification.used_at.is_(None))):record.used_at=now
     challenge,code=email_verification.create_code(db,user);db.flush();email_verification.send_code(user.email,code,db);db.commit()
     return {'sent':True,'email':user.email,'verification_challenge':str(challenge),'verification_expires_in':60}
+
+
+class PendingEmailResend(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    email: EmailStr
+
+@router.post('/pending/resend-code')
+def pending_resend_code(data:PendingEmailResend,db:Session=Depends(get_db)):
+    """Resend the verification code for an email that is registered but not yet
+    verified, so a returning applicant can complete verification instead of a
+    bare warning. The code is mailed only to the matching pending address."""
+    email=str(data.email).strip().casefold()
+    user=db.scalar(select(User).where(func.lower(User.email)==email))
+    if user is None or user.status!='pending_email':
+        raise HTTPException(404,'No pending verification for this email')
+    return resend_code_for_user(db,user)
 
 
 class VerifyEmailCode(BaseModel):

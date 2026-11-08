@@ -59,10 +59,21 @@ def normalized(data, db, *, original_hash=None):
     phone=normalized_phone(data.phone,data.postal_code)
     if phone is None:raise HTTPException(422,'Enter a valid international phone number')
     validate_locations(db,data.country_id,data.region_id,data.city_id)
-    if db.scalar(select(User.id).where(or_(
-            func.lower(User.username)==username,func.lower(User.email)==email,
-            User.phone_identity==phone))):
-        raise HTTPException(409,'Username, email or phone number is already registered')
+    existing=db.scalar(select(User).where(func.lower(User.email)==email))
+    if existing is not None:
+        # Distinguish account state so the UI can route the applicant to the
+        # correct professional path (sign in, re-verify, or reactivate).
+        if existing.status=='archived':
+            raise HTTPException(409,'EMAIL_ARCHIVED: This email belongs to an inactive (archived) account. Use account recovery to reactivate it.')
+        if existing.status=='suspended':
+            raise HTTPException(409,'EMAIL_SUSPENDED: This account is suspended. Contact support.')
+        if existing.status=='pending_email':
+            raise HTTPException(409,'EMAIL_PENDING: This email is registered but not yet verified. Resend the verification code or sign in.')
+        raise HTTPException(409,'EMAIL_ACTIVE: This email is already registered and active. Sign in to your existing account.')
+    if db.scalar(select(User.id).where(func.lower(User.username)==username)):
+        raise HTTPException(409,'USERNAME_TAKEN: This username is already taken. Choose a different username.')
+    if db.scalar(select(User.id).where(User.phone_identity==phone)):
+        raise HTTPException(409,'PHONE_TAKEN: This phone number is already registered. Use a different phone number.')
     return {'username':username,'email':email,'phone':phone,
             'password_hash':original_hash if original_hash is not None else hash_password(data.password),
             'postal_code':data.postal_code.strip(),'country_id':data.country_id,

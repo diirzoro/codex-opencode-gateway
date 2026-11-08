@@ -50,17 +50,18 @@ window.addEventListener('storage',event=>{
    No Python provider routes, database credentials, or second disk catalog. */
 window.nativeDirectTest=(()=>{
   const testHost=()=>location.hostname==='test.opencode-gateway.codes';
-  const active=()=>testHost()&&Boolean(currentUser);
+  const nativeMode=()=>testHost()||Boolean(window.nativeSession?.active());
+  const active=()=>nativeMode()&&Boolean(currentUser);
   const base='/native-direct/api/';
-  const defaultDirectory='/var/lib/opencode-native-test/workspace';
+  const defaultDirectory=()=>window.__nativeAccountDir||'/var/lib/opencode-native-test/workspace';
   let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
   let deletedAuthSlots=new Set();
-  const url=(path,directory=defaultDirectory)=>base+path.replace(/^\/+/,'')+'?directory='+encodeURIComponent(directory);
+  const url=(path,directory=defaultDirectory())=>base+path.replace(/^\/+/,'')+'?directory='+encodeURIComponent(directory);
   const rootFromFile=file=>{
     if(typeof file!=='string'||!file.startsWith('file:'))return null;
     try{return decodeURIComponent(new URL(file).pathname).replace(/\/+$/,'');}catch{return null;}
   };
-  const direct=async(path,{method='GET',value,signal,directory=defaultDirectory}={})=>{
+  const direct=async(path,{method='GET',value,signal,directory=defaultDirectory()}={})=>{
     // Timebox each Native control request. The larger verification deadline
     // cannot stop a single fetch stuck at Nginx/upstream otherwise.
     const timeout=method==='GET'?18000:30000;
@@ -253,22 +254,30 @@ window.nativeDirectTest=(()=>{
     const raw=[value?.name,value?.message,value?.data?.message,value?.data?.statusCode,
       value?.data?.code,value?.status,value?.error?.message]
       .filter(v=>v!==undefined&&v!==null).join(' ').slice(0,3000);
+    // Surface the human-readable Native/provider message so the user sees the
+    // same reason OpenCode shows. Only the readable message text is used; raw
+    // exception bodies (which may embed keys) are never echoed.
+    const safeDetail=[value?.message,value?.error?.message,value?.data?.message]
+      .filter(v=>typeof v==='string'&&v.trim()&&!/^(error|failed|retryerror|provider.?error)$/i.test(v.trim()))
+      .map(v=>v.trim())[0]||'';
+    const detail=safeDetail?safeDetail.slice(0,400):'';
+    const withDetail=(m)=>detail&&!m.includes(detail)?m+' '+detail:m;
     if(/(?:401|unauthoriz|invalid.{0,40}(?:api.?key|token|credential)|incorrect.{0,30}key|authentication.?error|api.?key.{0,30}(?:invalid|incorrect|missing))/i.test(raw))
-      return {kind:'invalid_key',message:'رفض المزود مفتاح API (401 أو بيانات اعتماد غير صحيحة).'};
+      return {kind:'invalid_key',message:withDetail('رفض المزود مفتاح API (401 أو بيانات اعتماد غير صحيحة).')};
     if(/(?:403|forbidden|access.denied|permission.denied)/i.test(raw))
-      return {kind:'access_denied',message:'رفض المزود صلاحية هذا المفتاح (403).'};
+      return {kind:'access_denied',message:withDetail('رفض المزود صلاحية هذا المفتاح (403).')};
     if(/(?:429|quota|rate.limit|free usage exceeded|insufficient|billing|credits|balance)/i.test(raw))
-      return {kind:'quota',message:'طلب OpenCode رُفض بسبب الرصيد أو حدود استخدام المزود.'};
+      return {kind:'quota',message:withDetail('طلب OpenCode رُفض بسبب الرصيد أو حدود استخدام المزود.')};
     if(/(?:model.{0,40}(?:not.found|unavailable|not supported)|invalid.model|(?:404).{0,30}model)/i.test(raw))
-      return {kind:'model_unavailable',message:'الموديل المختار غير متاح لدى المزود.'};
+      return {kind:'model_unavailable',message:withDetail('الموديل المختار غير متاح لدى المزود.')};
     if(/(?:timeout|timed.out|network|connect|econn|enotfound|fetch.failed)/i.test(raw))
-      return {kind:'network',message:'تعذر اتصال OpenCode بمزود النموذج.'};
-    return {kind:'provider_error',message:'أعاد OpenCode خطأ من المزود. تحقق من صلاحية المفتاح وحالة النموذج.'};
+      return {kind:'network',message:withDetail('تعذر اتصال OpenCode بمزود النموذج.')};
+    return {kind:'provider_error',message:withDetail('أعاد OpenCode خطأ من المزود.')};
   }
   async function verifyProviderModel(pid,modelID){
     // A new, unpredictable challenge proves the selected Native model really
     // responded. Generic text or an error message must NEVER verify a key.
-    const directory=defaultDirectory;
+    const directory=defaultDirectory();
     const challenge='NATIVE-VERIFY-'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase();
     let sid='',completed=false;
     try{
@@ -335,7 +344,7 @@ window.nativeDirectTest=(()=>{
   const matches=(path)=>{
     // TEST provider operations are Native-only even before auth is ready.
     // They MUST NOT fall back to Python if the user session/direct link fails.
-    if(!testHost())return false;
+    if(!nativeMode())return false;
     if(/^\/api\/opencode\/(?:connections(?:\/|$)|catalog\/providers(?:\/|$)|catalog\/agents(?:$|\?))/.test(path))return true;
     return /^\/api\/workspaces\/[^/]+\/providers(?:\/|$|\?)/.test(path);
   };
@@ -369,18 +378,13 @@ window.nativeDirectTest=(()=>{
       return {native_acknowledged:true,credential_deleted:true,
         provider_may_remain_available:true};
     }
-    // Dashboard first paint: show existing Native-configured providers without
-    // downloading the entire ~7 MB discovery catalog. Searching or choosing an
-    // unconfigured provider still uses the authoritative OpenCode /provider.
+    // Connections first paint: show Native's already-configured providers fast
+    // (/config/providers) without re-downloading the 7 MB catalog. The full
+    // catalog is only fetched when the user searches, and cached in memory.
     if(name==='/api/opencode/catalog/providers/page' &&
        !parsed.searchParams.get('query') &&
        Number(parsed.searchParams.get('offset')||0)===0){
       const [nativeData]=await Promise.all([configuredListing(),visibility()]);
-      // Show the fast /config/providers view first. After the ONE optional
-      // background /provider check, include Native connected candidates that
-      // are absent from /config/providers (e.g. an older OpenAI/Google auth).
-      // These extra entries are for credential management in Connections only;
-      // they are NOT automatically injected into Workspace model choices.
       const configuredIds=new Set(nativeData.all.map(p=>p.id));
       const otherNative=catalogSnapshot?catalogSnapshot.all.filter(p=>
         nativeConnections(catalogSnapshot).includes(p.id)&&!configuredIds.has(p.id)):[];
@@ -491,7 +495,7 @@ window.nativeDirectTest=(()=>{
     }
     throw Error('Unsupported direct OpenCode provider action: '+name);
   }
-  return {active,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,matches,route,
+  return {active,testHost,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,matches,route,
     providerAllowed,providerVisible,modelAllowed,modelVisible,classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 
@@ -798,6 +802,17 @@ $('#verifyEmailCancel').onclick=async()=>{
  finally{button.disabled=false;}
 };
 $('#verifyEmailLogin').onclick=()=>window.openAuthLogin();
+function localizeRegisterError(error){
+  const m=error.message||'';
+  const code=(c)=>(en,ar)=>m.startsWith(c+':')?(lang==='ar'?ar:en):null;
+  return code('EMAIL_ACTIVE')('This email is already registered and active. Sign in to your existing account, or use a different email.','هذا البريد الإلكتروني مسجّل ومفعّل مسبقًا. سجّل الدخول إلى حسابك الحالي، أو استخدم بريدًا آخر.')
+    || code('EMAIL_PENDING')('This email is registered but not yet verified. Resend the verification code, or sign in.','هذا البريد مسجّل لكنه لم يُفعّل بعد. أعد إرسال رمز التفعيل، أو سجّل الدخول.')
+    || code('EMAIL_ARCHIVED')('This email belongs to an inactive (archived) account. Recover it to reactivate, or sign in.','هذا البريد مرتبط بحساب غير نشط (مؤرشف). استرجعه لإعادة تفعيله، أو سجّل الدخول.')
+    || code('EMAIL_SUSPENDED')('This account is suspended. Contact support for assistance.','هذا الحساب موقوف. تواصل مع الدعم للمساعدة.')
+    || code('USERNAME_TAKEN')('This username is already taken. Choose a different username.','اسم المستخدم هذا محجوز. اختر اسمًا آخر.')
+    || code('PHONE_TAKEN')('This phone number is already registered. Use a different phone number.','رقم الهاتف هذا مسجّل مسبقًا. استخدم رقمًا آخر.')
+    || m;
+}
 $('#registerForm').onsubmit=async event=>{
  event.preventDefault();const button=$('#registerSubmit');
  if(button.disabled||!event.currentTarget.reportValidity())return;
@@ -856,12 +871,26 @@ $('#registerForm').onsubmit=async event=>{
   }
   apiMessage('registerMessage',error.status===429
    ?(lang==='ar'?'انتظر حتى تنتهي مهلة الـ60 ثانية قبل طلب رمز جديد. إذا وصلك رمز سابق فارجع إلى شاشة التحقق من المتصفح نفسه.':'Wait for the 60-second cooldown before requesting a new code. Return to verification in the original browser if you already received a code.')
-   :error.message,true);
+   :localizeRegisterError(error),true);
   if(error.status===409&&!isEdit){
-    try{await offerExistingAccountRecovery(value('registerEmail'),'registerMessage');}
-    catch(recoveryError){apiMessage('registerMessage',recoveryError.message,true);}
+    const m=error.message||'';
+    if(m.startsWith('EMAIL_PENDING')){
+      // Pending account: send a fresh verification code and show the OTP step,
+      // not just a warning.
+      try{
+       const result=await api('/api/auth/pending/resend-code',{method:'POST',body:JSON.stringify({email:value('registerEmail')})});
+       if(submissionRevision!==authViewRevision)return;
+       showEmailCodeStep({...result,staged:false},result.email||value('registerEmail'));
+      }catch(resendError){apiMessage('registerMessage',resendError.message,true);}
+      return;
+    }
+    if(/^EMAIL_(ACTIVE|ARCHIVED)/i.test(m)){
+      // Active or archived account: send the recovery/reactivation email.
+      try{await offerExistingAccountRecovery(value('registerEmail'),'registerMessage');}
+      catch(recoveryError){apiMessage('registerMessage',recoveryError.message,true);}
+    }
   }
- }
+  }
  finally{button.disabled=false;}
 };
 // Successful sign-in should land in the customer's existing workspace, not Account.
@@ -942,7 +971,6 @@ $('#createProjectForm').onsubmit=async event=>{event.preventDefault();const butt
 async function openWorkspace(project,workspace){if(['admin','owner'].includes(currentUser?.role)){await page('adminPage');return;}stopEvents();activeProject=project;activeWorkspace=workspace;activeSession=null;$('#workspaceRepo').textContent=project.name;$('#workspaceBranch').textContent=project.branch||'No branch';renderWorkspaceEmpty();$('#promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';$('#runtimeStatus').textContent=t('sessionDisconnected');await page('workspacePage');await Promise.all([refreshSessions(),refreshGit()]);$('#sendMessage').disabled=true;$('#providerSelect').replaceChildren(new Option(t('selectProvider'),''));$('#modelSelect').replaceChildren(new Option(t('selectModel'),''))}
 async function refreshGit(){if(!activeWorkspace)return;const state=await api(`/api/workspaces/${activeWorkspace.id}/git/status`);$('#commitButton').disabled=state.clean;$('#pushButton').disabled=true;$('#gitSummary').textContent=`${state.changes.length} ${t('changedFiles')} · ${state.head?state.head.slice(0,8):t('noCommits')}`}
 async function refreshSessions(){if(!activeWorkspace)return;const rows=await api(`/api/workspaces/${activeWorkspace.id}/sessions`);const list=$('#sessionList');list.replaceChildren();for(const row of rows){const button=textElement('button',row.title,'session');button.onclick=()=>selectSession(row);list.append(button)}}
-$('.new-session').onclick=async()=>{if(!activeWorkspace)return;const button=$('.new-session');button.disabled=true;try{const row=await api(`/api/workspaces/${activeWorkspace.id}/sessions`,{method:'POST',body:JSON.stringify({title:'New session'})});await refreshSessions();await selectSession(row)}catch(error){toast(error.message);$('#runtimeStatus').textContent='OpenCode unavailable'}finally{button.disabled=false}};
 async function selectSession(session){const revision=++sessionSelectionRevision,workspaceId=activeWorkspace?.id;const opened=await api(`/api/sessions/${session.id}/open`,{method:'POST'});if(revision!==sessionSelectionRevision||activeWorkspace?.id!==workspaceId)return;stopEvents();activeSession={...session,...opened};window.resetWorkspaceQuestions?.();try{localStorage.setItem('og-context:'+currentUser.id,JSON.stringify({workspace_id:workspaceId,session_id:session.id}));}catch(error){}window.refreshWorkspaceTodos?.(true);$('#runtimeStatus').textContent=opened.status;if($('#agentFeed').workspaceFollow)$('#agentFeed').workspaceFollow.following=true;$('#agentFeed').messageSnapshot=null;$('#agentFeed').replaceChildren(textElement('p',session.title));startEvents();syncPermissionPolling();if(window.nativeSession?.active()){void refreshMessages().catch(error=>{if(revision===sessionSelectionRevision&&activeSession?.id===session.id)toast(error.message);});}else{await refreshMessages();}}
 Object.assign(copy.en,{repeatMsg:'Repeat',copyMsg:'Copy',editMsg:'Edit',regenerateMsg:'Regenerate (new request)',hideMsg:'Hide from your view',copied:'Copied',copyFailed:'Could not copy',resent:'Message resubmitted'});
 Object.assign(copy.ar,{repeatMsg:'إعادة',copyMsg:'نسخ',editMsg:'تعديل',regenerateMsg:'إعادة التوليد بطلب جديد',hideMsg:'إخفاء من واجهتك',copied:'تم النسخ',copyFailed:'تعذر النسخ',resent:'أُعيد إرسال الرسالة'});
@@ -1246,6 +1274,13 @@ const navigationReady=authReady.then(async()=>{
  if(!currentUser){await page(location.hash.startsWith('#social=')?'authPage':'landing');return;}
  window.__navRestored=true;
  if(['admin','owner'].includes(currentUser.role)){await page('adminPage');if(new URLSearchParams(location.search).has('github'))await window.openGithubConnectionPanel?.();return;}
+ // Browser refresh restores the page the user was on, not the Workspace. A
+ // fresh login (no saved page) still opens the default destination below.
+ const restoredPage=document.documentElement.dataset.restorePage;
+ if(restoredPage&&restoredPage!=='workspacePage'){
+  await page(restoredPage);
+  return;
+ }
  await openWorkspaceAfterLogin();
  // Return the CUSTOMER to the GitHub connection panel after OAuth instead
  // of silently opening a different workspace. The server-side status remains

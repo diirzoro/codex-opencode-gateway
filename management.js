@@ -342,7 +342,7 @@
       const act=node('div','','manage-actions');
       if(p.public_free)act.append(node('span',tr('Available directly through OpenCode Native','متاح مباشرة عبر OpenCode Native')));
       else if(p.connected)act.append(button(
-        window.nativeDirectTest?.active()?tr('Remove stored Native credential','إزالة اعتماد Native المحفوظ'):tr('Disconnect / delete key','فصل / حذف المفتاح'),
+        tr('Delete API Key','حذف مفتاح API'),
         ()=>disconnect(p)));
       else if(p.allowed!==false)act.append(button(tr('Connect','ربط'),()=>openAuthDialog(p)));
       else act.append(node('span',tr('Restricted by platform policy','مقيّد بسياسة المنصة')));
@@ -410,9 +410,7 @@
           :p.verified===true?tr('Tested','تم اختباره'):tr('Configured · not tested','مهيأ · لم يُختبر')));
         if(p.allowed===false)item.append(node('span',tr('Restricted','مقيّد')));
         if(!p.public_free){
-          const remove=button(window.nativeDirectTest?.active()
-            ?tr('Remove Native credential','إزالة اعتماد Native')
-            :tr('Disconnect / delete key','فصل / حذف المفتاح'),()=>disconnect(p));
+          const remove=button(tr('Delete API Key','حذف مفتاح API'),()=>disconnect(p));
           remove.disabled=!view.ready;item.append(remove);
         }
         connectedBox.append(item);
