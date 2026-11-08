@@ -568,7 +568,7 @@ const api=async(path,options={})=>{
        .map(x=>({path:x.path,status:x.status||'modified'})),
        clean:changes.length===0,branch:vcs?.branch||activeProject?.branch||null,
        repository:activeProject?.repository||null,remote_branch:activeProject?.branch||null,
-       github_access:Boolean(activeProject?.remote_url),push_available:Boolean(activeProject?.source_type==='github'&&(activeProject?.remote_url||activeProject?.repository)),source:'opencode-native'};
+       github_access:Boolean(activeProject?.source_type==='github'&&(activeProject?.remote_url||activeProject?.repository)),push_available:Boolean(activeProject?.source_type==='github'&&(activeProject?.remote_url||activeProject?.repository)),source:'opencode-native'};
    }
    const workspaceDiff=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/diff$/i);
    if(workspaceDiff){
