@@ -780,9 +780,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     nativeVariant.replaceChildren(new Option(tr('Default variant','الخيار الافتراضي'),''));for(const variant of Object.keys(model?.variants||{}))nativeVariant.add(new Option(variant,variant));nativeVariant.value=selected||'';nativeVariant.hidden=nativeVariant.options.length<2;
   }
   nativeVariant.onchange=saveNativeSelection;
-  const newTask=textElement('button','','icon-btn');newTask.id='composerNewTask';newTask.type='button';newTask.title=tr('New task','مهمة جديدة');newTask.setAttribute('aria-label',tr('New task','مهمة جديدة'));newTask.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>';newTask.onclick=async()=>{if(!activeWorkspace){toast(tr('Open a workspace first.','افتح مساحة عمل أولاً.'));return;}try{await createSession();toast(tr('New task started in this workspace.','بدأت مهمة جديدة في مساحة العمل.'));}catch(error){toast(error.message)}};
   q('providerSelect').setAttribute('aria-label','Provider');q('modelSelect').setAttribute('aria-label','Model');
-  const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Attach a file to this workspace','أرفق ملفًا في مساحة العمل');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);controls.insertBefore(newTask,agent);
+  const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Attach a file to this workspace','أرفق ملفًا في مساحة العمل');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);
   const attachmentList=textElement('div','','composer-attachments');attachmentList.id='composerAttachments';attachmentList.setAttribute('aria-live','polite');q('promptInput').before(attachmentList);
   let attachments=[];let attachmentRevision=0;
   const releasePreview=item=>{if(item.preview){URL.revokeObjectURL(item.preview);item.preview=null;}};
@@ -1487,7 +1486,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const selectIcons=['<circle cx="12" cy="7" r="3"/><path d="M5 21v-3a7 7 0 0 1 14 0v3"/>','<path d="M7 18a5 5 0 0 1-1-10 6 6 0 0 1 11-1 5.5 5.5 0 0 1 1 11Z"/>','<path d="m12 3 9 5v8l-9 5-9-5V8Z M3 8l9 5 9-5M12 13v8"/>'];
   [agent,q('providerSelect'),q('modelSelect')].forEach((select,index)=>{const label=textElement('label','','composer-select');label.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">'+selectIcons[index]+'</svg>';label.append(select);picks.append(label);});
   picks.append(nativeVariant);
-  utilities.append(attach,newTask);projectPanelBrand.append(q('chatGithub'),q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
+  utilities.append(attach);projectPanelBrand.append(q('chatGithub'),q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
   const choices=textElement('button','','icon-btn composer-choice-toggle');choices.type='button';choices.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
   choices.onclick=()=>{const open=picks.classList.toggle('open');choices.setAttribute('aria-expanded',String(open));};
   controls.replaceChildren(utilities,choices,picks,actions,retryModels);
@@ -1519,7 +1518,6 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     q('sendMessage').disabled=sending||queuing||nativeBusy||(window.nativeSession?.active()&&busy)||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
     q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
-    newTask.disabled=!workAccess||(!window.nativeSession?.active()&&busy)||sending||Boolean(sessionCreating)||Boolean(pendingSubmission);
     closeSessionButton.disabled=!activeSession||sending||Boolean(pendingSubmission);
     // Unconfirmed Native receipt is still an actionable stop: even an idle
     // runtime needs a verified session-scoped stop to unblock the saved draft.
