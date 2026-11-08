@@ -421,12 +421,13 @@
     // Connections page: read native agent discovery through Nginx, not the Python
     // workspace runtime. This describes the independent TEST native service only.
     const runtimeJob=(async()=>{
-      if(!activeWorkspace?.id){
-        if(runtime.isConnected)runtime.lastElementChild.textContent=tr('Select a workspace for native discovery.','اختر مساحة عمل لاكتشاف الوكلاء.');
-        return;
-      }
-      const catalog=await window.workspaceRuntime.loadAgents(activeWorkspace.id);
-      const agents=catalog?.agents;
+      // Account Connections is independent of Project/Workspace selection.
+      // Discover agents once from the same OpenCode Native browser cache.
+      const agents=window.nativeDirectTest?.active()
+        ?await window.nativeDirectTest.agents()
+        :activeWorkspace?.id
+          ?(await window.workspaceRuntime.loadAgents(activeWorkspace.id))?.agents
+          :[];
       if(!Array.isArray(agents))throw new Error('Invalid native agents response');
       if(runtime.isConnected)runtime.lastElementChild.textContent=
         tr('Native OpenCode agents via Nginx: ','وكلاء OpenCode المباشرين عبر Nginx: ')+agents.length;
