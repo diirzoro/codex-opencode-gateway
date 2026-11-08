@@ -18,13 +18,13 @@ GATEWAY="opencode-gateway-test.service"
 NATIVE="opencode-native-test.service"
 REVISION=ROOT/".test-full-release-revision"
 LOCK=Path("/home/tahir/.gateway-test-deploy.lock")
-FRONT={"app.js","index.html","styles.css","dashboards.js","enhancements.js",
-       "management.js","native-session-client.js","runtime-client.js"}
-ALLOWED_ROOTS=("backend/app/","backend/alembic/versions/","assets/")
-ALLOWED_EXACT={"backend/alembic.ini","backend/alembic/env.py","backend/alembic/script.py.mako"}
-PROTECTED=("backend/app/services/preview_", "backend/app/routes/preview_", "backend/app/models/preview.py")
-# Exact obsolete runtime files and a proven unapplied TEST-only migration; these were
-# pruned only inside /home/tahir/opencode-gateway-test after source reconciliation.
+# Source-of-truth: deploy every tracked file from the selected GitHub commit.
+# Only test suites, screenshots and generated test artifacts are excluded.
+# No .env or runtime user data are tracked in this repository.
+EXCLUDED_DIRS={"tests","test","__tests__","screenshots","screenshot",
+    "test-results","playwright-report",".pytest_cache","__pycache__",
+    ".venv","node_modules","workspaces"}
+EXCLUDED_SUFFIXES=(".pyc",".pyo",".log")
 RETIRED_FILES = (
     "backend/app/routes/agent.py",
     "backend/app/services/message_queue.py",
@@ -56,13 +56,15 @@ def files(revision):
     listing=git("ls-tree","-r","--name-only",revision)
     result=[]
     for name in listing.splitlines():
-        if name in FRONT or name in ALLOWED_EXACT or (
-            name.startswith("backend/app/") and name.endswith(".py") and not name.startswith(PROTECTED)
-        ) or (name.startswith("backend/alembic/versions/") and name.endswith(".py")
-        ) or name.startswith("assets/"):
-            result.append(name)
-    if not {"backend/app/main.py","backend/app/routes/admin.py","backend/alembic.ini","index.html"} <= set(result):
-        raise RuntimeError("Incomplete source revision")
+        parts=PurePosixPath(name).parts
+        if any(part in EXCLUDED_DIRS for part in parts):continue
+        if any(part.startswith("test_") or part.endswith("_test.py") for part in parts):continue
+        if name.endswith(EXCLUDED_SUFFIXES):continue
+        result.append(name)
+    required={"backend/app/main.py","backend/app/routes/admin.py",
+              "backend/alembic.ini","index.html",
+              "ops/native-direct/nginx.conf","scripts/full_test_git_release.py"}
+    if not required <= set(result):raise RuntimeError("Incomplete project source revision")
     return sorted(result)
 def check(name):
     rel=PurePosixPath(name)
