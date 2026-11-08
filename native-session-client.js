@@ -316,42 +316,18 @@
     match=path.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/(.*?))?(?:\?.*)?$/);if(!match)return null;
     const id=match[1],tail=match[2]||'',row=await context(id),user=owner();
     if(!tail&&method==='PATCH'){
-      if(window.nativeDirectTest?.testHost?.()){
-        const payload=JSON.parse(options.body||'{}');
-        const changed=await window.nativeDirectTest.direct('session/'+encodeURIComponent(row.runtime_id),{
-          method:'PATCH',directory:directWorkspaceRoot(row.workspace_id),value:{title:payload.title}
-        });
-        const value=remember({...row,title:changed?.title||payload.title});
-        return {value};
-      }
-      if(window.nativeDirectTest?.active?.()){
-        throw Error(label('Rename the Project, not its separate Native session.',
-          'غيّر اسم المشروع، وليس اسم جلسة Native مستقلة.'));
-      }
-      const value=await api('/api/native-test/sessions/'+id,options);remember({...row,...value});return {value};
+      if(!window.nativeDirectTest?.active?.())throw Error('OpenCode Native is unavailable');
+      const payload=JSON.parse(options.body||'{}');
+      const projectId=row.project_id||row.id;
+      const result=await api('/api/projects/'+encodeURIComponent(projectId),{
+        method:'PATCH',body:JSON.stringify({name:payload.title})
+      });
+      const value=remember({...row,title:result.name||payload.title});
+      return {value};
     }
     if((!tail&&method==='DELETE')||['close','archive','restore','reopen'].includes(tail)){
-      if(window.nativeDirectTest?.testHost?.()){
-        const act=tail||'delete';
-        if(act==='delete'){
-          const result=await window.nativeDirectTest.direct('session/'+encodeURIComponent(row.runtime_id),{
-            method:'DELETE',directory:directWorkspaceRoot(row.workspace_id)
-          });
-          if(result!==true)throw Error('OpenCode did not confirm session deletion');
-          rows.delete(id);histories.delete(id);
-          const ids=directSessionIds(row.workspace_id);
-          delete ids.map[row.runtime_id];
-          try{localStorage.setItem(ids.key,JSON.stringify(ids.map));}catch{}
-          return {value:{...row,lifecycle:'deleted'}};
-        }
-        const lifecycle=({close:'closed',archive:'archived',restore:'closed',reopen:'active'})[act];
-        const value=remember({...row,lifecycle});
-        return {value};
-      }
-      if(window.nativeDirectTest?.active?.())
-        throw Error(label('Manage the conversation through its Project. Native session history was preserved.',
-          'أدر المحادثة من خلال المشروع. تم الحفاظ على سجل جلسة Native.'));
-      return {value:await api('/api/native-test/sessions/'+id+'/visibility/'+(tail||'delete'),{method:'POST'})};
+      throw Error(label('Project conversations have no separate deletion or archive. Use Project actions.',
+        'لا توجد إدارة منفصلة لحذف أو أرشفة المحادثة. استخدم إجراءات المشروع.'));
     }
     if(!tail||tail==='open'){
       const fresh=tail==='open'
@@ -666,7 +642,7 @@
           button.disabled=permissionReplies.has(actionKey)||reply==='once'&&!names[permission];
           button.onclick=async()=>{
             if(!current(id,user)||permissionReplies.has(actionKey))return;permissionReplies.add(actionKey);card.dataset.sending='1';card.setAttribute('aria-busy','true');card.querySelectorAll('button').forEach(n=>n.disabled=true);
-            try{if(reply==='remember')await api('/api/native-test/sessions/'+id+'/permissions/'+encodeURIComponent(item.id)+'/remember',{method:'POST'});if(!current(id,user))return;await api('/api/sessions/'+id+'/permissions/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({reply:reply==='remember'?'once':reply})});if(!current(id,user))return;permissionReplies.delete(actionKey);box.nativeSignature='';await refreshPermissions();}
+            try{if(!current(id,user))return;await api('/api/sessions/'+id+'/permissions/'+encodeURIComponent(item.id),{method:'POST',body:JSON.stringify({reply})});if(!current(id,user))return;permissionReplies.delete(actionKey);box.nativeSignature='';await refreshPermissions();}
             catch(error){permissionReplies.delete(actionKey);if(!current(id,user))return;delete card.dataset.sending;card.removeAttribute('aria-busy');card.querySelectorAll('button').forEach(n=>n.disabled=n.dataset.reply==='once'&&!names[permission]);toast(error.message);}
           };controls.append(button);
         }card.append(controls);section.append(card);
@@ -680,7 +656,7 @@
     try{return await job;}finally{if(discoveryReads.get(id)===job)discoveryReads.delete(id);}
   }
   async function loadDiscovery(id){
-    const directMode=window.nativeDirectTest?.active?.() ?? window.nativeDirectTest?.testHost?.();
+    const directMode=Boolean(window.nativeDirectTest?.active?.());
     // The connection dashboard owns one shared account inventory, backed by
     // OpenCode's actual Native catalog. Opening a project must not reload it.
     // Use the configured/connected Native providers (cached) for the composer,
