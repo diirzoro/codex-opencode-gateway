@@ -747,7 +747,11 @@ const api=async(path,options={})=>{
  if(revision!==authenticationRevision)throw new Error('Authenticated session changed');
  if(response.ok)window.authSession?.observe(response.headers.get('X-Session-Idle-Expires-At'));
  if(response.status===204){invalidateProviderMutation(path,options.method);return null;}
- const body=await response.json().catch(()=>({detail:'Unexpected server response'}));
+ // Surface an actionable HTTP status and endpoint without dumping response
+ // bodies (which may contain secrets or infrastructure diagnostics).
+ const body=await response.json().catch(()=>({
+   detail:'Unexpected server response (HTTP '+response.status+', '+new URL(path,location.origin).pathname+')'
+ }));
  if(revision!==authenticationRevision)throw new Error('Authenticated session changed');
  if(!response.ok){
   if(response.status===401&&!options.allowAnonymous&&currentUser)clearAuthenticatedState();
