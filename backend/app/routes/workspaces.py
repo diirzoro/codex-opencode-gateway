@@ -292,11 +292,6 @@ def workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Sessi
         payload["native_directory"]=str(manager.root_for(row,allow_expired=True))
     return payload
 
-@router.delete("/workspaces/{workspace_id}")
-def delete_workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    manager.owned(db,Workspace,workspace_id,user.id)
-    raise HTTPException(409,"Workspace preserved: verified push and cleanup policy are not implemented")
-
 @router.get("/workspaces/{workspace_id}/preview/capabilities")
 def workspace_preview_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),
                                    db: Session=Depends(get_db)):
