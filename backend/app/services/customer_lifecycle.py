@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, inspect, select
 from ..database import SessionLocal
 from ..models import (AccountAudit, AuthSession, ExecutionEvent, GithubAuthState,
-    GithubConnection, PasswordReset, ProviderCredential, UserProviderCredential, Subscription, User, Workspace, WorkspaceSession, EmailVerification)
+    GithubConnection, PasswordReset, Subscription, User, Workspace, WorkspaceSession, EmailVerification)
 from .entitlements import ACCOUNT_RETENTION_DAYS, aware
 
 POLICY_ACTION = "account.retention_started"
@@ -111,13 +111,10 @@ def archive_due(*, now=None):
                 storage.stage()
                 session_ids = select(WorkspaceSession.id).where(WorkspaceSession.user_id == identifier)
                 db.execute(delete(ExecutionEvent).where(ExecutionEvent.session_id.in_(session_ids)))
-                for model in (WorkspaceSession, AuthSession, ProviderCredential, GithubAuthState, GithubConnection, PasswordReset, EmailVerification):
+                for model in (WorkspaceSession, AuthSession, GithubAuthState, GithubConnection, PasswordReset, EmailVerification):
                     db.execute(delete(model).where(model.user_id == identifier))
                 # The account-owned credential table is introduced in migration
                 # 0017; archive its secrets too, but support pre-0017 installs.
-                if inspect(db.connection()).has_table("user_provider_credentials"):
-                    db.execute(delete(UserProviderCredential).where(
-                        UserProviderCredential.user_id == identifier))
                 user.status = "archived"
                 # Retain identity/contact/billing relationships, not a CRM copy
                 # of the old login secret. A later paid activation permits reset.
