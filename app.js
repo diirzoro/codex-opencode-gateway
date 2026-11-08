@@ -1401,13 +1401,9 @@ const navigationReady=authReady.then(async()=>{
  if(!currentUser){await page(location.hash.startsWith('#social=')?'authPage':'landing');return;}
  window.__navRestored=true;
  if(['admin','owner'].includes(currentUser.role)){await page('adminPage');if(new URLSearchParams(location.search).has('github'))await window.openGithubConnectionPanel?.();return;}
- // Browser refresh restores the page the user was on, not the Workspace. A
- // fresh login (no saved page) still opens the default destination below.
- const restoredPage=document.documentElement.dataset.restorePage;
- if(restoredPage&&restoredPage!=='workspacePage'){
-  await page(restoredPage);
-  return;
- }
+ // Existing Project is the customer's working home. Restore its one
+ // persistent Native conversation rather than a saved projects landing page.
+ // When there is no Project yet, openWorkspaceAfterLogin shows the projects home.
  await openWorkspaceAfterLogin();
  // Return the CUSTOMER to the GitHub connection panel after OAuth instead
  // of silently opening a different workspace. The server-side status remains
