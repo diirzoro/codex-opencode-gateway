@@ -95,18 +95,18 @@ def recovery_status(data:RecoveryToken,db:Session=Depends(get_db)):
     return {'reactivation_required':reactivation_eligible(user),'account_activation_required':user.status=='pending_email'}
 
 def reactivation_payload(db,user):
-    from ..services.entitlements import access_payload
-    access=access_payload(db,user)
+    # Email proof and password activation do not depend on subscriptions.
+    # Billing remains a separate post-login service.
     return {'email':user.email,'username':user.username,'scope':'reactivation',
-        'payment_verified':user.status=='active' and access['reason']=='subscription' and access['allowed']}
+            'password_setup_required':True}
 
 @router.post('/auth/reactivation/verify')
 def verify_reactivation(data:RecoveryToken,response:Response,db:Session=Depends(get_db)):
     record=recovery_record(db,data.token,lock=True)
     user=db.scalar(select(User).where(User.id==record.user_id).with_for_update().execution_options(populate_existing=True))
     if not user or not reactivation_eligible(user): raise HTTPException(400,'Recovery link is invalid or expired')
-    # Single-use email proof issues a renewal-only AuthSession; it neither
-    # changes account status nor establishes a usable password/normal session.
+    # Single-use email proof issues a temporary password-setup session.
+    # It does not grant access or require billing before the new password.
     revoke(db,user)
     db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
     raw,hashed=new_reactivation_token()
@@ -131,9 +131,11 @@ class ReactivationPassword(BaseModel):
 @router.post('/auth/reactivation/password')
 def reactivation_password(data:ReactivationPassword,response:Response,user:User=Depends(require_reactivation_user),db:Session=Depends(get_db)):
     user=db.scalar(select(User).where(User.id==user.id).with_for_update().execution_options(populate_existing=True))
-    if not reactivation_eligible(user) or not reactivation_payload(db,user)['payment_verified']:
-        raise HTTPException(409,'Complete a verified real payment before setting the reactivation password')
-    user.password_hash=hash_password(data.password);revoke(db,user)
+    if not reactivation_eligible(user):
+        raise HTTPException(409,'Account reactivation is not available')
+    user.password_hash=hash_password(data.password)
+    user.status='active'
+    revoke(db,user)
     db.execute(update(PasswordReset).where(PasswordReset.user_id==user.id).values(used=True))
     audit(db,user,'account.reactivation_completed');audit(db,user,'password.reset');db.commit()
     from ..config import settings
@@ -147,9 +149,10 @@ def reset(data:Reset,response:Response,db:Session=Depends(get_db)):
     if not user or user.status not in {'active','pending_email'}: raise HTTPException(400,'Use account reactivation to renew this archived account')
     activating_legacy=user.status=='pending_email'
     finishing_reactivation=reactivation_eligible(user)
-    if finishing_reactivation and not reactivation_payload(db,user)['payment_verified']:
-        raise HTTPException(409,'Complete a verified real payment before setting the reactivation password')
-    user.password_hash=hash_password(data.password); revoke(db,user)
+    # Recovery and account activation are independent of payment.
+    user.password_hash=hash_password(data.password)
+    if finishing_reactivation: user.status='active'
+    revoke(db,user)
     if activating_legacy:
         from ..services.entitlements import CORE_TRIAL_DAYS
         from ..models import EmailVerification
