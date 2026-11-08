@@ -522,6 +522,14 @@
       return refresh(true);
     }
     view.refresh=refresh;
+    // The compact 50-provider Native index may finish after Dashboard's
+    // lightweight first paint. Refresh only this view from the browser cache.
+    document.addEventListener('native-provider-picker-ready',event=>{
+      if(!workspaceId&&alive()&&view.ready&&
+         String(event.detail?.owner||'')===String(currentUser?.id||'')){
+        refresh().catch(()=>{});
+      }
+    },{signal:controller.signal});
     combo.addEventListener('input',()=>{body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
     combo.addEventListener('focus',()=>{optionsOpen=true;scheduleSearch();});
     combo.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}});
