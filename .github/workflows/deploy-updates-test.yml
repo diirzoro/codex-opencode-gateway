@@ -82,6 +82,13 @@ jobs:
           node --check dashboards.js
           node --check management.js
           python3 scripts/validate_migration_chain.py
+          # No second AI provider/key registry in the Gateway source tree.
+          for retired in account_provider_sync native_provider_accounts user_provider_credentials providers runtime_snapshot archive_storage; do
+            test ! -f "backend/app/services/${retired}.py" || { echo "Retired Gateway Native service found: ${retired}"; exit 1; }
+          done
+          grep -q 'revision = "0036_native_only_provider_credentials"' backend/alembic/versions/0036_native_only_provider_credentials.py
+          ! grep -q 'class ProviderCredential(Base)' backend/app/models/workspace.py
+          ! grep -q 'class UserProviderCredential(Base)' backend/app/models/workspace.py
       # Only source checks: the user removed the old regression test files.
       - name: Configure pinned SSH for TEST
         env:
