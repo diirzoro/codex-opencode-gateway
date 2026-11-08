@@ -115,7 +115,17 @@
     if(!live?.id||live.id!==ctx.binding.native_session_id||live.directory!==ctx.root)
       throw Error(label('Project session needs explicit recovery; no replacement was created.',
         'جلسة المشروع تحتاج إلى استعادة مقصودة؛ لم تُنشأ جلسة بديلة.'));
-    return [localProjectRow(workspace,ctx,live)];
+    // Project is the only user-facing conversation title. Synchronize through
+    // OpenCode Native itself; Python only owns the administrative Project name.
+    let named=live;
+    if(ctx.name&&live.title!==ctx.name){
+      named=await window.nativeDirectTest.direct(
+        'session/'+encodeURIComponent(live.id),
+        {method:'PATCH',directory:ctx.root,value:{title:ctx.name}});
+      if(named?.id!==live.id)
+        throw Error('OpenCode did not confirm the Project conversation title');
+    }
+    return [localProjectRow(workspace,ctx,named)];
   }
   async function localCreateProjectSession(workspace,options={}){
     const ctx=await localProjectContext(workspace);
@@ -314,10 +324,15 @@
       if(!window.nativeDirectTest?.active?.())throw Error('OpenCode Native is unavailable');
       const payload=JSON.parse(options.body||'{}');
       const projectId=row.project_id||row.id;
+      if(typeof payload.title!=='string'||!payload.title.trim())throw Error('Project name is required');
       const result=await api('/api/projects/'+encodeURIComponent(projectId),{
-        method:'PATCH',body:JSON.stringify({name:payload.title})
+        method:'PATCH',body:JSON.stringify({name:payload.title.trim()})
       });
-      const value=remember({...row,title:result.name||payload.title});
+      const named=await window.nativeDirectTest.direct(
+        'session/'+encodeURIComponent(row.runtime_id),
+        {method:'PATCH',directory:nativeRoot(row.workspace_id),value:{title:result.name||payload.title.trim()}});
+      if(named?.id!==row.runtime_id)throw Error('Native Project title update was not confirmed');
+      const value=remember({...row,title:result.name||payload.title.trim()});
       return {value};
     }
     if((!tail&&method==='DELETE')||['close','archive','restore','reopen'].includes(tail)){
