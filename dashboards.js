@@ -2016,7 +2016,10 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }catch(error){methodsError=error;}
     // Restore historical TEST-only Stripe path; backend controls readiness from
     // the existing admin-encrypted dynamic Stripe profile, never client keys.
-    const stripeStatus=await api('/api/billing/stripe/status',{cache:'no-store'}).catch(()=>null);
+    let stripeStatus=null,stripeStatusError=null;
+    try{
+      stripeStatus=await api('/api/billing/stripe/status',{cache:'no-store'});
+    }catch(error){stripeStatusError=error;}
     if(stripeStatus?.test_checkout_available){
       methods.push({id:'stripe-test',kind:'stripe',label:'Stripe (Test)',
         available:true,details:{checkout_mode:'stripe_test'}});
@@ -2027,6 +2030,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     dialog.append(title('Subscribe / Payment','الاشتراك / الدفع'),btn('checkoutClose','Close','إغلاق',()=>dialog.close()));
     if(methodsError)dialog.append(textElement('p',
       tr('Payment methods could not load: ','تعذر تحميل وسائل الدفع: ')+methodsError.message,
+      'api-message show error'));
+    if(stripeStatusError)dialog.append(textElement('p',
+      tr('Stripe status could not load: ','تعذر تحميل حالة Stripe: ')+stripeStatusError.message,
       'api-message show error'));
     const choices=textElement('div','','checkout-plans');for(const p of plans.filter(p=>p.active!==false)){
       const choiceLabel=(window.planDisplayName?window.planDisplayName(p):p.name)+' · '+(window.planDisplayPrice?window.planDisplayPrice(p):(p.currency+' '+(p.price_cents/100).toFixed(2)))+' · '+(window.planDisplayTerm?window.planDisplayTerm(p):(p.duration_days+' days'));const choice=btn('checkoutPlan-'+p.id,choiceLabel,choiceLabel,()=>{dialog.close();beginCheckout(p.id);});choice.setAttribute('aria-pressed',String(p.id===planId));choices.append(choice);
