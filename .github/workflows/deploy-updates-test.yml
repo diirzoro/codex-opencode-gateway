@@ -287,32 +287,13 @@ jobs:
             'read -r pass; printf "%s\n" "$pass" | sudo -S -p "" sh -c "install -m 0644 /home/tahir/.native-direct-stage/app.js /var/www/opencode-native-direct-test/app.js && install -m 0644 /home/tahir/.native-direct-stage/index.html /var/www/opencode-native-direct-test/index.html"'
           echo 'TEST Native direct web client updated from the same pinned commit.'
 
-          # Update the EXISTING TEST Native Nginx snippet in-place, with its
-          # original vhost, listeners, upstreams, certificates and passwords unchanged.
+          # Update only the existing TEST Nginx snippet, no new settings.
           scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            ops/native-direct/nginx.conf "$USER@$HOST:/home/tahir/.native-direct-stage/nginx.conf"
+            ops/native-direct/nginx.conf ops/native-direct/update-existing-test-nginx.sh \
+            "$USER@$HOST:/home/tahir/.native-direct-stage/"
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
             -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            'read -r password; printf "%s\n" "$password" | sudo -S -p "" bash -s' <<'NGINX_UPDATE'
-          set -euo pipefail
-          target=/etc/nginx/snippets/opencode-native-direct-test.conf
-          incoming=/home/tahir/.native-direct-stage/nginx.conf
-          test -f "$target" && test -f "$incoming"
-          backup="$(mktemp)"
-          cp "$target" "$backup"
-          restore() {
-            install -m 0644 -o root -g root "$backup" "$target"
-            nginx -t && systemctl reload nginx
-            rm -f "$backup"
-          }
-          trap 'restore' ERR
-          install -m 0644 -o root -g root "$incoming" "$target"
-          nginx -t
-          systemctl reload nginx
-          trap - ERR
-          rm -f "$backup"
-          echo TEST_NATIVE_NGINX_AUTH_UPDATED
-          NGINX_UPDATE
+            'read -r password; printf "%s\n" "$password" | sudo -S -p "" bash /home/tahir/.native-direct-stage/update-existing-test-nginx.sh'
           # Unauthenticated requests should never trigger a browser Basic Auth
           # challenge; Gateway login is now the existing auth boundary.
           challenge="$(curl -sS -D - -o /dev/null \
