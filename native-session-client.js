@@ -207,21 +207,11 @@
     if(e.type==='message.part.delta'){const m=messages.find(m=>m.info.id===p.messageID),part=m?.parts.find(v=>v.id===p.partID);if(!part||!['text','reasoning'].includes(part.type)||p.field!=='text'||typeof p.delta!=='string')return false;part.text=(part.text||'')+p.delta;return true;}
     return false;
   }
-  const attachmentDeliveries=new Set();
-  function noteAttachmentDelivery(id,pending){
-    const row=rows.get(id),user=owner(),messageID=pending?.messageID;
-    const ids=(pending?.files||[]).map(file=>file.path?.match(/^__gateway_chat_attachments\/([0-9a-f-]{36})\/[^/]+$/)?.[1]).filter(Boolean);
-    if(!row||!messageID||!ids.length)return;
-    const key=user+':'+messageID;if(attachmentDeliveries.has(key))return;attachmentDeliveries.add(key);if(attachmentDeliveries.size>500)attachmentDeliveries.delete(attachmentDeliveries.values().next().value);
-    // Lifecycle hint only, outside the submission outcome. Failed cleanup
-    // bookkeeping must never turn an accepted Native prompt into a retry.
-    api('/api/workspaces/'+row.workspace_id+'/attachments/delivery',{method:'POST',body:JSON.stringify({session_id:id,message_id:messageID,upload_ids:ids}),signal:AbortSignal.timeout(10000)}).catch(()=>attachmentDeliveries.delete(key));
-  }
   function reconcile(id,messages){
     const last=messages.findLast(m=>m.info.role==='user'&&m.info.model)?.info;
     if(last&&!selection(id))select(id,{providerID:last.model.providerID,modelID:last.model.modelID,agent:last.agent,variant:last.model.variant});
     let pending=uncertain.get(id);try{pending??=JSON.parse(sessionStorage.getItem(storageKey('uncertain',id))||'null');}catch{}
-    if(pending){if(messages.some(m=>m.info.id===(pending.messageID||pending))){if(typeof pending==='object'){pending.accepted=true;noteAttachmentDelivery(id,pending);}uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}else uncertain.set(id,pending);}
+    if(pending){if(messages.some(m=>m.info.id===(pending.messageID||pending))){if(typeof pending==='object'){pending.accepted=true;}uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}else uncertain.set(id,pending);}
   }
   async function history(id,force=false){
     if(pendingReads.has('history:'+id))return pendingReads.get('history:'+id);
@@ -509,7 +499,12 @@
     if(streamId!==id)await start();
     const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
     const messageID='msg_'+((BigInt(Date.now())*4096n)&0xffffffffffffn).toString(16).padStart(12,'0')+Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');
-    const parts=[{type:'text',text},...files.map(f=>({type:'file',mime:f.mime||({'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','pdf':'application/pdf'}[f.path.split('.').at(-1)]||'application/octet-stream'),url:row.file_base+f.path.split('/').map(encodeURIComponent).join('/'),filename:f.path.split('/').at(-1)}))];
+    const parts=[{type:'text',text},...files.map(f=>({
+      type:'file',
+      mime:f.mime||({'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','pdf':'application/pdf','txt':'text/plain','json':'application/json'}[String(f.path||'').split('.').at(-1)?.toLowerCase()]||'application/octet-stream'),
+      url:f.url||row.file_base+String(f.path).split('/').map(encodeURIComponent).join('/'),
+      filename:f.name||String(f.path).split('/').at(-1)
+    }))];
     const pending={messageID,text,files,providerID,modelID,agent,variant};uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}
     const submissionController=new AbortController();submissionsInFlight.set(id,submissionController);
     try{await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
@@ -551,7 +546,7 @@
     }finally{if(submissionsInFlight.get(id)===submissionController)submissionsInFlight.delete(id);}
 
     if(owner()!==user||epoch!==sendEpoch||(sendGenerations.get(id)||0)!==sendGeneration)return;
-    noteAttachmentDelivery(id,pending);
+    
     uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
     if((statusEvents.get(id)||0)===seenStatus)statuses.set(id,'submitted');
     if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'submitted';
@@ -593,13 +588,8 @@
     // that request hang and prevent the abort from ever being sent.
     if(!pendingAttachment(id))
       throw Error(label('No attachment task in this conversation.','لا توجد مهمة مرفق في هذه المحادثة.'));
-    const pending=uncertain.get(id);
     await forceStop(id);
     if(owner()!==user||generation!==epoch)throw Error('Authenticated account changed');
-    // A confirmed idle Native session can no longer read temporary bytes.
-    // Record a cleanup hint for the EXISTING Gateway attachment reaper; the
-    // server still independently verifies Native idle before removing bytes.
-    if(pending?.files?.length)noteAttachmentDelivery(id,pending);
     if(current(id,user)){activeSession.execution_status='idle';await start();}
     return {cancelled:true};
   }
