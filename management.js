@@ -474,7 +474,7 @@
       if(!alive())return;
       if(force&&window.nativeDirectTest?.active()){
         view.nativeCatalogRequested=false;
-        window.nativeDirectTest.forget();
+        window.nativeDirectTest.forget({fresh:true});
       }
       if(!workspaceId){
         view.ready=false;
