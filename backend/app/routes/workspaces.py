@@ -613,7 +613,12 @@ def workspaces(user: User=Depends(require_user),db: Session=Depends(get_db)):
 
 @router.get("/workspaces/{workspace_id}")
 def workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
-    return manager.workspace_payload(manager.owned(db,Workspace,workspace_id,user.id))
+    row=manager.owned(db,Workspace,workspace_id,user.id)
+    payload=manager.workspace_payload(row)
+    # Platform-owned filesystem metadata only. Never query the OpenCode API.
+    if native_sessions.enabled():
+        payload["native_directory"]=str(manager.root_for(row,allow_expired=True))
+    return payload
 
 @router.delete("/workspaces/{workspace_id}")
 def delete_workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
