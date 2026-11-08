@@ -5,6 +5,58 @@
   const admin=()=>['admin','owner'].includes(currentUser?.role);
   const texts=[];
   function text(tag,en,ar,cls){const node=textElement(tag,tr(en,ar),cls);texts.push([node,en,ar]);return node;}
+  async function deleteOwnedProject(project,workspace){
+    // Browser -> Native for the conversation; Platform owns project metadata only.
+    const bindingData=await api('/api/projects/'+encodeURIComponent(project.id)+'/native-binding');
+    const binding=bindingData?.binding;
+    if(binding){
+      if(!window.nativeDirectTest?.active?.())
+        throw Error(tr('OpenCode Native is unavailable; project not deleted.',
+          'OpenCode Native غير متاح؛ لم يُحذف المشروع.'));
+      const owned=await api('/api/workspaces/'+encodeURIComponent(binding.workspace_id));
+      const directory=owned.native_directory;
+      if(owned.project_id!==project.id||!directory)
+        throw Error(tr('Native session directory does not match this project.',
+          'مجلد جلسة Native لا يطابق هذا المشروع.'));
+      const sid=binding.native_session_id;
+      const endpoint='session/'+encodeURIComponent(sid);
+      let exists=true;
+      try{
+        const current=await window.nativeDirectTest.direct(endpoint,{directory});
+        if(current?.id!==sid||current.directory!==directory)
+          throw Error('Native session does not match the project directory');
+      }catch(error){
+        if(error.status===404)exists=false;
+        else throw error;
+      }
+      if(exists){
+        const all=await window.nativeDirectTest.direct('session/status',{directory});
+        if(all?.[sid]&&all[sid].type!=='idle'){
+          await window.nativeDirectTest.direct(endpoint+'/abort',{method:'POST',value:{},directory});
+          for(let attempt=0;attempt<10;attempt++){
+            const state=await window.nativeDirectTest.direct('session/status',{directory});
+            if(!state?.[sid]||state[sid].type==='idle')break;
+            if(attempt===9)throw Error('Native session is still running; retry project deletion');
+            await new Promise(resolve=>setTimeout(resolve,350));
+          }
+        }
+        try{await window.nativeDirectTest.direct(endpoint,{method:'DELETE',directory});}
+        catch(error){if(error.status!==404)throw error;}
+        try{
+          const remaining=await window.nativeDirectTest.direct(endpoint,{directory});
+          if(remaining?.id===sid)throw Error('Native still reports the session after deletion');
+        }catch(error){
+          if(error.status!==404)throw error;
+        }
+      }
+    }
+    return api('/api/projects/'+encodeURIComponent(project.id),{
+      method:'DELETE',body:JSON.stringify({
+        confirm_name:project.name,confirmation:'DELETE LOCAL PROJECT'
+      })
+    });
+  }
+
   function btn(id,en,ar,action,cls='button ghost small'){const node=text('button',en,ar,cls);node.id=id;node.type='button';node.onclick=async()=>{try{await action();}catch(error){toast(error.message);}};return node;}
   function title(en,ar){return text('h2',en,ar);}
   const home=document.createElement('main');home.id='workspaceHomePage';home.className='page portal-page';
@@ -1333,8 +1385,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         )))return;
         remove.disabled=true;
         try{
-          const result=await api('/api/projects/'+project.id,{method:'DELETE',
-            body:JSON.stringify({confirm_name:project.name,confirmation:'DELETE LOCAL PROJECT'})});
+          const result=await deleteOwnedProject(project,workspace);
           if(currentUser?.id!==owner)return;
           if(result.deleted!==true)throw Error(tr('Project deletion was not confirmed.','لم يؤكد الخادم حذف المشروع.'));
           toast(tr('Local project deleted. Your account storage was released.','حُذف المشروع المحلي وتحررت مساحته من حصة الحساب.'));
@@ -1451,7 +1502,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(!await window.confirmAction(tr('Confirm permanent deletion of local project '+project.name+' and its working files. This cannot be undone.','تأكيد نهائي لحذف المشروع المحلي '+project.name+' وملفاته. لا يمكن التراجع عن ذلك.')))return;
     deleteActiveProject.disabled=true;
     try{
-      const result=await api('/api/projects/'+project.id,{method:'DELETE',body:JSON.stringify({confirm_name:project.name,confirmation:'DELETE LOCAL PROJECT'})});
+      const result=await deleteOwnedProject(project,activeWorkspace);
       if(currentUser?.id!==owner)return;
       if(result.deleted!==true)throw Error(tr('Project deletion was not confirmed.','لم يؤكد الخادم حذف المشروع.'));
       toast(tr('Local project deleted. Your account storage was released.','حُذف المشروع المحلي وتحررت مساحته من حصة الحساب.'));
