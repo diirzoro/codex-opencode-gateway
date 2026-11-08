@@ -388,33 +388,6 @@ window.nativeDirectTest=(()=>{
     if(!active())throw Error('TEST OpenCode Native connection requires sign-in; Gateway provider fallback is disabled');
     const method=(options.method||'GET').toUpperCase();
     const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
-    // Credential setup is a direct Native operation. It must not wait for the
-    // entire provider/model catalog, Gateway policy, or a model prompt.
-    const accountCredential=name.match(/^\/api\/opencode\/connections\/([a-z0-9._-]+)\/credentials$/i);
-    const workspaceCredential=name.match(/^\/api\/workspaces\/[^/]+\/providers\/([a-z0-9._-]+)\/credentials$/i);
-    const credentialId=accountCredential?.[1]||workspaceCredential?.[1];
-    if(credentialId&&method==='POST'){
-      const input=JSON.parse(options.body||'{}');
-      if(typeof input.api_key!=='string'||!input.api_key.trim())throw Error('API key is required');
-      const accepted=await direct('auth/'+encodeURIComponent(credentialId),{
-        method:'PUT',value:{type:'api',key:input.api_key}
-      });
-      if(accepted!==true)throw Error('OpenCode Native did not acknowledge the key');
-      clearRevoked(credentialId);
-      // Native accepted the stored credential, not a validated model response.
-      forget();invalidateProviderMutation(path,'POST');
-      return {provider_id:credentialId,connected:true,persisted:true,
-        verified:false,native_acknowledged:true};
-    }
-    const accountOptions=name.match(/^\/api\/opencode\/connections\/([a-z0-9._-]+)\/options$/i);
-    const workspaceOptions=name.match(/^\/api\/workspaces\/[^/]+\/providers\/([a-z0-9._-]+)\/options$/i);
-    if((accountOptions||workspaceOptions)&&method==='GET'){
-      // OpenCode announces its own auth methods. No model catalog required.
-      const id=(accountOptions||workspaceOptions)[1];
-      const auth=await direct('provider/auth');
-      return {provider_id:id,auth_methods:methods(auth,id),models:[],
-        native:true,credential_storage_ready:true};
-    }
     // Disconnect uses only the OpenCode Native /auth and /provider endpoints.
     // Do not block it on policy, models, agents, or the 7 MB catalog presentation.
     const directDelete=/^\/api\/(?:opencode\/connections|workspaces\/[^/]+\/providers)\/([^/]+)$/.exec(name);
