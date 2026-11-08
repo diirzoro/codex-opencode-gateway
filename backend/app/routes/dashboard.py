@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
-from ..models import Project, ProviderCredential, User, Workspace, WorkspaceSession
+from ..models import Project, User, Workspace, WorkspaceSession
 from ..services import github, session_lifecycle
 from ..services.accounts import user_payload
 from ..services.entitlements import access_payload
@@ -20,7 +20,7 @@ def dashboard(user: User = Depends(require_user), db: Session = Depends(get_db))
     sessions = list(db.scalars(select(WorkspaceSession).join(Workspace, Workspace.id == WorkspaceSession.workspace_id).join(Project, Project.id == Workspace.project_id).where(WorkspaceSession.user_id == user.id, Project.archived_at.is_(None), visible_project_predicate(user.id)).order_by(WorkspaceSession.created_at.desc())))
     session_states = session_lifecycle.states(db, sessions)
     sessions = [s for s in sessions if session_states[s.id] not in {"deleted", "archived"}]
-    credentials_count = db.scalar(select(func.count()).select_from(ProviderCredential).where(ProviderCredential.user_id == user.id)) or 0
+    credentials_count = 0  # AI credentials live exclusively in OpenCode Native; Gateway stores none.
     by_project = {}
     for workspace in workspaces:
         by_project.setdefault(str(workspace.project_id), []).append(workspace)
