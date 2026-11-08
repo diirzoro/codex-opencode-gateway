@@ -394,11 +394,11 @@
     }
     function renderConnected(){
       connectedBox.replaceChildren(node('h2',window.nativeDirectTest?.active()
-        ?tr('Available through OpenCode Native','المزوّدات المتاحة عبر OpenCode Native')
+        ?tr('OpenCode and verified connections','OpenCode والاتصالات المتحقق منها')
         :tr('Connected providers','المزوّدات المتصلة')));
       if(window.nativeDirectTest?.active())connectedBox.append(node('p',tr(
-        'The list comes from OpenCode Native, not a Gateway model database. A configured provider does not prove a saved or working API key. Free OpenCode models require no manual key. Deleting a shared credential can affect other accounts.',
-        'تأتي القائمة من OpenCode Native وليس من قاعدة نماذج Gateway. ظهور مزود مهيأ لا يثبت وجود مفتاح API أو عمله. نماذج OpenCode المجانية لا تحتاج إلى مفتاح يدوي. حذف اعتماد مشترك قد يؤثر على حسابات أخرى.')));
+        'Only built-in OpenCode and client connections verified through a Native model request appear here. Unverified models remain searchable. Provider keys stay exclusively inside OpenCode Native, which may share credentials between TEST accounts.',
+        'يظهر OpenCode الافتراضي والاتصالات التي تحققت فعليًا عبر نموذج Native فقط. بقية المزودين متاحون للبحث والربط. المفاتيح محفوظة في OpenCode Native وحده، وقد تكون مشتركة بين حسابات TEST.',)));
       const selected=(snapshot?.providers||[]).find(p=>p.id===selectedProviderId);
       if(selected)renderSelected(selected);
       const rows=(snapshot?.providers||[]).filter(p=>p.connected||p.public_free);
@@ -406,7 +406,7 @@
       for(const p of rows){
         const item=node('div','','manage-actions');item.append(node('strong',p.name||p.id),node('span',p.public_free
           ?tr('Free models in Native · no API key','نماذج مجانية في Native · بلا مفتاح API'):window.nativeDirectTest?.active()
-          ?tr('Native provider · API key unverified','مزود Native · مفتاح API غير متحقق')
+          ?tr('Verified in this browser session','تم التحقق خلال جلسة المتصفح')
           :p.verified===true?tr('Tested','تم اختباره'):tr('Configured · not tested','مهيأ · لم يُختبر')));
         if(p.allowed===false)item.append(node('span',tr('Restricted','مقيّد')));
         if(!p.public_free){
