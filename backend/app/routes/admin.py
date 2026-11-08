@@ -492,27 +492,6 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
     db.commit(); db.refresh(row)
     return row.as_payload()
 
-@router.get('/native/providers')
-def native_provider_policy_catalog(offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=50),query:str=Query('',max_length=200),provider_id:str|None=Query(None,max_length=200),actor:User=Depends(require_admin),db:Session=Depends(get_db)):
-    from . import native_sessions
-    from ..services import native_provider_accounts,policy,providers
-    if not native_sessions.enabled():raise HTTPException(409,'Native discovery is not enabled')
-    native_sessions.admit(actor)
-    data=native_sessions.metadata('GET','/provider',native_provider_accounts.root(actor))
-    if not isinstance(data,dict) or not isinstance(data.get('all'),list):raise HTTPException(502,'Invalid Native catalog')
-    rules=policy.load(db)
-    def summary(entry):
-        pid=entry['id']
-        return {'id':pid,'name':str(entry.get('name',pid)), 'runtime_configured':pid in data.get('connected',[]),
-                'allowed':policy.provider_allowed(rules,pid),'visible':policy.provider_visible(rules,pid),'model_count':len(entry.get('models',{}))}
-    if provider_id is not None:
-        entry=next((r for r in data['all'] if r.get('id')==provider_id),None)
-        if entry is None:raise HTTPException(404,'Provider is not discovered by Native')
-        return {'provider':summary(entry),'models':[{'id':mid,'name':str(m.get('name',mid)), 'allowed':policy.model_allowed(rules,mid,provider_id),'visible':policy.model_visible(rules,provider_id,mid)} for mid,m in entry.get('models',{}).items()]}
-    term=query.casefold();rows=sorted([r for r in data['all'] if not term or term in (str(r.get('id',''))+' '+str(r.get('name',''))).casefold()],key=lambda r:r['id'])
-    return {'items':[summary(r) for r in rows[offset:offset+limit]],'total':len(rows),'next_offset':offset+limit if offset+limit<len(rows) else None,
-            'custom_provider_creation':False,'custom_provider_reason':'Custom Native provider configuration is protected on the shared engine. Select an existing discovered provider; customer credentials connect separately.'}
-
 class EmailDeliveryUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     provider: Literal["resend", "brevo"] = "resend"
