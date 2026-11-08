@@ -64,6 +64,10 @@ window.nativeDirectTest=(()=>{
   // Browser-only revoked-ID hints guard against Native 1.19.x's stale
   // /provider.connected cache. No API keys or OAuth tokens are stored here.
   let deletedAuthSlots=new Set();
+  // Native catalog/provider.connected may reflect environment or credentials
+  // of another account in the shared TEST process. Neither establishes that
+  // this client connected a provider. A real Native model proof does.
+  let clientVerifiedProviders=new Set();
   const revokedKey=user=>'og-native-revoked-provider-ids:'+user;
   function rememberRevoked(id){
     deletedAuthSlots.add(id);
@@ -108,7 +112,7 @@ window.nativeDirectTest=(()=>{
   function ownerScope(){
     const user=String(currentUser?.id||'');
     if(scopeOwner!==user){
-      scopeOwner=user;deletedAuthSlots=new Set();
+      scopeOwner=user;deletedAuthSlots=new Set();clientVerifiedProviders=new Set();
       try{
         const saved=JSON.parse(localStorage.getItem(revokedKey(user))||'[]');
         if(Array.isArray(saved))for(const id of saved)
@@ -150,7 +154,10 @@ window.nativeDirectTest=(()=>{
       m?.cost?.input===0&&m?.cost?.output===0);
   }
   function nativeConnections(data){
-    return (data.connected||[]).filter(id=>!deletedAuthSlots.has(id));
+    // Explicit verified connections ONLY. Never inherit Native process-global
+    // connection candidates from environment variables, /config/providers or
+    // another TEST user. OpenCode free models are handled by publicFree().
+    return [...clientVerifiedProviders].filter(id=>!deletedAuthSlots.has(id));
   }
   async function agents({force=false}={}){
     const user=ownerScope();
@@ -182,8 +189,8 @@ window.nativeDirectTest=(()=>{
     const [data,agentRows,policy]=await Promise.all([catalog({force}),agents({force}),visibility({force})]);
     return {data,agents:agentRows,policy};
   }
-  // One owner-scoped browser-memory snapshot of Native's configured providers.
-  // Dashboard and Workspace share it; no second DB, file cache or Python AI.
+  // One owner-scoped browser-memory snapshot of Native model definitions.
+  // Dashboard and Workspace share it; no credential DB or Python AI.
   // The first request reads OpenCode Native; provider mutations call forget().
   async function configuredProviders({force=false}={}){
     const user=ownerScope();
@@ -202,13 +209,9 @@ window.nativeDirectTest=(()=>{
         throw Error('Invalid OpenCode Native /config/providers response');
       const all=value.providers.filter(p=>p&&typeof p.id==='string');
       if(ownerScope()!==user)throw Error('Account changed during Native provider loading');
-      // /config/providers is a model-definition inventory, never credential
-      // evidence. A provider can remain here after Native DELETE /auth/:id.
-      // Use Native /provider.connected for candidate account connections.
-      // It is cached once in this browser session, not fetched per prompt.
-      const authoritative=await catalog({force});
-      if(ownerScope()!==user)throw Error('Account changed during provider loading');
-      const connected=new Set(nativeConnections(authoritative));
+      // This inventory describes Native model definitions, not account auth.
+      // Never promote unverified entries from Native's process-global catalog.
+      const connected=new Set(nativeConnections(value));
       const usable=all.filter(p=>!deletedAuthSlots.has(p.id));
       const result={all:usable,connected:usable.filter(p=>connected.has(p.id)).map(p=>p.id),
         default:value.default,public_free:usable.filter(publicFree).map(p=>p.id)};
@@ -404,15 +407,15 @@ window.nativeDirectTest=(()=>{
       // Native's DELETE response, not a catalog entry, acknowledges removal.
       const result=await direct('auth/'+encodeURIComponent(providerId),{method:'DELETE'});
       if(result!==true)throw Error('OpenCode did not acknowledge removal of this credential');
+      clientVerifiedProviders.delete(providerId);
       rememberRevoked(providerId);
       forget();
       invalidateProviderMutation(path,'DELETE');
       return {native_acknowledged:true,credential_deleted:true,
         provider_may_remain_available:true};
     }
-    // Connections first paint: show Native's already-configured providers fast
-    // (/config/providers) without re-downloading the 7 MB catalog. The full
-    // catalog is only fetched when the user searches, and cached in memory.
+    // First paint shows only OpenCode free models and this client's actually
+    // verified connections. All other Native catalog providers remain searchable.
     if(name==='/api/opencode/catalog/providers/page' &&
        !parsed.searchParams.get('query') &&
        Number(parsed.searchParams.get('offset')||0)===0){
@@ -496,6 +499,7 @@ window.nativeDirectTest=(()=>{
         options.onNativePhase?.('verifying');
         const checked=await verifyProviderModel(p.id,selected);
         clearRevoked(p.id);
+        clientVerifiedProviders.add(p.id);
         forget();invalidateProviderMutation(path,'POST');
         return {connected:true,persisted:true,verified:true,
           provider_id:p.id,verified_model_id:checked.model_id};
@@ -507,6 +511,7 @@ window.nativeDirectTest=(()=>{
         try{
           const undone=await direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
           if(undone!==true)throw Error('OpenCode did not acknowledge removal of the pending key');
+          clientVerifiedProviders.delete(p.id);
           rememberRevoked(p.id);
           // Native 1.19.x may cache /provider.connected after deleting auth.
           // Do not call a stale catalog proof that the key still exists.
