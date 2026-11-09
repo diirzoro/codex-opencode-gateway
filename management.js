@@ -17,7 +17,7 @@
   const admin=()=>['admin','owner'].includes(currentUser?.role);
 
   const main=node('main','','page portal-page');main.id='managementPage';protectedPages.add(main.id);
-  const header=node('header','','portal-header');header.append(button(tr('← Back','← رجوع'),()=>page(authenticatedHome())),node('strong','OpenCode Gateway'),button(tr('Workspace','مساحة العمل'),()=>page(activeWorkspace?'workspacePage':'onboarding')));
+  const header=node('header','','portal-header');header.append(button(tr('← Back','← رجوع'),()=>page(authenticatedHome())),node('strong','Pi Gateway'),button(tr('Workspace','مساحة العمل'),()=>page(activeWorkspace?'workspacePage':'onboarding')));
   const body=node('div','','manage-body');main.append(header,body);document.querySelector('#app-main').append(main);
   async function render(root,name,isPlatform=false){
     await authReady;if(!currentUser)return page('authPage');
@@ -40,11 +40,11 @@
     return window.openClientView(client[name]);
   }
   async function nativeCatalog(body,platform=false){
-    // TEST models and provider cache are managed only by OpenCode Native.
+    // TEST models and provider cache are managed only by Pi Native.
     // Do not expose the legacy Gateway/Python refresh scheduler in TEST.
     if(location.hostname==='test.opencode-gateway.codes'||!platform||!admin())return;
-    const box=section(body,tr('Native catalog maintenance','صيانة فهرس OpenCode'));
-    const note=node('p',tr('Uses OpenCode’s own cache refresh. The running service may retain its current model snapshot; conversations are not restarted.','يستخدم تحديث Cache الأصلي في OpenCode. قد تحتفظ الخدمة الجارية بفهرسها الحالي؛ لا تُعاد تشغيل المحادثات.'));box.append(note);
+    const box=section(body,tr('Native catalog maintenance','صيانة فهرس Pi'));
+    const note=node('p',tr('Uses Pi’s own cache refresh. The running service may retain its current model snapshot; conversations are not restarted.','يستخدم تحديث Cache الأصلي في Pi. قد تحتفظ الخدمة الجارية بفهرسها الحالي؛ لا تُعاد تشغيل المحادثات.'));box.append(note);
     const state=node('p');state.setAttribute('role','status');box.append(state);
     const days=select(box,tr('Maintenance interval','دورية الصيانة'),'interval_days',[['7',tr('Every 7 days','كل 7 أيام')],['14',tr('Every 14 days','كل 14 يومًا')]]);
     function display(value){days.value=String(value.interval_days);state.textContent=tr('Last result: ','آخر نتيجة: ')+({not_attempted:tr('Not run yet','لم يُنفذ بعد'),running:tr('Running','جارٍ التنفيذ'),failed:tr('Refresh failed; last working catalog retained','فشل التحديث؛ يبقى آخر فهرس صالح'),cli_completed_reload_unverified:tr('Cache command completed; live reload unverified','اكتمل أمر Cache؛ إعادة التحميل الحية غير مثبتة')}[value.outcome]||tr('Unknown','غير معروف'))+(value.last_attempt_at?' · '+new Date(value.last_attempt_at*1000).toLocaleString():'')+(value.available===false?tr(' · Native service context requires operator inspection',' · يلزم فحص سياق الخدمة الفعلي من المشغّل'):'');}
@@ -155,7 +155,7 @@
     // These names come exclusively from the existing Native provider inventory.
     const catalogCount=node('p','','provider-catalog-count');box.append(catalogCount);
     const catalogList=node('div','','provider-catalog-grid');box.append(catalogList);
-    const connectedBox=section(body,tr('Native credential inventory','مخزن مفاتيح OpenCode Native'));
+    const connectedBox=section(body,tr('Native credential inventory','مخزن مفاتيح Pi Native'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
     let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
     let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
@@ -164,11 +164,11 @@
     // The main catalog stays at 50. Every other Native ID/name is available
     // through manual resolution; connected providers have their own section.
     const sameCatalog=data=>data.workspace_id===workspaceId&&data.generation===snapshot?.generation&&data.revision===snapshot?.revision&&data.policy_revision===snapshot?.policy_revision;
-    // Dashboard reads the existing persistent OpenCode process directly.
+    // Dashboard reads the existing persistent Pi process directly.
     // Native owns and caches the model catalog; no second provider picker store.
     async function accountCatalogRows(){
-      if(!window.nativeDirectTest?.active())throw Error('OpenCode Native is unavailable');
-      // Read the already-running OpenCode Native server once. This
+      if(!window.nativeDirectTest?.active())throw Error('Pi Native is unavailable');
+      // Read the already-running Pi Native server once. This
       // installation does not implement /config/providers (404).
       // Use the exact same Native-derived inventory as the Workspace composer.
       // "connected" means reported by Native, not a verified API key.
@@ -193,7 +193,7 @@
         if(kind==='resolve'){
           const found=rows.find(p=>p.id.toLowerCase()===term)
             ||rows.find(p=>p.name.toLowerCase()===term);
-          if(!found)throw Error('Provider not found in OpenCode Native: '+value);
+          if(!found)throw Error('Provider not found in Pi Native: '+value);
           return [found];
         }
         return rows.filter(p=>p.id.toLowerCase().includes(term)
@@ -203,8 +203,8 @@
       if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
       if(!data.native&&!sameCatalog(data)){
         view.ready=false;customButton.disabled=true;window.workspaceRuntime.invalidate(workspaceId);
-        message(tr('OpenCode state changed. Refresh before connecting.','تغيّرت حالة OpenCode. حدّث الحالة قبل الربط.'),true);
-        throw new Error(tr('OpenCode state changed. Close this dialog and refresh before connecting.','تغيّرت حالة OpenCode. أغلق النافذة وحدّث الحالة قبل الربط.'));
+        message(tr('Pi state changed. Refresh before connecting.','تغيّرت حالة Pi. حدّث الحالة قبل الربط.'),true);
+        throw new Error(tr('Pi state changed. Close this dialog and refresh before connecting.','تغيّرت حالة Pi. أغلق النافذة وحدّث الحالة قبل الربط.'));
       }
       return data.providers;
     }
@@ -234,8 +234,8 @@
       const discovery=new AbortController(),onAbort=()=>dlg.close();controller.signal.addEventListener('abort',onAbort,{once:true});
       dlg.addEventListener('close',()=>{discovery.abort();controller.signal.removeEventListener('abort',onAbort);for(const input of dlg.querySelectorAll('input[type=password]'))input.value='';view.connecting=false;host.remove();},{once:true});
       const currentDialog=()=>alive()&&contextCurrent()&&dlg.open;
-      body.append(node('p',tr('OpenCode Native saves the key directly. Validity is checked when the model is used.', 'يحفظ OpenCode Native المفتاح مباشرة. تُختبر صلاحيته عند استخدام النموذج.')));
-      dlg.showModal();setFeedback(feedback,tr('Loading OpenCode authentication methods…','جارٍ تحميل طرق مصادقة OpenCode…'));
+      body.append(node('p',tr('Pi Native saves the key directly. Validity is checked when the model is used.', 'يحفظ Pi Native المفتاح مباشرة. تُختبر صلاحيته عند استخدام النموذج.')));
+      dlg.showModal();setFeedback(feedback,tr('Loading Pi authentication methods…','جارٍ تحميل طرق مصادقة Pi…'));
       let choices,accountOptions=null;
       try{
         if(!workspaceId){const authStarted=performance.now();const nativeMethods=await window.nativeDirectTest.direct('provider/auth',{signal:discovery.signal});accountOptions={auth_methods:Array.isArray(nativeMethods?.[p.id])&&nativeMethods[p.id].length?nativeMethods[p.id]:[{type:'api',label:'API key'}],native:true,credential_storage_ready:true};window.gatewayProviderTimings={...window.gatewayProviderTimings,auth_request_ms:performance.now()-authStarted};}
@@ -243,10 +243,10 @@
         if(!currentDialog())return;
         if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
         choices=accountOptions?accountOptions.auth_methods:p.auth_methods;
-        if(!Array.isArray(choices)||!choices.length)throw new Error(tr('No authentication methods reported by OpenCode.','لم يعلن OpenCode عن طرق مصادقة.'));
+        if(!Array.isArray(choices)||!choices.length)throw new Error(tr('No authentication methods reported by Pi.','لم يعلن Pi عن طرق مصادقة.'));
         setFeedback(feedback,'');
       }catch(error){if(currentDialog()&&error.name!=='AbortError')setFeedback(feedback,error.message,'error');return;}
-      const methodPicker=select(body,tr('OpenCode authentication method','طريقة مصادقة OpenCode'),'auth_method',choices.map((m,i)=>[String(i),m.label||(['api','key'].includes(m.type)?tr('API key','مفتاح API'):m.type)]));
+      const methodPicker=select(body,tr('Pi authentication method','طريقة مصادقة Pi'),'auth_method',choices.map((m,i)=>[String(i),m.label||(['api','key'].includes(m.type)?tr('API key','مفتاح API'):m.type)]));
       if(reauthorizing){
         for(const option of [...methodPicker.options])if(choices[Number(option.value)]?.type!=='oauth')option.remove();
         if(!methodPicker.options.length){setFeedback(feedback,tr('No OAuth method is available.','لا توجد طريقة OAuth متاحة.'),'error');return;}
@@ -256,7 +256,7 @@
       function renderMethod(){
         methodArea.replaceChildren();setFeedback(feedback,'');const index=Number(methodPicker.value),method=choices[index];
         const keyMethod=['api','key'].includes(method.type);
-        if(!keyMethod&&method.type!=='oauth'){setFeedback(feedback,tr('This authentication type is not supported by the installed OpenCode HTTP API: ','نوع المصادقة غير مدعوم في واجهة OpenCode المثبتة: ')+method.type,'warning');return;}
+        if(!keyMethod&&method.type!=='oauth'){setFeedback(feedback,tr('This authentication type is not supported by the installed Pi HTTP API: ','نوع المصادقة غير مدعوم في واجهة Pi المثبتة: ')+method.type,'warning');return;}
         const f=node('form','','manage-form');methodArea.append(f);const promptInputs=[];
         for(const prompt of method.prompts||[]){
           let field;if(prompt.type==='select')field=select(f,prompt.message,prompt.key,prompt.options.map(o=>[o.value,o.label]));
@@ -270,45 +270,45 @@
         if(keyMethod&&accountOptions?.credential_storage_ready===false){setFeedback(feedback,tr('Provider connection is unavailable: secure credential storage needs administrator repair. Your API key has not been rejected by the provider.','الربط غير متاح: التخزين الآمن للاعتمادات يحتاج إصلاحًا من المدير. لم يرفض المزوّد مفتاح API الخاص بك.'),'error');return;}
         if(keyMethod){
           const key=input(f,tr('API key (server-side only)','مفتاح API (على الخادم فقط)'),'api_key','password');key.required=true;key.autocomplete='new-password';
-          f.append(node('p',tr('Save directly in OpenCode Native without a test conversation.', 'حفظ مباشر في OpenCode Native دون إنشاء محادثة اختبار.'),'provider-note'));
+          f.append(node('p',tr('Save directly in Pi Native without a test conversation.', 'حفظ مباشر في Pi Native دون إنشاء محادثة اختبار.'),'provider-note'));
         }
-        const submit=node('button',keyMethod?tr('Save in OpenCode Native','حفظ في OpenCode Native'):tr('Authorize with OpenCode','تفويض عبر OpenCode'),'button');submit.type='submit';f.append(submit);
+        const submit=node('button',keyMethod?tr('Save in Pi Native','حفظ في Pi Native'):tr('Authorize with Pi','تفويض عبر Pi'),'button');submit.type='submit';f.append(submit);
         const currentForm=()=>currentDialog()&&view.ready&&methodArea.contains(f);
         f.onsubmit=async event=>{
           event.preventDefault();if(submitting||!currentForm()||!f.reportValidity())return;
           const values=Object.fromEntries(new FormData(f));submitting=true;submit.disabled=methodPicker.disabled=true;f.setAttribute('aria-busy','true');
           try{
             if(keyMethod){
-              // The key is sent to OpenCode Native /auth directly, never to Python.
+              // The key is sent to Pi Native /auth directly, never to Python.
               // A successful PUT confirms storage, not remote key validity.
-              setFeedback(feedback,tr('Saving in OpenCode Native…','جارٍ الحفظ في OpenCode Native…'));
-              if(!window.nativeDirectTest?.active())throw Error('OpenCode Native connection is unavailable');
+              setFeedback(feedback,tr('Saving in Pi Native…','جارٍ الحفظ في Pi Native…'));
+              if(!window.nativeDirectTest?.active())throw Error('Pi Native connection is unavailable');
               const result=await window.nativeDirectTest.direct('auth/'+encodeURIComponent(p.id),{
                 method:'PUT',value:{type:'api',key:values.api_key}
               });
               f.reset();if(!alive()||!contextCurrent())return;
-              if(result!==true)throw Error(tr('OpenCode did not confirm storage.','لم يؤكد OpenCode حفظ المفتاح.'));
+              if(result!==true)throw Error(tr('Pi did not confirm storage.','لم يؤكد Pi حفظ المفتاح.'));
               window.nativeDirectTest.acknowledgeNativeCredential(p.id);
               dlg.close();
-              toast(tr('Saved in OpenCode Native. Key validity has not been tested.',
-                'حُفظ المفتاح في OpenCode Native. لم تُختبر صلاحيته بعد.'));
+              toast(tr('Saved in Pi Native. Key validity has not been tested.',
+                'حُفظ المفتاح في Pi Native. لم تُختبر صلاحيته بعد.'));
               await reload();
             }else{
-              setFeedback(feedback,tr('Starting OpenCode authorization…','جارٍ بدء تفويض OpenCode…'));
+              setFeedback(feedback,tr('Starting Pi authorization…','جارٍ بدء تفويض Pi…'));
               const authorization=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values,...(reauthorizing?{reauthorize:true}:{})})});
               if(!currentForm())return;
-              if(!authorization||!['auto','code'].includes(authorization.method))throw new Error(tr('OpenCode did not return a supported OAuth authorization flow.','لم يُرجع OpenCode مسار تفويض OAuth مدعومًا.'));
-              let url;if(authorization.url){url=new URL(authorization.url);if(url.protocol!=='https:'||['localhost','127.0.0.1','::1'].includes(url.hostname))throw new Error(tr('OpenCode returned an unsupported authorization URL','أعاد OpenCode رابط تفويض غير مدعوم'));}
+              if(!authorization||!['auto','code'].includes(authorization.method))throw new Error(tr('Pi did not return a supported OAuth authorization flow.','لم يُرجع Pi مسار تفويض OAuth مدعومًا.'));
+              let url;if(authorization.url){url=new URL(authorization.url);if(url.protocol!=='https:'||['localhost','127.0.0.1','::1'].includes(url.hostname))throw new Error(tr('Pi returned an unsupported authorization URL','أعاد Pi رابط تفويض غير مدعوم'));}
               const area=node('div','','provider-oauth');f.replaceWith(area);setFeedback(feedback,'');area.append(node('p',authorization.instructions||''));
               if(url){const link=node('a',tr('Open provider authorization','افتح تفويض المزوّد'));link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';area.append(link);}
               let code;if(authorization.method==='code')code=input(area,tr('Authorization code','رمز التفويض'),'code');
               area.append(button(tr('Complete authorization','أكمل التفويض'),async()=>{
                 if(!currentDialog()||!view.ready)return;
-                setFeedback(feedback,tr('Completing OpenCode authorization…','جارٍ إكمال تفويض OpenCode…'));
+                setFeedback(feedback,tr('Completing Pi authorization…','جارٍ إكمال تفويض Pi…'));
                 try{
                   const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/callback',{method:'POST',body:JSON.stringify({method:index,...(code?{code:code.value}:{})})});
                   if(!alive()||!contextCurrent())return;
-                  if(result.connected!==true)throw new Error(tr('OpenCode did not confirm the OAuth connection.','لم يؤكد OpenCode اتصال OAuth.'));
+                  if(result.connected!==true)throw new Error(tr('Pi did not confirm the OAuth connection.','لم يؤكد Pi اتصال OAuth.'));
                   if(code)code.value='';dlg.close();toast(result.deferred_workspace_count?tr('Connected; refresh active workspaces to synchronize.','تم الربط؛ حدّث مساحات العمل النشطة للمزامنة.'):tr('Provider connected.','تم ربط المزوّد.'));await reload();
                 }catch(error){if(currentDialog())setFeedback(feedback,error.message,'error');}
               }));
@@ -324,7 +324,7 @@
     };
     function renderSelected(p){
       const state=window.nativeDirectTest?.active()&&p.public_free
-        ?tr('OpenCode Native free models · no key required','نماذج OpenCode المجانية · لا تحتاج إلى مفتاح')
+        ?tr('Pi Native free models · no key required','نماذج Pi المجانية · لا تحتاج إلى مفتاح')
         :window.nativeDirectTest?.active()&&p.connected
         ?tr('Available in Native · credential not verified','متاح في Native · لم يُثبت وجود مفتاح صالح')
         :p.auth_status==='reauthorization_required'?tr('Authorization required','يلزم إعادة التفويض'):
@@ -333,7 +333,7 @@
       status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String(p.model_count??p.models?.length??0)+' '+tr('models','نموذج')));
       if(!view.ready){status.append(node('span',tr('Refreshing workspace state…','جارٍ تحديث حالة مساحة العمل…')));return;}
       const act=node('div','','manage-actions');
-      if(p.public_free)act.append(node('span',tr('Available directly through OpenCode Native','متاح مباشرة عبر OpenCode Native')));
+      if(p.public_free)act.append(node('span',tr('Available directly through Pi Native','متاح مباشرة عبر Pi Native')));
       else if(p.connected)act.append(button(
         tr('Delete API Key','حذف مفتاح API'),
         ()=>disconnect(p)));
@@ -345,26 +345,26 @@
     let disconnectingProvider='';
     async function disconnect(p){
       if(!alive()||!contextCurrent()||!view.ready||disconnectingProvider||p.public_free)return;
-      // /auth in OpenCode 1.19.4 is process-global, not per user.
+      // /auth in Pi 1.19.4 is process-global, not per user.
       // This explicit confirmation is mandatory even if the slot is legacy.
       if(window.nativeDirectTest?.active()){
         const ok=await window.confirmAction?.(tr(
-          'Request deletion of the shared OpenCode Native key for '+(p.name||p.id)+'? This may disconnect other TEST accounts. Native may retain environment/configuration credentials or cached provider state; deletion acknowledgement alone cannot verify removal.',
-          'طلب حذف مفتاح '+(p.name||p.id)+' من مخزن OpenCode Native المشترك؟ قد يؤدي ذلك إلى فصل حسابات TEST أخرى. قد تبقى اعتمادات البيئة أو الإعدادات أو حالة المزود المخبأة؛ قبول الطلب وحده لا يثبت إزالة الاعتماد.'));
+          'Request deletion of the shared Pi Native key for '+(p.name||p.id)+'? This may disconnect other TEST accounts. Native may retain environment/configuration credentials or cached provider state; deletion acknowledgement alone cannot verify removal.',
+          'طلب حذف مفتاح '+(p.name||p.id)+' من مخزن Pi Native المشترك؟ قد يؤدي ذلك إلى فصل حسابات TEST أخرى. قد تبقى اعتمادات البيئة أو الإعدادات أو حالة المزود المخبأة؛ قبول الطلب وحده لا يثبت إزالة الاعتماد.'));
         if(!ok)return;
       }
       disconnectingProvider=p.id;
       const destination=workspaceId?base+encodeURIComponent(p.id):
         '/api/opencode/connections/'+encodeURIComponent(p.id);
       view.ready=false;renderConnected();renderOptions();
-      message(tr('Deleting key through OpenCode Native and confirming removal…',
-        'جارٍ حذف المفتاح عبر OpenCode Native والتأكد من زواله…'));
+      message(tr('Deleting key through Pi Native and confirming removal…',
+        'جارٍ حذف المفتاح عبر Pi Native والتأكد من زواله…'));
       try{
         // app.js maps this URL exclusively to Native DELETE /auth and a fresh
         // Native GET /provider; no Python credential handler is involved.
         const result=await api(destination,{method:'DELETE'});
         if(window.nativeDirectTest?.active()&&result?.native_acknowledged!==true)
-          throw new Error(tr('OpenCode did not acknowledge credential deletion.','لم يؤكد OpenCode طلب حذف الاعتماد.'));
+          throw new Error(tr('Pi did not acknowledge credential deletion.','لم يؤكد Pi طلب حذف الاعتماد.'));
         if(!alive()||!contextCurrent())return;
         await refresh();
         if(!alive()||!contextCurrent())return;
@@ -379,7 +379,7 @@
           'قبل Native طلب الحذف، لكن فحص النتيجة تعذر. الإزالة غير متحقق منها؛ حدّث الحالة قبل إعادة المحاولة.'),remains!==false);
       }catch(error){
         if(alive()&&contextCurrent()){
-          message(error.message||tr('OpenCode deletion was not confirmed.','لم يؤكد OpenCode حذف المفتاح.'),true);
+          message(error.message||tr('Pi deletion was not confirmed.','لم يؤكد Pi حذف المفتاح.'),true);
           // Never optimistically clear a provider after an ambiguous failure.
           // Re-read Native to display the current state without claiming success.
           await refresh(true).catch(()=>{});
@@ -394,8 +394,8 @@
         ?tr('Providers available in Native','المزوّدون المتاحون في Native')
         :tr('Connected providers','المزوّدات المتصلة')));
       if(window.nativeDirectTest?.active())connectedBox.append(node('p',tr(
-        'Native availability does not verify a working key or ownership by this account. Native may include cached state or environment/configuration credentials. Keys remain inside OpenCode Native and may be shared between TEST accounts.',
-        'إتاحة المزود في Native لا تثبت صلاحية مفتاحه أو ملكيته لهذا الحساب. قد تشمل الحالة بيانات مخبأة أو اعتمادات البيئة والإعدادات. المفاتيح داخل OpenCode Native وقد تكون مشتركة بين حسابات TEST.',)));
+        'Native availability does not verify a working key or ownership by this account. Native may include cached state or environment/configuration credentials. Keys remain inside Pi Native and may be shared between TEST accounts.',
+        'إتاحة المزود في Native لا تثبت صلاحية مفتاحه أو ملكيته لهذا الحساب. قد تشمل الحالة بيانات مخبأة أو اعتمادات البيئة والإعدادات. المفاتيح داخل Pi Native وقد تكون مشتركة بين حسابات TEST.',)));
       const selected=(snapshot?.providers||[]).find(p=>p.id===selectedProviderId);
       if(selected)renderSelected(selected);
       const rows=(snapshot?.providers||[]).filter(p=>p.connected||p.public_free);
@@ -442,7 +442,7 @@
           return tile;
         });
         catalogList.replaceChildren(...tiles);
-        catalogCount.textContent=tr('Available providers from OpenCode Native: ','المزوّدات المتاحة من OpenCode Native: ')+rows.length
+        catalogCount.textContent=tr('Available providers from Pi Native: ','المزوّدات المتاحة من Pi Native: ')+rows.length
           +(rows.length<50?tr(' · fewer than 50 Native providers available or allowed',' · أقل من 50 مزودًا متاحًا أو مسموحًا في Native'):'');
       }
       options.hidden=!optionsOpen||!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
@@ -453,11 +453,11 @@
       stopSearch();renderOptions();const query=combo.value.trim().toLowerCase();
       if(query.length<2||!view.ready)return;
       const sequence=searchSequence;searchTimer=setTimeout(async()=>{
-        searchAbort=new AbortController();searchState.textContent=tr('Searching OpenCode providers…','جارٍ البحث في مزوّدي OpenCode…');
+        searchAbort=new AbortController();searchState.textContent=tr('Searching Pi providers…','جارٍ البحث في مزوّدي Pi…');
         try{
           const rows=await lookup('search',query,searchAbort.signal);
           if(sequence!==searchSequence)return;searchRows=rows;searchQuery=query;renderOptions();
-          searchState.textContent=rows.length?tr('OpenCode search results','نتائج بحث OpenCode'):tr('No matching OpenCode provider. Enter its exact name or ID with Add custom provider.','لا يوجد مزوّد مطابق. أدخل الاسم أو المعرّف الدقيق عبر إضافة مزوّد مخصص.');
+          searchState.textContent=rows.length?tr('Pi search results','نتائج بحث Pi'):tr('No matching Pi provider. Enter its exact name or ID with Add custom provider.','لا يوجد مزوّد مطابق. أدخل الاسم أو المعرّف الدقيق عبر إضافة مزوّد مخصص.');
         }catch(error){if(sequence===searchSequence&&error.name!=='AbortError')searchState.textContent=error.message;}
       },350);
     }
@@ -465,16 +465,16 @@
     const customButton=button(tr('Add Provider Manually','إضافة مزوّد يدويًا'),()=>{
       const host=node('div'),f=node('form','','manage-form');
       const pid=input(f,tr('Provider name or ID','اسم المزوّد أو معرّفه'),'provider_id');pid.required=true;pid.maxLength=200;pid.placeholder='OpenAI / openai / …';
-      f.append(node('p',tr('Search any provider in OpenCode by its original name or ID. Saving credentials configures the connection; a native prompt is required to test access.','ابحث عن أي مزوّد في OpenCode باسمه أو معرّفه الأصلي. حفظ الاعتماد يهيئ الاتصال؛ يلزم طلب أصلي لاختبار صلاحية الوصول.')));
+      f.append(node('p',tr('Search any provider in Pi by its original name or ID. Saving credentials configures the connection; a native prompt is required to test access.','ابحث عن أي مزوّد في Pi باسمه أو معرّفه الأصلي. حفظ الاعتماد يهيئ الاتصال؛ يلزم طلب أصلي لاختبار صلاحية الوصول.')));
       const validationState=node('p','','provider-feedback');setFeedback(validationState,'');f.append(validationState);
       const save=node('button',tr('Choose authentication method','اختر طريقة المصادقة'),'button');save.type='submit';f.append(save);host.append(f);document.body.append(host);
       const dlg=window.mountFormDialog(host,f,tr('Add Provider Manually','إضافة مزوّد يدويًا'));dlg.classList.add('provider-auth-dialog');f.dialogTrigger.hidden=true;
       dlg.addEventListener('keydown',event=>event.stopPropagation());
       const current=()=>alive()&&view.ready&&contextCurrent()&&dlg.open;
       f.onsubmit=async event=>{
-        event.preventDefault();if(!current()||save.disabled||!f.reportValidity())return;save.disabled=true;setFeedback(validationState,tr('Checking the OpenCode provider…','جارٍ فحص المزوّد في OpenCode…'));
+        event.preventDefault();if(!current()||save.disabled||!f.reportValidity())return;save.disabled=true;setFeedback(validationState,tr('Checking the Pi provider…','جارٍ فحص المزوّد في Pi…'));
         try{
-          const rows=await lookup('resolve',pid.value.trim());if(!current())return;const p=rows[0];if(!p)throw new Error(tr('Provider was not found in OpenCode.','المزوّد غير موجود في OpenCode.'));
+          const rows=await lookup('resolve',pid.value.trim());if(!current())return;const p=rows[0];if(!p)throw new Error(tr('Provider was not found in Pi.','المزوّد غير موجود في Pi.'));
           if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
           selectedProviderId=p.id;dlg.close();await openAuthDialog(p,true);
         }catch(error){if(error.name!=='AbortError')showError(f,error);}finally{save.disabled=false;}
@@ -493,12 +493,12 @@
         try{
           const rows=await accountCatalogRows();
           if(!alive()||workspaceId)return;
-          // All 50 labels come from OpenCode's own provider catalog.
+          // All 50 labels come from Pi's own provider catalog.
           // The verified connection section stays separate.
           snapshot={providers:rows.filter(p=>p.visible!==false).slice(0,50)};
           view.ready=true;customButton.disabled=false;
           renderOptions();renderConnected();
-          message(tr('OpenCode providers ready','مزوّدو OpenCode جاهزون')+' · '+rows.length);
+          message(tr('Pi providers ready','مزوّدو Pi جاهزون')+' · '+rows.length);
           const selected=rows.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
@@ -506,14 +506,14 @@
       view.ready=false;customButton.disabled=true;
       status.querySelectorAll('button').forEach(button=>button.disabled=true);
       renderConnected();
-      message(snapshot?tr('Refreshing OpenCode providers…','جارٍ تحديث مزوّدي OpenCode…'):tr('Loading OpenCode providers…','جارٍ تحميل مزوّدي OpenCode…'));
+      message(snapshot?tr('Refreshing Pi providers…','جارٍ تحديث مزوّدي Pi…'):tr('Loading Pi providers…','جارٍ تحميل مزوّدي Pi…'));
       try{
         if(force)window.workspaceRuntime.invalidate(workspaceId);
         const next=await window.workspaceRuntime.load(workspaceId,{force});
         if(!alive()||!contextCurrent())return;
-        if(next.providers===null)throw new Error(next.errors?.provider_data?.detail||'OpenCode provider discovery failed');
+        if(next.providers===null)throw new Error(next.errors?.provider_data?.detail||'Pi provider discovery failed');
         snapshot=next;view.ready=true;customButton.disabled=false;
-        message(tr('Popular and connected OpenCode providers ready','المزوّدات الشائعة والمتصلة جاهزة')+' · '+snapshot.providers.length);renderOptions();renderConnected();
+        message(tr('Popular and connected Pi providers ready','المزوّدات الشائعة والمتصلة جاهزة')+' · '+snapshot.providers.length);renderOptions();renderConnected();
         let selected=snapshot.providers.find(p=>p.id===selectedProviderId);
         if(!selected&&selectedProviderId){try{selected=(await lookup('resolve',selectedProviderId))[0];}catch(error){if(error.name!=='AbortError')status.textContent=error.message;}}
         if(selected)renderSelected(selected);if(combo.value.trim().length>=2)scheduleSearch();
@@ -537,9 +537,9 @@
     combo.addEventListener('focus',()=>{optionsOpen=true;scheduleSearch();});
     combo.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}});
     document.addEventListener('click',event=>{if(!comboWrap.contains(event.target)){optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}},{signal:controller.signal});
-    box.append(button(tr('Refresh OpenCode state','حدّث حالة OpenCode'),()=>metadataReady?refresh(true):initialize()));
+    box.append(button(tr('Refresh Pi state','حدّث حالة Pi'),()=>metadataReady?refresh(true):initialize()));
     async function initialize(){
-      message(snapshot?tr('Refreshing OpenCode providers…','جارٍ تحديث OpenCode…'):tr('Loading OpenCode providers…','جارٍ تحميل مزوّدي OpenCode…'));renderOptions();renderConnected();
+      message(snapshot?tr('Refreshing Pi providers…','جارٍ تحديث Pi…'):tr('Loading Pi providers…','جارٍ تحميل مزوّدي Pi…'));renderOptions();renderConnected();
       // Account discovery must not wait for Python workspace/project requests.
       if(!body.dataset.connectionWorkspace){await refresh();return;}
       try{
