@@ -7,10 +7,14 @@ STAGE=/home/tahir/.native-direct-stage
 PI_SRC="$STAGE/pi-central.mjs"
 PI_DST=/home/tahir/pi-test/pi-central.mjs
 NGINX_SRC="$STAGE/nginx.conf"
-NGINX_DST=/etc/nginx/snippets/opencode-native-direct-test.conf
+NGINX_DST=/etc/nginx/snippets/pi-central-test.conf
 UNIT="$(systemctl show pi-central.service --property FragmentPath --value)"
 test "$UNIT" = /etc/systemd/system/pi-central.service
 test -f "$PI_SRC" && test -f "$PI_DST" && test -f "$NGINX_SRC" && test -f "$NGINX_DST"
+# The shared Nginx instance must reference the one canonical TEST Pi snippet.
+test -f /etc/nginx/sites-enabled/opencode-gateway-test
+grep -Fq "include /etc/nginx/snippets/pi-central-test.conf;" /etc/nginx/sites-enabled/opencode-gateway-test
+! grep -Eq "18097|18098" "$NGINX_SRC"
 test -x /home/tahir/pi-test/node_modules/.bin/pi
 test "$(systemctl show pi-central.service --property User --value)" = tahir
 grep -Fq '/home/tahir/pi-test/pi-central.mjs' "$UNIT"
