@@ -8,9 +8,9 @@
  * Nginx must proxy /native-direct/api/ to this UNIX socket, stripping prefix.
  */
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 
@@ -257,6 +257,71 @@ function piPromptParts(rawParts, scope, sessionId) {
   }
   return {message:messages.join("\n"),images};
 }
+// Existing project-file explorer transport. File contents are workspace data,
+// not a second coding agent or Python file processor. The Pi agent itself uses
+// its installed native read/edit/write/bash tools during conversations.
+function workspaceFile(scope,relative,allowRoot=false) {
+  if(typeof relative!=="string"||relative.length>1000||relative.includes("\\")
+    ||relative.includes("\0")||relative.startsWith("/")
+    ||relative.split("/").some(p=>p===".."||p===".git"||p===".ssh"
+      ||p===".pi"||p.startsWith(".env")||p==="auth.json"))
+    throw Object.assign(new Error("Invalid project file path"),{status:400});
+  const root=realpathSync(scope.directory);
+  const target=path.resolve(root,relative||".");
+  if(target!==root&&!target.startsWith(root+path.sep))
+    throw Object.assign(new Error("Project file outside workspace"),{status:403});
+  if(target===root&&!allowRoot)
+    throw Object.assign(new Error("Specify a project file"),{status:400});
+  let file;
+  try{file=realpathSync(target);}catch(e){
+    if(e.code==="ENOENT")throw Object.assign(new Error("Project file not found"),{status:404});
+    throw e;
+  }
+  if(file!==root&&!file.startsWith(root+path.sep))
+    throw Object.assign(new Error("Project file outside workspace"),{status:403});
+  return file;
+}
+function projectFileRequest(scope,pathname,query) {
+  const relative=query.get("path")||"";
+  if(pathname==="/file"){
+    const dir=workspaceFile(scope,relative,true);
+    if(!lstatSync(dir).isDirectory())
+      throw Object.assign(new Error("Not a project directory"),{status:404});
+    return readdirSync(dir,{withFileTypes:true})
+      .filter(x=>!x.isSymbolicLink()&&![".git",".ssh",".pi","auth.json"].includes(x.name)
+        &&!x.name.startsWith(".env"))
+      .slice(0,2000).map(x=>({name:x.name,
+        path:[relative,x.name].filter(Boolean).join("/"),
+        type:x.isDirectory()?"directory":"file"}));
+  }
+  if(pathname==="/file/content"){
+    const file=workspaceFile(scope,relative);
+    if(!lstatSync(file).isFile())
+      throw Object.assign(new Error("Not a regular project file"),{status:404});
+    if(lstatSync(file).size>1024*1024)
+      throw Object.assign(new Error("File exceeds 1 MB preview limit"),{status:413});
+    const data=readFileSync(file);
+    if(data.includes(0))throw Object.assign(new Error("Binary file cannot be previewed as text"),{status:415});
+    return {content:new TextDecoder("utf-8",{fatal:true}).decode(data)};
+  }
+  // Read-only Git information for the existing project panel; model edits and
+  // shell commands still execute with Pi's native tools, never this route.
+  const git=(args)=>execFileSync("git",args,{cwd:scope.directory,encoding:"utf8",
+    timeout:8000,maxBuffer:1024*1024,stdio:["ignore","pipe","ignore"]}).trim();
+  if(pathname==="/vcs"){
+    try{return {branch:git(["branch","--show-current"])};}catch{return {branch:""};}
+  }
+  if(pathname==="/file/status"){
+    try{
+      const output=git(["status","--porcelain=v1","-uno"]);
+      return output.split("\n").filter(Boolean).map(line=>({
+        status:line.slice(0,2).trim()||"modified",
+        path:line.slice(3).replace(/^"(.*)"$/,"$1")
+      }));
+    }catch{return [];}
+  }
+  throw Object.assign(new Error("Unsupported project file operation"),{status:404});
+}
 function mapped(messages, id) {
   return messages.map((m,index)=>{
     const text=Array.isArray(m.content) ? m.content.filter(x=>x.type==="text").map(x=>x.text||"").join("\n"):typeof m.content==="string"?m.content:"";
@@ -424,6 +489,10 @@ const server=http.createServer(async(req,res)=>{
       }
       return error(res,404,"Pi account endpoint not found");
     }
+    // File tree reads should not consume an agent process or compete with a
+    // running Pi conversation for RPC worker slots.
+    if(req.method==="GET"&&["/file","/file/content","/file/status","/vcs"].includes(pathname))
+      return json(res,200,projectFileRequest(s,pathname,query));
     const a=await agent(s);
     if(pathname==="/agent"&&req.method==="GET") {
       const native=await a.command("get_commands");
