@@ -10,7 +10,7 @@
 import http from "node:http";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync } from "node:fs";
+import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, readdirSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 
@@ -77,25 +77,19 @@ async function scope(req, query) {
     throw Object.assign(new Error("Workspace not owned"),{status:403});
   return {directory,workspaceId:match[2],projectId:String(detail.project_id),userId:match[1]};
 }
-// The installed Pi auth.json is the sole shared provider-credential store.
-// The web bridge does not create per-user copies or Gateway provider records.
-function credentials() {
-  const file=path.join(PI_AGENT_DIR,"auth.json");
-  if(!existsSync(file))return {};
-  const data=JSON.parse(readFileSync(file,"utf8"));
-  if(!data||typeof data!=="object"||Array.isArray(data))
-    throw new Error("Invalid installed Pi auth configuration");
-  return data;
+// The installed Pi SDK owns provider login, logout, and credential storage.
+// No custom auth.json reader/writer or Gateway provider ledger exists here.
+async function piModels() {
+  const {ModelRuntime}=await import("@earendil-works/pi-coding-agent");
+  if(!ModelRuntime?.create)
+    throw Object.assign(new Error("Installed Pi ModelRuntime API is unavailable"),{status:502});
+  return ModelRuntime.create({
+    authPath:path.join(PI_AGENT_DIR,"auth.json"),
+    modelsPath:path.join(PI_AGENT_DIR,"models.json"),
+    allowModelNetwork:false
+  });
 }
-function writeCredentials(data) {
-  const file=path.join(PI_AGENT_DIR,"auth.json");
-  const temp=path.join(PI_AGENT_DIR,".auth-"+process.pid+"-"+Date.now()+".tmp");
-  try {
-    writeFileSync(temp,JSON.stringify(data),{mode:0o600,flag:"wx"});
-    chmodSync(temp,0o600);
-    renameSync(temp,file);
-    chmodSync(file,0o600);
-  } finally {if(existsSync(temp))unlinkSync(temp);}
+function invalidatePiInventory() {
   modelsSnapshots.clear();
   commandsSnapshots.clear();
 }
@@ -353,15 +347,10 @@ function providerCatalog(models,userId,availableProviders=[],providerDefinitions
     else grouped.set(provider.id,{id:provider.id,name:provider.name||provider.id,models:{}});
   }
   const all=[...grouped.values()];
-  const native=credentials();
+  // "connected" is scoped to the precise provider ID in Pi. A DeepSeek
+  // model inside OpenRouter never counts as direct "deepseek" authentication.
   const available=new Set(availableProviders);
-  const connected=all.filter(row=>{
-    const entry=native[row.id];
-    return available.has(row.id)||!!entry&&typeof entry==="object"&&(
-      entry.type==="api_key"&&typeof entry.key==="string"&&entry.key.length>0
-      ||entry.type==="oauth"&&(typeof entry.access==="string"||typeof entry.refresh==="string")
-    );
-  }).map(row=>row.id);
+  const connected=all.filter(row=>available.has(row.id)).map(row=>row.id);
   // Key presence is NOT evidence the remote provider accepts it.
   return {all,connected,default:{},verification:"pi_configured_unverified"};
 }
@@ -387,37 +376,28 @@ async function nativeDiscovery(userId) {
     // currently available models on some Pi builds. Both sources are Pi-native.
     let models=m.models,availableProviders=m.models.map(model=>model.provider),providers=[];
     try {
-      const sdk=await import("@earendil-works/pi-coding-agent");
-      let all=[],authenticated=[];
-      if(sdk.ModelRuntime?.create){
-        // Pi owns the full provider registry (including DeepSeek before
-        // a key is configured). RPC only returns models currently available.
-        const runtime=await sdk.ModelRuntime.create({
-          authPath:path.join(PI_AGENT_DIR,"auth.json"),
-          modelsPath:path.join(PI_AGENT_DIR,"models.json"),
-          allowModelNetwork:false
-        });
-        all=runtime.getModels();
-        providers=runtime.getProviders().map(p=>({
-          id:p.id,name:p.name||p.id,
-          auth_methods:Object.keys(p.auth||{}).filter(k=>["apiKey","oauth"].includes(k))
-        }));
-        authenticated=typeof runtime.getAvailableSnapshot==="function"
-          ?runtime.getAvailableSnapshot():[];
-      }else if(sdk.ModelRegistry?.create&&sdk.AuthStorage?.create){
-        // Earlier installed Pi packages use this native SDK facade.
-        const auth=sdk.AuthStorage.create(path.join(PI_AGENT_DIR,"auth.json"));
-        const registry=sdk.ModelRegistry.create(auth,path.join(PI_AGENT_DIR,"models.json"));
-        all=registry.getAll();
-        authenticated=await registry.getAvailable();
-      }
+      const runtime=await piModels();
+      const all=runtime.getModels();
+      providers=runtime.getProviders().map(provider=>({
+        id:provider.id,name:provider.name||provider.id,
+        auth_methods:[
+          ...(provider.auth?.apiKey?.login?["apiKey"]:[]),
+          ...(provider.auth?.oauth?.login?["oauth"]:[])
+        ]
+      }));
       if(Array.isArray(all)&&all.length){
         const byId=new Map(all.map(model=>[model.provider+"\0"+model.id,model]));
         for(const model of m.models)byId.set(model.provider+"\0"+model.id,model);
         models=[...byId.values()];
       }
-      if(Array.isArray(authenticated))
-        availableProviders=[...new Set([...availableProviders,...authenticated.map(model=>model.provider)])];
+      // Pi records provider credentials by provider ID, not by model/agent.
+      const stored=await runtime.listCredentials();
+      const saved=new Set(stored.map(row=>row.providerId));
+      availableProviders=[...new Set([
+        ...availableProviders,
+        ...runtime.getAvailableSnapshot().map(model=>model.provider),
+        ...providers.filter(p=>saved.has(p.id)).map(p=>p.id)
+      ])];
     } catch (e) {
       // Older installed forks may lack this SDK factory. The Pi RPC inventory
       // remains authoritative rather than replacing it with a Gateway catalog.
@@ -471,20 +451,36 @@ const server=http.createServer(async(req,res)=>{
       const auth=pathname.match(/^\/auth\/([a-zA-Z0-9._-]{1,120})$/);
       if(auth&&["PUT","DELETE"].includes(req.method)) {
         const provider=auth[1];
-        if(["__proto__","prototype","constructor"].includes(provider))return error(res,400,"Invalid provider");
-        const stored=credentials();
+        const runtime=await piModels();
+        const declared=runtime.getProvider(provider);
+        if(!declared)return error(res,404,"Provider is not registered in installed Pi");
+        const status=runtime.getProviderAuthStatus(provider);
         if(req.method==="PUT"){
           const payload=await body(req);
           if(payload?.type!=="api"||typeof payload.key!=="string"||
-            !payload.key.trim()||payload.key.length>8192)
+             !payload.key.trim()||payload.key.length>8192)
             return error(res,422,"Invalid Pi API credential");
+          if(!declared.auth?.apiKey?.login)
+            return error(res,422,"Provider does not offer native Pi API-key login");
+          // Only this exact Pi provider can be a duplicate connection.
+          if(status.configured)
+            return error(res,409,"This Pi provider is already configured; disconnect it before replacing its key");
           releaseProviderWorkers();
-          stored[provider]={type:"api_key",key:payload.key.trim()};
+          await runtime.login(provider,"api_key",{
+            signal:AbortSignal.timeout(20000),
+            prompt:async prompt=>{
+              if(!["secret","text"].includes(prompt.type))
+                throw Object.assign(new Error("This provider requires an unsupported Pi login interaction"),{status:422});
+              return payload.key.trim();
+            },
+            notify:()=>{}
+          });
         }else{
+          if(!status.configured)return error(res,404,"This Pi provider is not connected");
           releaseProviderWorkers();
-          delete stored[provider];
+          await runtime.logout(provider);
         }
-        writeCredentials(stored);
+        invalidatePiInventory();
         return json(res,200,true);
       }
       return error(res,404,"Pi account endpoint not found");
