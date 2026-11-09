@@ -82,6 +82,7 @@ jobs:
           node --check dashboards.js
           node --check management.js
           node --check integration/pi-central.mjs
+          bash -n ops/native-direct/update-existing-test-nginx.sh
           python3 scripts/validate_migration_chain.py
           # No second AI provider/key registry in the Gateway source tree.
           for retired in account_provider_sync native_provider_accounts user_provider_credentials providers runtime_snapshot archive_storage; do
@@ -272,9 +273,42 @@ jobs:
           # Password travels only over encrypted SSH stdin; never in log or CLI arguments.
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates </dev/null && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && TEST_SUDO_PASS_STDIN=1 python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
-      # The standalone OpenCode browser console was removed from the repo.
-      # Do not reinstall its deleted files or overwrite Nginx with an unverified
-      # Pi route here. Pi rollout requires a separate reviewed service transition.
+      - name: Activate existing Pi Central and TEST Nginx in place
+        if: steps.confirm.outputs.mode == 'deploy-test'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          port="${PORT:-22}"
+          : "${VPS_SUDO_PASSWORD:?Missing protected TEST sudo credential}"
+          node --check integration/pi-central.mjs
+          # Use the existing staging directory and same TEST service; no duplicate services.
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'test -d /home/tahir/.native-direct-stage && systemctl is-active --quiet pi-central.service'
+          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            integration/pi-central.mjs "$USER@$HOST:/home/tahir/.native-direct-stage/pi-central.mjs"
+          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            ops/native-direct/nginx.conf "$USER@$HOST:/home/tahir/.native-direct-stage/nginx.conf"
+          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'read -r password; printf "%s\n" "$password" | sudo -S -p "" bash /home/tahir/opencode-gateway-test/ops/native-direct/update-existing-test-nginx.sh'
+          echo TEST_PI_AND_NGINX_DEPLOYED
+      - name: Verify Pi upstream and TEST Gateway reachability
+        if: steps.confirm.outputs.mode == 'deploy-test'
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          USER: ${{ inputs.vps_username || 'tahir' }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${PORT:-22}"
+          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            'sudo -n -u www-data curl -fsS --max-time 7 --unix-socket /run/pi-central/pi.sock http://localhost/health'
+          curl -fsS --retry 3 --retry-delay 2 https://test.opencode-gateway.codes/api/health
+          echo
       - name: Verify TEST health after TEST operation
         if: steps.confirm.outputs.mode != 'audit-test' && steps.confirm.outputs.mode != 'native-probe'
         run: |
