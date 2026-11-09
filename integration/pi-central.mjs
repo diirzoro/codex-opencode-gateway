@@ -9,7 +9,7 @@
  */
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdirSync, chmodSync, existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
@@ -66,14 +66,14 @@ function projectIdFor(s) {
 }
 class Agent {
   constructor(s) {
-    this.scope=s; this.id=projectIdFor(s); this.pending=new Map();
-    this.events=new Set();this.buf="";this.serial=0;this.last=Date.now();
+    this.scope=s; this.id=projectIdFor(s);
+    this.events=new Set();this.buf="";this.requests=[];this.busy=false;this.last=Date.now();
     this.closed=false;this.active=false;
     const sessionDir=path.join(ROOT,s.workspaceId);
     mkdirSync(sessionDir,{recursive:true,mode:0o700});
     this.child=spawn(PI,["--mode","rpc","--continue",
       "--session-dir",sessionDir,"--no-tools","--no-extensions","--no-skills",
-      "--no-prompt-templates","--no-approve","--name",s.projectId],{
+      "--no-prompt-templates","--name",s.projectId],{
         cwd:s.directory,stdio:["pipe","pipe","pipe"],env:process.env });
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data",data=>this.consume(data));
@@ -88,9 +88,16 @@ class Agent {
     while((n=this.buf.indexOf("\n"))>=0) {
       const line=this.buf.slice(0,n);this.buf=this.buf.slice(n+1);
       let x;try{x=JSON.parse(line);}catch{continue;}
-      if(x.type==="response" && this.pending.has(x.id)) {
-        const p=this.pending.get(x.id);this.pending.delete(x.id);clearTimeout(p.timer);
-        x.success?p.resolve(x.data):p.reject(new Error(x.error||"Pi command failed"));
+      if(x.type==="response") {
+        // Pi RPC's documented response key is "command"; it may omit request id.
+        // Serialize requests to avoid matching a response to another caller.
+        const p=this.requests.shift();
+        if(p) {
+          clearTimeout(p.timer);this.busy=false;
+          x.success?p.resolve(x.data):p.reject(new Error(
+            typeof x.error==="string"?x.error:x.error?.message||"Pi RPC command failed"));
+          this.drain();
+        }
       } else if(x.type!=="response") {
         if(x.type==="agent_start")this.active=true;
         if(x.type==="agent_settled")this.active=false;
@@ -107,19 +114,27 @@ class Agent {
   command(type, fields={}, ms=15000) {
     if(this.closed)return Promise.reject(new Error("Pi stopped"));
     this.last=Date.now();
-    const id="req-"+(++this.serial)+"-"+randomUUID();
     return new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error("Pi timeout"));},ms);
-      this.pending.set(id,{resolve,reject,timer});
-      this.child.stdin.write(JSON.stringify({id,type,...fields})+"\n",err=>{
-        if(err){clearTimeout(timer);this.pending.delete(id);reject(err);}
-      });
+      this.requests.push({type,fields,ms,resolve,reject});
+      this.drain();
+    });
+  }
+  drain() {
+    if(this.busy||this.closed||!this.requests.length)return;
+    this.busy=true;
+    const next=this.requests[0];
+    next.timer=setTimeout(()=>{
+      // A lost RPC response means process state is uncertain. Never resend blindly.
+      this.close();
+    },next.ms);
+    this.child.stdin.write(JSON.stringify({type:next.type,...next.fields})+"\n",err=>{
+      if(err)this.close();
     });
   }
   close() {
     if(this.closed)return;this.closed=true;
-    for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new Error("Pi exited"));}
-    this.pending.clear();
+    for(const p of this.requests){clearTimeout(p.timer);p.reject(new Error("Pi exited or timed out"));}
+    this.requests=[];
     for(const res of this.events)try{res.end();}catch{}
     this.events.clear();
     this.child.kill("SIGTERM");pool.delete(this.id);
@@ -131,8 +146,8 @@ async function agent(s) {
   if(a && !a.closed)return a;
   if(pool.size>=MAX_PROCS)throw Object.assign(new Error("All Pi workers busy"),{status:503});
   a=new Agent(s);pool.set(id,a);
-  await a.command("get_state");
-  return a;
+  try { await a.command("get_state"); return a; }
+  catch(e) { a.close(); throw e; }
 }
 async function body(req) {
   let s="";for await(const part of req){s+=part;if(s.length>128_000)throw Object.assign(new Error("Body too large"),{status:413});}
