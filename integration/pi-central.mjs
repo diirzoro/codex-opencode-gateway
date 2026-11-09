@@ -89,10 +89,6 @@ async function piModels() {
     allowModelNetwork:false
   });
 }
-function invalidatePiInventory() {
-  modelsSnapshots.clear();
-  commandsSnapshots.clear();
-}
 function projectIdFor(s) {
   return "pi_"+createHash("sha256").update(HOST+"\0"+s.userId+"\0"+s.workspaceId+"\0"+s.projectId).digest("hex").slice(0,32);
 }
@@ -421,51 +417,6 @@ const server=http.createServer(async(req,res)=>{
       if(pathname==="/agent"&&req.method==="GET") {
         const native=await nativeDiscovery(s.userId);
         return json(res,200,nativeCommands(native.commands));
-      }
-      if(pathname==="/provider/auth"&&req.method==="GET") {
-        const native=await nativeDiscovery(s.userId);
-        const result={};
-        for(const p of native.providers){
-          const methods=p.auth_methods||[];
-          result[p.id]=[
-            ...(methods.includes("apiKey")?[{type:"api",label:"API key"}]:[]),
-            ...(methods.includes("oauth")?[{type:"oauth",label:"Pi OAuth"}]:[])
-          ];
-        }
-        return json(res,200,result);
-      }
-      const auth=pathname.match(/^\/auth\/([a-zA-Z0-9._-]{1,120})$/);
-      if(auth&&["PUT","DELETE"].includes(req.method)) {
-        const provider=auth[1];
-        const runtime=await piModels();
-        const declared=runtime.getProvider(provider);
-        if(!declared)return error(res,404,"Provider is not registered in installed Pi");
-        const status=runtime.getProviderAuthStatus(provider);
-        if(req.method==="PUT"){
-          const payload=await body(req);
-          if(payload?.type!=="api"||typeof payload.key!=="string"||
-             !payload.key.trim()||payload.key.length>8192)
-            return error(res,422,"Invalid Pi API credential");
-          if(!declared.auth?.apiKey?.login)
-            return error(res,422,"Provider does not offer native Pi API-key login");
-          // Only this exact Pi provider can be a duplicate connection.
-          if(status.configured)
-            return error(res,409,"This Pi provider already has credentials; remove them before reconnecting");
-          await runtime.login(provider,"api_key",{
-            signal:AbortSignal.timeout(20000),
-            prompt:async prompt=>{
-              if(!["secret","text"].includes(prompt.type))
-                throw Object.assign(new Error("This provider requires an unsupported Pi login interaction"),{status:422});
-              return payload.key.trim();
-            },
-            notify:()=>{}
-          });
-        }else{
-          if(!status.configured)return error(res,404,"This Pi provider is not connected");
-          await runtime.logout(provider);
-        }
-        invalidatePiInventory();
-        return json(res,200,true);
       }
       return error(res,404,"Pi account endpoint not found");
     }
