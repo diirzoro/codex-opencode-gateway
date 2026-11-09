@@ -44,10 +44,8 @@ function invalidateProviderMutation(path,method='GET'){
 }
 window.addEventListener('storage',event=>{
  if(!currentUser)return;
- if(event.key==='og-native-revoked-provider-ids:'+currentUser.id)
-   window.nativeDirectTest?.syncRevoked();
  if(event.key==='og-native-provider-revision:'+currentUser.id){
-   window.nativeDirectTest?.syncRevoked();
+   window.nativeDirectTest?.forget();
    window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser.id}}));
  }
 });
@@ -61,26 +59,12 @@ window.nativeDirectTest=(()=>{
   const base='/native-direct/api/';
   const defaultDirectory=()=>window.__nativeAccountDir||'/var/lib/opencode-native-test/workspace';
   let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
-  // Browser-only revoked-ID hints guard against Native 1.19.x's stale
-  // /provider.connected cache. No API keys or OAuth tokens are stored here.
-  let deletedAuthSlots=new Set();
-  // Native catalog/provider.connected may reflect environment or credentials
-  // of another account in the shared TEST process. Neither establishes that
-  // this client connected a provider. A real Native model proof does.
-  let clientVerifiedProviders=new Set();
-  const revokedKey=user=>'og-native-revoked-provider-ids:'+user;
-  function rememberRevoked(id){
-    deletedAuthSlots.add(id);
-    try{localStorage.setItem(revokedKey(String(currentUser?.id||'')),JSON.stringify([...deletedAuthSlots]));}catch{}
-  }
-  function clearRevoked(id){
-    deletedAuthSlots.delete(id);
-    try{localStorage.setItem(revokedKey(String(currentUser?.id||'')),JSON.stringify([...deletedAuthSlots]));}catch{}
-  }
-  function acknowledgeNativeCredential(id){
-    clearRevoked(id);
-    clientVerifiedProviders.delete(id); // Saved is not proof of a working key.
+  let presentationRevision=0;
+  // Invalidate presentation snapshots only. Native owns authentication state;
+  // Gateway must not invent a saved, verified or deleted provider registry.
+  function acknowledgeNativeCredential(){
     forget();
+    try{localStorage.setItem('og-native-provider-revision:'+currentUser?.id,String(Date.now()));}catch{}
     window.dispatchEvent(new CustomEvent('account-provider-changed',{
       detail:{owner:currentUser?.id}
     }));
@@ -124,27 +108,23 @@ window.nativeDirectTest=(()=>{
   function ownerScope(){
     const user=String(currentUser?.id||'');
     if(scopeOwner!==user){
-      scopeOwner=user;deletedAuthSlots=new Set();clientVerifiedProviders=new Set();
-      try{
-        const saved=JSON.parse(localStorage.getItem(revokedKey(user))||'[]');
-        if(Array.isArray(saved))for(const id of saved)
-          if(typeof id==='string'&&/^[a-z0-9][a-z0-9._-]{0,119}$/i.test(id))deletedAuthSlots.add(id);
-      }catch{}
+      scopeOwner=user;
+      presentationRevision++;
+      // Retire the old browser-only deletion hint, never consult it as truth.
+      try{localStorage.removeItem('og-native-revoked-provider-ids:'+user);}catch{}
       catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
       catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
     }
     return user;
   }
   function forget({fresh=false}={}){
+    presentationRevision++;
     catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
     catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
     window.nativeSession?.invalidate();window.workspaceRuntime?.clear();
   }
-  function syncRevoked(){
-    scopeOwner='';ownerScope();forget();
-  }
   async function catalog({force=false}={}){
-    const user=ownerScope();
+    const user=ownerScope(),revision=presentationRevision;
     // Keep only a browser-memory reference to Native's original /provider.
     // Never build a second persistent catalog or refresh models on every prompt.
     if(!force&&catalogSnapshot)return catalogSnapshot;
@@ -152,6 +132,7 @@ window.nativeDirectTest=(()=>{
     const promise=direct('provider').then(data=>{
       if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid OpenCode Native provider response');
       if(ownerScope()!==user)throw Error('Account changed during Native provider discovery');
+      if(revision!==presentationRevision)throw Error('Native provider state changed; retry discovery');
       catalogSnapshot=data;workspaceSnapshot=null;
       window.dispatchEvent(new CustomEvent('native-provider-inventory-updated',{detail:{owner:user}}));
       return data;
@@ -166,10 +147,8 @@ window.nativeDirectTest=(()=>{
       m?.cost?.input===0&&m?.cost?.output===0);
   }
   function nativeConnections(data){
-    // Explicit verified connections ONLY. Never inherit Native process-global
-    // connection candidates from environment variables, /config/providers or
-    // another TEST user. OpenCode free models are handled by publicFree().
-    return [...clientVerifiedProviders].filter(id=>!deletedAuthSlots.has(id));
+    // Runtime availability only, NOT credential validity or account ownership.
+    return data.connected.filter(id=>data.all.some(p=>p?.id===id));
   }
   async function agents({force=false}={}){
     const user=ownerScope();
@@ -207,7 +186,7 @@ window.nativeDirectTest=(()=>{
     return {data,agents:agentRows,policy};
   }
   async function configuredProviders({force=false}={}){
-    const user=ownerScope();
+    const user=ownerScope(),revision=presentationRevision;
     if(!force&&configuredSnapshot)return configuredSnapshot;
     if(configuredPending)return configuredPending;
     const job=(async()=>{
@@ -217,17 +196,14 @@ window.nativeDirectTest=(()=>{
       // additional catalog/cache/database participates.
       const value=await catalog({force});
       if(ownerScope()!==user)throw Error('Account changed during Native provider loading');
-      const all=value.all.filter(p=>p&&typeof p.id==='string'&&!deletedAuthSlots.has(p.id));
-      // A process-global Native /provider.connected entry cannot establish
-      // ownership or validity for this Gateway account. Never promote it into
-      // an account connection; only the public provider or an actual verified
-      // Native model response may do that.
-      const available=new Set(['opencode',...nativeConnections(value)]);
+      if(revision!==presentationRevision)throw Error('Native provider state changed; retry discovery');
+      const all=value.all.filter(p=>p&&typeof p.id==='string');
+      const available=new Set([...all.filter(publicFree).map(p=>p.id),...nativeConnections(value)]);
       const result={
         all,
         connected:all.filter(p=>available.has(p.id)).map(p=>p.id),
         default:value.default&&typeof value.default==='object'?value.default:{},
-        public_free:all.filter(p=>p.id==='opencode'||publicFree(p)).map(p=>p.id)
+        public_free:all.filter(publicFree).map(p=>p.id)
       };
       configuredSnapshot=result;
       return result;
@@ -240,12 +216,13 @@ window.nativeDirectTest=(()=>{
   // remains the sole source of AI model definitions, keys and execution.
   let workspaceSnapshot=null,workspacePending=null;
   async function workspaceRegistry({force=false}={}){
-    const user=ownerScope();
+    const user=ownerScope(),revision=presentationRevision;
     if(!force&&workspaceSnapshot)return workspaceSnapshot;
     if(workspacePending)return workspacePending;
     const job=Promise.all([configuredProviders({force}),agents({force}),visibility({force})])
       .then(([data,agentRows,policy])=>{
         if(ownerScope()!==user)throw Error('Account changed during Native workspace discovery');
+        if(revision!==presentationRevision)throw Error('Native provider state changed; retry discovery');
         workspaceSnapshot={data,agents:agentRows,policy};
         return workspaceSnapshot;
       });
@@ -267,15 +244,13 @@ window.nativeDirectTest=(()=>{
   }
   // Shared, Native-reported availability for Dashboard, Connections and Workspace.
   // Presence in /provider.connected is NOT proof that a key works or belongs
-  // to this account; only an actual Native model response can verify it.
-  const nativeReported=(p,data)=>!deletedAuthSlots.has(p.id)&&(
-    p.id==='opencode'||publicFree(p)||clientVerifiedProviders.has(p.id));
+  // to this account. Display Native's result without a second verification list.
+  const nativeReported=(p,data)=>publicFree(p)||(data.connected||[]).includes(p.id);
   const idx=(p,data)=>({
     id:p.id,name:p.name||p.id,visible:providerVisible(p.id),allowed:providerAllowed(p.id),
-    connected:nativeReported(p,data),public_free:p.id==='opencode'||publicFree(p),
-    auth_status:publicFree(p)?'free_native':
-      clientVerifiedProviders.has(p.id)?'verified_native':undefined,
-    verified:clientVerifiedProviders.has(p.id),model_count:p.model_count??Object.keys(p.models||{}).length,
+    connected:nativeReported(p,data),public_free:publicFree(p),
+    auth_status:publicFree(p)?'free_native':nativeReported(p,data)?'native_reported_unverified':undefined,
+    verified:false,model_count:p.model_count??Object.keys(p.models||{}).length,
     default_model:data.default?.[p.id]
   });
   function ordered(data,query=''){
@@ -291,15 +266,12 @@ window.nativeDirectTest=(()=>{
     if(!p){const e=new Error('Provider not found in OpenCode Native: '+pid);e.status=404;throw e;}
     return p;
   }
-  function methods(auth,pid){const list=auth?.[pid];return Array.isArray(list)&&list.length?list:[{type:'api',label:'API key'}];}
   function modelDetails(p,data){
     return {provider_id:p.id,connected:nativeReported(p,data),allowed:providerAllowed(p.id),
       default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
         allowed:modelAllowed(p.id,id),visible:modelVisible(p.id,id)}))};
   }
-  // Credential acceptance and provider authentication are different outcomes.
-  // Verify through a real model request in the EXISTING OpenCode Native process.
-  // Only Native /auth stores keys; never send them to Python or PostgreSQL.
+  // Present actual Native execution errors; do not run a separate key checker.
   function nativeFailure(value){
     const raw=[value?.name,value?.message,value?.data?.message,value?.data?.statusCode,
       value?.data?.code,value?.status,value?.error?.message]
@@ -323,73 +295,6 @@ window.nativeDirectTest=(()=>{
     if(/(?:timeout|timed.out|network|connect|econn|enotfound|fetch.failed)/i.test(raw))
       return {kind:'network',message:withDetail('تعذر اتصال OpenCode بمزود النموذج.')};
     return {kind:'provider_error',message:withDetail('أعاد OpenCode خطأ من المزود.')};
-  }
-  async function verifyProviderModel(pid,modelID){
-    // A new, unpredictable challenge proves the selected Native model really
-    // responded. Generic text or an error message must NEVER verify a key.
-    const directory=defaultDirectory();
-    const challenge='NATIVE-VERIFY-'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase();
-    let sid='',completed=false;
-    try{
-      const session=await direct('session',{method:'POST',directory,
-        value:{title:'Native credential verification · '+pid}});
-      if(!/^ses_[A-Za-z0-9_-]+$/.test(session?.id||''))
-        throw Error('لم يؤكد OpenCode إنشاء جلسة التحقق.');
-      sid=session.id;
-      const receipt=await direct('session/'+encodeURIComponent(sid)+'/prompt_async',{
-        method:'POST',directory,value:{
-          model:{providerID:pid,modelID},
-          parts:[{type:'text',text:'Return only the following verification code, exactly as written, with no extra text: '+challenge}]
-        }});
-      if(receipt!==null&&receipt!==true&&receipt!==undefined)
-        throw Error('لم يؤكد OpenCode قبول رسالة التحقق.');
-      const deadline=Date.now()+65000;
-      let failure=null,unexpectedAnswer=false;
-      while(Date.now()<deadline){
-        await new Promise(resolve=>setTimeout(resolve,1800));
-        const messages=await direct('session/'+encodeURIComponent(sid)+'/message',{directory});
-        if(!Array.isArray(messages))throw Error('أعاد OpenCode سجل تحقق غير صالح.');
-        const assistant=messages.filter(row=>row?.info?.role==='assistant');
-        for(const message of assistant){
-          const info=message.info;
-          if(info?.error){failure=nativeFailure(info.error);break;}
-          if(info?.providerID!==pid||info?.modelID!==modelID){
-            // A fallback/foreign/default model is not proof of the requested key.
-            failure={kind:'wrong_model',message:'رد نموذج مختلف عن المزود أو النموذج المحدد. لم يتم توثيق هذا المفتاح.'};
-            break;
-          }
-          const answer=(message.parts||[]).filter(part=>part?.type==='text')
-            .map(part=>part.text||'').join('').trim();
-          if(!answer)continue;
-          if(!info?.time?.completed&&!info?.finish)continue;
-          if(answer===challenge){
-            completed=true;
-            return {verified:true,provider_id:pid,model_id:modelID};
-          }
-          unexpectedAnswer=true;
-        }
-        if(failure)break;
-        const states=await direct('session/status',{directory});
-        const state=states?.[sid];
-        if(state?.type==='retry'){
-          const problem=nativeFailure({name:'RetryError',message:state.message});
-          if(problem.kind!=='provider_error'){failure=problem;break;}
-        }
-        if(unexpectedAnswer&&(state===undefined||state?.type==='idle')){
-          failure={kind:'unexpected_response',message:'استجاب OpenCode، لكن النموذج لم يُرجع رمز التحقق الصحيح. لم يتم توثيق المفتاح.'};
-          break;
-        }
-      }
-      const error=new Error(failure?.message||'انتهت مهلة اختبار النموذج الحقيقي؛ لم يتم قبول اتصال غير متحقق.');
-      error.credentialKind=failure?.kind||'not_verified';
-      throw error;
-    }finally{
-      if(sid){
-        if(!completed)await direct('session/'+encodeURIComponent(sid)+'/abort',{
-          method:'POST',value:{},directory}).catch(()=>{});
-        await direct('session/'+encodeURIComponent(sid),{method:'DELETE',directory}).catch(()=>{});
-      }
-    }
   }
   const matches=(path)=>{
     // TEST provider operations are Native-only even before auth is ready.
@@ -417,8 +322,6 @@ window.nativeDirectTest=(()=>{
       const result=await direct('auth/'+encodeURIComponent(providerId),{method:'DELETE'});
       if(ownerScope()!==owner)throw Error('Account changed during Native credential deletion; refresh the current account');
       if(result!==true)throw Error('OpenCode did not acknowledge removal of this credential');
-      clientVerifiedProviders.delete(providerId);
-      rememberRevoked(providerId);
       forget();
       invalidateProviderMutation(path,'DELETE');
       // /provider combines saved auth, environment/config and cached runtime
@@ -433,8 +336,7 @@ window.nativeDirectTest=(()=>{
       return {native_acknowledged:true,credential_deletion_verified:false,
         provider_available_after_delete:providerAvailable};
     }
-    // Native /provider is the one catalog source. Dashboard reads it directly;
-    // Workspace still reads Native /config/providers and /agent only.
+    // Native /provider is the shared catalog source for Dashboard and Workspace.
     const [data]=await Promise.all([catalog(),visibility()]);
     if(name.endsWith('/providers/search')){
       const query=parsed.searchParams.get('query')||'';
@@ -447,7 +349,7 @@ window.nativeDirectTest=(()=>{
       return name.startsWith('/api/workspaces/')?{native:true,providers:[item]}:item;
     }
     if(name==='/api/opencode/connections')return nativeConnections(data).map(provider_id=>({
-      provider_id,auth_status:'verified_native',verified:true}));
+      provider_id,auth_status:'native_reported_unverified',verified:false}));
     const isAccount=segments[0]==='api'&&segments[1]==='opencode'&&segments[2]==='connections';
     const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
     if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
@@ -458,8 +360,7 @@ window.nativeDirectTest=(()=>{
     if(!providerId)throw Error('Missing Native provider ID');
     const p=find(data,providerId),tail=segments.slice(isAccount?4:5);
     if(tail.length===1&&tail[0]==='models'){
-      // Workspaces select models from the account's manually connected providers.
-      // Never turn a full Native catalogue lookup into an unconnected model picker.
+      // Workspace availability follows Native, not a Gateway connection ledger.
       const item=modelDetails(p,data);
       return isWorkspace&&!item.connected?{...item,models:[]}:item;
     }
@@ -473,7 +374,7 @@ window.nativeDirectTest=(()=>{
     }
     throw Error('Unsupported direct OpenCode provider action: '+name);
   }
-  return {active,testHost,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,syncRevoked,acknowledgeNativeCredential,matches,route,
+  return {active,testHost,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,acknowledgeNativeCredential,matches,route,
     providerAllowed,providerVisible,modelAllowed,modelVisible,classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 
