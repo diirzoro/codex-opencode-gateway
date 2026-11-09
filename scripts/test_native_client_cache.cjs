@@ -9,6 +9,20 @@ const app=fs.readFileSync('app.js','utf8');
 const workspaceUI=fs.readFileSync('dashboards.js','utf8');
 const dashboard=fs.readFileSync('management.js','utf8');
 const pageHTML=fs.readFileSync('index.html','utf8');
+const testNginx=fs.readFileSync('ops/native-direct/nginx.conf','utf8');
+const authLocation=testNginx.slice(testNginx.indexOf('location ^~ /native-direct/api/auth/ {'),
+  testNginx.indexOf('location = /native-direct/api/provider/auth {'));
+assert(authLocation.includes('proxy_pass http://127.0.0.1:18098;'),
+  'Credential mutations must use the existing TEST auth-capable transport');
+assert(!authLocation.includes('18097'),'Discovery transport must not handle credential CRUD');
+assert(authLocation.includes('auth_request /api/auth/me;'),'Keep Gateway login protection');
+assert(authLocation.includes('limit_except PUT DELETE { deny all; }'));
+assert(authLocation.includes('proxy_set_header Authorization "";'));
+assert(authLocation.includes('proxy_set_header Cookie "";'));
+const installer=fs.readFileSync('ops/native-direct/update-existing-test-nginx.sh','utf8');
+assert(installer.indexOf('--data \'{}\'')<installer.indexOf('backup='),
+  'Check Native schema rejection before modifying TEST routing');
+assert(installer.includes('400|422)'));
 const iconStart=workspaceUI.indexOf('const composerIcons=');
 const iconEnd=workspaceUI.indexOf(';\n  for(const [id,markup]',iconStart);
 assert(iconStart>=0&&iconEnd>iconStart,'Workspace composer icons missing');

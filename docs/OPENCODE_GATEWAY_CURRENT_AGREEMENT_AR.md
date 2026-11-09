@@ -139,7 +139,8 @@
 
 | الوظيفة | المسار الحالي في المصدر | حد الإثبات |
 |---|---|---|
-| Providers/Agents/Auth | Browser → `/native-direct/api/{provider,agent,auth/...}` → Nginx `18097` | لا Python AI handler في هذا المسار؛ الوجهة الداخلية الفعلية تحتاج مطابقة إعداد TEST الجاري |
+| Providers/Agents/Auth methods | Browser → `/native-direct/api/{provider,agent,provider/auth}` → Nginx `18097` | Native discovery؛ لا Python AI handler |
+| Credential PUT/DELETE | Browser → `/native-direct/api/auth/{provider}` → النقل المحمي `18098` | مصحح في مصدر TEST؛ يجب تأكيده بعد النشر، دون منفذ جديد |
 | Sessions/Prompt/SSE/Tools/Questions/Permissions/Files | Browser adapters → `/native-direct/api/...` → Nginx `18098` | لا وسيط Python لتنفيذها في المصدر؛ فشل 404 لا يثبت سبب إعداد الخادم وحده |
 | هوية الدخول | Nginx `auth_request /api/auth/me` | Python يفحص هوية الحساب فقط. لم يُحذف هذا الحاجز أو يُفتح Native للعامة |
 | Project/Workspace/Native binding | Platform APIs وPostgreSQL | ملكية وربط إداري فقط. `backend/app/routes/native_sessions.py` يعيد وضع التشغيل دون اتصال Native |
@@ -169,6 +170,15 @@
 **الاختبارات:** قبل التصحيح، فشل `node scripts/test_native_client_cache.cjs` على `4063e68` عند قائمة المزودين؛ بعده نجحت اختبارات النقل المعزولة والتمييز بين التوفر والتحقق. أضيفت فحوص أن الحذف لا يخفي مزودًا ما زال Native يعيده، وأن مزودًا محذوف الاعتماد يبقى قابلًا للبحث في الكتالوج، وأن التحديث/عميل جديد لا يستخدمان سجل المتصفح، وتنظيف المخازن القديمة لا يمس مفاتيح غير مرتبطة، وتعطل Native لا يستدعي Python للنماذج أو الوكلاء. `node --check` لـapp.js وruntime-client.js وmanagement.js و`validate_migration_chain.py` (36 migration، دون تطبيقها) و`git diff --check` نجحت. هذه اختبارات fixtures، وليست اختبار مفاتيح حقيقية أو بديلًا لقبول TEST.
 
 **المتبقي بدقة:** حذف اعتماد DeepSeek من مخزن خدمة VPS الفعلي وعدم عودته بعد Refresh ما زال **BLOCKED / غير مثبت**؛ فحص المتصفح السابق لم يُرجع نتيجة، ولا توجد جلسة طرفية VPS متاحة لهذه الجولة. يلزم بعد النشر مطابقة المصدر الجاري ومسارات Native ومداخل auth/environment/config بأسماء فقط. لا نخفي مزودًا لإيهام نجاح الحذف، ولا نعلن عزل الاعتمادات المشتركة عبر تغيير واجهة. عزل Native متعدد المستخدمين يبقى **BLOCKED** كما في البند 8؛ لم يُزل حاجز مصادقة قائم ولم يُفتح Native للعامة.
+
+### تشخيص 404 في الاعتمادات والجلسة — 9 نوفمبر 2026
+
+- **FAILED — تقرير المستخدم:** `OpenCode Native HTTP 404 (auth/deepseek)` لا يثبت حذف الاعتماد. عقد OpenCode الرسمي `v1.19.4` في `packages/opencode/src/server/routes/instance/httpapi/groups/control.ts` يعرّف PUT/DELETE `/auth/:providerID`؛ والـhandler يعيد boolean. ليست مطالبة بإضافة API بديلة في Python.
+- **تعارض توجيه مثبت في المصدر:** `ops/native-direct/nginx.conf` كان يرسل `/auth/` إلى نقل discovery `18097`؛ بينما `scripts/native_test_release.py::loopback_candidate` يضيف `/auth/{provider}` إلى النقل المحمي الموجود `18098` وصولًا إلى Native. تم تصحيح وجهة `/auth/` في ملف TEST إلى `18098`، مع إبقاء فحص دخول Gateway ومسح Cookie/Authorization الصادرين من المتصفح. طرق المصادقة `/provider/auth` تبقى discovery. لا أرقام منافذ جديدة، ولا تعديل LIVE أو workflows.
+- `update-existing-test-nginx.sh` يفحص وجود المسار قبل تغيير الملف باستخدام PUT ذي body غير صالح `{}` ومعرّف تجريبي؛ عقد Auth.Info يرفضه قبل تنفيذ الحفظ. لا مفتاح ولا حذف ولا fallback. يقبل الفحص رفض schema بـ400/422 فقط، ويرفض 404/401/200/500 مع ترك إعداد Nginx كما هو. لم يُنفذ هذا الفحص على VPS ضمن هذه الجولة؛ سيُنفذ عبر خطوة TEST الموجودة عند النشر اليدوي.
+- **PASSED — فحوص محلية:** اختبار عقد التوجيه ضمن `test_native_client_cache.cjs`، فحوص النقل السابقة، `bash -n` و`git diff --check`. اختبار installer بأوامر curl/id وهمية وحالة مؤقتة أثبت رفض 404/401/200/500 دون تعديل الملف. هذه fixtures وليست فحص Nginx حيًا؛ binary Nginx غير متاح في بيئة العمل المحلية.
+- **FAILED — دليل متصفح TEST مباشر:** الصفحة على `https://test.opencode-gateway.codes/` أظهرت 404 للجلسة `ses_e44c884a2ffe1rhQLJiGfUxvBw` ولـ`file?path=`. قراءة `/native-direct/api/session/ses_e44c884a2ffe1rhQLJiGfUxvBw` أعادت JSON من Native: `NotFoundError` و`Session not found`. الطلب يصل إلى Native؛ لا يجوز تفسيره كـ404 توجيه عام أو إنشاء جلسة بديلة تلقائيًا. سبب فقد الجلسة/اختلاف مخزن Native أو سياقها ما زال غير مثبت؛ يلزم فحص الخدمة والمخزن الأصليين. لم تتغير روابط المشروع أو ملفاته أو محادثاته.
+- قبول حذف DeepSeek على VPS واستعادة الجلسة **NOT TESTED / BLOCKED** بعد التصحيح، إذ لم يحدث نشر ضمن هذه الجولة. أثناء إنهاء فحص المتصفح طلبت الإضافة تحديثها؛ لا يُعلن نجاح اختبار إضافي لم يُنفذ.
 
 ## المراجع الفنية
 
