@@ -27,6 +27,7 @@ const CATALOG_DIRECTORY="/home/tahir/pi-test";
 const CATALOG_TTL_MS=60_000;
 const modelsSnapshots=new Map();
 const commandsSnapshots=new Map();
+let nativeDiscoveryPending=null;
 
 const json = (res, status, value) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8",
@@ -282,8 +283,10 @@ async function nativeDiscovery(userId) {
   if(models&&commands&&Date.now()-models.time<CATALOG_TTL_MS
     &&Date.now()-commands.time<CATALOG_TTL_MS)
     return {models:models.models,availableProviders:models.availableProviders||[],commands:commands.commands};
-  // One Pi RPC instance discovers models and Pi's actual installed
-  // extension commands, skills and prompt templates; no synthetic agents.
+  if(nativeDiscoveryPending)return nativeDiscoveryPending;
+  // All web clients share one concurrent Pi inventory read, not duplicate
+  // Pi discovery processes or browser/Provider databases.
+  nativeDiscoveryPending=(async()=>{
   const a=new Agent({directory:CATALOG_DIRECTORY,workspaceId:"catalog",
     projectId:"catalog",userId,catalog:true});
   try {
@@ -320,6 +323,8 @@ async function nativeDiscovery(userId) {
     commandsSnapshots.set(userId,{commands:c.commands,time});
     return {models,availableProviders,commands:c.commands};
   }finally{a.close();}
+  })();
+  try{return await nativeDiscoveryPending;}finally{nativeDiscoveryPending=null;}
 }
 function nativeCommands(commands) {
   return commands.filter(c=>c&&typeof c.name==="string"
