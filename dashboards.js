@@ -1499,7 +1499,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(pendingSubmission&&pendingSubmission.owner!==currentUser?.id){pendingSubmission=null;retrySubmission.hidden=true;submissionStatus.textContent='';}
     const selected=providers.find(p=>p.id===q('providerSelect').value);
     agent.disabled=!workAccess||!agentsReady;
-    q('providerSelect').disabled=!workAccess||!providers.some(p=>(p.connected||p.id==='opencode')&&p.allowed!==false);
+    q('providerSelect').disabled=!workAccess||!providers.some(p=>(p.connected)&&p.allowed!==false);
     q('modelSelect').disabled=!workAccess||!modelsReady||!selected?.connected||selected.allowed===false||q('modelSelect').options.length<2;
     const busy=['submitted','waiting_approval'].includes(activeSession?.execution_status);
     renderAttachments();
@@ -1563,8 +1563,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     chosenAgent=agent.value;agent.onchange=()=>{chosenAgent=agent.value;saveNativeSelection();updateSend();};updateSend();
   }
   function renderProviders(snapshot,preferredProvider=''){
-    providers=(snapshot.providers||[]).filter(p=>(p.visible!==false||p.id===preferredProvider||p.id===chosenProvider)&&p.auth_status!=='reauthorization_required'&&!p.locally_disconnected&&p.allowed!==false&&(p.connected||p.id==='opencode'));q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
-    for(const p of providers.filter(p=>p.connected||p.id==='opencode')){const option=new Option(p.name+' · '+(p.allowed===false?tr('Restricted','مقيّد'):p.connected?tr('Connected','متصل'):tr('Default provider','المزوّد الافتراضي')),p.id);option.disabled=p.allowed===false;q('providerSelect').add(option);}
+    providers=(snapshot.providers||[]).filter(p=>(p.visible!==false||p.id===preferredProvider||p.id===chosenProvider)&&p.auth_status!=='reauthorization_required'&&!p.locally_disconnected&&p.allowed!==false&&(p.connected));q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
+    for(const p of providers.filter(p=>p.connected)){const option=new Option(p.name+' · '+(p.allowed===false?tr('Restricted','مقيّد'):p.connected?tr('Connected','متصل'):tr('Default provider','المزوّد الافتراضي')),p.id);option.disabled=p.allowed===false;q('providerSelect').add(option);}
     if(preferredProvider)chosenProvider=preferredProvider;
     if(!providers.some(p=>p.id===chosenProvider)){chosenProvider='';chosenModel='';}
     if(!chosenProvider){const configured=snapshot.config?.model;const configuredProvider=providers.find(p=>typeof configured==='string'&&configured.startsWith(p.id+'/'));const connected=providers.filter(p=>p.connected&&p.allowed!==false);chosenProvider=configuredProvider?.id||(window.nativeSession?.active()?connected[0]?.id||'':connected.length===1?connected[0].id:'');if(configuredProvider)chosenModel=configured.slice(configuredProvider.id.length+1);}
