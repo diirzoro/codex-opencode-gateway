@@ -1556,15 +1556,34 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     sessionListPending={workspaceId,owner,promise};try{return await promise;}finally{if(sessionListPending?.promise===promise)sessionListPending=null;}
   };
   function renderAgents(snapshot){
-    agent.title=snapshot.errors?.agents?.detail||tr('Agent','الوكيل');agent.hidden=false;agent.replaceChildren(new Option((snapshot.default_agent==='build'?'Code':snapshot.default_agent==='plan'?'Plan':tr('Agent','الوكيل')),''));
-    for(const a of snapshot.agents||[]){const option=new Option((a.name==='build'?'Code':a.name==='plan'?'Plan':a.name)+(a.mode==='subagent'?tr(' · Subagent',' · وكيل فرعي'):''),a.name);option.disabled=Boolean(a.hidden)||!['primary','all'].includes(a.mode);agent.add(option);}
+    agent.title=tr('Pi native coding agent and installed skills / extension commands','وكيل Pi الأساسي ومهارات Pi وأوامر الإضافات');
+    agent.hidden=false;
+    agent.replaceChildren(new Option(tr('Pi coding agent · default','وكيل Pi للبرمجة · الافتراضي'),''));
+    const kinds={skill:tr('Skill','مهارة'),extension:tr('Extension','إضافة'),prompt:tr('Prompt template','قالب أمر')};
+    for(const row of snapshot.agents||[]){
+      const label=row.name+' · '+(kinds[row.source]||tr('Pi command','أمر Pi'));
+      const option=new Option(label,row.name);
+      option.disabled=Boolean(row.hidden);
+      option.title=row.description||label;
+      agent.add(option);
+    }
     agentsReady=snapshot.agents!==null;
-    agent.value=(snapshot.agents||[]).some(a=>a.name===chosenAgent&&!a.hidden&&['primary','all'].includes(a.mode))?chosenAgent:'';
-    chosenAgent=agent.value;agent.onchange=()=>{chosenAgent=agent.value;saveNativeSelection();updateSend();};updateSend();
+    agent.value=(snapshot.agents||[]).some(row=>row.name===chosenAgent&&!row.hidden)?chosenAgent:'';
+    chosenAgent=agent.value;
+    agent.onchange=()=>{chosenAgent=agent.value;saveNativeSelection();updateSend();};
+    updateSend();
   }
   function renderProviders(snapshot,preferredProvider=''){
-    providers=(snapshot.providers||[]).filter(p=>(p.visible!==false||p.id===preferredProvider||p.id===chosenProvider)&&p.auth_status!=='reauthorization_required'&&!p.locally_disconnected&&p.allowed!==false&&(p.connected));q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
-    for(const p of providers.filter(p=>p.connected)){const option=new Option(p.name+' · '+(p.allowed===false?tr('Restricted','مقيّد'):p.connected?tr('Connected','متصل'):tr('Default provider','المزوّد الافتراضي')),p.id);option.disabled=p.allowed===false;q('providerSelect').add(option);}
+    // Show Pi's full model registry, not just configured providers. A provider
+    // without Pi credentials is visible but cannot be selected for execution.
+    providers=(snapshot.providers||[]);
+    q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
+    for(const p of providers){
+      const label=p.name+' · '+(p.connected?tr('Available in Pi','متاح في Pi'):tr('Not configured in Pi','غير مهيأ في Pi'));
+      const option=new Option(label,p.id);
+      option.disabled=!p.connected;
+      q('providerSelect').add(option);
+    }
     if(preferredProvider)chosenProvider=preferredProvider;
     if(!providers.some(p=>p.id===chosenProvider)){chosenProvider='';chosenModel='';}
     if(!chosenProvider){const configured=snapshot.config?.model;const configuredProvider=providers.find(p=>typeof configured==='string'&&configured.startsWith(p.id+'/'));const connected=providers.filter(p=>p.connected&&p.allowed!==false);chosenProvider=configuredProvider?.id||(window.nativeSession?.active()?connected[0]?.id||'':connected.length===1?connected[0].id:'');if(configuredProvider)chosenModel=configured.slice(configuredProvider.id.length+1);}
