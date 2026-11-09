@@ -73,7 +73,7 @@ jobs:
           assert pathlib.Path('index.html').is_file()
           print('FULL_SOURCE_PREFLIGHT_SUCCESS',len(versions),'migrations')
           PY
-      - name: Validate TEST Native browser code before every deployment
+      - name: Validate TEST Pi browser and central engine source
         run: |
           set -euo pipefail
           node --check app.js
@@ -81,7 +81,7 @@ jobs:
           node --check runtime-client.js
           node --check dashboards.js
           node --check management.js
-          node scripts/test_native_client_cache.cjs
+          node --check integration/pi-central.mjs
           python3 scripts/validate_migration_chain.py
           # No second AI provider/key registry in the Gateway source tree.
           for retired in account_provider_sync native_provider_accounts user_provider_credentials providers runtime_snapshot archive_storage; do
@@ -121,7 +121,7 @@ jobs:
           set -euo pipefail
           port="${PORT:-22}"
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            'test "$HOME" = /home/tahir && test -d /home/tahir/opencode-gateway-test/.git && test -f /home/tahir/opencode-gateway-test/.env && systemctl is-active --quiet opencode-gateway-test.service && systemctl is-active --quiet opencode-native-test.service'
+            'test "$HOME" = /home/tahir && test -d /home/tahir/opencode-gateway-test/.git && test -f /home/tahir/opencode-gateway-test/.env && systemctl is-active --quiet opencode-gateway-test.service && systemctl is-active --quiet pi-central.service'
       - name: Inspect TEST Native local service and Nginx topology
         if: steps.confirm.outputs.mode == 'native-probe'
         env:
@@ -272,44 +272,9 @@ jobs:
           # Password travels only over encrypted SSH stdin; never in log or CLI arguments.
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates </dev/null && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && TEST_SUDO_PASS_STDIN=1 python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
-      - name: Update TEST Native direct client from this exact commit
-        if: steps.confirm.outputs.mode == 'deploy-test'
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ inputs.vps_username || 'tahir' }}
-          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
-          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
-        run: |
-          set -euo pipefail
-          node --check assets/native-direct/app.js
-          port="${PORT:-22}"
-          # Static OpenCode Native UI is outside the Gateway Git worktree.
-          # Deploy it explicitly, never silently leave the old verifier live.
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            'test -d /var/www/opencode-native-direct-test && install -d -m 700 /home/tahir/.native-direct-stage'
-          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            assets/native-direct/index.html assets/native-direct/app.js "$USER@$HOST:/home/tahir/.native-direct-stage/"
-          : "${VPS_SUDO_PASSWORD:?Missing protected VPS sudo credential}"
-          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
-            -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            'read -r pass; printf "%s\n" "$pass" | sudo -S -p "" sh -c "install -m 0644 /home/tahir/.native-direct-stage/app.js /var/www/opencode-native-direct-test/app.js && install -m 0644 /home/tahir/.native-direct-stage/index.html /var/www/opencode-native-direct-test/index.html"'
-          echo 'TEST Native direct web client updated from the same pinned commit.'
-
-          # Update only the existing TEST Nginx snippet, no new settings.
-          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            ops/native-direct/nginx.conf ops/native-direct/update-existing-test-nginx.sh \
-            "$USER@$HOST:/home/tahir/.native-direct-stage/"
-          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
-            -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            'read -r password; printf "%s\n" "$password" | sudo -S -p "" bash /home/tahir/.native-direct-stage/update-existing-test-nginx.sh'
-          # Unauthenticated requests should never trigger a browser Basic Auth
-          # challenge; Gateway login is now the existing auth boundary.
-          challenge="$(curl -sS -D - -o /dev/null \
-            'https://test.opencode-gateway.codes/native-direct/api/provider?directory=%2Fvar%2Flib%2Fopencode-native-test%2Fworkspace')"
-          if printf '%s\n' "$challenge" | grep -Eqi '^www-authenticate:[[:space:]]*basic'; then
-            echo 'TEST Native still requests separate Basic Auth' >&2
-            exit 1
-          fi
+      # The standalone OpenCode browser console was removed from the repo.
+      # Do not reinstall its deleted files or overwrite Nginx with an unverified
+      # Pi route here. Pi rollout requires a separate reviewed service transition.
       - name: Verify TEST health after TEST operation
         if: steps.confirm.outputs.mode != 'audit-test' && steps.confirm.outputs.mode != 'native-probe'
         run: |
