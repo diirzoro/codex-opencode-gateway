@@ -89,6 +89,13 @@ async function piModels() {
     allowModelNetwork:false
   });
 }
+// A successful Pi login means Pi saved/configured the credential. It does
+// NOT mean the upstream API key passed a real inference request. No duplicate
+// credential store, test prompt, custom validator, or provider account ledger.
+function refreshNativeCatalog() {
+  modelsSnapshots.clear();
+  commandsSnapshots.clear();
+}
 function projectIdFor(s) {
   return "pi_"+createHash("sha256").update(HOST+"\0"+s.userId+"\0"+s.workspaceId+"\0"+s.projectId).digest("hex").slice(0,32);
 }
@@ -417,6 +424,51 @@ const server=http.createServer(async(req,res)=>{
       if(pathname==="/agent"&&req.method==="GET") {
         const native=await nativeDiscovery(s.userId);
         return json(res,200,nativeCommands(native.commands));
+      }
+      if(pathname==="/provider/auth"&&req.method==="GET"){
+        const discovered=await nativeDiscovery(s.userId);
+        const methods={};
+        for(const p of discovered.providers)
+          methods[p.id]=[
+            ...(p.auth_methods.includes("apiKey")?[{type:"api",label:"Pi API key"}]:[]),
+            ...(p.auth_methods.includes("oauth")?[{type:"oauth",label:"Pi account sign-in"}]:[])
+          ];
+        return json(res,200,methods);
+      }
+      const auth=pathname.match(/^\/auth\/([a-zA-Z0-9._-]{1,120})$/);
+      if(auth&&["PUT","DELETE"].includes(req.method)){
+        const providerId=auth[1];
+        // This is the same installed ModelRuntime invoked by Pi's terminal
+        // "auth login" / "auth logout"; Pi alone persists credentials.
+        const runtime=await piModels();
+        const provider=runtime.getProvider(providerId);
+        if(!provider)return error(res,404,"Provider is not registered in installed Pi");
+        if(req.method==="PUT"){
+          const payload=await body(req);
+          if(payload?.type!=="api"||typeof payload.key!=="string"||
+             !payload.key.trim()||payload.key.length>8192)
+            return error(res,422,"API key required");
+          if(!provider.auth?.apiKey?.login)
+            return error(res,422,"This Pi provider has no native API-key login");
+          // Do not claim remote key validation or reject a provider because
+          // an unrelated provider exposes a similarly named model.
+          if(runtime.getProviderAuthStatus(providerId).configured)
+            return error(res,409,"Pi reports this provider is already configured");
+          const key=payload.key.trim();
+          await runtime.login(providerId,"api_key",{
+            signal:AbortSignal.timeout(30000),
+            prompt:async question=>{
+              if(question.type==="secret"||question.type==="text")return key;
+              throw Object.assign(new Error("Pi login requires an unsupported interactive step"),{status:422});
+            },
+            notify:()=>{}
+          });
+          refreshNativeCatalog();
+          return json(res,200,{provider:providerId,configured:true,verified:false,source:"pi"});
+        }
+        await runtime.logout(providerId);
+        refreshNativeCatalog();
+        return json(res,200,{provider:providerId,configured:false,source:"pi"});
       }
       return error(res,404,"Pi account endpoint not found");
     }
