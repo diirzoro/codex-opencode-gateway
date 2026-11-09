@@ -89,44 +89,9 @@ async function piModels() {
     allowModelNetwork:false
   });
 }
-// Verify a candidate key by making a minimal, real request through Pi's
-// native ModelRuntime before calling login(). This uses Pi's temporary
-// per-request apiKey override and NEVER saves a failed candidate.
-async function verifyPiApiKey(runtime,providerId,key){
-  const chatModels=runtime.getModels(providerId).filter(model=>
-    model&&typeof model.id==="string"&&model.provider===providerId);
-  if(!chatModels.length)
-    throw Object.assign(new Error("Pi cannot verify this provider: no usable chat model is registered. The key was not saved."),{status:422});
-  const cheapest=[...chatModels].sort((a,b)=>{
-    const cost=m=>Number(m.cost?.input||0)+Number(m.cost?.output||0);
-    return cost(a)-cost(b);
-  })[0];
-  const signal=AbortSignal.timeout(20000);
-  let result;
-  try{
-    result=await runtime.complete(
-      cheapest,
-      {messages:[{role:"user",content:"Reply OK.",timestamp:Date.now()}]},
-      {apiKey:key,maxTokens:2,signal}
-    );
-  }catch(e){
-    if(signal.aborted)
-      throw Object.assign(new Error("Pi provider verification timed out. The key was not saved."),{status:503});
-    throw Object.assign(new Error("Pi could not verify this provider key. Nothing was saved."),{status:422});
-  }
-  if(!result||!["stop","length","toolUse"].includes(result.stopReason))
-    throw Object.assign(new Error("Pi did not confirm the API key with the provider. Nothing was saved."),{status:422});
-  return true;
-}
 function invalidatePiInventory() {
   modelsSnapshots.clear();
   commandsSnapshots.clear();
-}
-function releaseProviderWorkers() {
-  const workers=[...pool.values()].filter(a=>!a.closed);
-  if(workers.some(a=>a.active))
-    throw Object.assign(new Error("Stop active Pi responses before changing shared provider configuration"),{status:409});
-  for(const a of workers)a.close();
 }
 function projectIdFor(s) {
   return "pi_"+createHash("sha256").update(HOST+"\0"+s.userId+"\0"+s.workspaceId+"\0"+s.projectId).digest("hex").slice(0,32);
@@ -380,8 +345,7 @@ function providerCatalog(models,userId,availableProviders=[],providerDefinitions
   // model inside OpenRouter never counts as direct "deepseek" authentication.
   const available=new Set(availableProviders);
   const connected=all.filter(row=>available.has(row.id)).map(row=>row.id);
-  // Key presence is NOT evidence the remote provider accepts it.
-  return {all,connected,default:{},verification:"pi_configured_unverified"};
+  return {all,connected,default:{}};
 }
 async function nativeDiscovery(userId) {
   const models=modelsSnapshots.get(userId), commands=commandsSnapshots.get(userId);
@@ -487,10 +451,6 @@ const server=http.createServer(async(req,res)=>{
           // Only this exact Pi provider can be a duplicate connection.
           if(status.configured)
             return error(res,409,"This Pi provider already has credentials; remove them before reconnecting");
-          // SDK login saves credentials but is NOT a remote validation. Check
-          // first using Pi's actual model transport; never persist a fake key.
-          await verifyPiApiKey(runtime,provider,payload.key.trim());
-          releaseProviderWorkers();
           await runtime.login(provider,"api_key",{
             signal:AbortSignal.timeout(20000),
             prompt:async prompt=>{
@@ -502,7 +462,6 @@ const server=http.createServer(async(req,res)=>{
           });
         }else{
           if(!status.configured)return error(res,404,"This Pi provider is not connected");
-          releaseProviderWorkers();
           await runtime.logout(provider);
         }
         invalidatePiInventory();
