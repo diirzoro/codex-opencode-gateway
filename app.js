@@ -256,7 +256,7 @@ window.nativeDirectTest=(()=>{
     const q=query.trim().toLowerCase();
     return data.all.filter(p=>!q||p.id.toLowerCase().includes(q)||(p.name||'').toLowerCase().includes(q))
       .sort((a,b)=>Number(data.connected.includes(b.id))-Number(data.connected.includes(a.id))
-        ||Number(['openrouter','deepseek','openai','anthropic','google'].includes(b.id))-Number(['deepseek','openai','anthropic','google','opencode'].includes(a.id))
+        
         ||(a.name||a.id).localeCompare(b.name||b.id));
   }
   function find(data,pid){
