@@ -30,18 +30,8 @@ function invalidateProviderMutation(path,method='GET'){
   try{localStorage.setItem('og-github-revision:'+currentUser?.id,String(Date.now()));}catch{}
   window.dispatchEvent(new CustomEvent('gateway-github-changed',{detail:{owner:currentUser?.id}}));
  }
- if(/^\/api\/opencode\/connections\/[^/?]+(?:\/(?:credentials|oauth\/callback))?(?:\?|$)/.test(path)&&!['GET','HEAD'].includes(method.toUpperCase())){
-  window.workspaceRuntime?.clear();
-  try{localStorage.setItem('og-native-provider-revision:'+currentUser?.id,String(Date.now()));}catch{}
-  window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser?.id}}));
- }
- const mutation=path.match(/^\/api\/workspaces\/([^/]+)\/providers\/([^/?]+)(?:\/(?:credentials|oauth\/callback))?(?:\?|$)/);
- if(mutation&&!['GET','HEAD'].includes(method.toUpperCase())){
-  const workspaceId=decodeURIComponent(mutation[1]);window.workspaceRuntime?.invalidate(workspaceId);
-  if(window.nativeSession?.active()){window.workspaceRuntime?.clear();try{localStorage.setItem('og-native-provider-revision:'+currentUser?.id,String(Date.now()));}catch{}window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser?.id}}));}
-  if(method.toUpperCase()==='DELETE')window.dispatchEvent(new CustomEvent('workspace-provider-disconnected',{detail:{workspaceId,providerId:decodeURIComponent(mutation[2])}}));
- }
 }
+
 window.addEventListener('storage',event=>{
  if(!currentUser)return;
  if(event.key==='og-native-provider-revision:'+currentUser.id){
@@ -290,35 +280,7 @@ window.nativeDirectTest=(()=>{
     if(!active())throw Error('Pi connection requires sign-in');
     const method=(options.method||'GET').toUpperCase();
     const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
-    // Disconnect uses only the Pi Native /auth and /provider endpoints.
-    // Do not block it on policy, models, agents, or the 7 MB catalog presentation.
-    const directDelete=/^\/api\/(?:opencode\/connections|workspaces\/[^/]+\/providers)\/([^/]+)$/.exec(name);
-    if(method==='DELETE'&&directDelete){
-      const owner=ownerScope();
-      const providerId=decodeURIComponent(directDelete[1]);
-      if(!/^[a-z0-9][a-z0-9._-]{0,119}$/i.test(providerId))
-        throw Error('Invalid Pi provider ID for credential deletion');
-      // Do not require /provider.connected before or after deletion: the
-      // built-in Pi provider can be usable without credentials, and the
-      // Native 1.19.x provider-state cache can remain stale after /auth DELETE.
-      // Native's DELETE response, not a catalog entry, acknowledges removal.
-      const result=await direct('auth/'+encodeURIComponent(providerId),{method:'DELETE'});
-      if(ownerScope()!==owner)throw Error('Account changed during Native credential deletion; refresh the current account');
-      if(result!==true)throw Error('Pi did not acknowledge removal of this credential');
-      forget();
-      invalidateProviderMutation(path,'DELETE');
-      // /provider combines saved auth, environment/config and cached runtime
-      // state. It cannot prove auth.json deletion, but it can expose a provider
-      // that remains available. Never label DELETE acknowledgement as proof.
-      let providerAvailable=null;
-      try{
-        const after=await catalog({force:true});
-        providerAvailable=after.connected.includes(providerId);
-      }catch{}
-      if(ownerScope()!==owner)throw Error('Account changed during Native credential deletion; refresh the current account');
-      return {native_acknowledged:true,credential_deletion_verified:false,
-        provider_available_after_delete:providerAvailable};
-    }
+    if(method!=='GET')throw Error('Pi provider inventory is read-only. Credentials are managed by installed Pi.');
     // Native /provider is the shared catalog source for Dashboard and Workspace.
     const data=await catalog();
     if(name.endsWith('/providers/search')){
@@ -345,14 +307,6 @@ window.nativeDirectTest=(()=>{
       // Workspace availability follows Native, not a Gateway connection ledger.
       const item=modelDetails(p,data);
       return isWorkspace&&!item.connected?{...item,models:[]}:item;
-    }
-    if(tail[0]==='oauth'&&method==='POST'){
-      const request=JSON.parse(options.body||'{}');
-      const operation=tail[1]==='authorize'?'authorize':tail[1]==='callback'?'callback':null;
-      if(!operation)throw Error('Unsupported Native OAuth operation');
-      const result=await direct('provider/'+encodeURIComponent(p.id)+'/oauth/'+operation,{method:'POST',value:request});
-      if(operation==='callback'){forget();invalidateProviderMutation(path,'POST');}
-      return result;
     }
     throw Error('Unsupported Pi provider action: '+name);
   }
