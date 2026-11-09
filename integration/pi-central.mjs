@@ -264,8 +264,13 @@ function providerCatalog(models,userId){
   }
   const all=[...grouped.values()];
   const native=credentials();
-  const connected=all.filter(row=>native[row.id]?.type==="api_key" &&
-    typeof native[row.id]?.key==="string" && native[row.id].key.length>0).map(row=>row.id);
+  const connected=all.filter(row=>{
+    const entry=native[row.id];
+    return !!entry&&typeof entry==="object"&&(
+      entry.type==="api_key"&&typeof entry.key==="string"&&entry.key.length>0
+      ||entry.type==="oauth"&&(typeof entry.access==="string"||typeof entry.refresh==="string")
+    );
+  }).map(row=>row.id);
   // Key presence is NOT evidence the remote provider accepts it.
   return {all,connected,default:{},verification:"pi_configured_unverified"};
 }
@@ -290,8 +295,10 @@ const server=http.createServer(async(req,res)=>{
     if(s.catalog){
       if(pathname==="/provider"&&req.method==="GET")
         return json(res,200,providerCatalog(await configuredModels(s.userId),s.userId));
+      // Pi RPC has no standalone "agent registry" query. Do not fabricate
+      // OpenCode-style build agents; Pi's built-in agent runs by default.
       if(pathname==="/agent"&&req.method==="GET")
-        return json(res,200,[{name:"build",mode:"primary",hidden:false}]);
+        return json(res,200,[]);
       if(pathname==="/provider/auth"&&req.method==="GET") {
         const result={};
         for(const p of providerCatalog(await configuredModels(s.userId),s.userId).all)
