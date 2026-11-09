@@ -100,7 +100,7 @@ set +a
 sudo_operator /usr/bin/systemctl restart opencode-gateway.service
 unset sudo_password
 /usr/bin/systemctl is-active --quiet opencode-gateway.service
-curl -fsS --retry 15 --retry-delay 2 --retry-connrefused http://127.0.0.1:8000/api/health
+curl -fsS --retry 15 --retry-delay 2 --retry-connrefused --header 'Host: opencode-gateway.codes' http://127.0.0.1:8000/api/health
 echo "LIVE_CODE_AND_SCHEMA_PROMOTED no-backup-created; old files retained"
 # Real Native prompts, file permissions, SSE and cross-user isolation still
 # require authenticated browser acceptance; health alone is not enough.
