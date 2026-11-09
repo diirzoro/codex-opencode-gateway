@@ -218,11 +218,11 @@ window.nativeDirectTest=(()=>{
       const value=await catalog({force});
       if(ownerScope()!==user)throw Error('Account changed during Native provider loading');
       const all=value.all.filter(p=>p&&typeof p.id==='string'&&!deletedAuthSlots.has(p.id));
-      const available=new Set([
-        'opencode',
-        ...(Array.isArray(value.connected)?value.connected:[]),
-        ...nativeConnections(value)
-      ]);
+      // A process-global Native /provider.connected entry cannot establish
+      // ownership or validity for this Gateway account. Never promote it into
+      // an account connection; only the public provider or an actual verified
+      // Native model response may do that.
+      const available=new Set(['opencode',...nativeConnections(value)]);
       const result={
         all,
         connected:all.filter(p=>available.has(p.id)).map(p=>p.id),
@@ -269,13 +269,12 @@ window.nativeDirectTest=(()=>{
   // Presence in /provider.connected is NOT proof that a key works or belongs
   // to this account; only an actual Native model response can verify it.
   const nativeReported=(p,data)=>!deletedAuthSlots.has(p.id)&&(
-    p.id==='opencode'||publicFree(p)||(data.connected||[]).includes(p.id)||
-    clientVerifiedProviders.has(p.id));
+    p.id==='opencode'||publicFree(p)||clientVerifiedProviders.has(p.id));
   const idx=(p,data)=>({
     id:p.id,name:p.name||p.id,visible:providerVisible(p.id),allowed:providerAllowed(p.id),
     connected:nativeReported(p,data),public_free:p.id==='opencode'||publicFree(p),
-    auth_status:publicFree(p)?'free_native':clientVerifiedProviders.has(p.id)?'verified_native':
-      (data.connected||[]).includes(p.id)?'native_reported_unverified':undefined,
+    auth_status:publicFree(p)?'free_native':
+      clientVerifiedProviders.has(p.id)?'verified_native':undefined,
     verified:clientVerifiedProviders.has(p.id),model_count:p.model_count??Object.keys(p.models||{}).length,
     default_model:data.default?.[p.id]
   });
