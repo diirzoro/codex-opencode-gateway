@@ -698,28 +698,21 @@
     if(!Array.isArray(providers.all)||!Array.isArray(providers.connected)||!Array.isArray(agents))
       throw Error('Invalid native discovery schema');
     const connected=new Set(providers.connected);
-    // Composer choices come exclusively from account Connections.
-    // The 50-provider limit belongs to the Connections picker, never here.
-    // Do not expose unconnected catalog models as workspace choices.
-    const first=directMode
-      ?providers.all.filter(p=>connected.has(p.id)&&
-          window.nativeDirectTest.providerAllowed(p.id)&&window.nativeDirectTest.providerVisible(p.id))
-        .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)))
-      :[...providers.all,...(providers.connected_entries||[])]
-        .filter(p=>connected.has(p.id)&&p.allowed!==false&&p.visible!==false);
+    // Show every provider reported by Pi. Models remain selectable only when
+    // Pi reports that a provider is configured; no Python policy filtering.
+    const first=[...providers.all,...(providers.connected_entries||[])].filter(
+      (p,i,rows)=>p?.id&&rows.findIndex(q=>q?.id===p.id)===i
+    ).sort((a,b)=>Number(connected.has(b.id))-Number(connected.has(a.id))
+      ||String(a.name||a.id).localeCompare(String(b.name||b.id)));
     return {native:true,loadedAt:Date.now(),workspace_id:String(id),health:{healthy:true},
       version:configuration.version,status:'ready',errors:{},
       agents:agents.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode)),
-      default_agent:null,generation:'native-test',revision:'native-account',
-      policy_revision:directMode?String(inventory.policy.updated_at||'admin'):'native',
+      default_agent:null,generation:'pi-native',revision:'pi-catalog',
+      policy_revision:'pi-native',
       providers:first.map(p=>({
-        ...p,...providers.gateway_auth_status?.[p.id],connected:connected.has(p.id),
-        allowed:directMode?window.nativeDirectTest.providerAllowed(p.id):true,
-        visible:directMode?window.nativeDirectTest.providerVisible(p.id):true,
+        ...p,connected:connected.has(p.id),allowed:true,visible:true,
         default_model:providers.default?.[p.id],
-        models:Object.entries(p.models||{}).filter(([mid])=>!directMode||
-            window.nativeDirectTest.modelAllowed(p.id,mid)&&window.nativeDirectTest.modelVisible(p.id,mid))
-          .map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
+        models:Object.entries(p.models||{}).map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
       }))};
   }
   window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
