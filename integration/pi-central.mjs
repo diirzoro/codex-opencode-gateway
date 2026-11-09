@@ -20,7 +20,8 @@ const ROOT = process.env.PI_SESSIONS_ROOT || "/home/tahir/pi-test/sessions";
 const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || "/home/tahir/.pi/agent";
 const GATEWAY = process.env.PI_TEST_GATEWAY || "http://127.0.0.1:8001";
 const HOST = "test.opencode-gateway.codes";
-const MAX_PROCS = 2;
+// A bounded pool reuses idle Pi workers rather than rejecting the next workspace.
+const MAX_PROCS = Math.max(2,Math.min(32,Number(process.env.PI_MAX_WORKERS)||6));
 const IDLE_MS = 10 * 60_000;
 const pool = new Map();
 const CATALOG_DIRECTORY="/home/tahir/pi-test";
@@ -48,8 +49,13 @@ async function gateway(req, endpoint) {
     response=await fetch(GATEWAY+endpoint, { signal:ctrl, redirect:"manual",
       headers:{cookie:c,host:HOST,"x-forwarded-proto":"https",accept:"application/json"} });
   } catch { throw Object.assign(new Error("Gateway unavailable"),{status:503}); }
-  if (!response.ok) throw Object.assign(new Error(response.status===401?"Unauthorized":"Access denied"),
-    {status:response.status===401?401:response.status===403?403:503});
+  if (!response.ok) {
+    // Preserve the genuine Gateway result; a missing workspace is a 404,
+    // not a misleading 503 from the Pi provider or session engine.
+    const status=response.status;
+    throw Object.assign(new Error("Project lookup returned HTTP "+status),
+      {status: [400,401,403,404,410].includes(status)?status:502});
+  }
   return response.json();
 }
 async function scope(req, query) {
@@ -62,13 +68,14 @@ async function scope(req, query) {
     throw Object.assign(new Error("Owned project directory required"),{status:400});
   // One narrow platform lookup establishes the workspace-file ownership;
   // it never manages providers, models, agent state, or conversations.
-  const match=directory.match(/\/([0-9a-f-]{36})\/repo\/?$/i);
+  const match=directory.match(/\/([0-9a-f-]{36})\/([0-9a-f-]{36})\/repo\/?$/i);
   if(!match)throw Object.assign(new Error("Invalid workspace directory"),{status:403});
-  const who=await gateway(req,"/api/auth/me");
-  const detail=await gateway(req,"/api/workspaces/"+encodeURIComponent(match[1]));
-  if(detail.native_directory!==directory || !detail.project_id)
+  // The existing project endpoint already checks the logged-in owner's
+  // cookie. No separate Python auth/me or AI service check is required.
+  const detail=await gateway(req,"/api/workspaces/"+encodeURIComponent(match[2]));
+  if(detail.native_directory!==directory || detail.id!==match[2] || !detail.project_id)
     throw Object.assign(new Error("Workspace not owned"),{status:403});
-  return {directory,workspaceId:match[1],projectId:String(detail.project_id),userId:String(who.id)};
+  return {directory,workspaceId:match[2],projectId:String(detail.project_id),userId:match[1]};
 }
 // The installed Pi auth.json is the sole shared provider-credential store.
 // The web bridge does not create per-user copies or Gateway provider records.
@@ -190,7 +197,15 @@ async function agent(s) {
   const id=projectIdFor(s);
   let a=pool.get(id);
   if(a && !a.closed)return a;
-  if(pool.size>=MAX_PROCS)throw Object.assign(new Error("All Pi workers busy"),{status:503});
+  // An idle Pi RPC worker can be closed without touching its native
+  // conversation files. Reopen it when that project is selected again.
+  if(pool.size>=MAX_PROCS){
+    const idle=[...pool.values()].filter(p=>!p.closed&&!p.active&&!p.busy)
+      .sort((a,b)=>a.last-b.last)[0];
+    if(idle)idle.close();
+  }
+  if(pool.size>=MAX_PROCS)
+    throw Object.assign(new Error("Every Pi worker is currently executing; retry shortly"),{status:503});
   a=new Agent(s);pool.set(id,a);
   try { await a.command("get_state"); return a; }
   catch(e) { a.close(); throw e; }
@@ -300,16 +315,30 @@ async function nativeDiscovery(userId) {
     // currently available models on some Pi builds. Both sources are Pi-native.
     let models=m.models,availableProviders=m.models.map(model=>model.provider);
     try {
-      const {AuthStorage,ModelRegistry}=await import("@earendil-works/pi-coding-agent");
-      const auth=AuthStorage.create(path.join(PI_AGENT_DIR,"auth.json"));
-      const registry=ModelRegistry.create(auth,path.join(PI_AGENT_DIR,"models.json"));
-      const all=registry.getAll();
-      if(Array.isArray(all)&&all.length) {
+      const sdk=await import("@earendil-works/pi-coding-agent");
+      let all=[],authenticated=[];
+      if(sdk.ModelRuntime?.create){
+        // The installed Earendil Pi family exposes the complete native
+        // registry through ModelRuntime; never create a Gateway catalog.
+        const runtime=await sdk.ModelRuntime.create({
+          authPath:path.join(PI_AGENT_DIR,"auth.json"),
+          modelsPath:path.join(PI_AGENT_DIR,"models.json"),
+          allowModelNetwork:false
+        });
+        all=runtime.getModels();
+        authenticated=await runtime.getAvailable();
+      }else if(sdk.ModelRegistry?.create&&sdk.AuthStorage?.create){
+        // Earlier installed Pi packages use this native SDK facade.
+        const auth=sdk.AuthStorage.create(path.join(PI_AGENT_DIR,"auth.json"));
+        const registry=sdk.ModelRegistry.create(auth,path.join(PI_AGENT_DIR,"models.json"));
+        all=registry.getAll();
+        authenticated=await registry.getAvailable();
+      }
+      if(Array.isArray(all)&&all.length){
         const byId=new Map(all.map(model=>[model.provider+"\0"+model.id,model]));
         for(const model of m.models)byId.set(model.provider+"\0"+model.id,model);
         models=[...byId.values()];
       }
-      const authenticated=await registry.getAvailable();
       if(Array.isArray(authenticated))
         availableProviders=[...new Set([...availableProviders,...authenticated.map(model=>model.provider)])];
     } catch (e) {
