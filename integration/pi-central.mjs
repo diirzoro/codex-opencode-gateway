@@ -29,6 +29,7 @@ const CATALOG_TTL_MS=60_000;
 const modelsSnapshots=new Map();
 const commandsSnapshots=new Map();
 let nativeDiscoveryPending=null;
+let piInventoryRevision=0;
 
 const json = (res, status, value) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8",
@@ -93,8 +94,11 @@ async function piModels() {
 // NOT mean the upstream API key passed a real inference request. No duplicate
 // credential store, test prompt, custom validator, or provider account ledger.
 function refreshNativeCatalog() {
+  piInventoryRevision++;
   modelsSnapshots.clear();
-  commandsSnapshots.clear();
+  // Commands are installed Pi skills/extensions, not provider credentials;
+  // login/logout must not invent or alter the agent/skill inventory.
+  nativeDiscoveryPending=null;
 }
 function projectIdFor(s) {
   return "pi_"+createHash("sha256").update(HOST+"\0"+s.userId+"\0"+s.workspaceId+"\0"+s.projectId).digest("hex").slice(0,32);
@@ -361,7 +365,8 @@ async function nativeDiscovery(userId) {
   // Pi's installed SDK is the single source for the full provider/model
   // catalog and credential state. RPC get_available_models is intentionally
   // not used for this: it can contain only models usable by current auth.
-  nativeDiscoveryPending=(async()=>{
+  const revision=piInventoryRevision;
+  const pending=(async()=>{
     const runtime=await piModels();
     const models=runtime.getModels();
     const providers=runtime.getProviders().map(provider=>({
@@ -395,11 +400,14 @@ async function nativeDiscovery(userId) {
     } finally {a.close();}
 
     const time=Date.now();
+    if(revision!==piInventoryRevision)
+      throw Object.assign(new Error("Pi provider state changed during discovery; retry"),{status:409});
     modelsSnapshots.set(userId,{models,availableProviders,providers,time});
     commandsSnapshots.set(userId,{commands,time});
     return {models,availableProviders,providers,commands};
   })();
-  try{return await nativeDiscoveryPending;}finally{nativeDiscoveryPending=null;}
+  nativeDiscoveryPending=pending;
+  try{return await pending;}finally{if(nativeDiscoveryPending===pending)nativeDiscoveryPending=null;}
 }
 function nativeCommands(commands) {
   return commands.filter(c=>c&&typeof c.name==="string"
@@ -464,11 +472,25 @@ const server=http.createServer(async(req,res)=>{
             notify:()=>{}
           });
           refreshNativeCatalog();
+          // Read Pi's own persisted credential state after its login resolves.
+          // No custom key validator, request to the provider, or local record.
+          const confirmed=await piModels();
+          const saved=await confirmed.listCredentials();
+          if(!saved.some(item=>item.providerId===providerId)||
+             !confirmed.getProviderAuthStatus(providerId).configured)
+            return error(res,502,"Pi login returned but Pi did not confirm saved credentials");
           return json(res,200,{provider:providerId,configured:true,verified:false,source:"pi"});
         }
         await runtime.logout(providerId);
         refreshNativeCatalog();
-        return json(res,200,{provider:providerId,configured:false,source:"pi"});
+        const confirmed=await piModels();
+        const saved=await confirmed.listCredentials();
+        if(saved.some(item=>item.providerId===providerId))
+          return error(res,502,"Pi logout returned but Pi still reports stored credentials");
+        // Pi may continue to use an environment/model-config key after logout.
+        return json(res,200,{provider:providerId,
+          configured:confirmed.getProviderAuthStatus(providerId).configured,
+          credentialRemoved:true,source:"pi"});
       }
       return error(res,404,"Pi account endpoint not found");
     }
