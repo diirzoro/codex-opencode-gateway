@@ -58,7 +58,7 @@ window.nativeDirectTest=(()=>{
   const active=()=>nativeMode()&&Boolean(currentUser);
   const base='/native-direct/api/';
   const defaultDirectory=()=>'/home/tahir/pi-test'; // Pi Central account catalog scope; workspace RPC calls pass their owned directory explicitly.
-  let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
+  let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
   let presentationRevision=0;
   // Invalidate presentation snapshots only. Native owns authentication state;
   // Gateway must not invent a saved, verified or deleted provider registry.
@@ -112,15 +112,15 @@ window.nativeDirectTest=(()=>{
       presentationRevision++;
       // Retire the old browser-only deletion hint, never consult it as truth.
       try{localStorage.removeItem('og-native-revoked-provider-ids:'+user);}catch{}
-      catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
-      catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
+      catalogSnapshot=agentsSnapshot=workspaceSnapshot=configuredSnapshot=null;
+      catalogPending=agentsPending=workspacePending=configuredPending=null;
     }
     return user;
   }
   function forget({fresh=false}={}){
     presentationRevision++;
-    catalogSnapshot=agentsSnapshot=policySnapshot=workspaceSnapshot=configuredSnapshot=null;
-    catalogPending=agentsPending=policyPending=workspacePending=configuredPending=null;
+    catalogSnapshot=agentsSnapshot=workspaceSnapshot=configuredSnapshot=null;
+    catalogPending=agentsPending=workspacePending=configuredPending=null;
     window.nativeSession?.invalidate();window.workspaceRuntime?.clear();
   }
   async function catalog({force=false}={}){
@@ -159,30 +159,19 @@ window.nativeDirectTest=(()=>{
       // Public presentation metadata only: never cache agent prompts,
       // secrets, tools or executable configuration in Gateway/browser state.
       const safe=rows.filter(p=>p&&typeof p.name==='string').map(p=>
-        ({name:p.name,mode:p.mode,hidden:p.hidden===true}));
+        ({name:p.name,mode:p.mode,hidden:p.hidden===true,
+          source:p.source||'extension',description:p.description||''}));
       agentsSnapshot=safe;
       return safe;
     });
     agentsPending=promise;
     try{return await promise;}finally{if(agentsPending===promise)agentsPending=null;}
   }
-  async function visibility({force=false}={}){
-    const user=ownerScope();
-    if(!force&&policySnapshot)return policySnapshot;
-    if(policyPending)return policyPending;
-    const promise=api('/api/opencode/display-policy').then(data=>{
-      if(!Array.isArray(data?.allowed_providers)||!Array.isArray(data?.hidden_providers)
-        ||!Array.isArray(data?.allowed_models)||!data?.hidden_models)
-        throw Error('Admin provider visibility is not available');
-      if(ownerScope()!==user)throw Error('Account changed during policy discovery');
-      policySnapshot=data;return data;
-    });
-    policyPending=promise;
-    try{return await promise;}finally{if(policyPending===promise)policyPending=null;}
-  }
+  // Both existing Dashboard and Workspace consume the Pi-owned data.
+  // No Python provider/model presentation policy is involved.
   async function registry({force=false}={}){
-    const [data,agentRows,policy]=await Promise.all([catalog({force}),agents({force}),visibility({force})]);
-    return {data,agents:agentRows,policy};
+    const [data,agentRows]=await Promise.all([catalog({force}),agents({force})]);
+    return {data,agents:agentRows};
   }
   async function configuredProviders({force=false}={}){
     const user=ownerScope(),revision=presentationRevision;
@@ -210,43 +199,28 @@ window.nativeDirectTest=(()=>{
     configuredPending=job;
     try{return await job;}finally{if(configuredPending===job)configuredPending=null;}
   }
-  // Workspace never downloads the full catalog just to open a conversation.
-  // Provider/model visibility is Gateway *control-plane* metadata only; Native
-  // remains the sole source of AI model definitions, keys and execution.
+  // Reuse one Pi-native inventory for Connections, Dashboard and Workspace.
   let workspaceSnapshot=null,workspacePending=null;
   async function workspaceRegistry({force=false}={}){
     const user=ownerScope(),revision=presentationRevision;
     if(!force&&workspaceSnapshot)return workspaceSnapshot;
     if(workspacePending)return workspacePending;
-    const job=Promise.all([configuredProviders({force}),agents({force}),visibility({force})])
-      .then(([data,agentRows,policy])=>{
-        if(ownerScope()!==user)throw Error('Account changed during Native workspace discovery');
-        if(revision!==presentationRevision)throw Error('Native provider state changed; retry discovery');
-        workspaceSnapshot={data,agents:agentRows,policy};
+    const job=Promise.all([configuredProviders({force}),agents({force})])
+      .then(([data,agentRows])=>{
+        if(ownerScope()!==user)throw Error('Account changed during Pi workspace discovery');
+        if(revision!==presentationRevision)throw Error('Pi state changed; retry discovery');
+        workspaceSnapshot={data,agents:agentRows};
         return workspaceSnapshot;
       });
     workspacePending=job;
     try{return await job;}finally{if(workspacePending===job)workspacePending=null;}
-  }
-  function providerAllowed(pid,policy=policySnapshot){
-    return !!policy&&(!policy.allowed_providers.length||policy.allowed_providers.includes(pid));
-  }
-  function providerVisible(pid,policy=policySnapshot){
-    return !!policy&&!policy.hidden_providers.includes(pid);
-  }
-  function modelAllowed(pid,mid,policy=policySnapshot){
-    return providerAllowed(pid,policy)&&(!policy.allowed_models.length||
-      policy.allowed_models.includes(mid)||policy.allowed_models.includes(pid+'/'+mid));
-  }
-  function modelVisible(pid,mid,policy=policySnapshot){
-    return !!policy&&!(policy.hidden_models[pid]||[]).includes(mid);
   }
   // Shared, Native-reported availability for Dashboard, Connections and Workspace.
   // Presence in /provider.connected is NOT proof that a key works or belongs
   // to this account. Display Native's result without a second verification list.
   const nativeReported=(p,data)=>publicFree(p)||(data.connected||[]).includes(p.id);
   const idx=(p,data)=>({
-    id:p.id,name:p.name||p.id,visible:providerVisible(p.id),allowed:providerAllowed(p.id),
+    id:p.id,name:p.name||p.id,visible:true,allowed:true,
     connected:nativeReported(p,data),public_free:publicFree(p),
     auth_status:publicFree(p)?'free_native':nativeReported(p,data)?'native_reported_unverified':undefined,
     verified:false,model_count:p.model_count??Object.keys(p.models||{}).length,
@@ -266,9 +240,9 @@ window.nativeDirectTest=(()=>{
     return p;
   }
   function modelDetails(p,data){
-    return {provider_id:p.id,connected:nativeReported(p,data),allowed:providerAllowed(p.id),
+    return {provider_id:p.id,connected:nativeReported(p,data),allowed:true,
       default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
-        allowed:modelAllowed(p.id,id),visible:modelVisible(p.id,id)}))};
+        allowed:true,visible:true}))};
   }
   // Present actual Native execution errors; do not run a separate key checker.
   function nativeFailure(value){
@@ -336,7 +310,7 @@ window.nativeDirectTest=(()=>{
         provider_available_after_delete:providerAvailable};
     }
     // Native /provider is the shared catalog source for Dashboard and Workspace.
-    const [data]=await Promise.all([catalog(),visibility()]);
+    const data=await catalog();
     if(name.endsWith('/providers/search')){
       const query=parsed.searchParams.get('query')||'';
       const items=ordered(data,query).slice(0,50).map(p=>idx(p,data));
@@ -353,8 +327,7 @@ window.nativeDirectTest=(()=>{
     const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
     if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
     if(isWorkspace&&segments.length===4)
-      return ordered(data).filter(p=>nativeReported(p,data)&&providerAllowed(p.id)&&providerVisible(p.id))
-        .map(p=>idx(p,data));
+      return ordered(data).map(p=>idx(p,data));
     const providerId=isAccount?segments[3]:segments[4];
     if(!providerId)throw Error('Missing Native provider ID');
     const p=find(data,providerId),tail=segments.slice(isAccount?4:5);
@@ -373,8 +346,8 @@ window.nativeDirectTest=(()=>{
     }
     throw Error('Unsupported Pi provider action: '+name);
   }
-  return {active,testHost,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,acknowledgeNativeCredential,matches,route,
-    providerAllowed,providerVisible,modelAllowed,modelVisible,classifyError:nativeFailure,rootFromFile,defaultDirectory};
+  return {active,testHost,url,direct,catalog,configuredProviders,agents,registry,workspaceRegistry,forget,acknowledgeNativeCredential,matches,route,
+    classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 
 const api=async(path,options={})=>{
