@@ -1,172 +1,49 @@
-name: TEST | Fast deploy updates (manual audit optional)
+name: TEST | Deploy changed files only
+
 on:
   workflow_dispatch:
-    inputs:
-      vps_username:
-        description: "VPS username (same as LIVE)"
-        required: true
-        type: string
-        default: tahir
-      confirmation:
-        description: "TEST deployment is manual: explicitly select audit, deploy or rollback"
-        required: true
-        type: choice
-        default: audit-test
-        options:
-          - audit-test
-          - deploy-test
-          - rollback-test
-      rollback_sha:
-        description: "Only for rollback-test: previous GitHub updates commit SHA (40 hex characters)"
-        required: false
-        type: string
+
 permissions:
   contents: read
+
 concurrency:
-  group: opencode-test-deploy
+  group: test-file-deployment
   cancel-in-progress: false
+
 jobs:
-  test:
-    # Do not silently skip this job on a mismatched event/ref.
-    # Fail explicitly at the first step before any TEST server access.
+  deploy:
     runs-on: ubuntu-latest
     environment: test
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
-      - name: Confirm TEST operation
-        id: confirm
-        env:
-          CONFIRMATION: ${{ inputs.confirmation }}
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-        run: |
-          set -euo pipefail
-          mode="$(printf '%s' "$CONFIRMATION" | tr -d '[:space:]')"
-
-          echo "TEST workflow trigger: event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA"
-          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || { echo "Unsupported TEST trigger"; exit 1; }
-          [[ "$GITHUB_REF" == "refs/heads/updates" ]] || { echo "Ref is not updates: $GITHUB_REF"; exit 1; }
-          [[ "$mode" == "audit-test" || "$mode" == "deploy-test" || "$mode" == "rollback-test" ]]
-          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Validate full TEST source and migration chain
-        run: |
-          set -euo pipefail
-          python3 -m py_compile scripts/full_test_git_release.py
-          python3 -m compileall -q backend/app backend/alembic/versions
-          python3 - <<'PY'
-          import pathlib, ast
-          versions=sorted(pathlib.Path('backend/alembic/versions').glob('*.py'))
-          assert versions, 'No Alembic migrations found'
-          revisions={}
-          for path in versions:
-              tree=ast.parse(path.read_text(encoding='utf-8'))
-              values={node.targets[0].id:ast.literal_eval(node.value) for node in tree.body if isinstance(node,ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and node.targets[0].id in ('revision','down_revision')}
-              assert values.get('revision') and values['revision'] not in revisions, path
-              revisions[values['revision']]=values.get('down_revision')
-          assert revisions['0024_github_app_settings']=='0023_admin_mail_drafts'
-          assert set(revisions.values())-set(revisions)-{None}==set(), 'Broken Alembic revision chain'
-          assert pathlib.Path('backend/alembic/versions/0022_email_service_policies.py').is_file()
-          assert pathlib.Path('backend/app/services/admin_email_config.py').is_file()
-          assert pathlib.Path('index.html').is_file()
-          print('FULL_SOURCE_PREFLIGHT_SUCCESS',len(versions),'migrations')
-          PY
-      - name: Validate TEST Pi browser and central engine source
-        run: |
-          set -euo pipefail
-          node --check app.js
-          node --check native-session-client.js
-          node --check runtime-client.js
-          node --check dashboards.js
-          node --check management.js
-          node --check integration/pi-central.mjs
-          bash -n ops/native-direct/update-existing-test-nginx.sh
-          python3 scripts/validate_migration_chain.py
-          # No second AI provider/key registry in the Gateway source tree.
-          for retired in account_provider_sync native_provider_accounts user_provider_credentials providers runtime_snapshot archive_storage; do
-            test ! -f "backend/app/services/${retired}.py" || { echo "Retired Gateway Native service found: ${retired}"; exit 1; }
-          done
-          grep -q 'revision = "0036_native_only_provider_credentials"' backend/alembic/versions/0036_native_only_provider_credentials.py
-          ! grep -q 'class ProviderCredential(Base)' backend/app/models/workspace.py
-          ! grep -q 'class UserProviderCredential(Base)' backend/app/models/workspace.py
-      # Only source checks: the user removed the old regression test files.
-      - name: Configure pinned SSH for TEST
+      - name: Copy changed files to the existing TEST project
         env:
           HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ inputs.vps_username || 'tahir' }}
-          EXPECTED_VPS_USER: ${{ secrets.VPS_USER }}
+          USER: ${{ secrets.VPS_USER }}
           KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/updates" ]]
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
           : "${HOST:?Missing STAGING_HOST}"
-          : "${USER:?Missing VPS username}"
-          : "${EXPECTED_VPS_USER:?Missing VPS_USER secret}"
-          [[ "$USER" == "$EXPECTED_VPS_USER" ]] || { echo "VPS username does not match existing VPS_USER secret"; exit 1; }
+          : "${USER:?Missing VPS_USER}"
           : "${KEY:?Missing STAGING_SSH_PRIVATE_KEY}"
           : "${KNOWN_HOSTS:?Missing STAGING_SSH_KNOWN_HOSTS}"
+          port="${PORT:-22}"
+
           install -d -m 700 "$HOME/.ssh"
           printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
           printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
-      - name: Full TEST audit or deploy by pinned GitHub commit
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ inputs.vps_username || 'tahir' }}
-          EXPECTED_VPS_USER: ${{ secrets.VPS_USER }}
-          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
-          TARGET_SHA: ${{ github.sha }}
-          MODE: ${{ steps.confirm.outputs.mode }}
-          ROLLBACK_SHA: ${{ inputs.rollback_sha }}
-          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
-        run: |
-          set -euo pipefail
-          port="${PORT:-22}"
-          # Read the approved script directly from the reviewed GitHub revision.
-          # Git checkout and app source are preserved; no server .env, IP, port,
-          # nginx, systemd, database files, Native engine, or LIVE changes.
-          operation=audit
-          if [[ "$MODE" == "deploy-test" ]]; then operation=deploy; fi
-          if [[ "$MODE" == "rollback-test" ]]; then
-            operation=rollback
-            [[ "$ROLLBACK_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Supply an exact 40-character GitHub commit SHA for rollback"; exit 1; }
-            TARGET_SHA="$ROLLBACK_SHA"
-          fi
-          : "${VPS_SUDO_PASSWORD:?Missing protected VPS_SUDO_PASSWORD secret}"
-          [[ "$VPS_SUDO_PASSWORD" != *$'\n'* ]] || { echo "Invalid multi-line sudo secret"; exit 1; }
-          # Password travels only over encrypted SSH stdin; never in log or CLI arguments.
-          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            "cd /home/tahir/opencode-gateway-test && git fetch --no-tags origin updates </dev/null && ( test '$operation' = rollback || test \"\$(git rev-parse origin/updates)\" = '$TARGET_SHA' ) && git show 'origin/updates:scripts/full_test_git_release.py' > /home/tahir/.full-test-git-release.py && chmod 600 /home/tahir/.full-test-git-release.py && TEST_SUDO_PASS_STDIN=1 python3 -I /home/tahir/.full-test-git-release.py $operation '$TARGET_SHA'"
-      - name: Deploy Pi source to existing Pi Central service
-        if: steps.confirm.outputs.mode == 'deploy-test'
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ inputs.vps_username || 'tahir' }}
-          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
-          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
-        run: |
-          set -euo pipefail
-          port="${PORT:-22}"
-          : "${VPS_SUDO_PASSWORD:?Missing protected TEST sudo credential}"
-          node --check integration/pi-central.mjs
-          # Only replace the source file for the existing Pi Central service.
-          # The TEST Nginx route has already been configured and is not modified.
-          scp -q -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            integration/pi-central.mjs "$USER@$HOST:/home/tahir/.native-direct-stage/pi-central.mjs"
-          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
-            -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
-            'read -r password; printf "%s\n" "$password" | sudo -S -p "" bash /home/tahir/opencode-gateway-test/ops/native-direct/update-existing-test-nginx.sh'
-          echo TEST_PI_CODE_UPDATED
-      - name: Verify TEST health after TEST operation
-        if: steps.confirm.outputs.mode != 'audit-test'
-        run: |
-          set -euo pipefail
-          curl -fsS --retry 6 --retry-delay 2 https://test.opencode-gateway.codes/api/health
-          echo
-      - name: Report scope
-        if: always()
-        run: |
-          echo "TEST deployment updates existing Gateway and Pi source; Pi restarts only when its file changes. Nginx, systemd unit configuration, and LIVE routing are not modified." >> "$GITHUB_STEP_SUMMARY"
+
+          # Source-file sync ONLY. The existing release script is read directly
+          # from the pinned Git commit; no deploy helper is staged on the VPS.
+          # No sudo, systemctl, service restarts, Nginx edits, database
+          # migrations, health checks, or extra Pi services.
+          ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$USER@$HOST" \
+            "bash -lc 'set -euo pipefail; cd /home/tahir/opencode-gateway-test; git fetch --no-tags origin updates </dev/null; git show ${TARGET_SHA}:scripts/full_test_git_release.py | python3 -I - deploy ${TARGET_SHA}'"
