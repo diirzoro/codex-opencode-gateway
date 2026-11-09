@@ -9,7 +9,7 @@
  */
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
@@ -105,8 +105,9 @@ class Agent {
     this.closed=false;this.active=false;
     const sessionDir=path.join(ROOT,"projects",s.userId,s.workspaceId);
     if(!s.catalog)mkdirSync(sessionDir,{recursive:true,mode:0o700});
+    // Keep Pi's own built-in tools, extensions, skills and prompt templates.
+    // No alternate tool executor or credential/configuration service.
     const args=["--mode","rpc",...(s.catalog?["--no-session"]:["--session-id",this.id,"--session-dir",sessionDir]),
-      "--no-tools","--no-extensions","--no-skills","--no-prompt-templates",
       "--name",s.projectId];
     const env={PATH:process.env.PATH,HOME:process.env.HOME||"/home/tahir",
       LANG:process.env.LANG||"C.UTF-8",PI_SKIP_VERSION_CHECK:"1",PI_TELEMETRY:"0",
@@ -192,8 +193,51 @@ async function agent(s) {
   catch(e) { a.close(); throw e; }
 }
 async function body(req) {
-  let s="";for await(const part of req){s+=part;if(s.length>128_000)throw Object.assign(new Error("Body too large"),{status:413});}
+  let s="";for await(const part of req){s+=part;if(s.length>12*1024*1024)throw Object.assign(new Error("Body too large"),{status:413});}
   try{return s?JSON.parse(s):{};}catch{throw Object.assign(new Error("Invalid JSON"),{status:400});}
+}
+function piPromptParts(rawParts, scope, sessionId) {
+  // The existing browser form sends file parts as data URLs or file:// URLs.
+  // Images go directly to Pi RPC; other files are staged *inside* the owned
+  // Pi workspace and referenced by path for Pi's native tools to inspect.
+  const parts=Array.isArray(rawParts)?rawParts:[];
+  const messages=[], images=[];
+  for(const p of parts) {
+    if(p?.type==="text") {
+      if(typeof p.text==="string")messages.push(p.text);
+      continue;
+    }
+    if(p?.type!=="file")continue;
+    const filename=path.basename(String(p.filename||"attachment")).replace(/[\x00-\x1F]/g,"_").slice(0,140)||"attachment";
+    const source=String(p.url||"");
+    if(source.startsWith("file:")) {
+      const u=new URL(source);
+      if(u.protocol!=="file:"||u.hostname||u.search||u.hash)
+        throw Object.assign(new Error("Invalid workspace file reference"),{status:422});
+      const absolute=path.resolve(decodeURIComponent(u.pathname));
+      const root=path.resolve(scope.directory);
+      if(!absolute.startsWith(root+path.sep))
+        throw Object.assign(new Error("File is outside the selected workspace"),{status:422});
+      messages.push("Attached workspace file: "+path.relative(root,absolute));
+      continue;
+    }
+    const match=/^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(source);
+    if(!match)throw Object.assign(new Error("Unsupported file data. Upload an existing workspace file or an inline attachment."),{status:422});
+    const mime=match[1].toLowerCase();
+    const data=Buffer.from(match[2],"base64");
+    if(data.length>8*1024*1024)
+      throw Object.assign(new Error("Attachment exceeds 8 MB"),{status:413});
+    if(["image/png","image/jpeg","image/webp"].includes(mime)){
+      images.push({type:"image",data:match[2],mimeType:mime});
+      messages.push("Attached image: "+filename);
+      continue;
+    }
+    const target=path.join(scope.directory,".pi-uploads",sessionId,randomUUID(),filename);
+    mkdirSync(path.dirname(target),{recursive:true,mode:0o700});
+    writeFileSync(target,data,{mode:0o600,flag:"wx"});
+    messages.push("Attached file for Pi tools to inspect: "+path.relative(scope.directory,target));
+  }
+  return {message:messages.join("\n"),images};
 }
 function mapped(messages, id) {
   return messages.map((m,index)=>{
@@ -297,11 +341,12 @@ const server=http.createServer(async(req,res)=>{
     }
     if(action==="prompt_async" && req.method==="POST") {
       const b=await body(req);
-      const message=(b.parts||[]).filter(x=>x.type==="text").map(x=>x.text||"").join("\n");
-      if(!message.trim()||message.length>100000)return error(res,422,"Prompt required");
+      const {message,images}=piPromptParts(b.parts,s,a.id);
+      if((!message.trim()&&!images.length)||message.length>100000)
+        return error(res,422,"Prompt required");
       if(b.model?.providerID&&b.model?.modelID)
         await a.command("set_model",{provider:b.model.providerID,modelId:b.model.modelID});
-      await a.command("prompt",{message});
+      await a.command("prompt",{message,...(images.length?{images}:{})});
       res.writeHead(204,{"cache-control":"no-store"});res.end();return;
     }
     if(action==="abort" && req.method==="POST"){await a.command("abort",{},30000);return json(res,200,true);}
