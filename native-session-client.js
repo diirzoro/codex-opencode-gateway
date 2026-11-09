@@ -110,6 +110,19 @@
     const ctx=await localProjectContext(workspace);
     if(!ctx.binding)return [];
     if(ctx.binding.workspace_id!==workspace)return [];
+    // TEST engine conversion: replace one old ses_* OpenCode binding with the
+    // unique pi_* session belonging to this same owned Project. No duplicate.
+    if(ctx.binding.native_session_id.startsWith('ses_')){
+      const available=await window.nativeDirectTest.direct('session',{directory:ctx.root});
+      const pi=Array.isArray(available)?available.filter(x=>x?.id?.startsWith('pi_')&&x.directory===ctx.root):[];
+      if(pi.length===1){
+        const changed=await api('/api/projects/'+encodeURIComponent(ctx.projectId)+'/native-binding',{
+          method:'POST',body:JSON.stringify({workspace_id:workspace,
+            native_session_id:pi[0].id,replace_legacy_opencode:true})
+        });
+        ctx.binding={...ctx.binding,native_session_id:changed.native_session_id};
+      }
+    }
     const live=await window.nativeDirectTest.direct('session/'+encodeURIComponent(ctx.binding.native_session_id),
       {directory:ctx.root});
     if(!live?.id||live.id!==ctx.binding.native_session_id||live.directory!==ctx.root)
