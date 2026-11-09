@@ -1599,12 +1599,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     updateSend();
   }
   function renderProviders(snapshot,preferredProvider=''){
-    // Show Pi's full model registry, not just configured providers. A provider
-    // without Pi credentials is visible but cannot be selected for execution.
-    providers=(snapshot.providers||[]);
+    // Workspace shows Pi-configured connections only. New provider discovery
+    // belongs to Connections; neither config nor model listing proves credits.
+    providers=(snapshot.providers||[]).filter(p=>p.connected);
     q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
     for(const p of providers){
-      const label=p.name+' · '+(p.connected?tr('Available in Pi','متاح في Pi'):tr('Not configured in Pi','غير مهيأ في Pi'));
+      const label=p.name+' · '+tr('Configured in Pi · credits unknown','مهيأ في Pi · الرصيد غير معلوم');
       const option=new Option(label,p.id);
       option.disabled=!p.connected;
       q('providerSelect').add(option);
@@ -1644,7 +1644,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const render=rows=>{
       rows=rows.filter(m=>m.visible!==false||m.id===chosenModel);
       q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));
-      for(const model of rows){const option=new Option(model.name||model.id,model.id);option.disabled=model.allowed===false;q('modelSelect').add(option);}
+      for(const model of rows){
+        const option=new Option(model.name||model.id,model.id);
+        option.disabled=model.allowed===false;
+        option.title=tr('Pi model · remaining credits not confirmed','نموذج Pi · الرصيد المتبقي غير مؤكد');
+        q('modelSelect').add(option);
+      }
       const preferred=chosenModel||selected?.default_model||'';
       q('modelSelect').value=rows.some(m=>m.id===preferred&&m.allowed!==false)?preferred:(window.nativeSession?.active()?rows.find(m=>m.allowed!==false)?.id||'':'');
     };
@@ -1654,7 +1659,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     try{
       const data=await window.workspaceRuntime.loadModels(workspaceId,selected.id);
       if(!current())return;render(data.models);modelsReady=data.allowed!==false&&data.connected===true;
-      chosenModel=q('modelSelect').value;q('modelSelect').title=tr('Model','النموذج');renderNativeVariants();updateSend();
+      chosenModel=q('modelSelect').value;
+      q('modelSelect').title=tr('Pi model · available credits are not confirmed until Pi processes a request','نموذج Pi · لا يُؤكد توفر الرصيد حتى يعالج Pi طلبًا');
+      renderNativeVariants();updateSend();
     }catch(error){if(current()){q('modelSelect').title=error.message;q('modelSelect').options[0].textContent=tr('Could not load models','تعذر تحميل النماذج');retryModels.hidden=false;updateSend();toast(error.message);}}
   }
   window.refreshWorkspaceChoices=async(preferredProvider='',force=true)=>{if(activeWorkspace&&force)window.workspaceRuntime.invalidate(activeWorkspace.id);return refreshChoices(preferredProvider,force);};
