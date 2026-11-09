@@ -204,18 +204,25 @@ function mapped(messages, id) {
   });
 }
 
-function providerCatalog(models){
+function providerCatalog(models,userId){
+  // Pi model availability is not authentication. A model in the catalog must
+  // NEVER imply that an account has an API key or a verified connection.
   const grouped=new Map();
   for(const model of models){
     if(!model || typeof model.id!=="string" || typeof model.provider!=="string")continue;
     const id=model.provider;
+    // Retired OpenCode Native itself is not a provider in this TEST platform.
+    if(id==="opencode")continue;
     let row=grouped.get(id);
     if(!row){row={id,name:id,models:{}};grouped.set(id,row);}
     row.models[model.id]={id:model.id,name:model.name||model.id,reasoning:Boolean(model.reasoning),
       context:model.contextWindow,maxTokens:model.maxTokens,cost:model.cost||null};
   }
   const all=[...grouped.values()];
-  return {all,connected:all.map(x=>x.id),default:{},verification:"unverified"};
+  const saved=credentials(userId);
+  const connected=all.filter(row=>saved[row.id]?.type==="api_key" &&
+    typeof saved[row.id]?.key==="string" && saved[row.id].key.length>0).map(row=>row.id);
+  return {all,connected,default:{},verification:"stored_unverified"};
 }
 async function configuredModels(userId){
   const cached=modelsSnapshots.get(userId);
@@ -237,12 +244,12 @@ const server=http.createServer(async(req,res)=>{
     const s=await scope(req,query);
     if(s.catalog){
       if(pathname==="/provider"&&req.method==="GET")
-        return json(res,200,providerCatalog(await configuredModels(s.userId)));
+        return json(res,200,providerCatalog(await configuredModels(s.userId),s.userId));
       if(pathname==="/agent"&&req.method==="GET")
         return json(res,200,[{name:"build",mode:"primary",hidden:false}]);
       if(pathname==="/provider/auth"&&req.method==="GET") {
         const result={};
-        for(const p of providerCatalog(await configuredModels(s.userId)).all)
+        for(const p of providerCatalog(await configuredModels(s.userId),s.userId).all)
           result[p.id]=[{type:"api",label:"API key"}];
         return json(res,200,result);
       }
