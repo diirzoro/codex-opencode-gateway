@@ -137,9 +137,9 @@ Browser: TEST Dashboard
 - `native-session-client.js` و`app.js` — عقد الواجهة القديمة مع OpenCode.
 - Pi official documentation: https://pi.dev/docs/latest/rpc و https://pi.dev/docs/latest/cli .
 
-## 10. تحديث سريع — 2026-11-09 — تجهيز الربط للنشر
-- \`integration/pi-central.mjs\` في \`updates\`: تصحيح خيار جلسة Pi من \`--session-id\` غير المثبت إلى \`--continue --session-dir\`، وعدم إعلان idle قبل \`agent_settled\`، وتعطيل الملحقات والقوالب والأدوات أثناء تطوير العزل. Commit: \`718919eb019da78a831e4d1caa0180301aab1893\`.
-- \`integration/pi-benchmark.mjs\`: قياس 5 طلبات Health إلى خدمة Pi القائمة، ثم طلب OpenRouter واحد حقيقي مع أزمنة بدء RPC والقبول وأول نص والاستقرار؛ لا يطبع أسرار الاعتماد. Commit: \`80aa1dde797c3c768fe267e721b8fed53c0c2bb7\`.
-- \`integration/install-pi-bridge-test.sh\`: نشر الملف إلى \`/home/tahir/pi-test/pi-central.mjs\` **في مكانه** وتشغيل \`node --check\`، ثم Restart خدمة \`pi-central.service\` الموجودة. لا ينشئ releases/backups ولا يلمس Nginx ولا LIVE. Commit: \`ac6ba3862883c05ac55be2e2e283c1674c3540b3\`.
-- **الحالة:** تم رفع ملفات الربط والقياس إلى GitHub فقط. يحتاج تشغيل أمر النشر على VPS بصلاحية مستخدم السيرفر؛ GitHub وحده لا يغيّر خدمة systemd. Nginx ما زال موجهًا إلى OpenCode؛ لا تبدّل مساراته حتى تتوفر جميع واجهات التوافق وتُختبر الصلاحيات.
-- **المتبقي قبل اعتماد TEST Dashboard:** تصحيح استعادة الجلسة عند إعادة تشغيل عامل Pi، توافق كامل للـproviders/models/events والواجهة، ثم توجيه Nginx في TEST وحده. لا تفتح المسارات للمستخدمين قبل إثبات عزل الجلسات.
+## 10. قرار التنظيف المعماري — 2026-11-09
+- المستخدم رفض تراكم محولات متعددة وملفات نشر وفحص مؤقتة.
+- حُذف من فرع `updates` الملفان المضافان حديثًا `integration/pi-benchmark.mjs` و`integration/install-pi-bridge-test.sh` نهائيًا؛ لا يُعاد إنشاؤهما.
+- احتُفظ فقط بملف ربط Pi قيد التطوير `integration/pi-central.mjs` وهذه المذكرة المستقلة. الكود الحالي غير مكتمل التوافق مع الواجهة ولم يُنشر إلى VPS.
+- الهدف هو الاستبدال داخل البنية الحالية، وليس تشغيل OpenCode وPi معًا على TEST بشكل دائم. قبل حذف ملفات OpenCode العاملة، يجب تحويل الإشارات والمسارات والنقاط المستخدمة فعليًا إلى Pi لكي لا يتوقف TEST. لا حذف في LIVE.
+- نُفّذت عملية التنظيف في GitHub على فرع `updates` فقط؛ لا يتغير VPS تلقائيًا مع الحذف من المستودع.
