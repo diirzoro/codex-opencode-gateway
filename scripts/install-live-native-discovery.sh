@@ -6,20 +6,40 @@ snippet=/etc/nginx/snippets/opencode-native-live.conf
 [[ -f "$snippet" ]] || { echo "LIVE Native snippet missing" >&2; exit 3; }
 grep -Fq 'location @native_session_live {' "$snippet" || { echo "Existing LIVE session boundary missing" >&2; exit 4; }
 grep -Fq 'location @native_discovery_live {' "$snippet" || { echo "Existing LIVE discovery boundary missing" >&2; exit 4; }
-if grep -Fq 'location = /native-direct/api/provider {' "$snippet" &&
-   grep -Fq 'location = /native-direct/api/agent {' "$snippet"; then
-  echo "LIVE Native discovery routes already present"
+# The two older LIVE routes can already exist. Install missing routes only.
+# Detect a duplicate existing auth-method route and leave it unchanged.
+if grep -Fq 'location = /native-direct/api/provider/auth {' "$snippet"; then
+  echo "LIVE Native provider authentication-method discovery already present"
   exit 0
 fi
 # Fail rather than silently duplicate or overwrite a partially configured route.
-if grep -Fq 'location = /native-direct/api/provider {' "$snippet" ||
-   grep -Fq 'location = /native-direct/api/agent {' "$snippet"; then
-  echo "Partial LIVE discovery configuration detected; manual reconciliation required" >&2
+# Require existing routes before extending them: never replace or expose them.
+if ! grep -Fq 'location = /native-direct/api/provider {' "$snippet" ||
+   ! grep -Fq 'location = /native-direct/api/agent {' "$snippet"; then
+  echo "LIVE provider/agent routes are missing; repair the base discovery installation first" >&2
   exit 5
 fi
 backup="${snippet}.bak-discovery-$(date -u +%Y%m%dT%H%M%SZ)"
 cp -p "$snippet" "$backup"
 cat >> "$snippet" <<'NGINX'
+
+# Authenticated LIVE provider authentication-method discovery (metadata GET).
+# Does not expose /auth/<provider> credential read/write/delete or sessions.
+location = /native-direct/api/provider/auth {
+    auth_basic off;
+    auth_request /api/auth/me;
+    limit_except GET { deny all; }
+    proxy_pass http://127.0.0.1:18097/provider/auth;
+    proxy_set_header Cookie "";
+    proxy_set_header Authorization "";
+    proxy_set_header Host 127.0.0.1:18097;
+    proxy_buffering off;
+    add_header Cache-Control "no-store" always;
+}
+NGINX
+# Old provider and agent locations remain unchanged.
+# The following block documents their previous installation but is not run.
+: <<'LEGACY_DISCOVERY_BLOCK'
 
 # Authenticated LIVE discovery only: no Native session, tools or credential writes.
 # This check authenticates the Gateway account; it does not grant session access.
@@ -49,7 +69,7 @@ location = /native-direct/api/agent {
     proxy_buffering off;
     add_header Cache-Control "no-store" always;
 }
-NGINX
+LEGACY_DISCOVERY_BLOCK
 if ! /usr/sbin/nginx -t; then
   cp -p "$backup" "$snippet"
   /usr/sbin/nginx -t || true
@@ -62,4 +82,4 @@ if ! /usr/bin/systemctl reload nginx; then
   echo "Nginx reload failed; original LIVE snippet restored" >&2
   exit 7
 fi
-echo "LIVE authenticated provider and agent discovery installed; rollback: $backup"
+echo "LIVE authenticated provider/auth discovery installed; rollback: $backup"
