@@ -144,8 +144,8 @@
     picker.disabled=true;
     if(activeWorkspace)picker.add(new Option(activeProject?.name||tr('Selected workspace','مساحة العمل المختارة'),activeWorkspace.id));
     picker.value=view.workspaceId;
-    const box=section(body,tr('Connect an AI provider','ربط مزوّد ذكاء'));
-    box.append(node('p',tr('Connect a Pi provider once by its provider ID. Models such as DeepSeek inside OpenRouter belong to OpenRouter and are not additional provider connections. Skills and agents are selected in Workspace, not connected here.','اربط مزوّد Pi مرة واحدة عبر معرّف المزوّد. نموذج DeepSeek داخل OpenRouter يتبع OpenRouter ولا يُعد اتصال مزوّد آخر. تُختار المهارات والوكلاء في مساحة العمل ولا تُربط من هذه الصفحة.')));
+    const box=section(body,tr('Pi providers · read-only inventory','مزوّدو Pi · عرض الحالة فقط'));
+    box.append(node('p',tr('This panel reads providers and configured status directly from installed Pi. It never collects, validates, saves, or deletes API keys. Models and Pi commands are not provider connections. Configure credentials through Pi itself.','تعرض هذه اللوحة المزوّدات وحالتها مباشرةً من Pi المثبت. لا تجمع مفاتيح API ولا تتحقق منها أو تحفظها أو تحذفها. النماذج وأوامر Pi ليست اتصالات مزوّدين. تُدار الاعتمادات داخل Pi نفسه.')));
     const comboWrap=node('div','','provider-combo'),combo=node('input');combo.type='search';
     combo.value=body.dataset.providerQuery||'';combo.placeholder=tr('Search providers…','ابحث عن المزوّدات…');combo.setAttribute('role','combobox');combo.setAttribute('aria-expanded','false');combo.autocomplete='off';combo.setAttribute('aria-label',combo.placeholder);
     const options=node('div','','provider-combo-options');options.hidden=true;comboWrap.append(combo,options);box.append(comboWrap);
@@ -202,7 +202,7 @@
       const data=await api(base+kind+'?'+(kind==='search'?'query':'name')+'='+encodeURIComponent(value),{signal});
       if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
       if(!data.native&&!sameCatalog(data)){
-        view.ready=false;customButton.disabled=true;window.workspaceRuntime.invalidate(workspaceId);
+        view.ready=false;window.workspaceRuntime.invalidate(workspaceId);
         message(tr('Pi state changed. Refresh before connecting.','تغيّرت حالة Pi. حدّث الحالة قبل الربط.'),true);
         throw new Error(tr('Pi state changed. Close this dialog and refresh before connecting.','تغيّرت حالة Pi. أغلق النافذة وحدّث الحالة قبل الربط.'));
       }
@@ -210,206 +210,25 @@
     }
     const retry=button(tr('Retry','إعادة المحاولة'),()=>metadataReady?refresh(true):initialize());retry.hidden=true;box.append(retry);
     const message=(text,error=false)=>{progress.textContent=text;progress.classList.toggle('connection-error',error);retry.hidden=!error;};
-    const setFeedback=(element,text,kind='status')=>{
-      element.textContent=text;element.hidden=!text;element.dataset.kind=kind;
-      element.setAttribute('role',kind==='error'?'alert':'status');element.setAttribute('aria-live',kind==='error'?'assertive':'polite');
-    };
-    const showError=(f,error)=>{let st=f.querySelector('.provider-feedback');if(!st){st=node('p','','provider-feedback');f.append(st)}setFeedback(st,error.message,'error')};
-    const openAuthDialog=async(p,resolved=false)=>{
-      const reauthorizing=!workspaceId&&p.reauthorize===true;
-      if(!view.ready||!alive()||!contextCurrent()||view.connecting)return;
-      view.connecting=true;
-      const host=node('div');document.body.append(host);
-      const dlg=document.createElement('dialog');dlg.className='action-form-dialog provider-auth-dialog';dlg.dataset.formDialog='';
-      dlg.addEventListener('keydown',event=>event.stopPropagation());
-      const head=document.createElement('header');head.className='action-dialog-head';
-      const heading=node('h2',tr('Connect ','ربط ')+(p.name||p.id));heading.id='provider-auth-'+(crypto.randomUUID?.()||Date.now());dlg.setAttribute('aria-labelledby',heading.id);head.append(heading);
-      const close=document.createElement('button');close.type='button';close.className='icon';close.textContent='×';close.setAttribute('aria-label',tr('Close','إغلاق'));close.onclick=()=>dlg.close();head.append(close);
-      const body=document.createElement('div');body.className='action-dialog-body';
-      const methodArea=node('div');body.append(methodArea);
-      const feedback=node('p','','provider-feedback');feedback.hidden=true;body.append(feedback);
-      const foot=document.createElement('div');foot.className='action-form-actions';
-      const cancel=document.createElement('button');cancel.type='button';cancel.className='button ghost';cancel.textContent=tr('Cancel','إلغاء');cancel.onclick=()=>dlg.close();foot.append(cancel);
-      dlg.append(head,body,foot);host.append(dlg);
-      const discovery=new AbortController(),onAbort=()=>dlg.close();controller.signal.addEventListener('abort',onAbort,{once:true});
-      dlg.addEventListener('close',()=>{discovery.abort();controller.signal.removeEventListener('abort',onAbort);for(const input of dlg.querySelectorAll('input[type=password]'))input.value='';view.connecting=false;host.remove();},{once:true});
-      const currentDialog=()=>alive()&&contextCurrent()&&dlg.open;
-      body.append(node('p',tr('Pi Native saves the key directly. Validity is checked when the model is used.', 'يحفظ Pi Native المفتاح مباشرة. تُختبر صلاحيته عند استخدام النموذج.')));
-      dlg.showModal();setFeedback(feedback,tr('Loading Pi authentication methods…','جارٍ تحميل طرق مصادقة Pi…'));
-      let choices,accountOptions=null;
-      try{
-        if(!workspaceId){const authStarted=performance.now();const nativeMethods=await window.nativeDirectTest.direct('provider/auth',{signal:discovery.signal});accountOptions={auth_methods:Array.isArray(nativeMethods?.[p.id])&&nativeMethods[p.id].length?nativeMethods[p.id]:[{type:'api',label:'API key'}],native:true,credential_storage_ready:true};window.gatewayProviderTimings={...window.gatewayProviderTimings,auth_request_ms:performance.now()-authStarted};}
-        else {if(!resolved)p=(await lookup('resolve',p.id,discovery.signal))[0];if(window.nativeDirectTest?.active()){const nativeMethods=await window.nativeDirectTest.direct('provider/auth',{signal:discovery.signal});accountOptions={auth_methods:Array.isArray(nativeMethods?.[p.id])&&nativeMethods[p.id].length?nativeMethods[p.id]:[{type:'api',label:'API key'}],native:true,credential_storage_ready:true};}}
-        if(!currentDialog())return;
-        if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
-        choices=accountOptions?accountOptions.auth_methods:p.auth_methods;
-        if(!Array.isArray(choices)||!choices.length)throw new Error(tr('No authentication methods reported by Pi.','لم يعلن Pi عن طرق مصادقة.'));
-        setFeedback(feedback,'');
-      }catch(error){if(currentDialog()&&error.name!=='AbortError')setFeedback(feedback,error.message,'error');return;}
-      const methodPicker=select(body,tr('Pi authentication method','طريقة مصادقة Pi'),'auth_method',choices.map((m,i)=>[String(i),m.label||(['api','key'].includes(m.type)?tr('API key','مفتاح API'):m.type)]));
-      if(reauthorizing){
-        for(const option of [...methodPicker.options])if(choices[Number(option.value)]?.type!=='oauth')option.remove();
-        if(!methodPicker.options.length){setFeedback(feedback,tr('No OAuth method is available.','لا توجد طريقة OAuth متاحة.'),'error');return;}
-        methodPicker.value=methodPicker.options[0].value;
-      }
-      body.prepend(methodPicker.parentElement);
-      function renderMethod(){
-        methodArea.replaceChildren();setFeedback(feedback,'');const index=Number(methodPicker.value),method=choices[index];
-        const keyMethod=['api','key'].includes(method.type);
-        if(!keyMethod&&method.type!=='oauth'){setFeedback(feedback,tr('This authentication type is not supported by the installed Pi HTTP API: ','نوع المصادقة غير مدعوم في واجهة Pi المثبتة: ')+method.type,'warning');return;}
-        const f=node('form','','manage-form');methodArea.append(f);const promptInputs=[];
-        for(const prompt of method.prompts||[]){
-          let field;if(prompt.type==='select')field=select(f,prompt.message,prompt.key,prompt.options.map(o=>[o.value,o.label]));
-          else if(prompt.type==='text'){field=input(f,prompt.message,prompt.key);field.placeholder=prompt.placeholder||'';}
-          else{setFeedback(feedback,tr('Unsupported auth prompt: ','حقل مصادقة غير مدعوم: ')+prompt.type,'warning');continue;}
-          promptInputs.push({prompt,field});
-        }
-        const updatePrompts=()=>{const values=Object.fromEntries(new FormData(f));for(const {prompt,field} of promptInputs){const condition=prompt.when;field.parentElement.hidden=Boolean(condition)&&(condition.op==='eq'?values[condition.key]!==condition.value:values[condition.key]===condition.value);field.disabled=field.parentElement.hidden;}};
-        f.addEventListener('change',updatePrompts);updatePrompts();
-        let submitting=false;
-        if(keyMethod&&accountOptions?.credential_storage_ready===false){setFeedback(feedback,tr('Provider connection is unavailable: secure credential storage needs administrator repair. Your API key has not been rejected by the provider.','الربط غير متاح: التخزين الآمن للاعتمادات يحتاج إصلاحًا من المدير. لم يرفض المزوّد مفتاح API الخاص بك.'),'error');return;}
-        if(keyMethod){
-          const key=input(f,tr('API key (server-side only)','مفتاح API (على الخادم فقط)'),'api_key','password');key.required=true;key.autocomplete='new-password';
-          f.append(node('p',tr('Save directly in Pi Native without a test conversation.', 'حفظ مباشر في Pi Native دون إنشاء محادثة اختبار.'),'provider-note'));
-        }
-        const submit=node('button',keyMethod?tr('Save in Pi Native','حفظ في Pi Native'):tr('Authorize with Pi','تفويض عبر Pi'),'button');submit.type='submit';f.append(submit);
-        const currentForm=()=>currentDialog()&&view.ready&&methodArea.contains(f);
-        f.onsubmit=async event=>{
-          event.preventDefault();if(submitting||!currentForm()||!f.reportValidity())return;
-          const values=Object.fromEntries(new FormData(f));submitting=true;submit.disabled=methodPicker.disabled=true;f.setAttribute('aria-busy','true');
-          try{
-            if(keyMethod){
-              // The key is sent to Pi Native /auth directly, never to Python.
-              // A successful PUT confirms storage, not remote key validity.
-              setFeedback(feedback,tr('Saving in Pi Native…','جارٍ الحفظ في Pi Native…'));
-              if(!window.nativeDirectTest?.active())throw Error('Pi Native connection is unavailable');
-              const result=await window.nativeDirectTest.direct('auth/'+encodeURIComponent(p.id),{
-                method:'PUT',value:{type:'api',key:values.api_key}
-              });
-              f.reset();if(!alive()||!contextCurrent())return;
-              if(result!==true)throw Error(tr('Pi did not confirm storage.','لم يؤكد Pi حفظ المفتاح.'));
-              window.nativeDirectTest.acknowledgeNativeCredential(p.id);
-              dlg.close();
-              toast(tr('Saved in Pi Native. Key validity has not been tested.',
-                'حُفظ المفتاح في Pi Native. لم تُختبر صلاحيته بعد.'));
-              await reload();
-            }else{
-              setFeedback(feedback,tr('Starting Pi authorization…','جارٍ بدء تفويض Pi…'));
-              const authorization=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/authorize',{method:'POST',body:JSON.stringify({method:index,inputs:values,...(reauthorizing?{reauthorize:true}:{})})});
-              if(!currentForm())return;
-              if(!authorization||!['auto','code'].includes(authorization.method))throw new Error(tr('Pi did not return a supported OAuth authorization flow.','لم يُرجع Pi مسار تفويض OAuth مدعومًا.'));
-              let url;if(authorization.url){url=new URL(authorization.url);if(url.protocol!=='https:'||['localhost','127.0.0.1','::1'].includes(url.hostname))throw new Error(tr('Pi returned an unsupported authorization URL','أعاد Pi رابط تفويض غير مدعوم'));}
-              const area=node('div','','provider-oauth');f.replaceWith(area);setFeedback(feedback,'');area.append(node('p',authorization.instructions||''));
-              if(url){const link=node('a',tr('Open provider authorization','افتح تفويض المزوّد'));link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';area.append(link);}
-              let code;if(authorization.method==='code')code=input(area,tr('Authorization code','رمز التفويض'),'code');
-              area.append(button(tr('Complete authorization','أكمل التفويض'),async()=>{
-                if(!currentDialog()||!view.ready)return;
-                setFeedback(feedback,tr('Completing Pi authorization…','جارٍ إكمال تفويض Pi…'));
-                try{
-                  const result=await api((workspaceId?base:'/api/opencode/connections/')+encodeURIComponent(p.id)+'/oauth/callback',{method:'POST',body:JSON.stringify({method:index,...(code?{code:code.value}:{})})});
-                  if(!alive()||!contextCurrent())return;
-                  if(result.connected!==true)throw new Error(tr('Pi did not confirm the OAuth connection.','لم يؤكد Pi اتصال OAuth.'));
-                  if(code)code.value='';dlg.close();toast(result.deferred_workspace_count?tr('Connected; refresh active workspaces to synchronize.','تم الربط؛ حدّث مساحات العمل النشطة للمزامنة.'):tr('Provider connected.','تم ربط المزوّد.'));await reload();
-                }catch(error){if(currentDialog())setFeedback(feedback,error.message,'error');}
-              }));
-            }
-          }catch(error){
-            window.workspaceRuntime.invalidate(workspaceId);
-            if(currentDialog())setFeedback(feedback,error.message,'error');
-            if(alive()&&contextCurrent()&&window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
-          }finally{submitting=false;f.removeAttribute('aria-busy');methodPicker.disabled=false;submit.disabled=false;}
-        };
-      }
-      methodPicker.onchange=renderMethod;renderMethod();methodPicker.focus();
-    };
     function renderSelected(p){
-      const state=window.nativeDirectTest?.active()&&p.public_free
-        ?tr('Pi Native free models · no key required','نماذج Pi المجانية · لا تحتاج إلى مفتاح')
-        :window.nativeDirectTest?.active()&&p.connected
-        ?tr('Available in Native · credential not verified','متاح في Native · لم يُثبت وجود مفتاح صالح')
-        :p.auth_status==='reauthorization_required'?tr('Authorization required','يلزم إعادة التفويض'):
-        p.auth_status==='refresh_required'?tr('Token expired · refresh or reauthorize','انتهى التوكن · جدّد أو أعد التفويض'):p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
-      const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
-      status.replaceChildren(node('strong',p.name||p.id),node('span',state+restriction+' · '+String(p.model_count??p.models?.length??0)+' '+tr('models','نموذج')));
-      if(!view.ready){status.append(node('span',tr('Refreshing workspace state…','جارٍ تحديث حالة مساحة العمل…')));return;}
-      const act=node('div','','manage-actions');
-      if(p.public_free)act.append(node('span',tr('Available directly through Pi Native','متاح مباشرة عبر Pi Native')));
-      else if(p.connected)act.append(button(
-        tr('Delete API Key','حذف مفتاح API'),
-        ()=>disconnect(p)));
-      else if(p.allowed!==false)act.append(button(tr('Connect','ربط'),()=>openAuthDialog(p)));
-      else act.append(node('span',tr('Restricted by platform policy','مقيّد بسياسة المنصة')));
-      if(!workspaceId&&p.auth_type==='oauth'&&p.allowed!==false)act.append(button(tr('Reauthorize','إعادة التفويض'),()=>openAuthDialog({...p,reauthorize:true})));
-      status.append(act);
-    }
-    let disconnectingProvider='';
-    async function disconnect(p){
-      if(!alive()||!contextCurrent()||!view.ready||disconnectingProvider||p.public_free)return;
-      // /auth in Pi 1.19.4 is process-global, not per user.
-      // This explicit confirmation is mandatory even if the slot is legacy.
-      if(window.nativeDirectTest?.active()){
-        const ok=await window.confirmAction?.(tr(
-          'Request deletion of the shared Pi Native key for '+(p.name||p.id)+'? This may disconnect other TEST accounts. Native may retain environment/configuration credentials or cached provider state; deletion acknowledgement alone cannot verify removal.',
-          'طلب حذف مفتاح '+(p.name||p.id)+' من مخزن Pi Native المشترك؟ قد يؤدي ذلك إلى فصل حسابات TEST أخرى. قد تبقى اعتمادات البيئة أو الإعدادات أو حالة المزود المخبأة؛ قبول الطلب وحده لا يثبت إزالة الاعتماد.'));
-        if(!ok)return;
-      }
-      disconnectingProvider=p.id;
-      const destination=workspaceId?base+encodeURIComponent(p.id):
-        '/api/opencode/connections/'+encodeURIComponent(p.id);
-      view.ready=false;renderConnected();renderOptions();
-      message(tr('Deleting key through Pi Native and confirming removal…',
-        'جارٍ حذف المفتاح عبر Pi Native والتأكد من زواله…'));
-      try{
-        // app.js maps this URL exclusively to Native DELETE /auth and a fresh
-        // Native GET /provider; no Python credential handler is involved.
-        const result=await api(destination,{method:'DELETE'});
-        if(window.nativeDirectTest?.active()&&result?.native_acknowledged!==true)
-          throw new Error(tr('Pi did not acknowledge credential deletion.','لم يؤكد Pi طلب حذف الاعتماد.'));
-        if(!alive()||!contextCurrent())return;
-        await refresh();
-        if(!alive()||!contextCurrent())return;
-        const remains=result?.provider_available_after_delete;
-        message(remains===true?tr(
-          'Native accepted the deletion request but still lists this provider as available. Credential removal is NOT verified; environment/configuration or cached state requires inspection.',
-          'قبل Native طلب الحذف لكنه ما زال يعرض المزود متاحًا. لم يُثبت زوال الاعتماد؛ يلزم فحص البيئة والإعدادات وحالة Native المخبأة.')
-          :remains===false?tr(
-          'Native accepted the deletion request and no longer lists this provider as available. Its catalog models remain searchable. Credential-store removal has not been independently verified.',
-          'قبل Native طلب الحذف ولم يعد يعرض المزود متاحًا. تظل نماذجه في فهرس البحث. لم يُتحقق مستقلًا من زوال الاعتماد من المخزن.')
-          :tr('Native accepted the deletion request, but the follow-up check failed. Removal is unverified; refresh before retrying.',
-          'قبل Native طلب الحذف، لكن فحص النتيجة تعذر. الإزالة غير متحقق منها؛ حدّث الحالة قبل إعادة المحاولة.'),remains!==false);
-      }catch(error){
-        if(alive()&&contextCurrent()){
-          message(error.message||tr('Pi deletion was not confirmed.','لم يؤكد Pi حذف المفتاح.'),true);
-          // Never optimistically clear a provider after an ambiguous failure.
-          // Re-read Native to display the current state without claiming success.
-          await refresh(true).catch(()=>{});
-        }
-      }finally{
-        disconnectingProvider='';
-        if(alive()&&contextCurrent()){view.ready=true;renderConnected();renderOptions();}
-      }
+      const state=p.public_free?tr('Pi free provider','مزوّد Pi مجاني')
+        :p.connected?tr('Configured in Pi · key not verified here','مهيأ داخل Pi · لم يُتحقق من المفتاح هنا')
+        :tr('Not configured in Pi','غير مهيأ داخل Pi');
+      status.replaceChildren(node('strong',p.name||p.id),
+        node('span',state+' · '+String(p.model_count??p.models?.length??0)+' '+tr('models','نموذج')));
     }
     function renderConnected(){
-      connectedBox.replaceChildren(node('h2',window.nativeDirectTest?.active()
-        ?tr('Providers available in Native','المزوّدون المتاحون في Native')
-        :tr('Connected providers','المزوّدات المتصلة')));
-      if(window.nativeDirectTest?.active())connectedBox.append(node('p',tr(
-        'Native availability does not verify a working key or ownership by this account. Native may include cached state or environment/configuration credentials. Keys remain inside Pi Native and may be shared between TEST accounts.',
-        'إتاحة المزود في Native لا تثبت صلاحية مفتاحه أو ملكيته لهذا الحساب. قد تشمل الحالة بيانات مخبأة أو اعتمادات البيئة والإعدادات. المفاتيح داخل Pi Native وقد تكون مشتركة بين حسابات TEST.',)));
+      connectedBox.replaceChildren(node('h2',tr('Providers configured in Pi','المزوّدات المهيأة داخل Pi')));
+      connectedBox.append(node('p',tr('Shown from Pi only; configured does not mean the provider accepted a test request. This interface does not manage API keys.','الحالة من Pi فقط؛ التهيئة لا تعني نجاح طلب لدى المزوّد. هذه الواجهة لا تدير مفاتيح API.')));
       const selected=(snapshot?.providers||[]).find(p=>p.id===selectedProviderId);
       if(selected)renderSelected(selected);
       const rows=(snapshot?.providers||[]).filter(p=>p.connected||p.public_free);
-      if(!rows.length){connectedBox.append(node('p',tr('No connected providers.','لا توجد مزوّدات متصلة.')));return;}
+      if(!rows.length){connectedBox.append(node('p',tr('No providers configured in Pi.','لا توجد مزوّدات مهيأة داخل Pi.')));return;}
       for(const p of rows){
-        const item=node('div','','manage-actions');item.append(node('strong',p.name||p.id),node('span',p.public_free
-          ?tr('Free models in Native · no API key','نماذج مجانية في Native · بلا مفتاح API'):window.nativeDirectTest?.active()
-          ?tr('Available in Native · key not verified','متاح في Native · المفتاح غير متحقق منه')
-          :p.verified===true?tr('Tested','تم اختباره'):tr('Configured · not tested','مهيأ · لم يُختبر')));
-        if(p.allowed===false)item.append(node('span',tr('Restricted','مقيّد')));
-        if(!p.public_free){
-          const remove=button(tr('Delete API Key','حذف مفتاح API'),()=>disconnect(p));
-          remove.disabled=!view.ready;item.append(remove);
-        }
+        const item=node('div','','manage-actions');
+        item.append(node('strong',p.name||p.id),node('span',
+          p.public_free?tr('Pi free provider','مزوّد Pi مجاني'):
+          tr('Configured in Pi · not verified','مهيأ داخل Pi · غير متحقق منه')));
         connectedBox.append(item);
       }
     }
@@ -419,7 +238,7 @@
       const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
       const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>(query||p.visible!==false)&&(!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query)));
       for(const p of rows){
-        const state=p.public_free?tr('Free Native models','نماذج Native مجانية'):p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
+        const state=p.public_free?tr('Free Native models','نماذج Native مجانية'):p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Configured in Pi · not verified','مهيأ داخل Pi · غير متحقق منه'):tr('Not configured in Pi','غير مهيأ داخل Pi');
         const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
         const o=previous.get(p.id)||node('button','','provider-combo-option');previous.delete(p.id);o.dataset.providerId=p.id;o.textContent=(p.name||p.id)+' · '+state+restriction;o.type='button';
         o.onclick=()=>{
@@ -436,7 +255,7 @@
         const tiles=rows.map(p=>{
           const tile=node('button','','provider-catalog-tile');
           tile.type='button';tile.textContent=p.name||p.id;
-          tile.title=(p.connected?tr('Connected','متصل'):tr('Available to connect','متاح للربط'))+' · '+(p.name||p.id);
+          tile.title=(p.connected?tr('Configured','مهيأ'):tr('Available in Pi catalog','متاح في فهرس Pi'))+' · '+(p.name||p.id);
           tile.onclick=()=>{selectedProviderId=p.id;renderSelected(p);};
           return tile;
         });
@@ -455,33 +274,11 @@
         try{
           const rows=await lookup('search',query,searchAbort.signal);
           if(sequence!==searchSequence)return;searchRows=rows;searchQuery=query;renderOptions();
-          searchState.textContent=rows.length?tr('Pi search results','نتائج بحث Pi'):tr('No matching Pi provider. Enter its exact name or ID with Add custom provider.','لا يوجد مزوّد مطابق. أدخل الاسم أو المعرّف الدقيق عبر إضافة مزوّد مخصص.');
+          searchState.textContent=rows.length?tr('Pi search results','نتائج بحث Pi'):tr('No matching provider in the installed Pi catalog.','لا يوجد مزوّد مطابق في فهرس Pi المثبت.');
         }catch(error){if(sequence===searchSequence&&error.name!=='AbortError')searchState.textContent=error.message;}
       },350);
     }
     controller.signal.addEventListener('abort',stopSearch,{once:true});
-    const customButton=button(tr('Add Provider Manually','إضافة مزوّد يدويًا'),()=>{
-      const host=node('div'),f=node('form','','manage-form');
-      const pid=input(f,tr('Provider name or ID','اسم المزوّد أو معرّفه'),'provider_id');pid.required=true;pid.maxLength=200;pid.placeholder='OpenAI / openai / …';
-      f.append(node('p',tr('Enter the exact provider name or ID registered in Pi (for example, deepseek). Model or agent names do not count as provider connections. Pi manages saved keys directly.','أدخل اسم أو معرّف المزوّد المسجل داخل Pi (مثل deepseek). أسماء النماذج أو الوكلاء لا تُعد اتصالات مزوّدين. يتولى Pi حفظ المفاتيح مباشرة.')));
-      const validationState=node('p','','provider-feedback');setFeedback(validationState,'');f.append(validationState);
-      const save=node('button',tr('Choose authentication method','اختر طريقة المصادقة'),'button');save.type='submit';f.append(save);host.append(f);document.body.append(host);
-      const dlg=window.mountFormDialog(host,f,tr('Add Provider Manually','إضافة مزوّد يدويًا'));dlg.classList.add('provider-auth-dialog');f.dialogTrigger.hidden=true;
-      dlg.addEventListener('keydown',event=>event.stopPropagation());
-      const current=()=>alive()&&view.ready&&contextCurrent()&&dlg.open;
-      f.onsubmit=async event=>{
-        event.preventDefault();if(!current()||save.disabled||!f.reportValidity())return;save.disabled=true;setFeedback(validationState,tr('Checking the Pi provider…','جارٍ فحص المزوّد في Pi…'));
-        try{
-          const rows=await lookup('resolve',pid.value.trim());if(!current())return;const p=rows[0];if(!p)throw new Error(tr('Provider is not registered in installed Pi.','المزوّد غير مسجل داخل Pi المثبت.'));
-          if(p.connected){
-            setFeedback(validationState,tr('This provider is already connected in Pi. Select another provider ID; a model or agent name is not a new provider.','هذا المزوّد متصل مسبقًا داخل Pi. اختر معرّف مزوّد آخر؛ اسم النموذج أو الوكيل ليس مزوّدًا جديدًا.'),'status');
-            return;
-          }
-          selectedProviderId=p.id;dlg.close();await openAuthDialog(p,true);
-        }catch(error){if(error.name!=='AbortError')showError(f,error);}finally{save.disabled=false;}
-      };
-      dlg.addEventListener('close',()=>host.remove(),{once:true});f.openDialog();
-    });customButton.disabled=true;box.append(customButton);
     async function refresh(force=false){
       if(!alive())return;
       if(force&&window.nativeDirectTest?.active()){
@@ -496,14 +293,14 @@
           if(!alive()||workspaceId)return;
           // Show all native providers; the connected section stays separate.
           snapshot={providers:rows};
-          view.ready=true;customButton.disabled=false;
+          view.ready=true;
           renderOptions();renderConnected();
           message(tr('Pi providers ready','مزوّدو Pi جاهزون')+' · '+rows.length);
           const selected=rows.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
         }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
         return;
       }
-      view.ready=false;customButton.disabled=true;
+      view.ready=false;
       status.querySelectorAll('button').forEach(button=>button.disabled=true);
       renderConnected();
       message(snapshot?tr('Refreshing Pi providers…','جارٍ تحديث مزوّدي Pi…'):tr('Loading Pi providers…','جارٍ تحميل مزوّدي Pi…'));
@@ -512,7 +309,7 @@
         const next=await window.workspaceRuntime.load(workspaceId,{force});
         if(!alive()||!contextCurrent())return;
         if(next.providers===null)throw new Error(next.errors?.provider_data?.detail||'Pi provider discovery failed');
-        snapshot=next;view.ready=true;customButton.disabled=false;
+        snapshot=next;view.ready=true;
         message(tr('Popular and connected Pi providers ready','المزوّدات الشائعة والمتصلة جاهزة')+' · '+snapshot.providers.length);renderOptions();renderConnected();
         let selected=snapshot.providers.find(p=>p.id===selectedProviderId);
         if(!selected&&selectedProviderId){try{selected=(await lookup('resolve',selectedProviderId))[0];}catch(error){if(error.name!=='AbortError')status.textContent=error.message;}}
