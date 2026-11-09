@@ -145,7 +145,7 @@
     if(activeWorkspace)picker.add(new Option(activeProject?.name||tr('Selected workspace','مساحة العمل المختارة'),activeWorkspace.id));
     picker.value=view.workspaceId;
     const box=section(body,tr('Connect an AI provider','ربط مزوّد ذكاء'));
-    box.append(node('p',tr('Popular providers and your connected providers are shown first. Search or add another provider by name. Connect once for your account and use it across your projects.','تظهر المزوّدات الشائعة والمتصلة أولاً. ابحث أو أضف مزوّدًا آخر باسمه. اربط المزوّد مرة لحسابك واستخدمه في مشاريعك.')));
+    box.append(node('p',tr('Connect a Pi provider once by its provider ID. Models such as DeepSeek inside OpenRouter belong to OpenRouter and are not additional provider connections. Skills and agents are selected in Workspace, not connected here.','اربط مزوّد Pi مرة واحدة عبر معرّف المزوّد. نموذج DeepSeek داخل OpenRouter يتبع OpenRouter ولا يُعد اتصال مزوّد آخر. تُختار المهارات والوكلاء في مساحة العمل ولا تُربط من هذه الصفحة.')));
     const comboWrap=node('div','','provider-combo'),combo=node('input');combo.type='search';
     combo.value=body.dataset.providerQuery||'';combo.placeholder=tr('Search providers…','ابحث عن المزوّدات…');combo.setAttribute('role','combobox');combo.setAttribute('aria-expanded','false');combo.autocomplete='off';combo.setAttribute('aria-label',combo.placeholder);
     const options=node('div','','provider-combo-options');options.hidden=true;comboWrap.append(combo,options);box.append(comboWrap);
@@ -463,7 +463,7 @@
     const customButton=button(tr('Add Provider Manually','إضافة مزوّد يدويًا'),()=>{
       const host=node('div'),f=node('form','','manage-form');
       const pid=input(f,tr('Provider name or ID','اسم المزوّد أو معرّفه'),'provider_id');pid.required=true;pid.maxLength=200;pid.placeholder='OpenAI / openai / …';
-      f.append(node('p',tr('Search any provider in Pi by its original name or ID. Saving credentials configures the connection; a native prompt is required to test access.','ابحث عن أي مزوّد في Pi باسمه أو معرّفه الأصلي. حفظ الاعتماد يهيئ الاتصال؛ يلزم طلب أصلي لاختبار صلاحية الوصول.')));
+      f.append(node('p',tr('Enter the exact provider name or ID registered in Pi (for example, deepseek). Model or agent names do not count as provider connections. Pi manages saved keys directly.','أدخل اسم أو معرّف المزوّد المسجل داخل Pi (مثل deepseek). أسماء النماذج أو الوكلاء لا تُعد اتصالات مزوّدين. يتولى Pi حفظ المفاتيح مباشرة.')));
       const validationState=node('p','','provider-feedback');setFeedback(validationState,'');f.append(validationState);
       const save=node('button',tr('Choose authentication method','اختر طريقة المصادقة'),'button');save.type='submit';f.append(save);host.append(f);document.body.append(host);
       const dlg=window.mountFormDialog(host,f,tr('Add Provider Manually','إضافة مزوّد يدويًا'));dlg.classList.add('provider-auth-dialog');f.dialogTrigger.hidden=true;
@@ -472,8 +472,11 @@
       f.onsubmit=async event=>{
         event.preventDefault();if(!current()||save.disabled||!f.reportValidity())return;save.disabled=true;setFeedback(validationState,tr('Checking the Pi provider…','جارٍ فحص المزوّد في Pi…'));
         try{
-          const rows=await lookup('resolve',pid.value.trim());if(!current())return;const p=rows[0];if(!p)throw new Error(tr('Provider was not found in Pi.','المزوّد غير موجود في Pi.'));
-          if(p.allowed===false)throw new Error(tr('This provider is restricted by platform policy.','هذا المزوّد مقيّد بسياسة المنصة.'));
+          const rows=await lookup('resolve',pid.value.trim());if(!current())return;const p=rows[0];if(!p)throw new Error(tr('Provider is not registered in installed Pi.','المزوّد غير مسجل داخل Pi المثبت.'));
+          if(p.connected){
+            setFeedback(validationState,tr('This provider is already connected in Pi. Select another provider ID; a model or agent name is not a new provider.','هذا المزوّد متصل مسبقًا داخل Pi. اختر معرّف مزوّد آخر؛ اسم النموذج أو الوكيل ليس مزوّدًا جديدًا.'),'status');
+            return;
+          }
           selectedProviderId=p.id;dlg.close();await openAuthDialog(p,true);
         }catch(error){if(error.name!=='AbortError')showError(f,error);}finally{save.disabled=false;}
       };
