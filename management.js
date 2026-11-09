@@ -387,10 +387,17 @@
         event.preventDefault();if(!alive()||!view.ready||!dlg.open||submit.disabled)return;
         submit.disabled=true;state.textContent='';
         try{
-          const rows=await lookup('resolve',id.value.trim());
-          const p=rows[0];
-          if(!p)throw Error(tr('Provider not found in installed Pi.','المزوّد غير موجود في Pi المثبت.'));
-          if(p.connected)throw Error(tr('Pi already has this provider configured.','هذا المزوّد مهيأ مسبقًا في Pi.'));
+          // Manual login reads Pi *now*, not a cached workspace catalog or
+          // previously saved form state. A model/agent name is not a provider.
+          const current=await window.nativeDirectTest.catalog({force:true});
+          const term=id.value.trim().toLowerCase();
+          const registered=current.all.find(p=>p.id.toLowerCase()===term)
+            ||current.all.find(p=>(p.name||'').toLowerCase()===term);
+          if(!registered)throw Error(tr('Provider ID not found in installed Pi.','معرّف المزوّد غير موجود في Pi المثبت.'));
+          if(current.connected.includes(registered.id))
+            throw Error(tr('This provider is already configured in Pi. Manage it in the saved providers section.','هذا المزوّد مهيأ مسبقًا في Pi. أدره من قسم المزوّدات المحفوظة.'));
+          const p={id:registered.id,name:registered.name||registered.id,connected:false,
+            model_count:Object.keys(registered.models||{}).length};
           selectedProviderId=p.id;dlg.close();await openPiLogin(p);
         }catch(error){if(dlg.open)state.textContent=error.message||String(error);}
         finally{submit.disabled=false;}
