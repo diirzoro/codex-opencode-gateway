@@ -1,4 +1,4 @@
-/* OpenCode 1.x native wire adapter and existing-UI presentation, not an execution engine. */
+/* Pi 1.x native wire adapter and existing-UI presentation, not an execution engine. */
 (() => {
   let identity='',configuration=null,configurationPending=null,stream=null,streamId='';
   const rows=new Map(),snapshots=new Map(),statuses=new Map(),statusEvents=new Map(),statusReads=new Map();
@@ -110,7 +110,7 @@
     const ctx=await localProjectContext(workspace);
     if(!ctx.binding)return [];
     if(ctx.binding.workspace_id!==workspace)return [];
-    // TEST engine conversion: replace one old ses_* OpenCode binding with the
+    // TEST engine conversion: replace one old ses_* Pi binding with the
     // unique pi_* session belonging to this same owned Project. No duplicate.
     if(ctx.binding.native_session_id.startsWith('ses_')){
       const available=await window.nativeDirectTest.direct('session',{directory:ctx.root});
@@ -129,14 +129,14 @@
       throw Error(label('Project session needs explicit recovery; no replacement was created.',
         'جلسة المشروع تحتاج إلى استعادة مقصودة؛ لم تُنشأ جلسة بديلة.'));
     // Project is the only user-facing conversation title. Synchronize through
-    // OpenCode Native itself; Python only owns the administrative Project name.
+    // Pi Native itself; Python only owns the administrative Project name.
     let named=live;
     if(ctx.name&&live.title!==ctx.name){
       named=await window.nativeDirectTest.direct(
         'session/'+encodeURIComponent(live.id),
         {method:'PATCH',directory:ctx.root,value:{title:ctx.name}});
       if(named?.id!==live.id)
-        throw Error('OpenCode did not confirm the Project conversation title');
+        throw Error('Pi did not confirm the Project conversation title');
     }
     return [localProjectRow(workspace,ctx,named)];
   }
@@ -203,7 +203,7 @@
   const url=(workspace,path)=>window.nativeDirectTest.url(path,nativeRoot(workspace));
   async function native(workspace,path,body,{signal,timeout=30000}={}){
     // No Python or legacy /native-session fallback. Native is the only engine.
-    if(!window.nativeDirectTest?.active?.())throw Error('OpenCode Native is unavailable');
+    if(!window.nativeDirectTest?.active?.())throw Error('Pi Native is unavailable');
     const controller=new AbortController(),cancel=()=>controller.abort();
     if(signal?.aborted)controller.abort();
     else signal?.addEventListener('abort',cancel,{once:true});
@@ -286,7 +286,7 @@
   function display(messages,row){
     if(!Array.isArray(messages))throw Error('Invalid native message snapshot');
     return messages.map(m=>{
-      // Preserve OpenCode text verbatim. Tool activity is sourced exclusively
+      // Preserve Pi text verbatim. Tool activity is sourced exclusively
       // from native tool parts, never guessed from or appended to chat text.
       const parts=Array.isArray(m.parts)?m.parts:[];
       const tools=new Map();for(const p of parts)if(p.type==='tool'&&p.callID)tools.set(p.callID,p);
@@ -310,7 +310,7 @@
     }
     if(/^\/api\/sessions(?:\?.*)?$/.test(path)&&method==='GET'){
       const unavailable=[];
-      // TEST: a user explicitly opens a project before asking OpenCode for
+      // TEST: a user explicitly opens a project before asking Pi for
       // its conversations. Do not let Native enumerate every account project.
       const workspaces=activeWorkspace?.id?[{id:activeWorkspace.id}]:[];
       const lists=await Promise.all(workspaces.map(async w=>{
@@ -334,7 +334,7 @@
     match=path.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/(.*?))?(?:\?.*)?$/);if(!match)return null;
     const id=match[1],tail=match[2]||'',row=await context(id),user=owner();
     if(!tail&&method==='PATCH'){
-      if(!window.nativeDirectTest?.active?.())throw Error('OpenCode Native is unavailable');
+      if(!window.nativeDirectTest?.active?.())throw Error('Pi Native is unavailable');
       const payload=JSON.parse(options.body||'{}');
       const projectId=row.project_id||row.id;
       if(typeof payload.title!=='string'||!payload.title.trim())throw Error('Project name is required');
@@ -448,8 +448,8 @@
       if(nativeIssue){
         const failure=window.nativeDirectTest?.classifyError(nativeIssue);
         const readable=failure?.message||label(
-          'OpenCode reported an error from the selected provider.',
-          'أبلغ OpenCode عن خطأ من مزود النموذج.');
+          'Pi reported an error from the selected provider.',
+          'أبلغ Pi عن خطأ من مزود النموذج.');
         const token=String(failure?.kind||'unknown')+':'+String(p.info?.id||p.messageID||'current');
         const state=document.getElementById('runtimeStatus');
         if(state)state.textContent=readable;
@@ -488,7 +488,7 @@
       if(opened)filesChanged();needsSnapshot=opened||!histories.has(id);
       opened=true;dirty={messages:true,status:true,controls:true,todos:true};schedule();
     };
-    source.onerror=()=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent='Reconnecting to native OpenCode';};
+    source.onerror=()=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent='Reconnecting to native Pi';};
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
   }
   function stop(){stream?.close();stream=null;streamId='';}
@@ -499,7 +499,7 @@
     return coalesce('abort:'+id,async()=>{
       const row=await context(id);
       if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
-      // Abort immediately via the EXISTING OpenCode Native session endpoint.
+      // Abort immediately via the EXISTING Pi Native session endpoint.
       // A file-read/history request must never precede or gate cancellation.
       await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/abort',{}, {timeout:8000});
       let stopped=false;
@@ -513,7 +513,7 @@
         if(state===undefined||state?.type==='idle'){stopped=true;break;}
         if(attempt!==9)await new Promise(resolve=>setTimeout(resolve,850));
       }
-      if(!stopped)throw Error(label('Native has not confirmed Stop yet. Keep your draft and retry Stop or Recover; no history was deleted.','لم يؤكد OpenCode التوقف بعد. احتفظ بالمسودة وحاول الإيقاف أو الاستعادة مجددًا؛ لم يُحذف سجل المحادثة.'));
+      if(!stopped)throw Error(label('Native has not confirmed Stop yet. Keep your draft and retry Stop or Recover; no history was deleted.','لم يؤكد Pi التوقف بعد. احتفظ بالمسودة وحاول الإيقاف أو الاستعادة مجددًا؛ لم يُحذف سجل المحادثة.'));
       if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
       uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
       statuses.set(id,'idle');if(current(id,user))activeSession.execution_status='idle';
@@ -547,7 +547,7 @@
          (sendGenerations.get(id)||0)!==sendGeneration&&
          owner()===user&&epoch===sendEpoch)
         throw Error(label('Submission interrupted by Stop. The session can resume after Native confirms idle.',
-                          'قوطع إرسال المرفق بالإلغاء. يمكن متابعة المحادثة بعد أن يؤكد OpenCode التوقف.'));
+                          'قوطع إرسال المرفق بالإلغاء. يمكن متابعة المحادثة بعد أن يؤكد Pi التوقف.'));
       // The HTTP response can fail after Native accepted an async prompt.
       // Resolve the exact Native message ID against authoritative history
       // before reporting uncertainty. Never send the prompt a second time.
@@ -564,7 +564,7 @@
       if((sendGenerations.get(id)||0)!==sendGeneration)throw Error(label('Submission interrupted by Stop. Review history before sending again.','قوطع الطلب بالإيقاف. راجع السجل قبل الإرسال مجددًا.'));
       if(!confirmed){
         if(owner()===user&&(!error.status||error.status===408||error.status>=500))
-          error.message=label('OpenCode receipt could not be confirmed. Your draft is saved; check session status.','تعذر تأكيد استلام OpenCode للطلب. المسودة محفوظة؛ تحقق من حالة الجلسة.')+(error.status?' (HTTP '+error.status+')':'');
+          error.message=label('Pi receipt could not be confirmed. Your draft is saved; check session status.','تعذر تأكيد استلام Pi للطلب. المسودة محفوظة؛ تحقق من حالة الجلسة.')+(error.status?' (HTTP '+error.status+')':'');
         else if(owner()===user){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}
         throw error;
       }
@@ -592,7 +592,7 @@
     // Confirm native completion before allowing the replacement prompt.
     const check=await native(row.workspace_id,'session/status');
     if(!check||typeof check!=='object'||Array.isArray(check))throw Error('Native session status is unavailable');
-    if((check[row.runtime_id]?.type||'idle')!=='idle')throw Error(label('OpenCode is still stopping. Retry after it becomes idle.','OpenCode ما زال يوقف التنفيذ؛ أعد المحاولة بعد توقفه.'));
+    if((check[row.runtime_id]?.type||'idle')!=='idle')throw Error(label('Pi is still stopping. Retry after it becomes idle.','Pi ما زال يوقف التنفيذ؛ أعد المحاولة بعد توقفه.'));
     statuses.set(id,'idle');
     return {interrupted:true,previous};
   }
@@ -663,10 +663,10 @@
         const candidates=['read','edit','write','apply_patch'].includes(permission)?[item.metadata?.filepath,...(item.patterns||[])]:['glob','grep','list'].includes(permission)?[item.metadata?.path]:[];
         const paths=[...new Set(candidates.map(value=>relativeFile(value,row)).filter(Boolean))].slice(0,8);
         if(paths.length){const list=document.createElement('ul');for(const path of paths){const li=document.createElement('li');li.textContent=path;li.dir='auto';list.append(li);}card.append(list);}
-        // Native direct TEST keeps permission replies in OpenCode: once/reject only.
+        // Native direct TEST keeps permission replies in Pi: once/reject only.
         // Gateway's legacy persistent remember endpoint is not a Native feature.
         const rememberFile=false; // Never use Python to read/patch Native permission state.
-        const note=document.createElement('small');note.textContent=rememberFile?label('Allow once, or remember these files for later prompts in this conversation. The current run may still ask.','اسمح مرة، أو تذكّر هذه الملفات للرسائل القادمة في هذه المحادثة. قد يظل التشغيل الحالي يطلب الموافقة.'):window.nativeDirectTest?.testHost?.()?label('This Native permission request only.','طلب الإذن هذا داخل OpenCode فقط.'):label('This request only. Gateway verifies ownership and policy.','لهذا الطلب فقط. تتحقق البوابة من الملكية والسياسة.');card.append(note);
+        const note=document.createElement('small');note.textContent=rememberFile?label('Allow once, or remember these files for later prompts in this conversation. The current run may still ask.','اسمح مرة، أو تذكّر هذه الملفات للرسائل القادمة في هذه المحادثة. قد يظل التشغيل الحالي يطلب الموافقة.'):window.nativeDirectTest?.testHost?.()?label('This Native permission request only.','طلب الإذن هذا داخل Pi فقط.'):label('This request only. Gateway verifies ownership and policy.','لهذا الطلب فقط. تتحقق البوابة من الملكية والسياسة.');card.append(note);
         const controls=document.createElement('div');controls.className='chat-approval-actions';
         for(const [text,reply] of [[label('Allow once','السماح مرة واحدة'),'once'],...(rememberFile?[[label('Remember these files','تذكّر هذه الملفات'),'remember']]:[]),[label('Reject','رفض'),'reject']]){const button=document.createElement('button');button.textContent=text;button.type='button';button.dataset.reply=reply;
           button.disabled=permissionReplies.has(actionKey)||reply==='once'&&!names[permission];
@@ -688,7 +688,7 @@
   async function loadDiscovery(id){
     const directMode=Boolean(window.nativeDirectTest?.active?.());
     // The connection dashboard owns one shared account inventory, backed by
-    // OpenCode's actual Native catalog. Opening a project must not reload it.
+    // Pi's actual Native catalog. Opening a project must not reload it.
     // Use the configured/connected Native providers (cached) for the composer,
     // not the full 7 MB discovery catalog.
     const inventory=directMode?await window.nativeDirectTest.workspaceRegistry():null;
