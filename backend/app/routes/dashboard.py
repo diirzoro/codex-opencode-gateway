@@ -15,6 +15,14 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 @router.get("")
 def dashboard(user: User = Depends(require_user), db: Session = Depends(get_db)):
+
+  @router.get("/providers")
+  async def get_providers(db: Session = Depends(get_db)):
+      response = await fetch('/api/native-test/providers');
+      if response.status != 200:
+          raise HTTPException(status_code=500, detail="Could not fetch providers");
+      providers = await response.json();
+      return providers;
     projects = list(db.scalars(select(Project).where(Project.user_id == user.id, Project.archived_at.is_(None), visible_project_predicate(user.id)).order_by(Project.created_at.desc())))
     workspaces = list(db.scalars(select(Workspace).join(Project, Project.id == Workspace.project_id).where(Workspace.user_id == user.id, Project.archived_at.is_(None), visible_project_predicate(user.id)).order_by(Workspace.created_at.desc())))
     sessions = list(db.scalars(select(WorkspaceSession).join(Workspace, Workspace.id == WorkspaceSession.workspace_id).join(Project, Project.id == Workspace.project_id).where(WorkspaceSession.user_id == user.id, Project.archived_at.is_(None), visible_project_predicate(user.id)).order_by(WorkspaceSession.created_at.desc())))

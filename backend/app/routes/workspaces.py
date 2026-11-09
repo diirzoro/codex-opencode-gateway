@@ -22,6 +22,16 @@ from . import native_sessions
 
 router=APIRouter(prefix="/api",tags=["workspaces"],dependencies=[Depends(require_workspace_entitlement)])
 
+    @router.get('/workspaces/{workspace_id}/providers')
+    async def fetchConnectedProviders(workspace_id: uuid.UUID, user: User = Depends(require_user), db: Session = Depends(get_db)):
+        # Call Native API to get providers for the workspace
+        response = await fetch(`/api/native-test/workspaces/${workspace_id}/providers`);
+        if (response.status !== 200) {
+            throw new HTTPException(500, detail='Unable to fetch providers');
+        }
+        return await response.json();
+
+
 class CreateProject(BaseModel):
     model_config=ConfigDict(extra="forbid",str_strip_whitespace=True)
     project_name: str=Field(min_length=1,max_length=120,pattern=r"^[^\r\n\x00]+$")
