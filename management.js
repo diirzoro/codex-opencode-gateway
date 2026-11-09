@@ -227,7 +227,7 @@
       key.type='password';key.required=true;key.autocomplete='off';key.maxLength=8192;
       f.append(node('p',tr('Submitted directly to Pi for native login. It is not stored by this website. Pi login confirms configuration, not remote provider acceptance.','يُرسل المفتاح مباشرةً إلى تسجيل دخول Pi الأصلي ولا يحفظه الموقع. نجاح تسجيل الدخول يعني التهيئة، لا إثبات قبول المزوّد للمفتاح.')));
       const state=node('p','','provider-feedback');state.setAttribute('role','status');f.append(state);
-      const submit=button(tr('Connect using Pi','ربط باستخدام Pi'),()=>{});submit.type='submit';f.append(submit);
+      const submit=node('button',tr('Connect using Pi','ربط باستخدام Pi'),'button');submit.type='submit';f.append(submit);
       host.append(f);document.body.append(host);
       const dlg=window.mountFormDialog(host,f,tr('Pi provider login','تسجيل دخول مزوّد Pi'));
       dlg.classList.add('provider-auth-dialog');f.dialogTrigger.hidden=true;
@@ -356,7 +356,7 @@
       const id=input(f,tr('Pi provider ID or name','اسم المزوّد أو معرّفه في Pi'),'provider_id');
       id.required=true;id.maxLength=200;id.placeholder='deepseek';
       const state=node('p','','provider-feedback');f.append(state);
-      const submit=button(tr('Continue to Pi login','متابعة إلى تسجيل دخول Pi'),()=>{});submit.type='submit';f.append(submit);
+      const submit=node('button',tr('Continue to Pi login','متابعة إلى تسجيل دخول Pi'),'button');submit.type='submit';f.append(submit);
       host.append(f);document.body.append(host);
       const dlg=window.mountFormDialog(host,f,tr('Select Pi provider','اختيار مزوّد Pi'));
       f.dialogTrigger.hidden=true;
