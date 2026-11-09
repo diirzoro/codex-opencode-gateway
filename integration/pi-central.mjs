@@ -105,7 +105,7 @@ class Agent {
     this.closed=false;this.active=false;
     const sessionDir=path.join(ROOT,"projects",s.userId,s.workspaceId);
     if(!s.catalog)mkdirSync(sessionDir,{recursive:true,mode:0o700});
-    const args=["--mode","rpc",...(s.catalog?["--no-session"]:["--continue","--session-dir",sessionDir]),
+    const args=["--mode","rpc",...(s.catalog?["--no-session"]:["--session-id",this.id,"--session-dir",sessionDir]),
       "--no-tools","--no-extensions","--no-skills","--no-prompt-templates",
       "--no-approve","--name",s.projectId];
     const env={PATH:process.env.PATH,HOME:process.env.HOME||"/home/tahir",
@@ -298,6 +298,6 @@ const server=http.createServer(async(req,res)=>{
 server.on("clientError",(_,s)=>s.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 mkdirSync(path.dirname(SOCK),{recursive:true,mode:0o700});
 if(existsSync(SOCK))unlinkSync(SOCK);
-server.listen(SOCK,()=>{chmodSync(SOCK,0o600);console.log("Pi TEST bridge on UNIX socket");});
+server.listen(SOCK,()=>{chmodSync(SOCK,0o660);console.log("Pi TEST bridge on UNIX socket");});
 setInterval(()=>{for(const a of pool.values())if(!a.active&&!a.events.size&&Date.now()-a.last>IDLE_MS)a.close();},60000).unref();
 process.on("SIGTERM",()=>{server.close();for(const a of pool.values())a.close();});
