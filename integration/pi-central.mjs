@@ -71,8 +71,9 @@ class Agent {
     this.closed=false;this.active=false;
     const sessionDir=path.join(ROOT,s.workspaceId);
     mkdirSync(sessionDir,{recursive:true,mode:0o700});
-    this.child=spawn(PI,["--mode","rpc","--session-id",this.id,
-      "--session-dir",sessionDir,"--no-tools","--name",s.projectId],{
+    this.child=spawn(PI,["--mode","rpc","--continue",
+      "--session-dir",sessionDir,"--no-tools","--no-extensions","--no-skills",
+      "--no-prompt-templates","--no-approve","--name",s.projectId],{
         cwd:s.directory,stdio:["pipe","pipe","pipe"],env:process.env });
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data",data=>this.consume(data));
@@ -92,12 +93,12 @@ class Agent {
         x.success?p.resolve(x.data):p.reject(new Error(x.error||"Pi command failed"));
       } else if(x.type!=="response") {
         if(x.type==="agent_start")this.active=true;
-        if(x.type==="agent_end"||x.type==="agent_settled")this.active=false;
+        if(x.type==="agent_settled")this.active=false;
         for(const res of this.events) {
           // Native Pi events are sent without invented OpenCode success states.
           try{res.write("data: "+JSON.stringify({type:"pi."+x.type,properties:x})+"\n\n");}catch{this.events.delete(res);}
         }
-        if(x.type==="agent_end"||x.type==="agent_settled") {
+        if(x.type==="agent_settled") {
           for(const res of this.events)try{res.write('data: {"type":"session.idle","properties":{"sessionID":"'+this.id+'"}}\n\n');}catch{}
         }
       }
