@@ -89,6 +89,35 @@ async function piModels() {
     allowModelNetwork:false
   });
 }
+// Verify a candidate key by making a minimal, real request through Pi's
+// native ModelRuntime before calling login(). This uses Pi's temporary
+// per-request apiKey override and NEVER saves a failed candidate.
+async function verifyPiApiKey(runtime,providerId,key){
+  const chatModels=runtime.getModels(providerId).filter(model=>
+    model&&typeof model.id==="string"&&model.provider===providerId);
+  if(!chatModels.length)
+    throw Object.assign(new Error("Pi cannot verify this provider: no usable chat model is registered. The key was not saved."),{status:422});
+  const cheapest=[...chatModels].sort((a,b)=>{
+    const cost=m=>Number(m.cost?.input||0)+Number(m.cost?.output||0);
+    return cost(a)-cost(b);
+  })[0];
+  const signal=AbortSignal.timeout(20000);
+  let result;
+  try{
+    result=await runtime.complete(
+      cheapest,
+      {messages:[{role:"user",content:"Reply OK.",timestamp:Date.now()}]},
+      {apiKey:key,maxTokens:2,signal}
+    );
+  }catch(e){
+    if(signal.aborted)
+      throw Object.assign(new Error("Pi provider verification timed out. The key was not saved."),{status:503});
+    throw Object.assign(new Error("Pi could not verify this provider key. Nothing was saved."),{status:422});
+  }
+  if(!result||!["stop","length","toolUse"].includes(result.stopReason))
+    throw Object.assign(new Error("Pi did not confirm the API key with the provider. Nothing was saved."),{status:422});
+  return true;
+}
 function invalidatePiInventory() {
   modelsSnapshots.clear();
   commandsSnapshots.clear();
@@ -457,7 +486,10 @@ const server=http.createServer(async(req,res)=>{
             return error(res,422,"Provider does not offer native Pi API-key login");
           // Only this exact Pi provider can be a duplicate connection.
           if(status.configured)
-            return error(res,409,"This Pi provider is already configured; disconnect it before replacing its key");
+            return error(res,409,"This Pi provider already has credentials; remove them before reconnecting");
+          // SDK login saves credentials but is NOT a remote validation. Check
+          // first using Pi's actual model transport; never persist a fake key.
+          await verifyPiApiKey(runtime,provider,payload.key.trim());
           releaseProviderWorkers();
           await runtime.login(provider,"api_key",{
             signal:AbortSignal.timeout(20000),
