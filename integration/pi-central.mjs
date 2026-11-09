@@ -266,7 +266,7 @@ function mapped(messages, id) {
   });
 }
 
-function providerCatalog(models,userId,availableProviders=[]){
+function providerCatalog(models,userId,availableProviders=[],providerDefinitions=[]){
   // Pi model availability is not authentication. A model in the catalog must
   // NEVER imply that an account has an API key or a verified connection.
   const grouped=new Map();
@@ -279,6 +279,13 @@ function providerCatalog(models,userId,availableProviders=[]){
     if(!row){row={id,name:id,models:{}};grouped.set(id,row);}
     row.models[model.id]={id:model.id,name:model.name||model.id,reasoning:Boolean(model.reasoning),
       context:model.contextWindow,maxTokens:model.maxTokens,cost:model.cost||null};
+  }
+  // Provider registry comes from installed Pi, including providers without a key.
+  for(const provider of providerDefinitions){
+    if(!provider?.id||typeof provider.id!=="string")continue;
+    const row=grouped.get(provider.id);
+    if(row)row.name=provider.name||row.name;
+    else grouped.set(provider.id,{id:provider.id,name:provider.name||provider.id,models:{}});
   }
   const all=[...grouped.values()];
   const native=credentials();
@@ -297,7 +304,7 @@ async function nativeDiscovery(userId) {
   const models=modelsSnapshots.get(userId), commands=commandsSnapshots.get(userId);
   if(models&&commands&&Date.now()-models.time<CATALOG_TTL_MS
     &&Date.now()-commands.time<CATALOG_TTL_MS)
-    return {models:models.models,availableProviders:models.availableProviders||[],commands:commands.commands};
+    return {models:models.models,availableProviders:models.availableProviders||[],providers:models.providers||[],commands:commands.commands};
   if(nativeDiscoveryPending)return nativeDiscoveryPending;
   // All web clients share one concurrent Pi inventory read, not duplicate
   // Pi discovery processes or browser/Provider databases.
@@ -313,21 +320,23 @@ async function nativeDiscovery(userId) {
     // The installed Pi SDK model registry includes built-in and models.json
     // definitions, including providers not yet connected. RPC contains only
     // currently available models on some Pi builds. Both sources are Pi-native.
-    let models=m.models,availableProviders=m.models.map(model=>model.provider);
+    let models=m.models,availableProviders=m.models.map(model=>model.provider),providers=[];
     try {
       const sdk=await import("@earendil-works/pi-coding-agent");
       let all=[],authenticated=[];
       if(sdk.ModelRuntime?.create){
-        // The installed Earendil Pi family exposes the complete native
-        // registry through ModelRuntime; never create a Gateway catalog.
+        // Pi owns the full provider registry (including DeepSeek before
+        // a key is configured). RPC only returns models currently available.
         const runtime=await sdk.ModelRuntime.create({
           authPath:path.join(PI_AGENT_DIR,"auth.json"),
           modelsPath:path.join(PI_AGENT_DIR,"models.json"),
           allowModelNetwork:false
         });
         all=runtime.getModels();
-        // Pi's existing availability snapshot is sufficient here. Do not
-        // perform a new network/provider auth refresh merely to render a list.
+        providers=runtime.getProviders().map(p=>({
+          id:p.id,name:p.name||p.id,
+          auth_methods:Object.keys(p.auth||{}).filter(k=>["apiKey","oauth"].includes(k))
+        }));
         authenticated=typeof runtime.getAvailableSnapshot==="function"
           ?runtime.getAvailableSnapshot():[];
       }else if(sdk.ModelRegistry?.create&&sdk.AuthStorage?.create){
@@ -351,9 +360,9 @@ async function nativeDiscovery(userId) {
         e instanceof Error?e.message:"unknown");
     }
     const time=Date.now();
-    modelsSnapshots.set(userId,{models,availableProviders,time});
+    modelsSnapshots.set(userId,{models,availableProviders,providers,time});
     commandsSnapshots.set(userId,{commands:c.commands,time});
-    return {models,availableProviders,commands:c.commands};
+    return {models,availableProviders,providers,commands:c.commands};
   }finally{a.close();}
   })();
   try{return await nativeDiscoveryPending;}finally{nativeDiscoveryPending=null;}
@@ -374,7 +383,7 @@ const server=http.createServer(async(req,res)=>{
     if(s.catalog){
       if(pathname==="/provider"&&req.method==="GET") {
         const native=await nativeDiscovery(s.userId);
-        return json(res,200,providerCatalog(native.models,s.userId,native.availableProviders));
+        return json(res,200,providerCatalog(native.models,s.userId,native.availableProviders,native.providers));
       }
       // Pi's registered extension/skill/prompt commands are its discoverable
       // capabilities. Do not invent "build", "plan" or other agents.
@@ -385,8 +394,13 @@ const server=http.createServer(async(req,res)=>{
       if(pathname==="/provider/auth"&&req.method==="GET") {
         const native=await nativeDiscovery(s.userId);
         const result={};
-        for(const p of providerCatalog(native.models,s.userId,native.availableProviders).all)
-          result[p.id]=[{type:"api",label:"API key"}];
+        for(const p of native.providers){
+          const methods=p.auth_methods||[];
+          result[p.id]=[
+            ...(methods.includes("apiKey")?[{type:"api",label:"API key"}]:[]),
+            ...(methods.includes("oauth")?[{type:"oauth",label:"Pi OAuth"}]:[])
+          ];
+        }
         return json(res,200,result);
       }
       const auth=pathname.match(/^\/auth\/([a-zA-Z0-9._-]{1,120})$/);
