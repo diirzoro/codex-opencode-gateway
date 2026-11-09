@@ -1,8 +1,8 @@
 /**
  * Pi Central ↔ existing OpenCode-shaped TEST browser transport.
- * TEST ONLY. No Python AI proxy; Gateway is used strictly as auth/ownership oracle.
- * IMPORTANT: This adapter is designed for a single TEST host and is not a
- * production multi-tenant sandbox. Pi tools are deliberately disabled.
+ * TEST ONLY. Pi is the only coding/provider engine; platform lookups only protect project files.
+ * Existing bridge only; native Pi owns the shared provider configuration.
+ * Workspace execution tools require project process isolation before activation.
  *
  * Run under systemd, same UID as installed Pi. Do not expose on TCP.
  * Nginx must proxy /native-direct/api/ to this UNIX socket, stripping prefix.
@@ -17,6 +17,7 @@ import { URL } from "node:url";
 const PI = process.env.PI_BINARY || "/home/tahir/pi-test/node_modules/.bin/pi";
 const SOCK = process.env.PI_SOCKET || "/run/pi-central/pi.sock";
 const ROOT = process.env.PI_SESSIONS_ROOT || "/home/tahir/pi-test/sessions";
+const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || "/home/tahir/.pi/agent";
 const GATEWAY = process.env.PI_TEST_GATEWAY || "http://127.0.0.1:8001";
 const HOST = "test.opencode-gateway.codes";
 const MAX_PROCS = 2;
@@ -51,48 +52,47 @@ async function gateway(req, endpoint) {
 }
 async function scope(req, query) {
   // Only Platform-owned paths are admitted; never run an arbitrary user URL directory.
-  const who=await gateway(req,"/api/auth/me");
   const directory=query.get("directory");
-  // The account catalog is read-only, not a workspace and never an execution scope.
-  if(directory===CATALOG_DIRECTORY)return {catalog:true, userId:String(who.id)};
-
-  if (!directory || directory.length>4096) throw Object.assign(new Error("Owned project directory required"),{status:400});
-  const list=await gateway(req,"/api/workspaces");
-  if (!Array.isArray(list) || list.length>500) throw Object.assign(new Error("Workspace inventory unavailable"),{status:503});
-  for(const row of list) {
-    if (!row?.id) continue;
-    const detail=await gateway(req,"/api/workspaces/"+encodeURIComponent(row.id));
-    if (detail.native_directory === directory && detail.project_id) {
-      return { directory, workspaceId:String(row.id), projectId:String(detail.project_id), userId:String(who.id) };
-    }
-  }
-  throw Object.assign(new Error("Workspace not owned"),{status:403});
+  // Catalogue and agent discovery come straight from installed Pi, not Python.
+  // Existing Nginx is the web entry boundary for this private socket.
+  if(directory===CATALOG_DIRECTORY)return {catalog:true,userId:"shared"};
+  if(!directory || directory.length>4096)
+    throw Object.assign(new Error("Owned project directory required"),{status:400});
+  // One narrow platform lookup establishes the workspace-file ownership;
+  // it never manages providers, models, agent state, or conversations.
+  const match=directory.match(/\/([0-9a-f-]{36})\/repo\/?$/i);
+  if(!match)throw Object.assign(new Error("Invalid workspace directory"),{status:403});
+  const who=await gateway(req,"/api/auth/me");
+  const detail=await gateway(req,"/api/workspaces/"+encodeURIComponent(match[1]));
+  if(detail.native_directory!==directory || !detail.project_id)
+    throw Object.assign(new Error("Workspace not owned"),{status:403});
+  return {directory,workspaceId:match[1],projectId:String(detail.project_id),userId:String(who.id)};
 }
-function accountDir(userId) {
-  if(!/^[0-9a-f-]{32,36}$/i.test(userId))throw Object.assign(new Error("Invalid user scope"),{status:403});
-  const dir=path.join(ROOT,"accounts",userId);
-  mkdirSync(dir,{recursive:true,mode:0o700});
-  return dir;
-}
-function credentials(userId) {
-  const file=path.join(accountDir(userId),"auth.json");
+// The installed Pi auth.json is the sole shared provider-credential store.
+// The web bridge does not create per-user copies or Gateway provider records.
+function credentials() {
+  const file=path.join(PI_AGENT_DIR,"auth.json");
   if(!existsSync(file))return {};
   const data=JSON.parse(readFileSync(file,"utf8"));
-  if(!data||typeof data!=="object"||Array.isArray(data))throw new Error("Invalid Pi auth storage");
+  if(!data||typeof data!=="object"||Array.isArray(data))
+    throw new Error("Invalid installed Pi auth configuration");
   return data;
 }
-function writeCredentials(userId,data) {
-  const dir=accountDir(userId),file=path.join(dir,"auth.json");
-  const temp=path.join(dir,".auth-"+process.pid+"-"+Date.now()+".tmp");
+function writeCredentials(data) {
+  const file=path.join(PI_AGENT_DIR,"auth.json");
+  const temp=path.join(PI_AGENT_DIR,".auth-"+process.pid+"-"+Date.now()+".tmp");
   try {
     writeFileSync(temp,JSON.stringify(data),{mode:0o600,flag:"wx"});
-    chmodSync(temp,0o600);renameSync(temp,file);chmodSync(file,0o600);
+    chmodSync(temp,0o600);
+    renameSync(temp,file);
+    chmodSync(file,0o600);
   } finally {if(existsSync(temp))unlinkSync(temp);}
-  modelsSnapshots.delete(userId);
+  modelsSnapshots.clear();
 }
-function releaseUserWorkers(userId) {
-  const workers=[...pool.values()].filter(a=>a.scope.userId===userId&&!a.closed);
-  if(workers.some(a=>a.active))throw Object.assign(new Error("Stop the current Pi response before changing credentials"),{status:409});
+function releaseProviderWorkers() {
+  const workers=[...pool.values()].filter(a=>!a.closed);
+  if(workers.some(a=>a.active))
+    throw Object.assign(new Error("Stop active Pi responses before changing shared provider configuration"),{status:409});
   for(const a of workers)a.close();
 }
 function projectIdFor(s) {
@@ -110,7 +110,7 @@ class Agent {
       "--name",s.projectId];
     const env={PATH:process.env.PATH,HOME:process.env.HOME||"/home/tahir",
       LANG:process.env.LANG||"C.UTF-8",PI_SKIP_VERSION_CHECK:"1",PI_TELEMETRY:"0",
-      PI_CODING_AGENT_DIR:accountDir(s.userId)};
+      PI_CODING_AGENT_DIR:PI_AGENT_DIR};
     this.child=spawn(PI,args,{cwd:s.directory,stdio:["pipe","pipe","pipe"],env});
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data",data=>this.consume(data));
@@ -219,10 +219,11 @@ function providerCatalog(models,userId){
       context:model.contextWindow,maxTokens:model.maxTokens,cost:model.cost||null};
   }
   const all=[...grouped.values()];
-  const saved=credentials(userId);
-  const connected=all.filter(row=>saved[row.id]?.type==="api_key" &&
-    typeof saved[row.id]?.key==="string" && saved[row.id].key.length>0).map(row=>row.id);
-  return {all,connected,default:{},verification:"stored_unverified"};
+  const native=credentials();
+  const connected=all.filter(row=>native[row.id]?.type==="api_key" &&
+    typeof native[row.id]?.key==="string" && native[row.id].key.length>0).map(row=>row.id);
+  // Key presence is NOT evidence the remote provider accepts it.
+  return {all,connected,default:{},verification:"pi_configured_unverified"};
 }
 async function configuredModels(userId){
   const cached=modelsSnapshots.get(userId);
@@ -257,19 +258,19 @@ const server=http.createServer(async(req,res)=>{
       if(auth&&["PUT","DELETE"].includes(req.method)) {
         const provider=auth[1];
         if(["__proto__","prototype","constructor"].includes(provider))return error(res,400,"Invalid provider");
-        const stored=credentials(s.userId);
+        const stored=credentials();
         if(req.method==="PUT"){
           const payload=await body(req);
           if(payload?.type!=="api"||typeof payload.key!=="string"||
             !payload.key.trim()||payload.key.length>8192)
             return error(res,422,"Invalid Pi API credential");
-          releaseUserWorkers(s.userId);
+          releaseProviderWorkers();
           stored[provider]={type:"api_key",key:payload.key.trim()};
         }else{
-          releaseUserWorkers(s.userId);
+          releaseProviderWorkers();
           delete stored[provider];
         }
-        writeCredentials(s.userId,stored);
+        writeCredentials(stored);
         return json(res,200,true);
       }
       return error(res,404,"Pi account endpoint not found");
