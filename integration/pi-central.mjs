@@ -26,6 +26,7 @@ const pool = new Map();
 const CATALOG_DIRECTORY="/home/tahir/pi-test";
 const CATALOG_TTL_MS=60_000;
 const modelsSnapshots=new Map();
+const commandsSnapshots=new Map();
 
 const json = (res, status, value) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8",
@@ -88,6 +89,7 @@ function writeCredentials(data) {
     chmodSync(file,0o600);
   } finally {if(existsSync(temp))unlinkSync(temp);}
   modelsSnapshots.clear();
+  commandsSnapshots.clear();
 }
 function releaseProviderWorkers() {
   const workers=[...pool.values()].filter(a=>!a.closed);
@@ -274,17 +276,32 @@ function providerCatalog(models,userId){
   // Key presence is NOT evidence the remote provider accepts it.
   return {all,connected,default:{},verification:"pi_configured_unverified"};
 }
-async function configuredModels(userId){
-  const cached=modelsSnapshots.get(userId);
-  if(cached&&Date.now()-cached.time<CATALOG_TTL_MS)return cached.models;
+async function nativeDiscovery(userId) {
+  const models=modelsSnapshots.get(userId), commands=commandsSnapshots.get(userId);
+  if(models&&commands&&Date.now()-models.time<CATALOG_TTL_MS
+    &&Date.now()-commands.time<CATALOG_TTL_MS)
+    return {models:models.models,commands:commands.commands};
+  // One Pi RPC instance discovers models and Pi's actual installed
+  // extension commands, skills and prompt templates; no synthetic agents.
   const a=new Agent({directory:CATALOG_DIRECTORY,workspaceId:"catalog",
     projectId:"catalog",userId,catalog:true});
   try {
-    const data=await a.command("get_available_models");
-    const models=Array.isArray(data?.models)?data.models:[];
-    modelsSnapshots.set(userId,{models,time:Date.now()});
-    return models;
+    const m=await a.command("get_available_models");
+    const c=await a.command("get_commands");
+    if(!Array.isArray(m?.models)||!Array.isArray(c?.commands))
+      throw new Error("Installed Pi returned an invalid discovery response");
+    const time=Date.now();
+    modelsSnapshots.set(userId,{models:m.models,time});
+    commandsSnapshots.set(userId,{commands:c.commands,time});
+    return {models:m.models,commands:c.commands};
   }finally{a.close();}
+}
+function nativeCommands(commands) {
+  return commands.filter(c=>c&&typeof c.name==="string"
+    &&/^[a-zA-Z0-9_][a-zA-Z0-9_.:-]{0,119}$/.test(c.name)
+    &&["extension","skill","prompt"].includes(c.source))
+    .map(c=>({name:c.name,mode:"primary",hidden:false,
+      source:c.source,description:String(c.description||"").slice(0,400)}));
 }
 const server=http.createServer(async(req,res)=>{
   try{
@@ -293,15 +310,20 @@ const server=http.createServer(async(req,res)=>{
     if(!["GET","POST","PATCH","PUT","DELETE"].includes(req.method))return error(res,405,"Method not allowed");
     const s=await scope(req,query);
     if(s.catalog){
-      if(pathname==="/provider"&&req.method==="GET")
-        return json(res,200,providerCatalog(await configuredModels(s.userId),s.userId));
-      // Pi RPC has no standalone "agent registry" query. Do not fabricate
-      // OpenCode-style build agents; Pi's built-in agent runs by default.
-      if(pathname==="/agent"&&req.method==="GET")
-        return json(res,200,[]);
+      if(pathname==="/provider"&&req.method==="GET") {
+        const native=await nativeDiscovery(s.userId);
+        return json(res,200,providerCatalog(native.models,s.userId));
+      }
+      // Pi's registered extension/skill/prompt commands are its discoverable
+      // capabilities. Do not invent "build", "plan" or other agents.
+      if(pathname==="/agent"&&req.method==="GET") {
+        const native=await nativeDiscovery(s.userId);
+        return json(res,200,nativeCommands(native.commands));
+      }
       if(pathname==="/provider/auth"&&req.method==="GET") {
+        const native=await nativeDiscovery(s.userId);
         const result={};
-        for(const p of providerCatalog(await configuredModels(s.userId),s.userId).all)
+        for(const p of providerCatalog(native.models,s.userId).all)
           result[p.id]=[{type:"api",label:"API key"}];
         return json(res,200,result);
       }
@@ -327,6 +349,10 @@ const server=http.createServer(async(req,res)=>{
       return error(res,404,"Pi account endpoint not found");
     }
     const a=await agent(s);
+    if(pathname==="/agent"&&req.method==="GET") {
+      const native=await a.command("get_commands");
+      return json(res,200,nativeCommands(native?.commands||[]));
+    }
     if(pathname==="/session" && req.method==="GET")return json(res,200,[{id:a.id,directory:s.directory,title:a.title}]);
     if(pathname==="/session" && req.method==="POST")return json(res,200,{id:a.id,directory:s.directory,title:s.projectId});
     if(pathname==="/session/status")return json(res,200,{[a.id]:{type:a.active?"busy":"idle"}});
@@ -353,7 +379,17 @@ const server=http.createServer(async(req,res)=>{
         return error(res,422,"Prompt required");
       if(b.model?.providerID&&b.model?.modelID)
         await a.command("set_model",{provider:b.model.providerID,modelId:b.model.modelID});
-      await a.command("prompt",{message,...(images.length?{images}:{})});
+      // A selected capability is a real Pi slash command, not a custom
+      // Gateway agent. Pi itself expands skills/templates or invokes an
+      // extension command. The default blank selection uses Pi's core agent.
+      let prompt=message;
+      if(b.agent) {
+        const commands=await a.command("get_commands");
+        const command=(commands?.commands||[]).find(c=>c?.name===b.agent);
+        if(!command) return error(res,422,"Selected Pi capability is no longer installed");
+        prompt="/"+command.name+(message.trim()?" "+message:"");
+      }
+      await a.command("prompt",{message:prompt,...(images.length?{images}:{})});
       res.writeHead(204,{"cache-control":"no-store"});res.end();return;
     }
     if(action==="abort" && req.method==="POST"){await a.command("abort",{},30000);return json(res,200,true);}
