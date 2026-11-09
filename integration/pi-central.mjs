@@ -326,7 +326,7 @@ function mapped(messages, id) {
   });
 }
 
-function providerCatalog(models,userId,availableProviders=[],providerDefinitions=[]){
+function providerCatalog(models,userId,availableProviders=[],providerDefinitions=[],providerStates={},piAvailableModels=[]){
   // Pi model availability is not authentication. A model in the catalog must
   // NEVER imply that an account has an API key or a verified connection.
   const grouped=new Map();
@@ -347,11 +347,22 @@ function providerCatalog(models,userId,availableProviders=[],providerDefinitions
     if(row)row.name=provider.name||row.name;
     else grouped.set(provider.id,{id:provider.id,name:provider.name||provider.id,models:{}});
   }
-  const all=[...grouped.values()];
-  // "connected" is scoped to the precise provider ID in Pi. A DeepSeek
-  // model inside OpenRouter never counts as direct "deepseek" authentication.
+  // Only installed Pi can report configuration and model availability.
+  // Neither saved credentials nor getAvailableSnapshot proves remaining credits.
+  const nativeModels=new Set(piAvailableModels);
   const available=new Set(availableProviders);
-  const connected=all.filter(row=>available.has(row.id)).map(row=>row.id);
+  const all=[...grouped.values()].map(row=>{
+    const state=providerStates[row.id]||{};
+    const modelIDs=Object.keys(row.models||{});
+    return {...row,configured:available.has(row.id),
+      credential_source:state.source||"none",
+      credential_stored:state.stored===true,
+      pi_available_models:modelIDs.filter(id=>nativeModels.has(row.id+"\0"+id)),
+      credit_status:"unknown",verified:false};
+  });
+  // Exact provider IDs only. A DeepSeek model under OpenRouter is not
+  // a direct DeepSeek provider connection.
+  const connected=all.filter(row=>row.configured).map(row=>row.id);
   return {all,connected,default:{}};
 }
 async function nativeDiscovery(userId) {
@@ -359,7 +370,8 @@ async function nativeDiscovery(userId) {
   if(models&&commands&&Date.now()-models.time<CATALOG_TTL_MS
     &&Date.now()-commands.time<CATALOG_TTL_MS)
     return {models:models.models,availableProviders:models.availableProviders,
-      providers:models.providers,commands:commands.commands};
+      providers:models.providers,providerStates:models.providerStates||{},
+      piAvailableModels:models.piAvailableModels||[],commands:commands.commands};
   if(nativeDiscoveryPending)return nativeDiscoveryPending;
 
   // Pi's installed SDK is the single source for the full provider/model
@@ -381,11 +393,18 @@ async function nativeDiscovery(userId) {
 
     const credentials=await runtime.listCredentials();
     const stored=new Set(credentials.map(row=>row.providerId));
-    // Some native auth methods resolve through environment/config rather
-    // than stored credentials. Provider is "configured" by Pi's own status.
+    // Pi's configured state does not claim that a remote call has credits.
+    const providerStates=Object.fromEntries(providers.map(p=>{
+      const status=runtime.getProviderAuthStatus(p.id);
+      return [p.id,{configured:status.configured===true,
+        stored:stored.has(p.id),source:status.source||"none"}];
+    }));
     const availableProviders=providers
-      .filter(p=>stored.has(p.id)||runtime.getProviderAuthStatus(p.id).configured)
-      .map(p=>p.id);
+      .filter(p=>providerStates[p.id].configured).map(p=>p.id);
+    // Pi-native availability snapshot may identify resolvable credentials;
+    // it does not guarantee a positive account balance.
+    const piAvailableModels=runtime.getAvailableSnapshot()
+      .filter(m=>m?.provider&&m?.id).map(m=>m.provider+"\0"+m.id);
 
     // Extension commands, skills and templates are discovered separately
     // from Pi RPC. A failed command lookup never erases native providers.
@@ -402,9 +421,9 @@ async function nativeDiscovery(userId) {
     const time=Date.now();
     if(revision!==piInventoryRevision)
       throw Object.assign(new Error("Pi provider state changed during discovery; retry"),{status:409});
-    modelsSnapshots.set(userId,{models,availableProviders,providers,time});
+    modelsSnapshots.set(userId,{models,availableProviders,providers,providerStates,piAvailableModels,time});
     commandsSnapshots.set(userId,{commands,time});
-    return {models,availableProviders,providers,commands};
+    return {models,availableProviders,providers,providerStates,piAvailableModels,commands};
   })();
   nativeDiscoveryPending=pending;
   try{return await pending;}finally{if(nativeDiscoveryPending===pending)nativeDiscoveryPending=null;}
@@ -425,7 +444,8 @@ const server=http.createServer(async(req,res)=>{
     if(s.catalog){
       if(pathname==="/provider"&&req.method==="GET") {
         const native=await nativeDiscovery(s.userId);
-        return json(res,200,providerCatalog(native.models,s.userId,native.availableProviders,native.providers));
+        return json(res,200,providerCatalog(native.models,s.userId,native.availableProviders,
+          native.providers,native.providerStates,native.piAvailableModels));
       }
       // Pi's registered extension/skill/prompt commands are its discoverable
       // capabilities. Do not invent "build", "plan" or other agents.
