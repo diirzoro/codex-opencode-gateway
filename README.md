@@ -35,10 +35,13 @@ do not mean the OpenCode engine is installed or supported.
   deleted.
 - The operator installed an OpenRouter credential through Pi CLI, whose
   default account directory is `/home/tahir/.pi/agent`.
-- GitHub's `integration/pi-central.mjs` is a **development bridge**, not a
-  proven deployment or a complete implementation of Pi tools/files/sessions.
-  It currently creates account-specific Pi directories and disables coding
-  tools pending operating-system/project isolation.
+- GitHub's `integration/pi-central.mjs` is an HTTP-to-Pi RPC transport,
+  not a second agent engine. It now points to the installed shared Pi
+  configuration in `/home/tahir/.pi/agent`, removes separate provider stores,
+  and lets Pi load its native coding tools, skills and extensions.
+  Image parts are passed to Pi RPC; non-image inline uploads are staged inside
+  the selected workspace for Pi's tools to inspect. These changes still require
+  deployment and an actual server test.
 - Deployment run `42671819015` failed with no reported jobs; do not infer
   that GitHub source changes were installed on VPS.
 - Saving any nonempty provider key is **not** authentication verification.
@@ -59,9 +62,11 @@ do not mean the OpenCode engine is installed or supported.
 - Implementation memo: `docs/PI_CENTRAL_MIGRATION_AR.md`
 
 Do not run the old OpenCode Native installation or discovery workflows.
-Do not enable Pi shell/edit tools for untrusted web users under the same
-unconfined VPS account. Pi tools inherit operating-system permissions;
-isolate projects at the operating-system boundary before public use.
+Pi tool processes inherit the existing VPS account's permissions.
+The current TEST integration has no OS-level isolation for different users,
+so do not treat this deployment as a production multi-tenant sandbox.
+The website retains the project-ownership boundary while Pi remains the sole
+coding and model execution engine.
 
 ## Official Pi documentation
 
