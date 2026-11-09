@@ -11,7 +11,11 @@
   async function ready(){
     const user=owner();if(!user)return false;
     if(identity!==user){clear();identity=user;}
-    if(!configuration){
+    if(location.hostname==='test.opencode-gateway.codes') {
+      // TEST Pi uses native RPC through the existing Nginx connection.
+      // No Python feature switch governs provider/agent execution.
+      configuration={enabled:true,mode:'pi-test',version:'native'};
+    } else if(!configuration) {
       const generation=epoch;configurationPending??=api('/api/native-test/state');let value;
       try{value=await configurationPending;}catch(error){if(generation===epoch)configurationPending=null;throw error;}
       if(generation!==epoch||user!==owner())throw Error('Authenticated account changed');
@@ -103,8 +107,7 @@
     return remember({id:context.projectId,workspace_id:workspace,project_id:context.projectId,
       runtime_id:live.id,title:context.name||live.title||'Project',
       status:'idle',lifecycle:'active',native:true,
-      native_directory:context.root,file_base:'file://'+context.root.replace(/\\\\/g,'/')+'/',
-      tool_access:{project_manager:true,shell_authorized:false,shell_enabled:false}});
+      native_directory:context.root,file_base:'file://'+context.root.replace(/\\\\/g,'/')+'/' });
   }
   async function localProjectSessionRows(workspace){
     const ctx=await localProjectContext(workspace);
