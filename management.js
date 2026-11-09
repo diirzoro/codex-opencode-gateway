@@ -161,8 +161,8 @@
     let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
     let searchRows=[],searchQuery='',searchTimer=null,searchAbort=null,searchSequence=0,optionsOpen=false;
     const searchState=node('p','','provider-search-status');searchState.setAttribute('role','status');comboWrap.after(searchState);
-    // The main catalog stays at 50. Every other Native ID/name is available
-    // through manual resolution; connected providers have their own section.
+    // The existing Connections form displays every provider Pi returns.
+    // Search only changes presentation, never truncates Pi's native inventory.
     const sameCatalog=data=>data.workspace_id===workspaceId&&data.generation===snapshot?.generation&&data.revision===snapshot?.revision&&data.policy_revision===snapshot?.policy_revision;
     // Dashboard reads the existing persistent Pi process directly.
     // Native owns and caches the model catalog; no second provider picker store.
@@ -197,7 +197,7 @@
           return [found];
         }
         return rows.filter(p=>p.id.toLowerCase().includes(term)
-          ||p.name.toLowerCase().includes(term)).slice(0,50);
+          ||p.name.toLowerCase().includes(term));
       }
       const data=await api(base+kind+'?'+(kind==='search'?'query':'name')+'='+encodeURIComponent(value),{signal});
       if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
@@ -417,7 +417,7 @@
       const renderStarted=performance.now();
       const query=(combo.value||'').trim().toLowerCase();const previous=new Map([...options.children].map(n=>[n.dataset.providerId,n]));
       const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
-      const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>(query||p.visible!==false)&&(!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query))).slice(0,50);
+      const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>(query||p.visible!==false)&&(!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query)));
       for(const p of rows){
         const state=p.public_free?tr('Free Native models','نماذج Native مجانية'):p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Connected · not tested','متصل · لم يُختبر'):tr('Disconnected','غير متصل');
         const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
