@@ -242,11 +242,16 @@
           });
           if(result?.provider!==p.id||result?.configured!==true||result.source!=='pi')
             throw Error(tr('Pi login did not return a configuration acknowledgement.','لم يرجع Pi تأكيدًا بالتهيئة.'));
+          // Never update from form input or an old in-memory catalog. Only
+          // reread the Pi-reported configuration after Pi finishes saving.
           window.nativeDirectTest.forget({fresh:true});
+          const piState=await window.nativeDirectTest.catalog({force:true});
+          if(!piState.connected.includes(p.id))
+            throw Error(tr('Pi has not yet reported this provider as configured. Refresh Pi state.','لم يُعلن Pi بعد تهيئة هذا المزوّد. حدّث حالة Pi.'));
           window.workspaceRuntime?.clear();
           dlg.close();
           await refresh(true);
-          message(tr('Pi saved the provider configuration. Remote API-key validity has not been tested.','حفظ Pi تهيئة المزوّد. لم تُختبر صلاحية المفتاح لدى المزوّد.'));
+          message(tr('Pi confirmed the stored provider configuration. Remote API-key validity is not tested.','أكد Pi حفظ تهيئة المزوّد. لم تُختبر صلاحية المفتاح لدى المزوّد.'));
           window.refreshWorkspaceChoices?.('',false)?.catch(()=>{});
         }catch(error){
           state.textContent=error.message||String(error);
@@ -266,12 +271,15 @@
       providerMutation=true;
       try{
         const result=await window.nativeDirectTest.direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
-        if(result?.provider!==p.id||result?.source!=='pi')
-          throw Error(tr('Pi did not acknowledge logout.','لم يؤكد Pi تسجيل الخروج.'));
+        if(result?.provider!==p.id||result?.source!=='pi'||result.credentialRemoved!==true)
+          throw Error(tr('Pi did not confirm credential removal.','لم يؤكد Pi إزالة الاعتماد.'));
         window.nativeDirectTest.forget({fresh:true});
+        const piState=await window.nativeDirectTest.catalog({force:true});
         window.workspaceRuntime?.clear();
         await refresh(true);
-        message(tr('Pi logout completed; updated provider status loaded.','أكمل Pi تسجيل الخروج؛ تم تحديث حالة المزوّد.'));
+        message(piState.connected.includes(p.id)
+          ?tr('Pi removed the stored key, but the provider remains configured through Pi environment or model settings.','أزال Pi المفتاح المحفوظ، لكن المزوّد لا يزال مهيأ عبر بيئة Pi أو إعدادات النماذج.')
+          :tr('Pi removed its stored credential and the refreshed Pi list no longer shows the provider as configured.','أزال Pi الاعتماد المحفوظ ولم يعد المزوّد مهيأ في قائمة Pi المحدثة.'));
       }catch(error){message(error.message||String(error),true);await refresh(true).catch(()=>{});}
       finally{providerMutation=false;}
     }
