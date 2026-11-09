@@ -98,10 +98,10 @@ set -a
 set +a
 (cd "$APP/backend" && ../.venv/bin/python -m alembic upgrade head && ../.venv/bin/python -m alembic current)
 sudo_operator /usr/bin/systemctl restart opencode-gateway.service
-unset sudo_password
 /usr/bin/systemctl is-active --quiet opencode-gateway.service
 curl -fsS --retry 15 --retry-delay 2 --retry-connrefused --header 'Host: opencode-gateway.codes' http://127.0.0.1:8000/api/health
 sudo_operator /usr/bin/bash "$APP/scripts/install-live-native-discovery.sh"
+unset sudo_password
 echo "LIVE_CODE_AND_SCHEMA_PROMOTED no-backup-created; old files retained"
 # Real Native prompts, file permissions, SSE and cross-user isolation still
 # require authenticated browser acceptance; health alone is not enough.
