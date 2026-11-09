@@ -144,8 +144,8 @@
     picker.disabled=true;
     if(activeWorkspace)picker.add(new Option(activeProject?.name||tr('Selected workspace','مساحة العمل المختارة'),activeWorkspace.id));
     picker.value=view.workspaceId;
-    const box=section(body,tr('Pi providers · read-only inventory','مزوّدو Pi · عرض الحالة فقط'));
-    box.append(node('p',tr('This panel reads providers and configured status directly from installed Pi. It never collects, validates, saves, or deletes API keys. Models and Pi commands are not provider connections. Configure credentials through Pi itself.','تعرض هذه اللوحة المزوّدات وحالتها مباشرةً من Pi المثبت. لا تجمع مفاتيح API ولا تتحقق منها أو تحفظها أو تحذفها. النماذج وأوامر Pi ليست اتصالات مزوّدين. تُدار الاعتمادات داخل Pi نفسه.')));
+    const box=section(body,tr('Pi provider connections','اتصالات مزوّدي Pi'));
+    box.append(node('p',tr('Provider login and logout use the installed Pi agent directly. Pi saves credentials in its own native store; this website never saves keys or treats configured credentials as remotely verified. Models and commands are not additional connections.','يستخدم ربط المزوّد وإلغاء ربطه Pi المثبت مباشرةً. يحفظ Pi الاعتمادات في مخزنه الأصلي، ولا يحفظ الموقع أي مفاتيح أو يعتبر التهيئة تحققًا من المزوّد. النماذج والأوامر ليست اتصالات منفصلة.')));
     const comboWrap=node('div','','provider-combo'),combo=node('input');combo.type='search';
     combo.value=body.dataset.providerQuery||'';combo.placeholder=tr('Search providers…','ابحث عن المزوّدات…');combo.setAttribute('role','combobox');combo.setAttribute('aria-expanded','false');combo.autocomplete='off';combo.setAttribute('aria-label',combo.placeholder);
     const options=node('div','','provider-combo-options');options.hidden=true;comboWrap.append(combo,options);box.append(comboWrap);
@@ -210,25 +210,95 @@
     }
     const retry=button(tr('Retry','إعادة المحاولة'),()=>metadataReady?refresh(true):initialize());retry.hidden=true;box.append(retry);
     const message=(text,error=false)=>{progress.textContent=text;progress.classList.toggle('connection-error',error);retry.hidden=!error;};
+    // Browser fields are transient inputs to Pi's native login/logout. This
+    // interface has no credential database, own verifier, or agent registry.
+    let providerMutation=false;
+    async function openPiLogin(p){
+      if(!alive()||!view.ready||providerMutation)return;
+      if(p.connected){message(tr('This provider is already configured in Pi.','هذا المزوّد مهيأ بالفعل في Pi.'),true);return;}
+      const methods=await window.nativeDirectTest.direct('provider/auth');
+      if(!Array.isArray(methods?.[p.id]))throw Error(tr('Pi does not recognize this provider.','لم يتعرف Pi على هذا المزوّد.'));
+      if(!methods[p.id].some(m=>m.type==='api')){
+        message(tr('Pi has no API-key login for this provider. Use Pi native account sign-in in the terminal.','لا يدعم هذا المزوّد ربط مفتاح API في Pi. استخدم تسجيل دخول Pi الأصلي من الطرفية.'),true);
+        return;
+      }
+      const host=node('div'),f=node('form','','manage-form');
+      const key=input(f,tr('Pi API key for ','مفتاح Pi API للمزوّد ')+(p.name||p.id),'pi_api_key');
+      key.type='password';key.required=true;key.autocomplete='off';key.maxLength=8192;
+      f.append(node('p',tr('Submitted directly to Pi for native login. It is not stored by this website. Pi login confirms configuration, not remote provider acceptance.','يُرسل المفتاح مباشرةً إلى تسجيل دخول Pi الأصلي ولا يحفظه الموقع. نجاح تسجيل الدخول يعني التهيئة، لا إثبات قبول المزوّد للمفتاح.')));
+      const state=node('p','','provider-feedback');state.setAttribute('role','status');f.append(state);
+      const submit=button(tr('Connect using Pi','ربط باستخدام Pi'),()=>{});submit.type='submit';f.append(submit);
+      host.append(f);document.body.append(host);
+      const dlg=window.mountFormDialog(host,f,tr('Pi provider login','تسجيل دخول مزوّد Pi'));
+      dlg.classList.add('provider-auth-dialog');f.dialogTrigger.hidden=true;
+      dlg.addEventListener('keydown',event=>event.stopPropagation());
+      f.onsubmit=async event=>{
+        event.preventDefault();if(providerMutation||!alive()||!dlg.open||!f.reportValidity())return;
+        providerMutation=true;submit.disabled=true;state.textContent=tr('Pi is processing this login…','يعالج Pi تسجيل الدخول…');
+        const candidate=key.value;key.value='';
+        try{
+          const result=await window.nativeDirectTest.direct('auth/'+encodeURIComponent(p.id),{
+            method:'PUT',value:{type:'api',key:candidate}
+          });
+          if(result?.provider!==p.id||result?.configured!==true||result.source!=='pi')
+            throw Error(tr('Pi login did not return a configuration acknowledgement.','لم يرجع Pi تأكيدًا بالتهيئة.'));
+          window.nativeDirectTest.forget({fresh:true});
+          window.workspaceRuntime?.clear();
+          dlg.close();
+          await refresh(true);
+          message(tr('Pi saved the provider configuration. Remote API-key validity has not been tested.','حفظ Pi تهيئة المزوّد. لم تُختبر صلاحية المفتاح لدى المزوّد.'));
+          window.refreshWorkspaceChoices?.('',false)?.catch(()=>{});
+        }catch(error){
+          state.textContent=error.message||String(error);
+          // A failed/ambiguous response does not mark the provider connected.
+          await refresh(true).catch(()=>{});
+        }finally{providerMutation=false;submit.disabled=false;}
+      };
+      dlg.addEventListener('close',()=>{key.value='';host.remove()},{once:true});
+      f.openDialog();
+    }
+    async function logoutPi(p){
+      if(!alive()||providerMutation||!p.connected)return;
+      const confirmed=await window.confirmAction?.(tr(
+        'Remove the credential for '+(p.name||p.id)+' from the shared installed Pi configuration? Other TEST clients may be affected.',
+        'إزالة اعتماد '+(p.name||p.id)+' من إعدادات Pi المثبتة المشتركة؟ قد يؤثر ذلك على عملاء TEST الآخرين.'));
+      if(!confirmed)return;
+      providerMutation=true;
+      try{
+        const result=await window.nativeDirectTest.direct('auth/'+encodeURIComponent(p.id),{method:'DELETE'});
+        if(result?.provider!==p.id||result?.source!=='pi')
+          throw Error(tr('Pi did not acknowledge logout.','لم يؤكد Pi تسجيل الخروج.'));
+        window.nativeDirectTest.forget({fresh:true});
+        window.workspaceRuntime?.clear();
+        await refresh(true);
+        message(tr('Pi logout completed; updated provider status loaded.','أكمل Pi تسجيل الخروج؛ تم تحديث حالة المزوّد.'));
+      }catch(error){message(error.message||String(error),true);await refresh(true).catch(()=>{});}
+      finally{providerMutation=false;}
+    }
     function renderSelected(p){
       const state=p.public_free?tr('Pi free provider','مزوّد Pi مجاني')
-        :p.connected?tr('Configured in Pi · key not verified here','مهيأ داخل Pi · لم يُتحقق من المفتاح هنا')
+        :p.connected?tr('Configured in Pi · not remotely verified','مهيأ داخل Pi · غير متحقق منه عن بُعد')
         :tr('Not configured in Pi','غير مهيأ داخل Pi');
       status.replaceChildren(node('strong',p.name||p.id),
         node('span',state+' · '+String(p.model_count??p.models?.length??0)+' '+tr('models','نموذج')));
+      if(view.ready){
+        const actions=node('div','','manage-actions');
+        if(p.connected)actions.append(button(tr('Disconnect through Pi','إلغاء الربط عبر Pi'),()=>logoutPi(p)));
+        else if(!p.public_free)actions.append(button(tr('Connect through Pi','الربط عبر Pi'),()=>openPiLogin(p).catch(error=>message(error.message,true))));
+        status.append(actions);
+      }
     }
     function renderConnected(){
       connectedBox.replaceChildren(node('h2',tr('Providers configured in Pi','المزوّدات المهيأة داخل Pi')));
-      connectedBox.append(node('p',tr('Shown from Pi only; configured does not mean the provider accepted a test request. This interface does not manage API keys.','الحالة من Pi فقط؛ التهيئة لا تعني نجاح طلب لدى المزوّد. هذه الواجهة لا تدير مفاتيح API.')));
+      connectedBox.append(node('p',tr('Configuration comes from Pi only. It is not proof of a successful remote model request.','تأتي حالة التهيئة من Pi فقط، وليست دليلاً على نجاح طلب لدى المزوّد.')));
       const selected=(snapshot?.providers||[]).find(p=>p.id===selectedProviderId);
       if(selected)renderSelected(selected);
       const rows=(snapshot?.providers||[]).filter(p=>p.connected||p.public_free);
       if(!rows.length){connectedBox.append(node('p',tr('No providers configured in Pi.','لا توجد مزوّدات مهيأة داخل Pi.')));return;}
       for(const p of rows){
         const item=node('div','','manage-actions');
-        item.append(node('strong',p.name||p.id),node('span',
-          p.public_free?tr('Pi free provider','مزوّد Pi مجاني'):
-          tr('Configured in Pi · not verified','مهيأ داخل Pi · غير متحقق منه')));
+        item.append(node('strong',p.name||p.id),node('span',p.public_free?
+          tr('Pi free provider','مزوّد Pi مجاني'):tr('Configured by Pi','مهيأ بواسطة Pi')));
         connectedBox.append(item);
       }
     }
@@ -279,6 +349,33 @@
       },350);
     }
     controller.signal.addEventListener('abort',stopSearch,{once:true});
+    // The existing "manual" selector resolves a provider ID from Pi's catalog,
+    // then invokes the exact same Pi-native login dialog as a provider tile.
+    const manualButton=button(tr('Add provider manually','إضافة مزوّد يدويًا'),()=>{
+      const host=node('div'),f=node('form','','manage-form');
+      const id=input(f,tr('Pi provider ID or name','اسم المزوّد أو معرّفه في Pi'),'provider_id');
+      id.required=true;id.maxLength=200;id.placeholder='deepseek';
+      const state=node('p','','provider-feedback');f.append(state);
+      const submit=button(tr('Continue to Pi login','متابعة إلى تسجيل دخول Pi'),()=>{});submit.type='submit';f.append(submit);
+      host.append(f);document.body.append(host);
+      const dlg=window.mountFormDialog(host,f,tr('Select Pi provider','اختيار مزوّد Pi'));
+      f.dialogTrigger.hidden=true;
+      f.onsubmit=async event=>{
+        event.preventDefault();if(!alive()||!view.ready||!dlg.open||submit.disabled)return;
+        submit.disabled=true;state.textContent='';
+        try{
+          const rows=await lookup('resolve',id.value.trim());
+          const p=rows[0];
+          if(!p)throw Error(tr('Provider not found in installed Pi.','المزوّد غير موجود في Pi المثبت.'));
+          if(p.connected)throw Error(tr('Pi already has this provider configured.','هذا المزوّد مهيأ مسبقًا في Pi.'));
+          selectedProviderId=p.id;dlg.close();await openPiLogin(p);
+        }catch(error){if(dlg.open)state.textContent=error.message||String(error);}
+        finally{submit.disabled=false;}
+      };
+      dlg.addEventListener('close',()=>host.remove(),{once:true});
+      f.openDialog();
+    });
+    box.append(manualButton);
     async function refresh(force=false){
       if(!alive())return;
       if(force&&window.nativeDirectTest?.active()){
