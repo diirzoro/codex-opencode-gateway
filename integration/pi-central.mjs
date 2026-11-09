@@ -29,6 +29,7 @@ const CATALOG_TTL_MS=60_000;
 const modelsSnapshots=new Map();
 const commandsSnapshots=new Map();
 let nativeDiscoveryPending=null;
+let nativeCommandsPending=null;
 let piInventoryRevision=0;
 
 const json = (res, status, value) => {
@@ -366,17 +367,11 @@ function providerCatalog(models,userId,availableProviders=[],providerDefinitions
   return {all,connected,default:{}};
 }
 async function nativeDiscovery(userId) {
-  const models=modelsSnapshots.get(userId), commands=commandsSnapshots.get(userId);
-  if(models&&commands&&Date.now()-models.time<CATALOG_TTL_MS
-    &&Date.now()-commands.time<CATALOG_TTL_MS)
-    return {models:models.models,availableProviders:models.availableProviders,
-      providers:models.providers,providerStates:models.providerStates||{},
-      piAvailableModels:models.piAvailableModels||[],commands:commands.commands};
+  const cached=modelsSnapshots.get(userId);
+  if(cached&&Date.now()-cached.time<CATALOG_TTL_MS)return cached;
   if(nativeDiscoveryPending)return nativeDiscoveryPending;
-
-  // Pi's installed SDK is the single source for the full provider/model
-  // catalog and credential state. RPC get_available_models is intentionally
-  // not used for this: it can contain only models usable by current auth.
+  // Provider and credential lookup is native Pi SDK ONLY. It never waits for
+  // session, agent, extension, or prompt-template discovery.
   const revision=piInventoryRevision;
   const pending=(async()=>{
     const runtime=await piModels();
@@ -390,43 +385,46 @@ async function nativeDiscovery(userId) {
     }));
     if(!Array.isArray(models)||!Array.isArray(providers)||!providers.length)
       throw Object.assign(new Error("Installed Pi provider registry is unavailable"),{status:502});
-
     const credentials=await runtime.listCredentials();
     const stored=new Set(credentials.map(row=>row.providerId));
-    // Pi's configured state does not claim that a remote call has credits.
     const providerStates=Object.fromEntries(providers.map(p=>{
       const status=runtime.getProviderAuthStatus(p.id);
       return [p.id,{configured:status.configured===true,
         stored:stored.has(p.id),source:status.source||"none"}];
     }));
-    const availableProviders=providers
-      .filter(p=>providerStates[p.id].configured).map(p=>p.id);
-    // Pi-native availability snapshot may identify resolvable credentials;
-    // it does not guarantee a positive account balance.
+    const availableProviders=providers.filter(p=>providerStates[p.id].configured).map(p=>p.id);
+    // Pi's "available" means credentials/model access as reported by Pi,
+    // never verified account credits or a successful completion.
     const piAvailableModels=runtime.getAvailableSnapshot()
       .filter(m=>m?.provider&&m?.id).map(m=>m.provider+"\0"+m.id);
-
-    // Extension commands, skills and templates are discovered separately
-    // from Pi RPC. A failed command lookup never erases native providers.
-    let commands=[];
-    const a=new Agent({directory:CATALOG_DIRECTORY,workspaceId:"catalog",
-      projectId:"catalog",userId,catalog:true});
-    try {
-      const result=await a.command("get_commands");
-      if(Array.isArray(result?.commands))commands=result.commands;
-    } catch (e) {
-      console.warn("Pi command discovery unavailable:",e instanceof Error?e.message:"unknown");
-    } finally {a.close();}
-
-    const time=Date.now();
     if(revision!==piInventoryRevision)
-      throw Object.assign(new Error("Pi provider state changed during discovery; retry"),{status:409});
-    modelsSnapshots.set(userId,{models,availableProviders,providers,providerStates,piAvailableModels,time});
-    commandsSnapshots.set(userId,{commands,time});
-    return {models,availableProviders,providers,providerStates,piAvailableModels,commands};
+      throw Object.assign(new Error("Pi provider state changed; refresh"),{status:409});
+    const value={models,availableProviders,providers,providerStates,
+      piAvailableModels,time:Date.now()};
+    modelsSnapshots.set(userId,value);
+    return value;
   })();
   nativeDiscoveryPending=pending;
   try{return await pending;}finally{if(nativeDiscoveryPending===pending)nativeDiscoveryPending=null;}
+}
+async function nativeCommandDiscovery(userId){
+  const cached=commandsSnapshots.get(userId);
+  if(cached&&Date.now()-cached.time<CATALOG_TTL_MS)return cached.commands;
+  if(nativeCommandsPending)return nativeCommandsPending;
+  // Commands/skills belong to Pi RPC; independent of provider logins.
+  const pending=(async()=>{
+    const a=new Agent({directory:CATALOG_DIRECTORY,workspaceId:"catalog",
+      projectId:"catalog",userId,catalog:true});
+    try{
+      const response=await a.command("get_commands");
+      if(!Array.isArray(response?.commands))
+        throw Object.assign(new Error("Pi command registry did not respond"),{status:502});
+      commandsSnapshots.set(userId,{commands:response.commands,time:Date.now()});
+      return response.commands;
+    }finally{a.close();}
+  })();
+  nativeCommandsPending=pending;
+  try{return await pending;}finally{if(nativeCommandsPending===pending)nativeCommandsPending=null;}
 }
 function nativeCommands(commands) {
   return commands.filter(c=>c&&typeof c.name==="string"
@@ -450,8 +448,8 @@ const server=http.createServer(async(req,res)=>{
       // Pi's registered extension/skill/prompt commands are its discoverable
       // capabilities. Do not invent "build", "plan" or other agents.
       if(pathname==="/agent"&&req.method==="GET") {
-        const native=await nativeDiscovery(s.userId);
-        return json(res,200,nativeCommands(native.commands));
+        const commands=await nativeCommandDiscovery(s.userId);
+        return json(res,200,nativeCommands(commands));
       }
       if(pathname==="/provider/auth"&&req.method==="GET"){
         const discovered=await nativeDiscovery(s.userId);
