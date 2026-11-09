@@ -1,0 +1,54 @@
+name: Maintenance | Reset experimental Native provider credentials
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type DELETE_ALL_EXPERIMENTAL_NATIVE_PROVIDER_KEYS"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-native-credential-reset
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    if: github.ref == 'refs/heads/master' && inputs.confirmation == 'DELETE_ALL_EXPERIMENTAL_NATIVE_PROVIDER_KEYS'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check reset utility
+        run: python3 -m py_compile scripts/reset-experimental-native-auth.py
+      - name: Connect to existing VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${VPS_HOST:?}" "${VPS_USER:?}" "${VPS_SSH_KEY:?}"
+          port="${VPS_SSH_PORT:-22}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$port" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          scp -P "$port" -o StrictHostKeyChecking=yes scripts/reset-experimental-native-auth.py \
+            "$VPS_USER@${VPS_HOST}:reset-experimental-native-auth.py"
+      - name: Delete experimental Native credentials; never modify Gateway DB
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${VPS_SUDO_PASSWORD:?}"
+          port="${VPS_SSH_PORT:-22}"
+          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -p "$port" -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            "sudo -S -p '' /usr/bin/env RESET_NATIVE_EXPERIMENTAL_AUTH=erase /usr/bin/python3 ./reset-experimental-native-auth.py"
