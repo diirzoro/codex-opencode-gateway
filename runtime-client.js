@@ -12,7 +12,7 @@
   async function requireNative(){
     const user=owner();
     if(!user)throw Error('Authentication required');
-    if(!window.nativeSession||!await window.nativeSession.ready())throw Error('OpenCode Native is not ready');
+    if(!window.nativeSession||!await window.nativeSession.ready())throw Error('Pi Coding Agent is not ready');
     if(user!==owner())throw Error('Authenticated session changed');
     return user;
   }
@@ -24,8 +24,8 @@
   }
   async function loadAgents(id,options){
     const user=await requireNative();
-    if(!window.nativeDirectTest?.active())throw Error('OpenCode Native is not ready');
-    // Agent discovery never waits for the large provider/model catalog.
+    if(!window.nativeDirectTest?.active())throw Error('Pi Coding Agent is not ready');
+    // Pi command discovery comes from Pi's installed extensions, skills and templates.
     const rows=await window.nativeDirectTest.agents(options);
     if(user!==owner())throw Error('Authenticated session changed');
     return {native:true,workspace_id:String(id),agents:rows.filter(a=>
