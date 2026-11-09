@@ -99,7 +99,17 @@ window.nativeDirectTest=(()=>{
       }
       throw error;
     }
-    if(!response.ok){const e=new Error('Pi HTTP '+response.status+' ('+path+')');e.status=response.status;throw e;}
+    if(!response.ok){
+      // Surface the actual Pi transport error instead of a generic 503 toast.
+      // The bridge sends short, sanitized diagnostic descriptions, never keys.
+      let detail='';
+      try{
+        const failure=await response.json();
+        if(typeof failure?.error==='string')detail=failure.error.slice(0,240);
+      }catch{}
+      const e=new Error('Pi HTTP '+response.status+' ('+path+')'+(detail?': '+detail:''));
+      e.status=response.status;throw e;
+    }
     if(response.status===204)return null;
     const body=await response.text();
     if(!body)return null;
