@@ -290,10 +290,30 @@ async function nativeDiscovery(userId) {
     const c=await a.command("get_commands");
     if(!Array.isArray(m?.models)||!Array.isArray(c?.commands))
       throw new Error("Installed Pi returned an invalid discovery response");
+    // The installed Pi SDK model registry includes built-in and models.json
+    // definitions, including providers not yet connected. RPC contains only
+    // currently available models on some Pi builds. Both sources are Pi-native.
+    let models=m.models;
+    try {
+      const {AuthStorage,ModelRegistry}=await import("@earendil-works/pi-coding-agent");
+      const auth=AuthStorage.create(path.join(PI_AGENT_DIR,"auth.json"));
+      const registry=ModelRegistry.create(auth,path.join(PI_AGENT_DIR,"models.json"));
+      const all=registry.getAll();
+      if(Array.isArray(all)&&all.length) {
+        const byId=new Map(all.map(model=>[model.provider+"\0"+model.id,model]));
+        for(const model of m.models)byId.set(model.provider+"\0"+model.id,model);
+        models=[...byId.values()];
+      }
+    } catch (e) {
+      // Older installed forks may lack this SDK factory. The Pi RPC inventory
+      // remains authoritative rather than replacing it with a Gateway catalog.
+      console.warn("Pi SDK model registry not available; using native RPC inventory:",
+        e instanceof Error?e.message:"unknown");
+    }
     const time=Date.now();
-    modelsSnapshots.set(userId,{models:m.models,time});
+    modelsSnapshots.set(userId,{models,time});
     commandsSnapshots.set(userId,{commands:c.commands,time});
-    return {models:m.models,commands:c.commands};
+    return {models,commands:c.commands};
   }finally{a.close();}
 }
 function nativeCommands(commands) {
