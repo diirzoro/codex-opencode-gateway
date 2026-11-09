@@ -221,8 +221,12 @@ window.nativeDirectTest=(()=>{
   const nativeReported=(p,data)=>publicFree(p)||(data.connected||[]).includes(p.id);
   const idx=(p,data)=>({
     id:p.id,name:p.name||p.id,visible:true,allowed:true,
-    connected:nativeReported(p,data),public_free:publicFree(p),
-    auth_status:publicFree(p)?'free_native':nativeReported(p,data)?'native_reported_unverified':undefined,
+    connected:nativeReported(p,data),configured:nativeReported(p,data),
+    public_free:false,credential_stored:p.credential_stored===true,
+    credential_source:p.credential_source||'none',
+    pi_available_models:p.pi_available_models||[],
+    credit_status:'unknown',
+    auth_status:nativeReported(p,data)?'pi_configured':'pi_not_configured',
     verified:false,model_count:p.model_count??Object.keys(p.models||{}).length,
     default_model:data.default?.[p.id]
   });
@@ -241,8 +245,12 @@ window.nativeDirectTest=(()=>{
   }
   function modelDetails(p,data){
     return {provider_id:p.id,connected:nativeReported(p,data),allowed:true,
+      configured:nativeReported(p,data),credit_status:'unknown',
+      pi_available_models:p.pi_available_models||[],
       default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
-        allowed:true,visible:true}))};
+        // Pi's credential availability is distinct from actual credit balance.
+        pi_auth_available:(p.pi_available_models||[]).includes(id),
+        credit_status:'unknown',allowed:true,visible:true}))};
   }
   // Present actual Native execution errors; do not run a separate key checker.
   function nativeFailure(value){
