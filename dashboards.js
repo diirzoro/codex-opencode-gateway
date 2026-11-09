@@ -11,8 +11,8 @@
     const binding=bindingData?.binding;
     if(binding){
       if(!window.nativeDirectTest?.active?.())
-        throw Error(tr('OpenCode Native is unavailable; project not deleted.',
-          'OpenCode Native غير متاح؛ لم يُحذف المشروع.'));
+        throw Error(tr('Pi Native is unavailable; project not deleted.',
+          'Pi Native غير متاح؛ لم يُحذف المشروع.'));
       const owned=await api('/api/workspaces/'+encodeURIComponent(binding.workspace_id));
       const directory=owned.native_directory;
       if(owned.project_id!==project.id||!directory)
@@ -67,7 +67,7 @@
   texts.push([q('homeProjectsTitle'),'Projects / workspaces','المشاريع / مساحات العمل']);
   const settings=document.createElement('main');settings.id='connectionsPage';settings.className='page portal-page';
   settings.innerHTML='<div class="portal-content connections-content"><div class="connections-heading"></div><div id="connectionsProviders"></div><div id="connectionsGithub"></div><div id="connectionsRuntime"></div><section id="connectionsWorkspace" class="manage-card"></section></div>';
-  q('app-main').append(settings);q('connectionsProviders').innerHTML='<section class="manage-card"><label>Workspace / مساحة العمل<select disabled><option>Restoring workspace… / جارٍ استعادة مساحة العمل…</option></select></label><label>Search providers / البحث عن المزوّدات<input type="search" role="combobox" placeholder="Search providers…"></label><p role="status">Loading OpenCode providers… / جارٍ تحميل مزوّدي OpenCode…</p></section>';settings.querySelector('.connections-heading').append(text('h1','Settings · Connections','الإعدادات · الاتصالات'),text('p','Choose a workspace provider and use its OpenCode authentication method.','اختر مزوّد مساحة العمل واستخدم طريقة المصادقة المتاحة في OpenCode.','lead'),btn('connectionsReturn','Return to workspace','العودة لمساحة العمل',()=>activeWorkspace?page('workspacePage'):page('workspaceHomePage')));
+  q('app-main').append(settings);q('connectionsProviders').innerHTML='<section class="manage-card"><label>Workspace / مساحة العمل<select disabled><option>Restoring workspace… / جارٍ استعادة مساحة العمل…</option></select></label><label>Search providers / البحث عن المزوّدات<input type="search" role="combobox" placeholder="Search providers…"></label><p role="status">Loading Pi providers… / جارٍ تحميل مزوّدي Pi…</p></section>';settings.querySelector('.connections-heading').append(text('h1','Settings · Connections','الإعدادات · الاتصالات'),text('p','Choose a workspace provider and use its Pi authentication method.','اختر مزوّد مساحة العمل واستخدم طريقة المصادقة المتاحة في Pi.','lead'),btn('connectionsReturn','Return to workspace','العودة لمساحة العمل',()=>activeWorkspace?page('workspacePage'):page('workspaceHomePage')));
   protectedPages.add('workspaceHomePage');protectedPages.add('connectionsPage');
   Object.assign(copy.en,{workspaceHome:'Workspace / Home',connectionsSettings:'Settings / Connections'});
   Object.assign(copy.ar,{workspaceHome:'مساحة العمل / الرئيسية',connectionsSettings:'الإعدادات / الاتصالات'});
@@ -99,7 +99,7 @@
     q('adminSmtpPort').value=brevo?'':'587';q('adminSmtpPort').disabled=brevo;
     q('adminSmtpUsername').value=brevo?'':'resend';q('adminSmtpTls').value=brevo?'https':'starttls';
     q('adminSenderEmail').value=cfg.sender||'no-reply@opencode-gateway.codes';
-    q('adminSenderName').value=cfg.sender_name||'OpenCode Gateway';
+    q('adminSenderName').value=cfg.sender_name||'Pi Gateway';
     q('adminSmtpSecret').value='';
     q('adminSmtpSave').disabled=!['resend','brevo'].includes(provider)||emailStatus?.settings_schema_ready===false||emailStatus?.credential_storage_ready===false;
     q('adminSmtpTest').disabled=!emailStatus?.configured||provider!==emailStatus.provider;
@@ -173,7 +173,7 @@
       const to=field.value.trim();if(!to||!field.reportValidity()){status.textContent=tr('Enter a valid test recipient you control.','أدخل بريد اختبار صحيحًا تملكه.');return;}
       const owner=currentUser.id;button.disabled=true;status.textContent=tr('Sending one test email…','جارٍ إرسال رسالة اختبار واحدة…');
       try{
-        const result=await api('/api/admin/service-integrations/send-email',{method:'POST',body:JSON.stringify({to,subject:'OpenCode Gateway TEST · email delivery test',body:'This is a test email requested from the TEST administration panel. SMTP acceptance does not prove inbox delivery. No action is required.'})});
+        const result=await api('/api/admin/service-integrations/send-email',{method:'POST',body:JSON.stringify({to,subject:'Pi Gateway TEST · email delivery test',body:'This is a test email requested from the TEST administration panel. SMTP acceptance does not prove inbox delivery. No action is required.'})});
         if(!admin()||currentUser.id!==owner)return;
         if(!result.sent)throw Error(tr('Sending was not confirmed.','لم يُؤكد الإرسال.'));
         status.textContent=tr('The selected provider accepted the test email. Check the recipient inbox and spam folder to confirm delivery.','قبل المزوّد المختار رسالة الاختبار. تحقق من الوارد والبريد المزعج لدى المستلم لتأكيد وصولها.');
@@ -421,7 +421,7 @@
       try{
         const result=await api('/api/admin/service-integrations/email',{
           method:'PUT',
-          body:JSON.stringify({provider:q('adminEmailProvider').value,smtp_from:sender,sender_name:q('adminSenderName').value.trim()||'OpenCode Gateway',...(key.value?{api_key:key.value}:{})})
+          body:JSON.stringify({provider:q('adminEmailProvider').value,smtp_from:sender,sender_name:q('adminSenderName').value.trim()||'Pi Gateway',...(key.value?{api_key:key.value}:{})})
         });
         key.value='';
         q('adminServiceNotice').textContent=result.configured?'حُفظ مزوّد الإرسال المختار بأمان · Saved securely':'Configuration not ready';
@@ -469,12 +469,12 @@
     });
     // GitHub status is independent from Native provider discovery; never block Connections readiness.
     const githubJob=loadConnectionsGithub().catch(error=>{const section=q('connectionsGithub');if(section) section.append(textElement('p',error.message));});
-    const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Native OpenCode discovery (TEST)','اكتشاف OpenCode المباشر (TEST)'),text('p','Loading native agents…','جارٍ تحميل الوكلاء مباشرة…'));
+    const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Native Pi discovery (TEST)','اكتشاف Pi المباشر (TEST)'),text('p','Loading native agents…','جارٍ تحميل الوكلاء مباشرة…'));
     // Connections page: read native agent discovery through Nginx, not the Python
     // workspace runtime. This describes the independent TEST native service only.
     const runtimeJob=(async()=>{
       // Account Connections is independent of Project/Workspace selection.
-      // Discover agents once from the same OpenCode Native browser cache.
+      // Discover agents once from the same Pi Native browser cache.
       const agents=window.nativeDirectTest?.active()
         ?await window.nativeDirectTest.agents()
         :activeWorkspace?.id
@@ -482,7 +482,7 @@
           :[];
       if(!Array.isArray(agents))throw new Error('Invalid native agents response');
       if(runtime.isConnected)runtime.lastElementChild.textContent=
-        tr('Native OpenCode agents via Nginx: ','وكلاء OpenCode المباشرين عبر Nginx: ')+agents.length;
+        tr('Native Pi agents via Nginx: ','وكلاء Pi المباشرين عبر Nginx: ')+agents.length;
     })().catch(error=>{
       if(runtime.isConnected)runtime.lastElementChild.textContent=
         tr('Native agent discovery unavailable: ','تعذر استدعاء الوكلاء مباشرة: ')+error.message;
@@ -507,7 +507,7 @@
       confirm:['Choose and confirm the GitHub identity below before connecting.','اختر وأكد هوية GitHub أدناه قبل الربط.'],
       'session-mismatch':['This GitHub transaction belongs to a different or expired Gateway session. Start a new connection.','معاملة GitHub تخص جلسة Gateway أخرى أو منتهية. ابدأ ربطًا جديدًا.'],
       'transaction-expired':['This transaction has expired or was already used. Start again.','انتهت المعاملة أو استُخدمت سابقًا. ابدأ من جديد.'],
-      'account-conflict':['This GitHub account is already connected to another OpenCode Gateway account and cannot be connected to two Gateway accounts simultaneously.\n\nPlease sign in to the Gateway account where this GitHub identity is currently connected and disconnect it first, or select a different GitHub account.\n\nLogging out does not disconnect GitHub.','حساب GitHub هذا مرتبط حاليًا بحساب آخر في OpenCode Gateway، ولا يمكن ربطه بحسابين في الوقت نفسه.\n\nيرجى تسجيل الدخول إلى حساب Gateway المرتبط بهذا GitHub وإجراء Disconnect أولًا، أو اختيار حساب GitHub آخر.\n\nتسجيل الخروج وحده لا يفصل ربط GitHub.'],
+      'account-conflict':['This GitHub account is already connected to another Pi Gateway account and cannot be connected to two Gateway accounts simultaneously.\n\nPlease sign in to the Gateway account where this GitHub identity is currently connected and disconnect it first, or select a different GitHub account.\n\nLogging out does not disconnect GitHub.','حساب GitHub هذا مرتبط حاليًا بحساب آخر في Pi Gateway، ولا يمكن ربطه بحسابين في الوقت نفسه.\n\nيرجى تسجيل الدخول إلى حساب Gateway المرتبط بهذا GitHub وإجراء Disconnect أولًا، أو اختيار حساب GitHub آخر.\n\nتسجيل الخروج وحده لا يفصل ربط GitHub.'],
       error:['GitHub authorization could not be confirmed; no new repository was imported.','تعذر تأكيد تفويض GitHub؛ لم يُستورد أي مستودع جديد.']
     };
     const status=await api('/api/github/status');if(owner!==currentUser?.id||render!==githubConnectionRender)return;
@@ -669,7 +669,7 @@
   }
   document.addEventListener('visibilitychange',syncWorkspacePolling);
   const controls=q('promptForm').lastElementChild;controls.classList.add('composer-controls');
-  const activity=textElement('section','','workspace-activity');activity.id='workspaceActivity';activity.setAttribute('aria-label',tr('OpenCode activity','نشاط OpenCode'));
+  const activity=textElement('section','','workspace-activity');activity.id='workspaceActivity';activity.setAttribute('aria-label',tr('Pi activity','نشاط Pi'));
   const activityStage=textElement('p','','activity-stage');activityStage.setAttribute('role','status');
   const activitySummary=textElement('div','','activity-summary');
   const capabilityView=document.createElement('details');capabilityView.className='agent-capabilities';capabilityView.append(text('summary','Tools & skills','الأدوات والمهارات'));
@@ -684,15 +684,15 @@
   let capabilityWorkspace='',capabilityPending=false;
   capabilityView.addEventListener('toggle',async()=>{
     if(!capabilityView.open||!activeWorkspace||capabilityPending||capabilityWorkspace===activeWorkspace.id)return;
-    const id=activeWorkspace.id,owner=currentUser?.id;capabilityPending=true;capabilityBody.textContent=tr('Loading workspace OpenCode tools and skills…','جارٍ تحميل أدوات ومهارات OpenCode للمساحة…');
+    const id=activeWorkspace.id,owner=currentUser?.id;capabilityPending=true;capabilityBody.textContent=tr('Loading workspace Pi tools and skills…','جارٍ تحميل أدوات ومهارات Pi للمساحة…');
     try{
       const data=await api('/api/workspaces/'+id+'/runtime/capabilities?view=agent');
       if(activeWorkspace?.id!==id||currentUser?.id!==owner)return;
       capabilityBody.replaceChildren(text('p','Reported by this workspace runtime. Agent permissions and admin policy still apply; the agent chooses tools and skills during execution.','مُعلنة من بيئة هذه المساحة. تبقى صلاحيات الوكيل وسياسة الإدارة مطبّقة؛ يختار الوكيل الأدوات والمهارات أثناء التنفيذ.'));
       const tools=textElement('p',tr('Tools: ','الأدوات: ')+(data.tools||[]).map(tool=>tool+(data.tool_policy?.[tool]===false?tr(' (Restricted)',' (مقيّد)'):'')).join(', '));
       const skills=textElement('p',tr('Skills: ','المهارات: ')+(data.skills||[]).map(skill=>skill.name).join(', '));capabilityBody.append(tools,skills);
-      if(!data.tools?.length)tools.textContent=tr('No tools reported by OpenCode.','لم يعلن OpenCode عن أدوات.');
-      if(!data.skills?.length)skills.textContent=tr('No skills reported by OpenCode.','لم يعلن OpenCode عن مهارات.');
+      if(!data.tools?.length)tools.textContent=tr('No tools reported by Pi.','لم يعلن Pi عن أدوات.');
+      if(!data.skills?.length)skills.textContent=tr('No skills reported by Pi.','لم يعلن Pi عن مهارات.');
       for(const error of Object.values(data.errors||{}))capabilityBody.append(textElement('p',error.detail));
       if(!Object.keys(data.errors||{}).length)capabilityWorkspace=id;
     }catch(error){if(activeWorkspace?.id===id&&currentUser?.id===owner)capabilityBody.textContent=error.message;}
@@ -728,7 +728,7 @@
     if(ended)rows=rows.map(row=>['pending','running'].includes(row.status)?{...row,status:'interrupted'}:row);
     if(!rows.length)return;
     const details=document.createElement('details');details.className='message-activity'+(rows.some(row=>row.native)?' native-activity':'');
-// Native OpenCode owns tool execution. Keep the UI summary compact;
+// Native Pi owns tool execution. Keep the UI summary compact;
 // show failures by default, but never expose tool arguments automatically.
 details.open=rows.some(row=>row.status==='error'||row.native&&['pending','running'].includes(row.status));
 if(rows.some(row=>row.native))details.dataset.activityId='group';
@@ -740,7 +740,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       if(row.command){const pre=textElement('pre','','tool-execution-code'),command=textElement('code',row.command+(row.command_limited?tr(' (arguments hidden)',' (المعاملات مخفية)'):''),'activity-command');pre.dir='ltr';pre.append(command);step.append(pre);}
       const result=textElement('div','','tool-execution-result');
       if(row.status==='error'){
-        const explanations={file_not_found:['The requested file/path was not found. Check the project and filename before retrying.','الملف أو المسار المطلوب غير موجود. تحقق من المشروع واسم الملف قبل إعادة المحاولة.'],permission_denied:['Access was denied. Review the requested path and permissions; do not bypass protection.','رُفض الوصول. راجع المسار والصلاحيات دون تجاوز الحماية.'],approval_rejected:['The requested operation was rejected. It was not authorized to continue.','رُفضت الموافقة على العملية؛ لم يُسمح لها بالمتابعة.'],command_not_found:['The required executable was not found in this runtime.','برنامج تشغيل الأمر المطلوب غير موجود في هذه البيئة.'],timeout:['The tool exceeded its time limit. Inspect its result before retrying.','تجاوزت الأداة المهلة. تحقق من نتيجتها قبل إعادة المحاولة.'],unsupported_format:['The tool cannot read this file format. Use a supported format or an authorized reader.','الأداة لا تدعم صيغة هذا الملف. استخدم صيغة مدعومة أو أداة قراءة مناسبة.'],interrupted:['Tool execution was interrupted before it finished. No successful result was confirmed; review the conversation before retrying.','توقف تنفيذ الأداة قبل اكتماله؛ لم تتأكد نتيجة ناجحة. راجع المحادثة قبل إعادة الطلب.'],invalid_arguments:['The tool rejected its input. The agent needs to correct the arguments before trying again.','رفضت الأداة المدخلات؛ يحتاج الوكيل إلى تصحيح معاملات الطلب قبل إعادة المحاولة.'],tool_unavailable:['This tool is unavailable or disabled for the selected agent. Use an available tool without bypassing permissions.','هذه الأداة غير متاحة أو معطلة للوكيل المحدد. استخدم أداة متاحة دون تجاوز الصلاحيات.'],dependency_missing:['A required module or dependency is missing. It must be prepared in the authorized isolated runtime.','وحدة أو اعتمادية مطلوبة غير موجودة؛ يلزم تجهيزها في بيئة التشغيل المعزولة والمصرح بها.'],network_unavailable:['The tool could not reach its required service or resolve its hostname. Check service availability and permitted networking.','تعذر على الأداة الاتصال بالخدمة المطلوبة أو تحديد عنوانها. تحقق من توفر الخدمة والاتصال المسموح به.'],tool_failed:['The operation failed. OpenCode did not provide a recognized cause that can be displayed here. Ask the agent to inspect this failure before retrying.','فشلت العملية، ولم تتوفر تفاصيل واضحة قابلة للعرض عن سببها. اطلب من الوكيل فحص هذا الفشل قبل إعادة المحاولة.']};
+        const explanations={file_not_found:['The requested file/path was not found. Check the project and filename before retrying.','الملف أو المسار المطلوب غير موجود. تحقق من المشروع واسم الملف قبل إعادة المحاولة.'],permission_denied:['Access was denied. Review the requested path and permissions; do not bypass protection.','رُفض الوصول. راجع المسار والصلاحيات دون تجاوز الحماية.'],approval_rejected:['The requested operation was rejected. It was not authorized to continue.','رُفضت الموافقة على العملية؛ لم يُسمح لها بالمتابعة.'],command_not_found:['The required executable was not found in this runtime.','برنامج تشغيل الأمر المطلوب غير موجود في هذه البيئة.'],timeout:['The tool exceeded its time limit. Inspect its result before retrying.','تجاوزت الأداة المهلة. تحقق من نتيجتها قبل إعادة المحاولة.'],unsupported_format:['The tool cannot read this file format. Use a supported format or an authorized reader.','الأداة لا تدعم صيغة هذا الملف. استخدم صيغة مدعومة أو أداة قراءة مناسبة.'],interrupted:['Tool execution was interrupted before it finished. No successful result was confirmed; review the conversation before retrying.','توقف تنفيذ الأداة قبل اكتماله؛ لم تتأكد نتيجة ناجحة. راجع المحادثة قبل إعادة الطلب.'],invalid_arguments:['The tool rejected its input. The agent needs to correct the arguments before trying again.','رفضت الأداة المدخلات؛ يحتاج الوكيل إلى تصحيح معاملات الطلب قبل إعادة المحاولة.'],tool_unavailable:['This tool is unavailable or disabled for the selected agent. Use an available tool without bypassing permissions.','هذه الأداة غير متاحة أو معطلة للوكيل المحدد. استخدم أداة متاحة دون تجاوز الصلاحيات.'],dependency_missing:['A required module or dependency is missing. It must be prepared in the authorized isolated runtime.','وحدة أو اعتمادية مطلوبة غير موجودة؛ يلزم تجهيزها في بيئة التشغيل المعزولة والمصرح بها.'],network_unavailable:['The tool could not reach its required service or resolve its hostname. Check service availability and permitted networking.','تعذر على الأداة الاتصال بالخدمة المطلوبة أو تحديد عنوانها. تحقق من توفر الخدمة والاتصال المسموح به.'],tool_failed:['The operation failed. Pi did not provide a recognized cause that can be displayed here. Ask the agent to inspect this failure before retrying.','فشلت العملية، ولم تتوفر تفاصيل واضحة قابلة للعرض عن سببها. اطلب من الوكيل فحص هذا الفشل قبل إعادة المحاولة.']};
         result.append(textElement('p',tr(...(explanations[row.error_kind]||explanations.tool_failed)),'tool-error-explanation'));
       }
       if(Number.isInteger(row.exit_code))result.append(textElement('small',tr('Exit code: ','رمز الخروج: ')+row.exit_code));
@@ -823,7 +823,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const sentAttachments=payload=>{const paths=new Set((payload?.attachments||[]).map(a=>a.path));for(const item of attachments.filter(a=>paths.has(a.path)))releasePreview(item);attachments=attachments.filter(a=>!paths.has(a.path));renderAttachments();};
   async function openAttachPicker(){
     if(!activeWorkspace||window.workspaceSubmissionBlocked?.())return;
-    if(!window.nativeSession?.active()){toast(tr('OpenCode Native is unavailable; no file was sent.','اتصال OpenCode Native غير متاح؛ لم يُرسل أي ملف.'));return;}
+    if(!window.nativeSession?.active()){toast(tr('Pi Native is unavailable; no file was sent.','اتصال Pi Native غير متاح؛ لم يُرسل أي ملف.'));return;}
     if(!activeSession)await createSession();
     const picker=document.createElement('input');picker.type='file';picker.multiple=true;picker.hidden=true;
     picker.oncancel=()=>picker.remove();picker.onchange=async()=>{
@@ -832,7 +832,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       for(const file of files){
         if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)break;
         const temporary=true;
-        // File capability and size acceptance are decided by the installed OpenCode Native and selected model.
+        // File capability and size acceptance are decided by the installed Pi Native and selected model.
         const item={name:file.name,size:file.size,type:file.type||'application/octet-stream',temporary,owner,workspaceId,state:'uploading',preview:['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)?URL.createObjectURL(file):null};attachments.push(item);renderAttachments();
         const valid=()=>revision===attachmentRevision&&workspaceId===activeWorkspace?.id&&sessionId===activeSession?.id&&owner===currentUser?.id&&!item.cancelled;
         let timer;
@@ -863,7 +863,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     };document.body.append(picker);picker.click();
   }
 
-  q('openTools').onclick=()=>window.openConnections('providers');q('openTools').title=tr('Open OpenCode provider and workspace setup','\u0641\u062a\u062d \u0625\u0639\u062f\u0627\u062f \u0645\u0632\u0648\u062f OpenCode \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644');q('chatGithub').onclick=()=>openConnections('github');
+  q('openTools').onclick=()=>window.openConnections('providers');q('openTools').title=tr('Open Pi provider and workspace setup','\u0641\u062a\u062d \u0625\u0639\u062f\u0627\u062f \u0645\u0632\u0648\u062f Pi \u0648\u0645\u0633\u0627\u062d\u0629 \u0627\u0644\u0639\u0645\u0644');q('chatGithub').onclick=()=>openConnections('github');
   // Project files and preview share the single persistent Project conversation.
   let sessionRows=[],sessionListPending=null,sessionCreating=null,sending=false,queuing=false,queueCount=0,queueSignature='',queueRevision=0,historyRevision=0,pendingSubmission=null,cancelRequested=false,statusPending=null;
   const submissionStatus=textElement('p','','muted-small');submissionStatus.setAttribute('role','status');q('promptForm').before(submissionStatus);
@@ -896,7 +896,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const cancelAttachment=btn('cancelPendingAttachment','Cancel pending attachment','إلغاء طلب المرفق',async()=>{
     const id=activeSession?.id,owner=currentUser?.id;
     if(!id||!window.nativeSession?.pendingAttachment(id))return;
-    const confirmed=await window.confirmAction(tr('Cancel the current attachment task in this conversation? OpenCode will stop this session only. Temporary files will be removed once Native is idle; chat history remains saved.','هل تريد إلغاء مهمة قراءة المرفق في هذه المحادثة؟ سيتوقف تنفيذ هذه الجلسة فقط، ستُنظّف الملفات المؤقتة بعد توقف Native، ويبقى سجل المحادثة محفوظًا.'));
+    const confirmed=await window.confirmAction(tr('Cancel the current attachment task in this conversation? Pi will stop this session only. Temporary files will be removed once Native is idle; chat history remains saved.','هل تريد إلغاء مهمة قراءة المرفق في هذه المحادثة؟ سيتوقف تنفيذ هذه الجلسة فقط، ستُنظّف الملفات المؤقتة بعد توقف Native، ويبقى سجل المحادثة محفوظًا.'));
     if(!confirmed)return;
     cancelAttachment.disabled=true;
     try{
@@ -908,7 +908,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       if(activeSession?.id===id&&currentUser?.id===owner){
         // Never silently swallow a Native abort failure or imply the file
         // stopped. Keep the recover/stop controls available.
-        submissionStatus.textContent=tr('OpenCode has not confirmed cancellation. The conversation and draft are preserved: ','لم يؤكد OpenCode إلغاء المرفق. بقيت المحادثة والمسودة محفوظتين: ')+error.message;
+        submissionStatus.textContent=tr('Pi has not confirmed cancellation. The conversation and draft are preserved: ','لم يؤكد Pi إلغاء المرفق. بقيت المحادثة والمسودة محفوظتين: ')+error.message;
         toast(submissionStatus.textContent);
       }
     }finally{cancelAttachment.disabled=false;updateSend();}
@@ -1408,7 +1408,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   // Reuse the actual Dashboard navigation and its handlers, never duplicate it.
   const dashboardMenu=document.createElement('dialog');dashboardMenu.className='workspace-dashboard-menu';dashboardMenu.setAttribute('aria-label',tr('Dashboard menu','قائمة لوحة التحكم'));
   const dashboardNav=q('clientNav'),dashboardParent=dashboardNav.parentNode,dashboardNext=dashboardNav.nextSibling;
-  const dashboardRail=textElement('aside','','workspace-dashboard-rail');dashboardRail.id='workspaceDashboardRail';const dashboardBrand=textElement('div','OpenCode Gateway','workspace-dashboard-brand');dashboardBrand.insertAdjacentHTML('afterbegin','<svg viewBox="0 0 16 20" aria-hidden="true"><use href="#icon-opencode"/></svg>');dashboardRail.append(dashboardBrand);shell.prepend(dashboardRail);
+  const dashboardRail=textElement('aside','','workspace-dashboard-rail');dashboardRail.id='workspaceDashboardRail';const dashboardBrand=textElement('div','Pi Gateway','workspace-dashboard-brand');dashboardBrand.insertAdjacentHTML('afterbegin','<svg viewBox="0 0 16 20" aria-hidden="true"><use href="#icon-opencode"/></svg>');dashboardRail.append(dashboardBrand);shell.prepend(dashboardRail);
   function placeDashboardNav(){if(dashboardMenu.open)return;if(q('workspacePage').classList.contains('active')&&!drawer()&&currentUser)dashboardRail.append(dashboardNav);else if(dashboardNav.parentNode!==dashboardParent)dashboardParent.insertBefore(dashboardNav,dashboardNext);}
   window.addEventListener('resize',placeDashboardNav);
   const closeDashboard=btn('closeWorkspaceDashboard','Close dashboard','إغلاق لوحة التحكم',()=>dashboardMenu.close(),'icon');closeDashboard.textContent='×';dashboardMenu.append(closeDashboard);document.body.append(dashboardMenu);
@@ -1436,8 +1436,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   function closePane(){paneDragEnd();pane.classList.remove('open');shell.classList.remove('panel-docked');shell.classList.add('sessions-collapsed');shell.style.gridTemplateColumns='';overlay(false);}
   function togglePane(){const opening=shell.classList.contains('sessions-collapsed')||(drawer()&&!pane.classList.contains('open'));shell.classList.toggle('sessions-collapsed',!opening);pane.classList.toggle('open',opening);shell.classList.toggle('panel-docked',drawer()&&opening);shell.style.gridTemplateColumns='';overlay(false);if(opening){setPanelWidth(panelWidth);if(panelMode==='changes')loadChanges();}}
 
-  copy.en.spaceReadyBody='Start a session to work with OpenCode. Review changes or preview your project in the side panel.';
-  copy.ar.spaceReadyBody='ابدأ جلسة للعمل مع OpenCode. راجع التغييرات أو عاين مشروعك في اللوحة الجانبية.';
+  copy.en.spaceReadyBody='Start a session to work with Pi. Review changes or preview your project in the side panel.';
+  copy.ar.spaceReadyBody='ابدأ جلسة للعمل مع Pi. راجع التغييرات أو عاين مشروعك في اللوحة الجانبية.';
   q('openSessions').onclick=togglePane;q('openSessions').setAttribute('aria-label',tr('Projects and preview','المشاريع والمعاينة'));q('openSessions').title=tr('Projects and preview','المشاريع والمعاينة');close.onclick=closePane;q('backdrop').addEventListener('click',()=>{pane.classList.remove('open');});
   const events=textElement('div');previewPanel.hidden=true;changesMode.setAttribute('aria-pressed','true');previewMode.setAttribute('aria-pressed','false');
   refreshGit=async()=>{await loadChanges();q('manageProviders')?.remove();};
@@ -1504,7 +1504,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const busy=['submitted','waiting_approval'].includes(activeSession?.execution_status);
     renderAttachments();
     attach.disabled=!workAccess||sending||Boolean(pendingSubmission)||busy;attachmentList.querySelectorAll('button').forEach(button=>button.disabled=sending||Boolean(pendingSubmission));
-    // OpenCode 1.x does not guarantee that a second prompt_async while a
+    // Pi 1.x does not guarantee that a second prompt_async while a
     // session is already running will execute. Never advertise a Gateway
     // queue in native mode or acknowledge a potentially orphaned prompt.
     const nativeBusy=Boolean(window.nativeSession?.active()&&window.nativeSession.blocked(activeSession?.id));
@@ -1512,7 +1512,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     recoveryAction.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
     cancelAttachment.hidden=!activeSession||!window.nativeSession?.pendingAttachment(activeSession.id);
     q('sendMessage').disabled=sending||queuing||nativeBusy||(window.nativeSession?.active()&&busy)||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
-    q('sendMessage').title=nativeBusy?tr('OpenCode is busy — send when this turn finishes','OpenCode مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
+    q('sendMessage').title=nativeBusy?tr('Pi is busy — send when this turn finishes','Pi مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
     // Unconfirmed Native receipt is still an actionable stop: even an idle
     // runtime needs a verified session-scoped stop to unblock the saved draft.
@@ -1578,18 +1578,18 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     runtimeReady=false;updateSend();
     const cached=window.workspaceRuntime.peek(workspaceId),cachedAgents=window.workspaceRuntime.peekAgents(workspaceId);
     if(cached)renderProviders(cached,preferredProvider);if(cachedAgents)renderAgents(cachedAgents);
-    q('runtimeStatus').textContent=cached?tr('Refreshing OpenCode…','جارٍ تحديث OpenCode…'):tr('Starting OpenCode…','جارٍ بدء OpenCode…');
+    q('runtimeStatus').textContent=cached?tr('Refreshing Pi…','جارٍ تحديث Pi…'):tr('Starting Pi…','جارٍ بدء Pi…');
     const agentsJob=window.workspaceRuntime.loadAgents(workspaceId).then(snapshot=>{
       if(!current())return;renderAgents(snapshot);
-      performance.measure('OpenCode agents populated '+workspaceId,{start:started,end:performance.now()});
+      performance.measure('Pi agents populated '+workspaceId,{start:started,end:performance.now()});
     }).catch(error=>{if(current()){agentsReady=false;agent.title=error.message;updateSend();}});
     const providersJob=window.workspaceRuntime.load(workspaceId,{force}).then(snapshot=>{
       if(!current())return;
       runtimeReady=snapshot.health?.healthy===true&&snapshot.providers!==null;
       renderProviders(snapshot,preferredProvider);renderAgents(snapshot);
-      q('runtimeStatus').textContent='OpenCode '+snapshot.version+' · '+snapshot.status;
+      q('runtimeStatus').textContent='Pi '+snapshot.version+' · '+snapshot.status;
       for(const error of Object.values(snapshot.errors||{}))toast(error.detail);
-      performance.measure('OpenCode providers populated '+workspaceId,{start:started,end:performance.now()});
+      performance.measure('Pi providers populated '+workspaceId,{start:started,end:performance.now()});
     }).catch(error=>{if(current()){runtimeReady=false;q('runtimeStatus').textContent=error.message;updateSend();toast(error.message);}});
     await Promise.allSettled([agentsJob,providersJob]);
   }
@@ -1632,7 +1632,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     saveNativeDraft();window.closeNativeFile?.();if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}detailLoads.delete(workspace.id);stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;restoreNativeDraft();window.resetWorkspaceQueue?.();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
     discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewStatus.textContent=tr('Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
-    renderWorkspaceEmpty();q('promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('OpenCode default','افتراضي OpenCode'),''));updateSend();
+    renderWorkspaceEmpty();q('promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('Pi default','افتراضي Pi'),''));updateSend();
     if(!navigate){
       syncWorkspacePolling();
       // Conversation navigation keeps the page mounted. Restart discovery for
@@ -1829,7 +1829,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(window.nativeSession?.active()){
       // A new prompt never cancels a running Native model. Stop is explicit.
       if(['submitted','waiting_approval'].includes(activeSession?.execution_status)){
-        submissionStatus.textContent=tr('OpenCode is processing this conversation. Wait or press Stop.','OpenCode يعالج هذه المحادثة. انتظر أو اضغط إيقاف صراحة.');
+        submissionStatus.textContent=tr('Pi is processing this conversation. Wait or press Stop.','Pi يعالج هذه المحادثة. انتظر أو اضغط إيقاف صراحة.');
         return;
       }
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
@@ -1837,14 +1837,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
         const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type,url:a.url,name:a.name}));
         await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});sentAttachments({attachments:nativeFiles});draft.confirm();
-        submissionStatus.textContent=tr('Accepted by native OpenCode','قبله OpenCode الأصلي');
-        // OpenCode SSE owns reply presentation. No blocking Gateway history
+        submissionStatus.textContent=tr('Accepted by native Pi','قبله Pi الأصلي');
+        // Pi SSE owns reply presentation. No blocking Gateway history
         // or status request after the Native prompt receipt.
       }catch(error){toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
     }
     // LIVE must not silently fall back to the legacy Python AI queue if Native is unavailable.
     if(location.hostname==='opencode-gateway.codes'&&!window.nativeSession?.active()){
-      submissionStatus.textContent=tr('OpenCode Native is unavailable. Nothing was sent.','اتصال OpenCode الأصلي غير متاح. لم تُرسل الرسالة.');
+      submissionStatus.textContent=tr('Pi Native is unavailable. Nothing was sent.','اتصال Pi الأصلي غير متاح. لم تُرسل الرسالة.');
       toast(submissionStatus.textContent);
       return;
     }
@@ -1893,7 +1893,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   async function openRepositoryPicker(onReady=null){
     const dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog';dialog.setAttribute('aria-label',tr('GitHub repository and branch','مستودع وفرع GitHub'));
     const close=btn('repositoryClose','Close','إغلاق',()=>dialog.close()),feedback=textElement('p',tr('Loading authorized repositories…','جارٍ تحميل المستودعات المصرّح بها…'),'api-message');feedback.setAttribute('role','status');
-    dialog.append(title('GitHub repository / branch','مستودع GitHub / الفرع'),close,text('p','Your repository stays in GitHub. OpenCode works on a server-side working copy. Commit and push are separate explicit actions.','يبقى المستودع في GitHub. يعمل OpenCode على نسخة عمل بالخادم. Commit وPush إجراءان منفصلان باختيارك.'),feedback);
+    dialog.append(title('GitHub repository / branch','مستودع GitHub / الفرع'),close,text('p','Your repository stays in GitHub. Pi works on a server-side working copy. Commit and push are separate explicit actions.','يبقى المستودع في GitHub. يعمل Pi على نسخة عمل بالخادم. Commit وPush إجراءان منفصلان باختيارك.'),feedback);
     document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();
     try{
       const state=await api('/api/github/status');if(!dialog.open)return;
@@ -1945,7 +1945,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const refundPolicy=text('p','Accepted payments cannot be cancelled or refunded.','المدفوعات المقبولة غير قابلة للإلغاء أو الاسترداد.','refund-policy');refundPolicy.id='subscriptionRefundPolicy';document.querySelector('#landing .pricing').append(refundPolicy);
   const prefs=applyPrefs;applyPrefs=()=>{prefs();for(const [node,en,ar] of texts){if(!node.firstChild)node.textContent=tr(en,ar);else if(node.firstChild.nodeType===3)node.firstChild.textContent=tr(en,ar);}renderEntitlement();renderStorage();if(q('accountLanguage'))q('accountLanguage').value=lang;if(q('accountAppearance'))q('accountAppearance').value=dark?'dark':'light';document.querySelectorAll('[data-account-en]').forEach(node=>node.textContent=lang==='ar'?node.dataset.accountAr:node.dataset.accountEn);};
   // The wordmark is a landing-page navigation control for every role.
-  const brand=document.querySelector('#app-header .header-brand');if(brand){brand.setAttribute('role','button');brand.tabIndex=0;brand.setAttribute('aria-label','OpenCode Gateway — Home');brand.style.cursor='pointer';brand.onclick=()=>page('landing');brand.onkeydown=event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();page('landing');}};}
+  const brand=document.querySelector('#app-header .header-brand');if(brand){brand.setAttribute('role','button');brand.tabIndex=0;brand.setAttribute('aria-label','Pi Gateway — Home');brand.style.cursor='pointer';brand.onclick=()=>page('landing');brand.onkeydown=event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();page('landing');}};}
   const paymentOrders=document.createElement('section');paymentOrders.id='clientPaymentOrders';document.querySelector('[data-client-panel=billing]').append(paymentOrders);
   const adminOrders=document.createElement('section');adminOrders.id='adminPaymentOrders';document.querySelector('[data-admin-panel=billing]').append(adminOrders);
   let paymentLoadCounter=0,paymentArchived=false;
