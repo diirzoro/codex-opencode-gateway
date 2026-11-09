@@ -1,56 +1,70 @@
-# OpenCode Gateway
+# Pi Gateway — TEST
 
-Independent browser workspace; not built by or affiliated with OpenCode or GitHub. Arabic/English, light/dark, conversation-focused responsive UI. Local development only; no deployment performed.
+Web workspace and account-management platform powered by **Pi Coding Agent**.
 
-Implemented in source: Gateway accounts/roles, admin and client pages, plan and billing management, project/workspace APIs, local Git operations, and an OpenCode adapter. External PayPal/GitHub functions need real server-side configuration. The adapter accepts OpenCode 1.18.31 and 1.18.32, but public isolation and live Gateway-to-OpenCode execution remain unverified; production prompt execution is disabled by default. See [deployment/OPENCODE_INTEGRATION.md](deployment/OPENCODE_INTEGRATION.md) and [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md) before upload. The project does not present simulated provider or payment success as real.
+## Architecture
 
-## Run the local application (Windows)
+The site uses one Nginx process for the TEST and LIVE virtual hosts. The TEST
+virtual host routes normal application traffic to the Gateway backend on
+`127.0.0.1:8001` and AI traffic under `/native-direct/api/` to the existing
+`/run/pi-central/pi.sock` Unix socket. Pi Central runs as
+`pi-central.service` and controls `@earendil-works/pi-coding-agent` using
+its native RPC protocol.
 
-The local runner uses the actual Gateway backend and the configured local PostgreSQL database. It binds to loopback only; it does not start a separate demo server or test database.
+The Gateway owns account authentication, projects, workspace ownership,
+GitHub integration, administrative policies, plans, and billing. **Pi alone**
+owns model execution, messages, conversation history, tools, extensions,
+skills, and AI credentials. There is no Python AI engine or second
+provider-credential registry.
 
-```powershell
-Set-Location 'D:\opencodde agent\codex project\project'
-# Create the ignored .env from .env.example and configure local-only values once.
-Set-Location backend
-..\.venv\Scripts\alembic.exe upgrade head
-Set-Location ..
-.\run-local.ps1
-# Open http://127.0.0.1:8766
-```
+TEST and LIVE have separate database identities. Keep account data, project
+files and Pi sessions distinct. An account's Pi `auth.json` must not be
+silently shared with other users merely because the operating system uses the
+same service user.
 
-Keep `.env`, `runtime/`, and `workspaces/` local. Do not copy production credentials into the project. The app and database currently run locally; no deployment is performed.
+The existing domain, Gateway service names and historical database identifiers
+contain `opencode` for compatibility with the deployed platform; those names
+do not mean the OpenCode engine is installed or supported.
 
-## Local PostgreSQL application
+## Status and limitations (2026-11-09)
 
-Prepare a separate local PostgreSQL database. Copy `.env.example` and supply local-only values. Export those explicit variables to the shell; this application does not automatically load `.env`. Activate your Python environment, then:
+- VPS operator confirmed Pi CLI version `1.5.0`, `pi-central.service`
+  active and Unix-socket health `ready`.
+- VPS operator redirected TEST Nginx to
+  `/etc/nginx/snippets/pi-central-test.conf`; old TEST OpenCode snippets were
+  deleted.
+- The operator installed an OpenRouter credential through Pi CLI, whose
+  default account directory is `/home/tahir/.pi/agent`.
+- GitHub's `integration/pi-central.mjs` is a **development bridge**, not a
+  proven deployment or a complete implementation of Pi tools/files/sessions.
+  It currently creates account-specific Pi directories and disables coding
+  tools pending operating-system/project isolation.
+- Deployment run `42671819015` failed with no reported jobs; do not infer
+  that GitHub source changes were installed on VPS.
+- Saving any nonempty provider key is **not** authentication verification.
+  The connected-provider list must not claim a provider is verified before a
+  successful real Pi model request.
+- The gateway workspace currently expects OpenCode-shaped compatibility
+  routes; these are existing UI transport paths, **not** permission to run
+  or reinstall the retired OpenCode engine.
 
-```powershell
-Set-Location backend
-python -m alembic upgrade head
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
+## Source and deployment
 
-The production example enables `OPENCODE_RUNTIME_MODE=local`, which starts per-workspace OpenCode processes with separate runtime data but **does not sandbox the host OS/network**; do not expose this mode to untrusted public customer workloads before adding production isolation. Backend-only `OPENCODE_BASE_URL=http://127.0.0.1:4096` refers to the separately running internal reference service and is used only for health diagnostics, without shared login credentials. Client prompts use Gateway-managed workspace processes, not the shared reference process. Frontend requests use `/api/...`; customers never access OpenCode directly. Existing environments must replace the old `OPENCODE_URL` variable with `OPENCODE_BASE_URL` (the old name is no longer read).
+- Active development branch: `updates`
+- Pi bridge source: `integration/pi-central.mjs`
+- TEST routing snippet source: `ops/native-direct/nginx.conf`
+- TEST in-place deployment helper:
+  `ops/native-direct/update-existing-test-nginx.sh`
+- TEST release workflow: `.github/workflows/deploy-updates-test.yml`
+- Implementation memo: `docs/PI_CENTRAL_MIGRATION_AR.md`
 
-## References
+Do not run the old OpenCode Native installation or discovery workflows.
+Do not enable Pi shell/edit tools for untrusted web users under the same
+unconfined VPS account. Pi tools inherit operating-system permissions;
+isolate projects at the operating-system boundary before public use.
 
-- [Product boundaries and development rules](docs/PRODUCT_BOUNDARIES.md) — branded Gateway client UI, OpenCode-owned coding capabilities, SaaS control plane, and no test environments.
-- [OpenCode deployment integration](deployment/OPENCODE_INTEGRATION.md) — packaged adapter versus separately installed runtime, and production execution gates.
-- [GitHub App deployment integration](deployment/GITHUB_INTEGRATION.md) — client-owned authorization and the server-side GitHub App setup.
-- [Implementation status and all 224 source requirements](docs/IMPLEMENTATION_STATUS.md)
-- [API reference](docs/API_REFERENCE.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Database and migrations](docs/DATABASE_REFERENCE.md)
-- [Security model and launch blockers](docs/SECURITY_MODEL.md)
-- [Roadmap](docs/DEVELOPMENT_ROADMAP.md)
-- [Phase report](docs/PHASE_REPORT.md)
-- [SVG asset credits](docs/ASSET_CREDITS.md)
-- [Later manual deployment commands](deployment/README.md) — documentation only.
+## Official Pi documentation
 
-## GitHub source publication
-
-The checked-in application source is the deliverable. Local environment settings, runtime data, workspaces, and dependencies are excluded. No automated test harness or test fixtures are part of this project copy.
-
-## Latest local acceptance
-
-Payment checkout supports admin-owned transfer methods, plan-bound hosted links and server-only PayPal Orders/capture verification. Configure merchant credentials locally before payment processing; see docs/PAYMENT_CHECKOUT_REPORT.md. No successful PayPal transaction is claimed without merchant acceptance. Backend migration head: 0008_paypal_checkout. OpenCode/provider integration and GitHub publishing still have documented configuration and production-isolation limits in the implementation status and phase report.
+- [Pi RPC](https://pi.dev/docs/latest/rpc)
+- [Pi RPC commands](https://pi.dev/docs/latest/rpc-commands)
+- [Pi CLI](https://pi.dev/docs/latest/cli)
