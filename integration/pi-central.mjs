@@ -358,57 +358,50 @@ async function nativeDiscovery(userId) {
   const models=modelsSnapshots.get(userId), commands=commandsSnapshots.get(userId);
   if(models&&commands&&Date.now()-models.time<CATALOG_TTL_MS
     &&Date.now()-commands.time<CATALOG_TTL_MS)
-    return {models:models.models,availableProviders:models.availableProviders||[],providers:models.providers||[],commands:commands.commands};
+    return {models:models.models,availableProviders:models.availableProviders,
+      providers:models.providers,commands:commands.commands};
   if(nativeDiscoveryPending)return nativeDiscoveryPending;
-  // All web clients share one concurrent Pi inventory read, not duplicate
-  // Pi discovery processes or browser/Provider databases.
+
+  // Pi's installed SDK is the single source for the full provider/model
+  // catalog and credential state. RPC get_available_models is intentionally
+  // not used for this: it can contain only models usable by current auth.
   nativeDiscoveryPending=(async()=>{
-  const a=new Agent({directory:CATALOG_DIRECTORY,workspaceId:"catalog",
-    projectId:"catalog",userId,catalog:true});
-  try {
-    // Provider and command discovery are independent Pi capabilities.
-    const m=await a.command("get_available_models").catch(()=>({models:[]}));
-    const c=await a.command("get_commands").catch(()=>({commands:[]}));
-    if(!Array.isArray(m?.models)||!Array.isArray(c?.commands))
-      throw new Error("Installed Pi returned an invalid discovery response");
-    // The installed Pi SDK model registry includes built-in and models.json
-    // definitions, including providers not yet connected. RPC contains only
-    // currently available models on some Pi builds. Both sources are Pi-native.
-    let models=m.models,availableProviders=m.models.map(model=>model.provider),providers=[];
+    const runtime=await piModels();
+    const models=runtime.getModels();
+    const providers=runtime.getProviders().map(provider=>({
+      id:provider.id,name:provider.name||provider.id,
+      auth_methods:[
+        ...(provider.auth?.apiKey?.login?["apiKey"]:[]),
+        ...(provider.auth?.oauth?.login?["oauth"]:[])
+      ]
+    }));
+    if(!Array.isArray(models)||!Array.isArray(providers)||!providers.length)
+      throw Object.assign(new Error("Installed Pi provider registry is unavailable"),{status:502});
+
+    const credentials=await runtime.listCredentials();
+    const stored=new Set(credentials.map(row=>row.providerId));
+    // Some native auth methods resolve through environment/config rather
+    // than stored credentials. Provider is "configured" by Pi's own status.
+    const availableProviders=providers
+      .filter(p=>stored.has(p.id)||runtime.getProviderAuthStatus(p.id).configured)
+      .map(p=>p.id);
+
+    // Extension commands, skills and templates are discovered separately
+    // from Pi RPC. A failed command lookup never erases native providers.
+    let commands=[];
+    const a=new Agent({directory:CATALOG_DIRECTORY,workspaceId:"catalog",
+      projectId:"catalog",userId,catalog:true});
     try {
-      const runtime=await piModels();
-      const all=runtime.getModels();
-      providers=runtime.getProviders().map(provider=>({
-        id:provider.id,name:provider.name||provider.id,
-        auth_methods:[
-          ...(provider.auth?.apiKey?.login?["apiKey"]:[]),
-          ...(provider.auth?.oauth?.login?["oauth"]:[])
-        ]
-      }));
-      if(Array.isArray(all)&&all.length){
-        const byId=new Map(all.map(model=>[model.provider+"\0"+model.id,model]));
-        for(const model of m.models)byId.set(model.provider+"\0"+model.id,model);
-        models=[...byId.values()];
-      }
-      // Pi records provider credentials by provider ID, not by model/agent.
-      const stored=await runtime.listCredentials();
-      const saved=new Set(stored.map(row=>row.providerId));
-      availableProviders=[...new Set([
-        ...availableProviders,
-        ...runtime.getAvailableSnapshot().map(model=>model.provider),
-        ...providers.filter(p=>saved.has(p.id)).map(p=>p.id)
-      ])];
+      const result=await a.command("get_commands");
+      if(Array.isArray(result?.commands))commands=result.commands;
     } catch (e) {
-      // Older installed forks may lack this SDK factory. The Pi RPC inventory
-      // remains authoritative rather than replacing it with a Gateway catalog.
-      console.warn("Pi SDK model registry not available; using native RPC inventory:",
-        e instanceof Error?e.message:"unknown");
-    }
+      console.warn("Pi command discovery unavailable:",e instanceof Error?e.message:"unknown");
+    } finally {a.close();}
+
     const time=Date.now();
     modelsSnapshots.set(userId,{models,availableProviders,providers,time});
-    commandsSnapshots.set(userId,{commands:c.commands,time});
-    return {models,availableProviders,providers,commands:c.commands};
-  }finally{a.close();}
+    commandsSnapshots.set(userId,{commands,time});
+    return {models,availableProviders,providers,commands};
   })();
   try{return await nativeDiscoveryPending;}finally{nativeDiscoveryPending=null;}
 }
