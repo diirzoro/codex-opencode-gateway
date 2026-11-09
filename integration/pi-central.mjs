@@ -326,7 +326,10 @@ async function nativeDiscovery(userId) {
           allowModelNetwork:false
         });
         all=runtime.getModels();
-        authenticated=await runtime.getAvailable();
+        // Pi's existing availability snapshot is sufficient here. Do not
+        // perform a new network/provider auth refresh merely to render a list.
+        authenticated=typeof runtime.getAvailableSnapshot==="function"
+          ?runtime.getAvailableSnapshot():[];
       }else if(sdk.ModelRegistry?.create&&sdk.AuthStorage?.create){
         // Earlier installed Pi packages use this native SDK facade.
         const auth=sdk.AuthStorage.create(path.join(PI_AGENT_DIR,"auth.json"));
