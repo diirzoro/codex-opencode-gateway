@@ -50,16 +50,37 @@ location ^~ /native-direct/api/auth/ {
     client_max_body_size 256k;
     limit_except GET PUT DELETE { deny all; }
     rewrite ^/native-direct/api/(.*)$ /$1 break;
-    proxy_pass http://127.0.0.1:18097;
+    proxy_pass http://127.0.0.1:18098;
     proxy_http_version 1.1;
     proxy_set_header Cookie "";
     proxy_set_header Authorization "";
-    proxy_set_header Host 127.0.0.1:18097;
+    proxy_set_header Host 127.0.0.1:18098;
     proxy_buffering off;
     proxy_cache off;
     add_header Cache-Control "no-store" always;
 }
 NGINX_AUTH
+fi
+# The existing protected Native session transport 18098 includes
+# /auth/{provider} in its allowlist. The discovery transport 18097 does
+# not reliably expose credential PUT/DELETE, which caused 404 on LIVE.
+# Repair pre-existing LIVE snippets as well as fresh installations.
+if grep -Fq 'location ^~ /native-direct/api/auth/ {' "$snippet"; then
+  temp_auth="$(mktemp)"
+  awk '
+    /location \^~ \/native-direct\/api\/auth\/ \{/ { in_auth=1; seen=1 }
+    in_auth && /proxy_pass http:\/\/127\.0\.0\.1:18097;/ {
+      sub("127.0.0.1:18097", "127.0.0.1:18098")
+    }
+    in_auth && /proxy_set_header Host 127\.0\.0\.1:18097;/ {
+      sub("127.0.0.1:18097", "127.0.0.1:18098")
+    }
+    { print }
+    in_auth && /^[[:space:]]*\}/ { in_auth=0 }
+    END { if (!seen) exit 1 }
+  ' "$snippet" > "$temp_auth"
+  cat "$temp_auth" > "$snippet"
+  rm -f "$temp_auth"
 fi
 if ! grep -Fq 'location ^~ /native-direct/api/ {' "$snippet"; then
 cat >> "$snippet" <<'NGINX_NATIVE'
