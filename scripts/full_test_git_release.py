@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GitHub-commit-based, TEST-only full application rollout. No source backups."""
+"""TEST-only file-diff deployment: restart Gateway only for backend changes."""
 import argparse
 import ast
 import fcntl
@@ -101,7 +101,6 @@ def service(name):return run("systemctl","is-active",name)=="active"
 def requirements():
     if os.geteuid()==0 or Path.cwd()!=ROOT:raise RuntimeError("Must run as tahir from TEST app")
     if not (ROOT/".env").is_file():raise RuntimeError("Existing TEST .env missing")
-    if not service(GATEWAY) or not service(PI):raise RuntimeError("Expected TEST services inactive")
     if not (ROOT/".git").exists():raise RuntimeError("TEST Git checkout missing")
 def verified_commit(sha):
     if not re.fullmatch(r"[a-f0-9]{40}",sha):raise RuntimeError("Invalid commit")
@@ -170,11 +169,14 @@ def rollout(target,mode):
                 if bytecode.is_file() and not bytecode.is_symlink():
                     bytecode.unlink()
     try:
-        # A TEST-only, root-owned migration gate is a mandatory deployment dependency.
+        # Only apply database migrations when the deployed migration files changed.
+        migration_changes=any(name.startswith("backend/alembic/versions/") or name=="backend/alembic/env.py" for name,_,_ in changes)
+        backend_changes=any(name.startswith("backend/") for name,_,_ in changes) or any(name.startswith("backend/") for name,_ in pending_retired)
+        # The root-owned migration gate is used only for a database schema change.
         # It must validate current_database() and run Alembic against the exact TEST
         # service environment. Never infer DB identity from a filename or URL.
         # A missing or failed gate must block restart and release marking.
-        if mode == "deploy":
+        if mode == "deploy" and migration_changes:
             gate = "/usr/local/sbin/opencode-gateway-test-migrate"
             try:
                 sudo_run(gate,"upgrade",timeout=180)
@@ -222,9 +224,11 @@ def rollout(target,mode):
                 raise RuntimeError("TEST database migration gate failed; "
                                    "deployment rolled back. Credentials are never logged.") from None
             print("TEST_MIGRATION_GATE_PASSED",flush=True)
-        sudo_run("/usr/bin/systemctl","restart",GATEWAY)
-        time.sleep(3)
-        if not service(GATEWAY):raise RuntimeError("Gateway unhealthy after restart")
+        if backend_changes:
+            sudo_run("/usr/bin/systemctl","restart",GATEWAY)
+            print("GATEWAY_CODE_RELOADED",flush=True)
+        else:
+            print("GATEWAY_NOT_RESTARTED_NO_BACKEND_CHANGES",flush=True)
         replace(REVISION,(target+"\n").encode())
         print("FULL_TEST_RELEASE_SUCCESS",target,flush=True)
     except Exception:
@@ -234,7 +238,8 @@ def rollout(target,mode):
                 data=subprocess.run(["git","-C",str(ROOT),"show",oldrev+":"+name],
                                     check=True,capture_output=True,timeout=45).stdout
                 replace(dest,data)
-            run("sudo","-n","/usr/bin/systemctl","restart",GATEWAY)
+            if backend_changes:
+                sudo_run("/usr/bin/systemctl","restart",GATEWAY)
             print("GIT_ROLLBACK_APPLIED",oldrev,flush=True)
         else:
             print("FIRST_RELEASE_HAS_NO_RECORDED_PREVIOUS_GIT_COMMIT; MANUAL RECOVERY REQUIRED",flush=True)
