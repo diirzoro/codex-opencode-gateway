@@ -174,7 +174,7 @@
       // "connected" means reported by Native, not a verified API key.
       const native=await window.nativeDirectTest.configuredProviders();
       const connected=new Set(native.connected||[]);
-      const preferred=new Set(['opencode','deepseek','openai','anthropic','google']);
+      const preferred=new Set();
       return (native.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
         id:p.id,name:p.name||p.id,model_count:Object.keys(p.models||{}).length,
         connected:connected.has(p.id),public_free:(native.public_free||[]).includes(p.id),
