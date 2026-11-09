@@ -123,129 +123,7 @@ jobs:
           port="${PORT:-22}"
           ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" \
             'test "$HOME" = /home/tahir && test -d /home/tahir/opencode-gateway-test/.git && test -f /home/tahir/opencode-gateway-test/.env && systemctl is-active --quiet opencode-gateway-test.service && systemctl is-active --quiet pi-central.service'
-      - name: Inspect TEST Native local service and Nginx topology
-        if: steps.confirm.outputs.mode == 'native-probe'
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-          USER: ${{ inputs.vps_username || 'tahir' }}
-          PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
-        run: |
-          set -euo pipefail
-          port="$PORT"
-          if test -z "$port"; then port=22; fi
-          ssh -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$USER@$HOST" 'bash -s' <<'NATIVE_DIAG'
-          set -eu
-          echo NATIVE_TOPOLOGY_START
-          root="$(sed -n 's/^WORKSPACE_ROOT=//p' /home/tahir/opencode-gateway-test/.env | tail -n 1)"
-          if test -z "$root"; then root='/home/tahir/opencode-gateway-test/workspaces'; fi
-          printf 'TEST_WORKSPACE_ROOT=%s\n' "$root"
-          if test -d "$root"; then echo TEST_WORKSPACE_ROOT_EXISTS=yes; else echo TEST_WORKSPACE_ROOT_EXISTS=no; fi
-          gateway_pid="$(systemctl show opencode-gateway-test.service -p MainPID --value)"
-          if test "$gateway_pid" -gt 1 && test -r "/proc/$gateway_pid/environ"; then
-            gateway_root="$(tr "\000" "\n" < "/proc/$gateway_pid/environ" | sed -n "s/^WORKSPACE_ROOT=//p" | head -n 1)"
-            printf "GATEWAY_WORKSPACE_ROOT_FROM_PROCESS=%s\n" "${gateway_root:-unset}"
-          fi
-          if test -r /home/tahir/opencode-gateway-test/backend/app/config.py; then echo "WORKSPACE_CONFIG_PRESENT=yes"; fi
-          for path in /home/tahir/opencode-gateway-test/workspaces /var/lib/opencode-gateway-test/workspaces /var/lib/opencode-gateway-test /home/tahir/opencode-gateway-test/runtime; do
-            if test -d "$path"; then echo "KNOWN_DATA_ROOT=$path"; fi
-          done
-          systemctl show opencode-native-test.service -p ActiveState -p MainPID -p User -p WorkingDirectory -p FragmentPath -p PrivateNetwork -p IPAddressDeny -p IPAddressAllow
-          command -v opencode || true
-          if command -v opencode >/dev/null 2>&1; then opencode --version || true; fi
-          for name in /etc/nginx/sites-enabled/*; do
-            if test -f "$name" && grep -Fq 'test.opencode-gateway.codes' "$name"; then
-              echo "TEST_NGINX_CONFIG=$name"
-              echo 'TEST_NGINX_TOPLEVEL'
-              grep -E '^[[:space:]]*(listen|server_name|include|location|proxy_pass|root|alias)[[:space:]]' "$name" | head -n 65 || true
-              echo 'TEST_NGINX_END'
-            fi
-          done
-          for endpoint in http://127.0.0.1:18098/provider/auth http://127.0.0.1:18098/session http://127.0.0.1:18098/global/health http://127.0.0.1:18097/provider; do
-            echo "UPSTREAM_CHECK=$endpoint"
-            curl -sS -m 12 -o /dev/null -w 'HTTP=%{http_code} CONNECT=%{time_connect} TTFB=%{time_starttransfer}\n' "$endpoint" || true
-          done
-          echo NATIVE_AGENT_PROBE_BEGIN
-          dir=/var/lib/opencode-native-test/workspace
-          for suffix in /agent /config/agents /config /provider/auth; do
-            for port in 18098 18097; do
-              code="$(curl -sS -G -m 15 -o /dev/null -w '%{http_code}' --data-urlencode "directory=$dir" "http://127.0.0.1:$port$suffix" || true)"
-              printf 'NATIVE_AGENT_PROBE port=%s path=%s code=%s\n' "$port" "$suffix" "$code"
-            done
-          done
-          worktree="$(find /var/lib/opencode-workspaces-test -mindepth 3 -maxdepth 3 -type d -name repo -print -quit 2>/dev/null || true)"
-          if test -n "$worktree"; then
-            for suffix in /agent /config/agents /config; do
-              code="$(curl -sS -G -m 15 -o /dev/null -w '%{http_code}' --data-urlencode "directory=$worktree" "http://127.0.0.1:18098$suffix" || true)"
-              printf 'NATIVE_PROJECT_AGENT path=%s code=%s\n' "$suffix" "$code"
-            done
-          else echo NATIVE_PROJECT_AGENT no_worktree; fi
-          echo NATIVE_AGENT_PROBE_END
-          # Native-only project-workspace smoke: do not call Gateway or DB.
-          if command -v jq >/dev/null 2>&1; then
-            worktree="$(find /var/lib/opencode-workspaces-test -mindepth 3 -maxdepth 3 -type d -name repo -print -quit 2>/dev/null || true)"
-            if test -n "$worktree"; then
-              echo NATIVE_PROJECT_ROOT_FOUND=yes
-              uri="$(jq -rn --arg v "$worktree" '$v|@uri')"
-              prefix='https://test.opencode-gateway.codes/native-direct/api/'
-              basic="$(cat /home/tahir/.native-direct-stage/native-access-password)"
-              response="$(mktemp)"
-              session_id=""
-              cleanup(){
-                if test -n "$session_id"; then
-                  curl -sS --max-time 15 --user "native-test:$basic" -X DELETE \
-                    -o /dev/null "$prefix""session/$session_id?directory=$uri" || true
-                fi
-                rm -f "$response"
-              }
-              trap cleanup EXIT
-              http="$(curl -sS --max-time 45 --user "native-test:$basic" \
-                -o "$response" -w '%{http_code}' "$prefix""provider?directory=$uri")" || http=000
-              echo "DIRECT_PROJECT_PROVIDER_HTTP=$http"
-              if test "$http" = 200; then
-                connected="$(jq -r 'if (.connected // []) | index("deepseek") then "yes" else "no" end' "$response")"
-                echo "DIRECT_PROJECT_DEEPSEEK_CONNECTED=$connected"
-                http="$(curl -sS --max-time 45 --user "native-test:$basic" \
-                  -H 'Content-Type: application/json' -X POST -d '{"title":"Native main TEST project smoke"}' \
-                  -o "$response" -w '%{http_code}' "$prefix""session?directory=$uri")" || http=000
-                echo "DIRECT_PROJECT_SESSION_CREATE_HTTP=$http"
-                if test "$http" = 200; then
-                  session_id="$(jq -r '.id // empty' "$response")"
-                  if [[ "$session_id" =~ ^ses_[A-Za-z0-9_-]+$ ]] && test "$connected" = yes; then
-                    body='{"model":{"providerID":"deepseek","modelID":"deepseek-flash"},"parts":[{"type":"text","text":"Reply with OK only, no tools."}]}'
-                    http="$(curl -sS --max-time 35 --user "native-test:$basic" \
-                      -H 'Content-Type: application/json' -X POST -d "$body" \
-                      -o "$response" -w '%{http_code}' \
-                      "$prefix""session/$session_id/prompt_async?directory=$uri")" || http=000
-                    echo "DIRECT_PROJECT_PROMPT_ASYNC_HTTP=$http"
-                    if test "$http" = 204 || test "$http" = 200; then
-                      for attempt in 1 2 3; do
-                        sleep 7
-                        http="$(curl -sS --max-time 35 --user "native-test:$basic" \
-                          -o "$response" -w '%{http_code}' \
-                          "$prefix""session/$session_id/message?directory=$uri")" || http=000
-                        if test "$http" = 200; then
-                          texts="$(jq -r '[.[] | select(.info.role=="assistant") | .parts[]? | select(.type=="text" and (.text | length)>0)]|length' "$response")"
-                          if test "$texts" -gt 0; then
-                            echo "DIRECT_PROJECT_NATIVE_ASSISTANT_REPLY=yes"
-                            break
-                          fi
-                        fi
-                      done
-                      test "$texts" -gt 0 || echo "DIRECT_PROJECT_NATIVE_ASSISTANT_REPLY=not_yet"
-                    fi
-                  fi
-                fi
-              fi
-              cleanup
-              trap - EXIT
-            else
-              echo NATIVE_PROJECT_ROOT_FOUND=no
-            fi
-          fi
-          echo NATIVE_TOPOLOGY_FINISHED
-          NATIVE_DIAG
       - name: Full TEST audit or deploy by pinned GitHub commit
-        if: steps.confirm.outputs.mode != 'native-probe'
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ inputs.vps_username || 'tahir' }}
@@ -310,7 +188,7 @@ jobs:
           curl -fsS --retry 3 --retry-delay 2 https://test.opencode-gateway.codes/api/health
           echo
       - name: Verify TEST health after TEST operation
-        if: steps.confirm.outputs.mode != 'audit-test' && steps.confirm.outputs.mode != 'native-probe'
+        if: steps.confirm.outputs.mode != 'audit-test'
         run: |
           set -euo pipefail
           curl -fsS --retry 6 --retry-delay 2 https://test.opencode-gateway.codes/api/health
