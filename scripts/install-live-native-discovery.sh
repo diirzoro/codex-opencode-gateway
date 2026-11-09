@@ -37,39 +37,6 @@ location = /native-direct/api/provider/auth {
     add_header Cache-Control "no-store" always;
 }
 NGINX
-# Old provider and agent locations remain unchanged.
-# The following block documents their previous installation but is not run.
-: <<'LEGACY_DISCOVERY_BLOCK'
-
-# Authenticated LIVE discovery only: no Native session, tools or credential writes.
-# This check authenticates the Gateway account; it does not grant session access.
-location = /native-direct/api/provider {
-    auth_basic off;
-    auth_request /api/auth/me;
-    limit_except GET { deny all; }
-    proxy_pass http://127.0.0.1:18097/provider;
-    proxy_set_header Cookie "";
-    proxy_set_header Authorization "";
-    proxy_set_header Host 127.0.0.1:18097;
-    proxy_buffering off;
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_types application/json;
-    add_header Cache-Control "no-store" always;
-}
-location = /native-direct/api/agent {
-    auth_basic off;
-    auth_request /api/auth/me;
-    limit_except GET { deny all; }
-    proxy_pass http://127.0.0.1:18097/agent;
-    proxy_set_header Cookie "";
-    proxy_set_header Authorization "";
-    proxy_set_header Host 127.0.0.1:18097;
-    proxy_buffering off;
-    add_header Cache-Control "no-store" always;
-}
-LEGACY_DISCOVERY_BLOCK
 if ! /usr/sbin/nginx -t; then
   cp -p "$backup" "$snippet"
   /usr/sbin/nginx -t || true
