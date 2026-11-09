@@ -78,9 +78,16 @@
     `;document.head.append(style);
   }
   const storageKey=(kind,id)=>'og-native-'+kind+':'+owner()+':'+id;
-  function selection(id){if(!selections.has(id)){try{selections.set(id,JSON.parse(localStorage.getItem(storageKey('selection',id))||'null'));}catch{}}return selections.get(id);}
-  function select(id,value){if(!id)return;selections.set(id,value);try{localStorage.setItem(storageKey('selection',id),JSON.stringify(value));}catch{}const row=rows.get(id);if(row){row.model={providerID:value.providerID,id:value.modelID,variant:value.variant};row.agent=value.agent;}}
-  function remember(row){const saved=selection(row.id);if(saved)row={...row,model:{providerID:saved.providerID,id:saved.modelID,variant:saved.variant},agent:saved.agent};rows.set(row.id,row);return row;}
+  // Pi is the sole persistent owner of session provider/model state and
+  // installed commands. Browser selections are transient composer input only.
+  function selection(id){return selections.get(id);}
+  function select(id,value){
+    if(!id)return;
+    // Remove obsolete local preferences left by the old client adapter.
+    try{localStorage.removeItem(storageKey('selection',id));}catch{}
+    selections.set(id,value);
+  }
+  function remember(row){rows.set(row.id,row);return row;}
   async function context(id){
     if(rows.has(id))return rows.get(id);
     const workspace=activeWorkspace?.id;
