@@ -708,12 +708,13 @@
     if(!Array.isArray(providers.all)||!Array.isArray(providers.connected)||!Array.isArray(agents))
       throw Error('Invalid native discovery schema');
     const connected=new Set(providers.connected);
-    // Show every provider reported by Pi. Models remain selectable only when
-    // Pi reports that a provider is configured; no Python policy filtering.
-    const first=[...providers.all,...(providers.connected_entries||[])].filter(
-      (p,i,rows)=>p?.id&&rows.findIndex(q=>q?.id===p.id)===i
-    ).sort((a,b)=>Number(connected.has(b.id))-Number(connected.has(a.id))
-      ||String(a.name||a.id).localeCompare(String(b.name||b.id)));
+    // Workspace shows Pi-configured providers only. New provider discovery
+    // belongs to Connections, not this model execution selector. "Configured"
+    // does not prove credit availability or a successful request.
+    const first=[...providers.all].filter(
+      (p,i,rows)=>p?.id&&connected.has(p.id)&&
+        rows.findIndex(q=>q?.id===p.id)===i
+    ).sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)));
     return {native:true,loadedAt:Date.now(),workspace_id:String(id),health:{healthy:true},
       version:configuration.version,status:'ready',errors:{},
       agents:agents.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode)),
