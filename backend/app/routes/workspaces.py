@@ -106,6 +106,7 @@ class BindProjectNativeSession(BaseModel):
     model_config=ConfigDict(extra="forbid")
     workspace_id:uuid.UUID
     native_session_id:str=Field(min_length=1,max_length=120,pattern=r"^[A-Za-z0-9_-]+$")
+    replace_legacy_opencode:bool=False
 
 
 def _native_binding_payload(binding):
@@ -146,10 +147,19 @@ def bind_native_session(project_id:uuid.UUID,data:BindProjectNativeSession,
         raise HTTPException(404,"Workspace does not belong to this project")
     current=db.get(ProjectNativeSessionBinding,project.id)
     if current is not None:
-        if (current.user_id!=user.id or current.workspace_id!=workspace.id
-                or current.native_session_id!=data.native_session_id):
+        if (current.user_id!=user.id or current.workspace_id!=workspace.id):
             raise HTTPException(409,"This project already has another persistent Native session")
-        return _native_binding_payload(current)
+        if current.native_session_id==data.native_session_id:
+            return _native_binding_payload(current)
+        # Explicit one-way conversion of a TEST-only legacy OpenCode identifier.
+        # Never infer consent, never migrate LIVE, and never permit Pi -> OpenCode.
+        if (data.replace_legacy_opencode and native_sessions.deployment()=="test"
+                and current.native_session_id.startswith("ses_")
+                and data.native_session_id.startswith("pi_")):
+            current.native_session_id=data.native_session_id
+            db.commit()
+            return _native_binding_payload(current)
+        raise HTTPException(409,"This project already has another persistent Native session")
     binding=ProjectNativeSessionBinding(project_id=project.id,user_id=user.id,
         workspace_id=workspace.id,native_session_id=data.native_session_id)
     db.add(binding)
