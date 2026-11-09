@@ -1,21 +1,75 @@
 #!/usr/bin/env bash
-# Replace existing TEST routing IN PLACE. No release/backup files, no LIVE edits.
+# TEST only — replace the existing Pi service implementation and Nginx snippet
+# in place. Do not create releases, a second service, or persistent backups.
 set -euo pipefail
-source_file=/home/tahir/.native-direct-stage/nginx.conf
-target=/etc/nginx/snippets/opencode-native-direct-test.conf
 test "$(id -u)" -eq 0
-test -f "$source_file"
-test -f "$target"
+STAGE=/home/tahir/.native-direct-stage
+PI_SRC="$STAGE/pi-central.mjs"
+PI_DST=/home/tahir/pi-test/pi-central.mjs
+NGINX_SRC="$STAGE/nginx.conf"
+NGINX_DST=/etc/nginx/snippets/opencode-native-direct-test.conf
+UNIT="$(systemctl show pi-central.service --property FragmentPath --value)"
+test "$UNIT" = /etc/systemd/system/pi-central.service
+test -f "$PI_SRC" && test -f "$PI_DST" && test -f "$NGINX_SRC" && test -f "$NGINX_DST"
+test -x /home/tahir/pi-test/node_modules/.bin/pi
+test "$(systemctl show pi-central.service --property User --value)" = tahir
+grep -Fq '/home/tahir/pi-test/pi-central.mjs' "$UNIT"
+grep -Fq 'RuntimeDirectory=pi-central' "$UNIT"
+node --check "$PI_SRC"
+
+# Full in-memory rollback if any service or Nginx validation fails. No extra files.
+old_pi="$(cat "$PI_DST")"
+old_unit="$(cat "$UNIT")"
+old_nginx="$(cat "$NGINX_DST")"
+changed=0
+restore() {
+  if [ "$changed" = 1 ]; then
+    printf '%s\n' "$old_pi" > "$PI_DST"
+    chown tahir:tahir "$PI_DST"
+    chmod 0644 "$PI_DST"
+    printf '%s\n' "$old_unit" > "$UNIT"
+    chown root:root "$UNIT"
+    chmod 0644 "$UNIT"
+    printf '%s\n' "$old_nginx" > "$NGINX_DST"
+    chown root:root "$NGINX_DST"
+    chmod 0644 "$NGINX_DST"
+    systemctl daemon-reload
+    systemctl restart pi-central.service || true
+    nginx -t && systemctl reload nginx || true
+    echo TEST_PI_ROLLED_BACK >&2
+  fi
+}
+trap restore ERR
+changed=1
+install -o tahir -g tahir -m 0644 "$PI_SRC" "$PI_DST"
+# Keep existing systemd unit: only its own service group & runtime-dir access.
+python3 - "$UNIT" <<'PY'
+import pathlib,sys,re
+p=pathlib.Path(sys.argv[1])
+s=p.read_text()
+def set_service_option(s,key,value):
+    pat=r'(?m)^'+re.escape(key)+r'=.*$'
+    if re.search(pat,s):
+        return re.sub(pat,key+'='+value,s)
+    return s.replace('[Service]','[Service]\n'+key+'='+value,1)
+assert '[Service]' in s
+s=set_service_option(s,'Group','www-data')
+s=set_service_option(s,'RuntimeDirectoryMode','0750')
+p.write_text(s)
+PY
+systemctl daemon-reload
+systemctl restart pi-central.service
+systemctl is-active --quiet pi-central.service
 test -S /run/pi-central/pi.sock
-# Roll back from memory if Nginx rejects new config; never leave invalid config.
-previous="$(cat "$target")"
-install -m 0644 -o root -g root "$source_file" "$target"
-if nginx -t && systemctl reload nginx; then
-  echo "TEST_PI_NGINX_ROUTE_ACTIVE"
-else
-  printf '%s\n' "$previous" > "$target"
-  nginx -t
-  systemctl reload nginx
-  echo "TEST Pi Nginx route not applied; previous runtime restored" >&2
-  exit 1
-fi
+# Check the ACTUAL nginx worker account can traverse directory and reach Pi.
+runuser -u www-data -- curl -fsS --max-time 7 \
+  --unix-socket /run/pi-central/pi.sock http://localhost/health |
+  grep -q '"status":"ready"'
+echo TEST_PI_SOCKET_ACCESS_OK
+
+# The TEST snippet is the only Nginx file being updated.
+install -o root -g root -m 0644 "$NGINX_SRC" "$NGINX_DST"
+nginx -t
+systemctl reload nginx
+echo TEST_PI_NGINX_ACTIVE
+trap - ERR
