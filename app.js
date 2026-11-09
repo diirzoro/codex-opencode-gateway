@@ -265,10 +265,17 @@ window.nativeDirectTest=(()=>{
   function modelVisible(pid,mid,policy=policySnapshot){
     return !!policy&&!(policy.hidden_models[pid]||[]).includes(mid);
   }
+  // Shared, Native-reported availability for Dashboard, Connections and Workspace.
+  // Presence in /provider.connected is NOT proof that a key works or belongs
+  // to this account; only an actual Native model response can verify it.
+  const nativeReported=(p,data)=>!deletedAuthSlots.has(p.id)&&(
+    p.id==='opencode'||publicFree(p)||(data.connected||[]).includes(p.id)||
+    clientVerifiedProviders.has(p.id));
   const idx=(p,data)=>({
     id:p.id,name:p.name||p.id,visible:providerVisible(p.id),allowed:providerAllowed(p.id),
-    connected:p.id==='opencode'||publicFree(p)||nativeConnections(data).includes(p.id),public_free:p.id==='opencode'||publicFree(p),
-    auth_status:publicFree(p)?'free_native':nativeConnections(data).includes(p.id)?'verified_native':undefined,
+    connected:nativeReported(p,data),public_free:p.id==='opencode'||publicFree(p),
+    auth_status:publicFree(p)?'free_native':clientVerifiedProviders.has(p.id)?'verified_native':
+      (data.connected||[]).includes(p.id)?'native_reported_unverified':undefined,
     verified:clientVerifiedProviders.has(p.id),model_count:p.model_count??Object.keys(p.models||{}).length,
     default_model:data.default?.[p.id]
   });
@@ -287,7 +294,7 @@ window.nativeDirectTest=(()=>{
   }
   function methods(auth,pid){const list=auth?.[pid];return Array.isArray(list)&&list.length?list:[{type:'api',label:'API key'}];}
   function modelDetails(p,data){
-    return {provider_id:p.id,connected:p.id==='opencode'||publicFree(p)||nativeConnections(data).includes(p.id),allowed:providerAllowed(p.id),
+    return {provider_id:p.id,connected:nativeReported(p,data),allowed:providerAllowed(p.id),
       default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
         allowed:modelAllowed(p.id,id),visible:modelVisible(p.id,id)}))};
   }
@@ -435,7 +442,7 @@ window.nativeDirectTest=(()=>{
     const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
     if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
     if(isWorkspace&&segments.length===4)
-      return ordered(data).filter(p=>(p.id==='opencode'||nativeConnections(data).includes(p.id))&&providerAllowed(p.id)&&providerVisible(p.id))
+      return ordered(data).filter(p=>nativeReported(p,data)&&providerAllowed(p.id)&&providerVisible(p.id))
         .map(p=>idx(p,data));
     const providerId=isAccount?segments[3]:segments[4];
     if(!providerId)throw Error('Missing Native provider ID');
