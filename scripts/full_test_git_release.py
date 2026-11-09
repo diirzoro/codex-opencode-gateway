@@ -15,7 +15,7 @@ import time
 
 ROOT=Path("/home/tahir/opencode-gateway-test")
 GATEWAY="opencode-gateway-test.service"
-NATIVE="opencode-native-test.service"
+PI="pi-central.service"
 REVISION=ROOT/".test-full-release-revision"
 LOCK=Path("/home/tahir/.gateway-test-deploy.lock")
 # Source-of-truth: deploy every tracked file from the selected GitHub commit.
@@ -43,6 +43,9 @@ RETIRED_FILES = (
     # The failed TEST rollout left this uncommitted, unapplied sibling of 0034.
     # New project binding is 0035 after the pre-existing 0034 payment migration.
     "backend/alembic/versions/0034_project_native_session_binding.py",
+    # Standalone OpenCode console was removed; the main TEST workspace stays.
+    "assets/native-direct/app.js",
+    "assets/native-direct/index.html",
 )
 
 def run(*argv,timeout=90,cwd=None,env=None):
@@ -98,7 +101,7 @@ def service(name):return run("systemctl","is-active",name)=="active"
 def requirements():
     if os.geteuid()==0 or Path.cwd()!=ROOT:raise RuntimeError("Must run as tahir from TEST app")
     if not (ROOT/".env").is_file():raise RuntimeError("Existing TEST .env missing")
-    if not service(GATEWAY) or not service(NATIVE):raise RuntimeError("Expected TEST services inactive")
+    if not service(GATEWAY) or not service(PI):raise RuntimeError("Expected TEST services inactive")
     if not (ROOT/".git").exists():raise RuntimeError("TEST Git checkout missing")
 def verified_commit(sha):
     if not re.fullmatch(r"[a-f0-9]{40}",sha):raise RuntimeError("Invalid commit")
@@ -156,7 +159,6 @@ def rollout(target,mode):
     if mode=="audit":return
     oldrev=active_revision()
     if mode=="rollback" and not oldrev:raise RuntimeError("No prior GitHub release marker; rollback unavailable")
-    nativepid=run("systemctl","show","--value","-p","MainPID",NATIVE)
     for name,dest,data in changes:replace(dest,data);print("UPDATED",name,flush=True)
     for name, dest in pending_retired:
         dest.unlink()
@@ -223,8 +225,6 @@ def rollout(target,mode):
         sudo_run("/usr/bin/systemctl","restart",GATEWAY)
         time.sleep(3)
         if not service(GATEWAY):raise RuntimeError("Gateway unhealthy after restart")
-        if nativepid!=run("systemctl","show","--value","-p","MainPID",NATIVE):
-            raise RuntimeError("OpenCode Native PID changed")
         replace(REVISION,(target+"\n").encode())
         print("FULL_TEST_RELEASE_SUCCESS",target,flush=True)
     except Exception:
