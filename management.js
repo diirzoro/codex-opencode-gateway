@@ -431,8 +431,7 @@
         options.append(o);
       }
       for(const old of previous.values())old.remove();
-      // Keep the same fifty Native records accessible on the main Dashboard,
-      // even when the search field has not received focus.
+      // Display the complete list reported by Pi without arbitrary limits.
       if(!query){
         const tiles=rows.map(p=>{
           const tile=node('button','','provider-catalog-tile');
@@ -442,8 +441,7 @@
           return tile;
         });
         catalogList.replaceChildren(...tiles);
-        catalogCount.textContent=tr('Available providers from Pi Native: ','المزوّدات المتاحة من Pi Native: ')+rows.length
-          +(rows.length<50?tr(' · fewer than 50 Native providers available or allowed',' · أقل من 50 مزودًا متاحًا أو مسموحًا في Native'):'');
+        catalogCount.textContent=tr('Providers reported by Pi: ','المزوّدات التي أعلن عنها Pi: ')+rows.length;
       }
       options.hidden=!optionsOpen||!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
       window.gatewayProviderTimings={...window.gatewayProviderTimings,render_sync_ms:performance.now()-renderStarted,rendered_options:rows.length};
@@ -493,9 +491,8 @@
         try{
           const rows=await accountCatalogRows();
           if(!alive()||workspaceId)return;
-          // All 50 labels come from Pi's own provider catalog.
-          // The verified connection section stays separate.
-          snapshot={providers:rows.filter(p=>p.visible!==false).slice(0,50)};
+          // Show all native providers; the connected section stays separate.
+          snapshot={providers:rows};
           view.ready=true;customButton.disabled=false;
           renderOptions();renderConnected();
           message(tr('Pi providers ready','مزوّدو Pi جاهزون')+' · '+rows.length);
