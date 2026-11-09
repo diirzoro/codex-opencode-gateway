@@ -107,7 +107,7 @@ class Agent {
     if(!s.catalog)mkdirSync(sessionDir,{recursive:true,mode:0o700});
     const args=["--mode","rpc",...(s.catalog?["--no-session"]:["--session-id",this.id,"--session-dir",sessionDir]),
       "--no-tools","--no-extensions","--no-skills","--no-prompt-templates",
-      "--no-approve","--name",s.projectId];
+      "--name",s.projectId];
     const env={PATH:process.env.PATH,HOME:process.env.HOME||"/home/tahir",
       LANG:process.env.LANG||"C.UTF-8",PI_SKIP_VERSION_CHECK:"1",PI_TELEMETRY:"0",
       PI_CODING_AGENT_DIR:accountDir(s.userId)};
@@ -143,7 +143,12 @@ class Agent {
           try{res.write("data: "+JSON.stringify({type:"pi."+x.type,properties:x})+"\n\n");}catch{this.events.delete(res);}
         }
         if(x.type==="agent_settled") {
-          for(const res of this.events)try{res.write('data: {"type":"session.idle","properties":{"sessionID":"'+this.id+'"}}\n\n');}catch{}
+          for(const res of this.events)try{
+            res.write("data: "+JSON.stringify({type:"message.updated",properties:{
+              info:{id:"pi-refresh-"+Date.now(),sessionID:this.id,role:"assistant",
+                time:{created:Date.now()}}}})+"\n\n");
+            res.write("data: "+JSON.stringify({type:"session.idle",properties:{sessionID:this.id}})+"\n\n");
+          }catch{}
         }
       }
     }
