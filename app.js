@@ -313,7 +313,7 @@ window.nativeDirectTest=(()=>{
     const data=await catalog();
     if(name.endsWith('/providers/search')){
       const query=parsed.searchParams.get('query')||'';
-      const items=ordered(data,query).slice(0,50).map(p=>idx(p,data));
+      const items=ordered(data,query).map(p=>idx(p,data));
       return name.startsWith('/api/workspaces/')?{native:true,providers:items}:items;
     }
     if(name.endsWith('/providers/resolve')){
