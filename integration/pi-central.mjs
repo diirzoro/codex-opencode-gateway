@@ -22,6 +22,10 @@ const HOST = "test.opencode-gateway.codes";
 const MAX_PROCS = 2;
 const IDLE_MS = 10 * 60_000;
 const pool = new Map();
+const CATALOG_DIRECTORY="/home/tahir/pi-test";
+const CATALOG_TTL_MS=60_000;
+let modelsSnapshot=null,modelsTimestamp=0;
+
 const json = (res, status, value) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store", "x-content-type-options": "nosniff" });
@@ -47,8 +51,11 @@ async function gateway(req, endpoint) {
 }
 async function scope(req, query) {
   // Only Platform-owned paths are admitted; never run an arbitrary user URL directory.
-  await gateway(req,"/api/auth/me");
+  const who=await gateway(req,"/api/auth/me");
   const directory=query.get("directory");
+  // The account catalog is read-only, not a workspace and never an execution scope.
+  if(directory===CATALOG_DIRECTORY)return {catalog:true, userId:String(who.id)};
+
   if (!directory || directory.length>4096) throw Object.assign(new Error("Owned project directory required"),{status:400});
   const list=await gateway(req,"/api/workspaces");
   if (!Array.isArray(list) || list.length>500) throw Object.assign(new Error("Workspace inventory unavailable"),{status:503});
@@ -66,7 +73,7 @@ function projectIdFor(s) {
 }
 class Agent {
   constructor(s) {
-    this.scope=s; this.id=projectIdFor(s);
+    this.scope=s; this.id=projectIdFor(s);this.title=s.projectId;
     this.events=new Set();this.buf="";this.requests=[];this.busy=false;this.last=Date.now();
     this.closed=false;this.active=false;
     const sessionDir=path.join(ROOT,s.workspaceId);
@@ -161,14 +168,54 @@ function mapped(messages, id) {
       parts:[{id:"part_"+mid,messageID:mid,sessionID:id,type:"text",text}]};
   });
 }
+
+function providerCatalog(models){
+  const grouped=new Map();
+  for(const model of models){
+    if(!model || typeof model.id!=="string" || typeof model.provider!=="string")continue;
+    const id=model.provider;
+    let row=grouped.get(id);
+    if(!row){row={id,name:id,models:{}};grouped.set(id,row);}
+    row.models[model.id]={id:model.id,name:model.name||model.id,reasoning:Boolean(model.reasoning),
+      context:model.contextWindow,maxTokens:model.maxTokens,cost:model.cost||null};
+  }
+  const all=[...grouped.values()];
+  return {all,connected:all.map(x=>x.id),default:{},verification:"unverified"};
+}
+async function configuredModels(){
+  if(modelsSnapshot && Date.now()-modelsTimestamp<CATALOG_TTL_MS)return modelsSnapshot;
+  const list=[...pool.values()].filter(a=>!a.closed);
+  if(list.length){
+    const data=await list[0].command("get_available_models");
+    modelsSnapshot=Array.isArray(data?.models)?data.models:[];
+    modelsTimestamp=Date.now();
+    return modelsSnapshot;
+  }
+  // Catalog worker is isolated from all project sessions and never executes prompts.
+  const cwd=CATALOG_DIRECTORY;
+  const a=new Agent({directory:cwd,workspaceId:"catalog",projectId:"catalog"});
+  try{
+    const data=await a.command("get_available_models");
+    modelsSnapshot=Array.isArray(data?.models)?data.models:[];
+    modelsTimestamp=Date.now();
+    return modelsSnapshot;
+  }finally{a.close();}
+}
 const server=http.createServer(async(req,res)=>{
   try{
     const {pathname,query}=cleanPath(req.url||"/");
     if(pathname==="/health" && req.method==="GET")return json(res,200,{service:"pi-central",status:"ready",activeWorkers:pool.size});
-    if(req.method!=="GET" && req.method!=="POST")return error(res,405,"Method not allowed");
+    if(!["GET","POST","PATCH"].includes(req.method))return error(res,405,"Method not allowed");
     const s=await scope(req,query);
+    if(s.catalog){
+      if(req.method!=="GET")return error(res,405,"Catalog is read-only");
+      if(pathname==="/provider")return json(res,200,providerCatalog(await configuredModels()));
+      if(pathname==="/agent")return json(res,200,[{name:"build",mode:"primary",hidden:false}]);
+      if(pathname==="/provider/auth")return json(res,200,[]);
+      return error(res,404,"Account catalog endpoint not found");
+    }
     const a=await agent(s);
-    if(pathname==="/session" && req.method==="GET")return json(res,200,[{id:a.id,directory:s.directory,title:s.projectId}]);
+    if(pathname==="/session" && req.method==="GET")return json(res,200,[{id:a.id,directory:s.directory,title:a.title}]);
     if(pathname==="/session" && req.method==="POST")return json(res,200,{id:a.id,directory:s.directory,title:s.projectId});
     if(pathname==="/session/status")return json(res,200,{[a.id]:{type:a.active?"busy":"idle"}});
     if(pathname==="/event") {
