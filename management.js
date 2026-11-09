@@ -349,8 +349,8 @@
       // This explicit confirmation is mandatory even if the slot is legacy.
       if(window.nativeDirectTest?.active()){
         const ok=await window.confirmAction?.(tr(
-          'Delete the shared OpenCode Native key for '+(p.name||p.id)+'? This may disconnect other TEST accounts. It will only be reported successful after OpenCode confirms it is gone.',
-          'هل تريد حذف مفتاح '+(p.name||p.id)+' من مخزن OpenCode Native المشترك؟ قد يؤدي ذلك إلى فصل حسابات TEST أخرى. لن نعلن النجاح حتى يؤكد OpenCode زواله.'));
+          'Request deletion of the shared OpenCode Native key for '+(p.name||p.id)+'? This may disconnect other TEST accounts. Native may retain environment/configuration credentials or cached provider state; deletion acknowledgement alone cannot verify removal.',
+          'طلب حذف مفتاح '+(p.name||p.id)+' من مخزن OpenCode Native المشترك؟ قد يؤدي ذلك إلى فصل حسابات TEST أخرى. قد تبقى اعتمادات البيئة أو الإعدادات أو حالة المزود المخبأة؛ قبول الطلب وحده لا يثبت إزالة الاعتماد.'));
         if(!ok)return;
       }
       disconnectingProvider=p.id;
@@ -366,13 +366,17 @@
         if(window.nativeDirectTest?.active()&&result?.native_acknowledged!==true)
           throw new Error(tr('OpenCode did not acknowledge credential deletion.','لم يؤكد OpenCode طلب حذف الاعتماد.'));
         if(!alive()||!contextCurrent())return;
-        const original=[...snapshot.providers];
-        const previousSearch=[...searchRows];
-        snapshot={...snapshot,providers:original.map(row=>row.id===p.id?{...row,connected:false,verified:false,auth_status:undefined}:row)};
-        searchRows=previousSearch.map(row=>row.id===p.id?{...row,connected:false,verified:false,auth_status:undefined}:row);
-        if(selectedProviderId===p.id)renderSelected({...p,connected:false,verified:false,auth_status:undefined});
-        toast(tr('OpenCode acknowledged the credential deletion. The provider may still appear because its models are built in or its catalog is cached.','أكد OpenCode طلب حذف الاعتماد. قد يبقى المزود ظاهرًا لأن نماذجه مدمجة أو لأن فهرسه مخبأ.'));
-        await reload();
+        await refresh();
+        if(!alive()||!contextCurrent())return;
+        const remains=result?.provider_available_after_delete;
+        message(remains===true?tr(
+          'Native accepted the deletion request but still lists this provider as available. Credential removal is NOT verified; environment/configuration or cached state requires inspection.',
+          'قبل Native طلب الحذف لكنه ما زال يعرض المزود متاحًا. لم يُثبت زوال الاعتماد؛ يلزم فحص البيئة والإعدادات وحالة Native المخبأة.')
+          :remains===false?tr(
+          'Native accepted the deletion request and no longer lists this provider as available. Its catalog models remain searchable. Credential-store removal has not been independently verified.',
+          'قبل Native طلب الحذف ولم يعد يعرض المزود متاحًا. تظل نماذجه في فهرس البحث. لم يُتحقق مستقلًا من زوال الاعتماد من المخزن.')
+          :tr('Native accepted the deletion request, but the follow-up check failed. Removal is unverified; refresh before retrying.',
+          'قبل Native طلب الحذف، لكن فحص النتيجة تعذر. الإزالة غير متحقق منها؛ حدّث الحالة قبل إعادة المحاولة.'),remains!==false);
       }catch(error){
         if(alive()&&contextCurrent()){
           message(error.message||tr('OpenCode deletion was not confirmed.','لم يؤكد OpenCode حذف المفتاح.'),true);
@@ -387,11 +391,11 @@
     }
     function renderConnected(){
       connectedBox.replaceChildren(node('h2',window.nativeDirectTest?.active()
-        ?tr('OpenCode and verified connections','OpenCode والاتصالات المتحقق منها')
+        ?tr('Providers available in Native','المزوّدون المتاحون في Native')
         :tr('Connected providers','المزوّدات المتصلة')));
       if(window.nativeDirectTest?.active())connectedBox.append(node('p',tr(
-        'Only built-in OpenCode and client connections verified through a Native model request appear here. Unverified models remain searchable. Provider keys stay exclusively inside OpenCode Native, which may share credentials between TEST accounts.',
-        'يظهر OpenCode الافتراضي والاتصالات التي تحققت فعليًا عبر نموذج Native فقط. بقية المزودين متاحون للبحث والربط. المفاتيح محفوظة في OpenCode Native وحده، وقد تكون مشتركة بين حسابات TEST.',)));
+        'Native availability does not verify a working key or ownership by this account. Native may include cached state or environment/configuration credentials. Keys remain inside OpenCode Native and may be shared between TEST accounts.',
+        'إتاحة المزود في Native لا تثبت صلاحية مفتاحه أو ملكيته لهذا الحساب. قد تشمل الحالة بيانات مخبأة أو اعتمادات البيئة والإعدادات. المفاتيح داخل OpenCode Native وقد تكون مشتركة بين حسابات TEST.',)));
       const selected=(snapshot?.providers||[]).find(p=>p.id===selectedProviderId);
       if(selected)renderSelected(selected);
       const rows=(snapshot?.providers||[]).filter(p=>p.connected||p.public_free);
@@ -399,7 +403,7 @@
       for(const p of rows){
         const item=node('div','','manage-actions');item.append(node('strong',p.name||p.id),node('span',p.public_free
           ?tr('Free models in Native · no API key','نماذج مجانية في Native · بلا مفتاح API'):window.nativeDirectTest?.active()
-          ?tr('Verified in this browser session','تم التحقق خلال جلسة المتصفح')
+          ?tr('Available in Native · key not verified','متاح في Native · المفتاح غير متحقق منه')
           :p.verified===true?tr('Tested','تم اختباره'):tr('Configured · not tested','مهيأ · لم يُختبر')));
         if(p.allowed===false)item.append(node('span',tr('Restricted','مقيّد')));
         if(!p.public_free){

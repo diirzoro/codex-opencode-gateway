@@ -407,6 +407,7 @@ window.nativeDirectTest=(()=>{
     // Do not block it on policy, models, agents, or the 7 MB catalog presentation.
     const directDelete=/^\/api\/(?:opencode\/connections|workspaces\/[^/]+\/providers)\/([^/]+)$/.exec(name);
     if(method==='DELETE'&&directDelete){
+      const owner=ownerScope();
       const providerId=decodeURIComponent(directDelete[1]);
       if(!/^[a-z0-9][a-z0-9._-]{0,119}$/i.test(providerId))
         throw Error('Invalid OpenCode provider ID for credential deletion');
@@ -415,13 +416,23 @@ window.nativeDirectTest=(()=>{
       // Native 1.19.x provider-state cache can remain stale after /auth DELETE.
       // Native's DELETE response, not a catalog entry, acknowledges removal.
       const result=await direct('auth/'+encodeURIComponent(providerId),{method:'DELETE'});
+      if(ownerScope()!==owner)throw Error('Account changed during Native credential deletion; refresh the current account');
       if(result!==true)throw Error('OpenCode did not acknowledge removal of this credential');
       clientVerifiedProviders.delete(providerId);
       rememberRevoked(providerId);
       forget();
       invalidateProviderMutation(path,'DELETE');
-      return {native_acknowledged:true,credential_deleted:true,
-        provider_may_remain_available:true};
+      // /provider combines saved auth, environment/config and cached runtime
+      // state. It cannot prove auth.json deletion, but it can expose a provider
+      // that remains available. Never label DELETE acknowledgement as proof.
+      let providerAvailable=null;
+      try{
+        const after=await catalog({force:true});
+        providerAvailable=after.connected.includes(providerId);
+      }catch{}
+      if(ownerScope()!==owner)throw Error('Account changed during Native credential deletion; refresh the current account');
+      return {native_acknowledged:true,credential_deletion_verified:false,
+        provider_available_after_delete:providerAvailable};
     }
     // Native /provider is the one catalog source. Dashboard reads it directly;
     // Workspace still reads Native /config/providers and /agent only.
@@ -550,9 +561,9 @@ const api=async(path,options={})=>{
         requested.split('/').some(part=>part==='..'))
        throw Error('Invalid project file path');
      const directory=await ownedDirectory(match[1]);
-     const selectedPath=requested
-       ?directory.replace(/\/$/,'')+'/'+requested
-       :directory;
+     // Native 1.19.4 file API takes a RelativePath inside `directory`.
+     // Sending the absolute root repeats it inside the Native filesystem scope.
+     const selectedPath=requested;
      const resource=(match[2]?'file/content':'file')+
        '?path='+encodeURIComponent(selectedPath);
      const result=await window.nativeDirectTest.direct(resource,{directory,signal:options.signal});

@@ -106,8 +106,24 @@
 // The opt-in native TEST mode reuses this existing interface; no runtime process.
 (() => {
  const previous=window.workspaceRuntime;
- async function load(id,options){if(window.nativeSession&&await window.nativeSession.ready())return window.nativeSession.discovery(id,options);return previous.load(id,options);}
- window.workspaceRuntime={...previous,load,async loadAgents(id,options){if(window.nativeSession&&await window.nativeSession.ready())return window.nativeSession.discovery(id,options);return previous.loadAgents(id,options);},
+ async function load(id,options){if(window.nativeSession&&await window.nativeSession.ready())return window.nativeSession.discovery(id,options);if(window.nativeDirectTest?.testHost?.())throw Error('OpenCode Native is not ready');return previous.load(id,options);}
+ async function loadAgents(id,options){
+   const owner=String(currentUser?.id||'');
+   if(window.nativeSession&&await window.nativeSession.ready()){
+     if(window.nativeDirectTest?.active()){
+       // /agent is independent of the large /provider response. Do not hold
+       // the agent picker behind model discovery or Python display policy.
+       const rows=await window.nativeDirectTest.agents(options);
+       if(!owner||owner!==String(currentUser?.id||''))throw Error('Authenticated session changed');
+       return {native:true,workspace_id:String(id),agents:rows.filter(a=>
+         a?.name&&!a.hidden&&['primary','all'].includes(a.mode)),default_agent:null};
+     }
+     return window.nativeSession.discovery(id,options);
+   }
+   if(window.nativeDirectTest?.testHost?.())throw Error('OpenCode Native is not ready');
+   return previous.loadAgents(id,options);
+ }
+ window.workspaceRuntime={...previous,load,loadAgents,
  clear(){window.nativeSession?.invalidate();previous.clear();},
  invalidate(id){window.nativeSession?.invalidate(id);previous.invalidate(id);},
  async loadModels(id,pid){if(!window.nativeSession?.active())return previous.loadModels(id,pid);const s=window.nativeSession.peek(id)||await load(id);const p=s.providers.find(p=>p.id===pid);return {...s,models:p?.models||[],connected:p?.connected===true,allowed:true};},
