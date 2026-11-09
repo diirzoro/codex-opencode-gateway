@@ -57,7 +57,7 @@ window.nativeDirectTest=(()=>{
   const nativeMode=()=>testHost()||Boolean(window.nativeSession?.active());
   const active=()=>nativeMode()&&Boolean(currentUser);
   const base='/native-direct/api/';
-  const defaultDirectory=()=>window.__nativeAccountDir||'/home/tahir/pi-test';
+  const defaultDirectory=()=>'/home/tahir/pi-test'; // Pi Central account catalog scope; workspace RPC calls pass their owned directory explicitly.
   let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
   let presentationRevision=0;
   // Invalidate presentation snapshots only. Native owns authentication state;
