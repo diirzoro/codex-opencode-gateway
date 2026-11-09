@@ -57,7 +57,7 @@ window.nativeDirectTest=(()=>{
   const nativeMode=()=>testHost()||Boolean(window.nativeSession?.active());
   const active=()=>nativeMode()&&Boolean(currentUser);
   const base='/native-direct/api/';
-  const defaultDirectory=()=>window.__nativeAccountDir||'/var/lib/opencode-native-test/workspace';
+  const defaultDirectory=()=>window.__nativeAccountDir||'/home/tahir/pi-test';
   let catalogSnapshot=null,catalogPending=null,agentsSnapshot=null,agentsPending=null,policySnapshot=null,policyPending=null,configuredSnapshot=null,configuredPending=null,scopeOwner='';
   let presentationRevision=0;
   // Invalidate presentation snapshots only. Native owns authentication state;
@@ -94,16 +94,16 @@ window.nativeDirectTest=(()=>{
     try{response=await fetch(url(path,directory),options);}
     catch(error){
       if(deadline.aborted){
-        const e=new Error('OpenCode Native did not respond within '+Math.round(timeout/1000)+' seconds ('+path+')');
+        const e=new Error('Pi did not respond within '+Math.round(timeout/1000)+' seconds ('+path+')');
         e.status=504;throw e;
       }
       throw error;
     }
-    if(!response.ok){const e=new Error('OpenCode Native HTTP '+response.status+' ('+path+')');e.status=response.status;throw e;}
+    if(!response.ok){const e=new Error('Pi HTTP '+response.status+' ('+path+')');e.status=response.status;throw e;}
     if(response.status===204)return null;
     const body=await response.text();
     if(!body)return null;
-    try{return JSON.parse(body);}catch{throw Error('Invalid OpenCode Native JSON ('+path+')');}
+    try{return JSON.parse(body);}catch{throw Error('Invalid Pi JSON ('+path+')');}
   };
   function ownerScope(){
     const user=String(currentUser?.id||'');
@@ -130,7 +130,7 @@ window.nativeDirectTest=(()=>{
     if(!force&&catalogSnapshot)return catalogSnapshot;
     if(catalogPending)return catalogPending;
     const promise=direct('provider').then(data=>{
-      if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid OpenCode Native provider response');
+      if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid Pi provider response');
       if(ownerScope()!==user)throw Error('Account changed during Native provider discovery');
       if(revision!==presentationRevision)throw Error('Native provider state changed; retry discovery');
       catalogSnapshot=data;workspaceSnapshot=null;
@@ -143,8 +143,7 @@ window.nativeDirectTest=(()=>{
   // OpenCode's own public/free provider is usable without a user API key.
   // This is determined only from Native model metadata, never hardcoded model IDs.
   function publicFree(p){
-    return p?.id==='opencode'&&Object.values(p.models||{}).some(m=>
-      m?.cost?.input===0&&m?.cost?.output===0);
+    return false;
   }
   function nativeConnections(data){
     // Runtime availability only, NOT credential validity or account ownership.
@@ -155,7 +154,7 @@ window.nativeDirectTest=(()=>{
     if(!force&&agentsSnapshot)return agentsSnapshot;
     if(agentsPending)return agentsPending;
     const promise=direct('agent').then(rows=>{
-      if(!Array.isArray(rows))throw Error('Invalid OpenCode Native agents');
+      if(!Array.isArray(rows))throw Error('Invalid Pi agent response');
       if(ownerScope()!==user)throw Error('Account changed during Native agent discovery');
       // Public presentation metadata only: never cache agent prompts,
       // secrets, tools or executable configuration in Gateway/browser state.
@@ -257,13 +256,13 @@ window.nativeDirectTest=(()=>{
     const q=query.trim().toLowerCase();
     return data.all.filter(p=>!q||p.id.toLowerCase().includes(q)||(p.name||'').toLowerCase().includes(q))
       .sort((a,b)=>Number(data.connected.includes(b.id))-Number(data.connected.includes(a.id))
-        ||Number(['deepseek','openai','anthropic','google','opencode'].includes(b.id))-Number(['deepseek','openai','anthropic','google','opencode'].includes(a.id))
+        ||Number(['openrouter','deepseek','openai','anthropic','google'].includes(b.id))-Number(['deepseek','openai','anthropic','google','opencode'].includes(a.id))
         ||(a.name||a.id).localeCompare(b.name||b.id));
   }
   function find(data,pid){
     const q=decodeURIComponent(pid).trim().toLowerCase();
     const p=data.all.find(p=>p.id.toLowerCase()===q)||data.all.find(p=>(p.name||'').toLowerCase()===q);
-    if(!p){const e=new Error('Provider not found in OpenCode Native: '+pid);e.status=404;throw e;}
+    if(!p){const e=new Error('Provider not found in Pi: '+pid);e.status=404;throw e;}
     return p;
   }
   function modelDetails(p,data){
@@ -304,7 +303,7 @@ window.nativeDirectTest=(()=>{
     return /^\/api\/workspaces\/[^/]+\/providers(?:\/|$|\?)/.test(path);
   };
   async function route(path,options={}){
-    if(!active())throw Error('TEST OpenCode Native connection requires sign-in; Gateway provider fallback is disabled');
+    if(!active())throw Error('Pi connection requires sign-in');
     const method=(options.method||'GET').toUpperCase();
     const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
     // Disconnect uses only the OpenCode Native /auth and /provider endpoints.
@@ -321,7 +320,7 @@ window.nativeDirectTest=(()=>{
       // Native's DELETE response, not a catalog entry, acknowledges removal.
       const result=await direct('auth/'+encodeURIComponent(providerId),{method:'DELETE'});
       if(ownerScope()!==owner)throw Error('Account changed during Native credential deletion; refresh the current account');
-      if(result!==true)throw Error('OpenCode did not acknowledge removal of this credential');
+      if(result!==true)throw Error('Pi did not acknowledge removal of this credential');
       forget();
       invalidateProviderMutation(path,'DELETE');
       // /provider combines saved auth, environment/config and cached runtime
@@ -372,7 +371,7 @@ window.nativeDirectTest=(()=>{
       if(operation==='callback'){forget();invalidateProviderMutation(path,'POST');}
       return result;
     }
-    throw Error('Unsupported direct OpenCode provider action: '+name);
+    throw Error('Unsupported Pi provider action: '+name);
   }
   return {active,testHost,url,direct,catalog,configuredProviders,agents,visibility,registry,workspaceRegistry,forget,acknowledgeNativeCredential,matches,route,
     providerAllowed,providerVisible,modelAllowed,modelVisible,classifyError:nativeFailure,rootFromFile,defaultDirectory};
