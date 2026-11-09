@@ -469,23 +469,48 @@
     });
     // GitHub status is independent from Native provider discovery; never block Connections readiness.
     const githubJob=loadConnectionsGithub().catch(error=>{const section=q('connectionsGithub');if(section) section.append(textElement('p',error.message));});
-    const runtime=q('connectionsRuntime');runtime.replaceChildren(title('Native Pi discovery (TEST)','اكتشاف Pi المباشر (TEST)'),text('p','Loading native agents…','جارٍ تحميل الوكلاء مباشرة…'));
-    // Connections page: read native agent discovery through Nginx, not the Python
-    // workspace runtime. This describes the independent TEST native service only.
+    const runtime=q('connectionsRuntime');
+    const piStatus=text('p','Loading Pi extensions, skills and commands…','جارٍ تحميل إضافات Pi ومهاراته وأوامره…');
+    runtime.replaceChildren(title('Installed Pi capabilities','إمكانات Pi المثبتة'),piStatus);
+    // Reuse exactly the same Pi inventory used by the existing Workspace
+    // selectors. Pi reports its actual extension/skill/prompt commands.
     const runtimeJob=(async()=>{
-      // Account Connections is independent of Project/Workspace selection.
-      // Discover agents once from the same Pi Native browser cache.
-      const agents=window.nativeDirectTest?.active()
-        ?await window.nativeDirectTest.agents()
-        :activeWorkspace?.id
-          ?(await window.workspaceRuntime.loadAgents(activeWorkspace.id))?.agents
-          :[];
-      if(!Array.isArray(agents))throw new Error('Invalid native agents response');
-      if(runtime.isConnected)runtime.lastElementChild.textContent=
-        tr('Native Pi agents via Nginx: ','وكلاء Pi المباشرين عبر Nginx: ')+agents.length;
+      const [commands,providers]=await Promise.all([
+        window.nativeDirectTest.agents(),
+        window.nativeDirectTest.configuredProviders()
+      ]);
+      if(!Array.isArray(commands)||!Array.isArray(providers?.all))
+        throw Error('Invalid installed Pi capabilities response');
+      if(!runtime.isConnected)return;
+      const sourceLabels={
+        extension:tr('Extensions','الإضافات'),
+        skill:tr('Skills','المهارات'),
+        prompt:tr('Prompt templates','قوالب الأوامر')
+      };
+      const grouped=['extension','skill','prompt'].map(source=>({
+        source,rows:commands.filter(c=>c.source===source)
+      }));
+      piStatus.textContent=tr('Pi providers: ','مزوّدو Pi: ')+providers.all.length+
+        tr(' · Configured: ',' · المهيأة: ')+providers.connected.length+
+        tr(' · Pi commands: ',' · أوامر Pi: ')+commands.length;
+      const details=document.createElement('details');
+      const summary=document.createElement('summary');
+      summary.textContent=tr('Show all installed Pi skills, extensions and commands','عرض جميع مهارات Pi وإضافاته وأوامره المثبتة');
+      details.append(summary);
+      for(const {source,rows} of grouped){
+        const heading=document.createElement('h4');
+        heading.textContent=sourceLabels[source]+' · '+rows.length;
+        details.append(heading);
+        for(const row of rows){
+          const item=document.createElement('p');
+          item.textContent='/'+row.name+(row.description?' · '+row.description:'');
+          details.append(item);
+        }
+      }
+      runtime.append(details);
     })().catch(error=>{
-      if(runtime.isConnected)runtime.lastElementChild.textContent=
-        tr('Native agent discovery unavailable: ','تعذر استدعاء الوكلاء مباشرة: ')+error.message;
+      if(runtime.isConnected)piStatus.textContent=
+        tr('Pi capability discovery unavailable: ','تعذر قراءة إمكانات Pi: ')+error.message;
     });
     // Let providers determine initial readiness. GitHub and native agents update independently.
     void githubJob;
