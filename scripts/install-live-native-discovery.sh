@@ -8,10 +8,7 @@ grep -Fq 'location @native_session_live {' "$snippet" || { echo "Existing LIVE s
 grep -Fq 'location @native_discovery_live {' "$snippet" || { echo "Existing LIVE discovery boundary missing" >&2; exit 4; }
 # The two older LIVE routes can already exist. Install missing routes only.
 # Detect a duplicate existing auth-method route and leave it unchanged.
-if grep -Fq 'location = /native-direct/api/provider/auth {' "$snippet"; then
-  echo "LIVE Native provider authentication-method discovery already present"
-  exit 0
-fi
+# Existing provider/auth is idempotent; still install missing Native routes.
 # Fail rather than silently duplicate or overwrite a partially configured route.
 # Require existing routes before extending them: never replace or expose them.
 if ! grep -Fq 'location = /native-direct/api/provider {' "$snippet" ||
@@ -21,6 +18,7 @@ if ! grep -Fq 'location = /native-direct/api/provider {' "$snippet" ||
 fi
 backup="${snippet}.bak-discovery-$(date -u +%Y%m%dT%H%M%SZ)"
 cp -p "$snippet" "$backup"
+if ! grep -Fq 'location = /native-direct/api/provider/auth {' "$snippet"; then
 cat >> "$snippet" <<'NGINX'
 
 # Authenticated LIVE provider authentication-method discovery (metadata GET).
@@ -37,6 +35,7 @@ location = /native-direct/api/provider/auth {
     add_header Cache-Control "no-store" always;
 }
 NGINX
+fi
 # Native credential storage and session transport: Browser -> Nginx -> OpenCode.
 # This preserves the existing Gateway sign-in check. Multi-user Native
 # session isolation remains BLOCKED under the architecture agreement.
