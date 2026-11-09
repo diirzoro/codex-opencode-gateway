@@ -295,9 +295,9 @@ def workspaces(user: User=Depends(require_user),db: Session=Depends(get_db)):
 def workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Session=Depends(get_db)):
     row=manager.owned(db,Workspace,workspace_id,user.id)
     payload=manager.workspace_payload(row)
-    # Platform-owned filesystem metadata only. Never query the OpenCode API.
-    if native_sessions.enabled():
-        payload["native_directory"]=str(manager.root_for(row,allow_expired=True))
+    # Filesystem identity for the existing Workspace/Pi integration.
+    # Project location is platform metadata; no AI service-enable gate applies.
+    payload["native_directory"]=str(manager.root_for(row,allow_expired=True))
     return payload
 
 @router.get("/workspaces/{workspace_id}/preview/capabilities")
