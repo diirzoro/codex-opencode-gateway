@@ -10,7 +10,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, chmodSync, existsSync, unlinkSync } from "node:fs";
+import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 
@@ -24,7 +24,7 @@ const IDLE_MS = 10 * 60_000;
 const pool = new Map();
 const CATALOG_DIRECTORY="/home/tahir/pi-test";
 const CATALOG_TTL_MS=60_000;
-let modelsSnapshot=null,modelsTimestamp=0;
+const modelsSnapshots=new Map();
 
 const json = (res, status, value) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8",
@@ -63,25 +63,55 @@ async function scope(req, query) {
     if (!row?.id) continue;
     const detail=await gateway(req,"/api/workspaces/"+encodeURIComponent(row.id));
     if (detail.native_directory === directory && detail.project_id) {
-      return { directory, workspaceId:String(row.id), projectId:String(detail.project_id) };
+      return { directory, workspaceId:String(row.id), projectId:String(detail.project_id), userId:String(who.id) };
     }
   }
   throw Object.assign(new Error("Workspace not owned"),{status:403});
 }
+function accountDir(userId) {
+  if(!/^[0-9a-f-]{32,36}$/i.test(userId))throw Object.assign(new Error("Invalid user scope"),{status:403});
+  const dir=path.join(ROOT,"accounts",userId);
+  mkdirSync(dir,{recursive:true,mode:0o700});
+  return dir;
+}
+function credentials(userId) {
+  const file=path.join(accountDir(userId),"auth.json");
+  if(!existsSync(file))return {};
+  const data=JSON.parse(readFileSync(file,"utf8"));
+  if(!data||typeof data!=="object"||Array.isArray(data))throw new Error("Invalid Pi auth storage");
+  return data;
+}
+function writeCredentials(userId,data) {
+  const dir=accountDir(userId),file=path.join(dir,"auth.json");
+  const temp=path.join(dir,".auth-"+process.pid+"-"+Date.now()+".tmp");
+  try {
+    writeFileSync(temp,JSON.stringify(data),{mode:0o600,flag:"wx"});
+    chmodSync(temp,0o600);renameSync(temp,file);chmodSync(file,0o600);
+  } finally {if(existsSync(temp))unlinkSync(temp);}
+  modelsSnapshots.delete(userId);
+}
+function releaseUserWorkers(userId) {
+  const workers=[...pool.values()].filter(a=>a.scope.userId===userId&&!a.closed);
+  if(workers.some(a=>a.active))throw Object.assign(new Error("Stop the current Pi response before changing credentials"),{status:409});
+  for(const a of workers)a.close();
+}
 function projectIdFor(s) {
-  return "pi_"+createHash("sha256").update(HOST+"\0"+s.workspaceId+"\0"+s.projectId).digest("hex").slice(0,32);
+  return "pi_"+createHash("sha256").update(HOST+"\0"+s.userId+"\0"+s.workspaceId+"\0"+s.projectId).digest("hex").slice(0,32);
 }
 class Agent {
   constructor(s) {
     this.scope=s; this.id=projectIdFor(s);this.title=s.projectId;
     this.events=new Set();this.buf="";this.requests=[];this.busy=false;this.last=Date.now();
     this.closed=false;this.active=false;
-    const sessionDir=path.join(ROOT,s.workspaceId);
-    mkdirSync(sessionDir,{recursive:true,mode:0o700});
-    this.child=spawn(PI,["--mode","rpc","--continue",
-      "--session-dir",sessionDir,"--no-tools","--no-extensions","--no-skills",
-      "--no-prompt-templates","--name",s.projectId],{
-        cwd:s.directory,stdio:["pipe","pipe","pipe"],env:process.env });
+    const sessionDir=path.join(ROOT,"projects",s.userId,s.workspaceId);
+    if(!s.catalog)mkdirSync(sessionDir,{recursive:true,mode:0o700});
+    const args=["--mode","rpc",...(s.catalog?["--no-session"]:["--continue","--session-dir",sessionDir]),
+      "--no-tools","--no-extensions","--no-skills","--no-prompt-templates",
+      "--no-approve","--name",s.projectId];
+    const env={PATH:process.env.PATH,HOME:process.env.HOME||"/home/tahir",
+      LANG:process.env.LANG||"C.UTF-8",PI_SKIP_VERSION_CHECK:"1",PI_TELEMETRY:"0",
+      PI_CODING_AGENT_DIR:accountDir(s.userId)};
+    this.child=spawn(PI,args,{cwd:s.directory,stdio:["pipe","pipe","pipe"],env});
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data",data=>this.consume(data));
     this.child.stderr.on("data",()=>{}); // never expose secrets or stderr to clients
@@ -182,37 +212,55 @@ function providerCatalog(models){
   const all=[...grouped.values()];
   return {all,connected:all.map(x=>x.id),default:{},verification:"unverified"};
 }
-async function configuredModels(){
-  if(modelsSnapshot && Date.now()-modelsTimestamp<CATALOG_TTL_MS)return modelsSnapshot;
-  const list=[...pool.values()].filter(a=>!a.closed);
-  if(list.length){
-    const data=await list[0].command("get_available_models");
-    modelsSnapshot=Array.isArray(data?.models)?data.models:[];
-    modelsTimestamp=Date.now();
-    return modelsSnapshot;
-  }
-  // Catalog worker is isolated from all project sessions and never executes prompts.
-  const cwd=CATALOG_DIRECTORY;
-  const a=new Agent({directory:cwd,workspaceId:"catalog",projectId:"catalog"});
-  try{
+async function configuredModels(userId){
+  const cached=modelsSnapshots.get(userId);
+  if(cached&&Date.now()-cached.time<CATALOG_TTL_MS)return cached.models;
+  const a=new Agent({directory:CATALOG_DIRECTORY,workspaceId:"catalog",
+    projectId:"catalog",userId,catalog:true});
+  try {
     const data=await a.command("get_available_models");
-    modelsSnapshot=Array.isArray(data?.models)?data.models:[];
-    modelsTimestamp=Date.now();
-    return modelsSnapshot;
+    const models=Array.isArray(data?.models)?data.models:[];
+    modelsSnapshots.set(userId,{models,time:Date.now()});
+    return models;
   }finally{a.close();}
 }
 const server=http.createServer(async(req,res)=>{
   try{
     const {pathname,query}=cleanPath(req.url||"/");
     if(pathname==="/health" && req.method==="GET")return json(res,200,{service:"pi-central",status:"ready",activeWorkers:pool.size});
-    if(!["GET","POST","PATCH"].includes(req.method))return error(res,405,"Method not allowed");
+    if(!["GET","POST","PATCH","PUT","DELETE"].includes(req.method))return error(res,405,"Method not allowed");
     const s=await scope(req,query);
     if(s.catalog){
-      if(req.method!=="GET")return error(res,405,"Catalog is read-only");
-      if(pathname==="/provider")return json(res,200,providerCatalog(await configuredModels()));
-      if(pathname==="/agent")return json(res,200,[{name:"build",mode:"primary",hidden:false}]);
-      if(pathname==="/provider/auth")return json(res,200,[]);
-      return error(res,404,"Account catalog endpoint not found");
+      if(pathname==="/provider"&&req.method==="GET")
+        return json(res,200,providerCatalog(await configuredModels(s.userId)));
+      if(pathname==="/agent"&&req.method==="GET")
+        return json(res,200,[{name:"build",mode:"primary",hidden:false}]);
+      if(pathname==="/provider/auth"&&req.method==="GET") {
+        const result={};
+        for(const p of providerCatalog(await configuredModels(s.userId)).all)
+          result[p.id]=[{type:"api",label:"API key"}];
+        return json(res,200,result);
+      }
+      const auth=pathname.match(/^\/auth\/([a-zA-Z0-9._-]{1,120})$/);
+      if(auth&&["PUT","DELETE"].includes(req.method)) {
+        const provider=auth[1];
+        if(["__proto__","prototype","constructor"].includes(provider))return error(res,400,"Invalid provider");
+        const stored=credentials(s.userId);
+        if(req.method==="PUT"){
+          const payload=await body(req);
+          if(payload?.type!=="api"||typeof payload.key!=="string"||
+            !payload.key.trim()||payload.key.length>8192)
+            return error(res,422,"Invalid Pi API credential");
+          releaseUserWorkers(s.userId);
+          stored[provider]={type:"api_key",key:payload.key.trim()};
+        }else{
+          releaseUserWorkers(s.userId);
+          delete stored[provider];
+        }
+        writeCredentials(s.userId,stored);
+        return json(res,200,true);
+      }
+      return error(res,404,"Pi account endpoint not found");
     }
     const a=await agent(s);
     if(pathname==="/session" && req.method==="GET")return json(res,200,[{id:a.id,directory:s.directory,title:a.title}]);
