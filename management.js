@@ -144,8 +144,8 @@
     picker.disabled=true;
     if(activeWorkspace)picker.add(new Option(activeProject?.name||tr('Selected workspace','مساحة العمل المختارة'),activeWorkspace.id));
     picker.value=view.workspaceId;
-    const box=section(body,tr('Pi provider connections','اتصالات مزوّدي Pi'));
-    box.append(node('p',tr('Provider login and logout use the installed Pi agent directly. Pi saves credentials in its own native store; this website never saves keys or treats configured credentials as remotely verified. Models and commands are not additional connections.','يستخدم ربط المزوّد وإلغاء ربطه Pi المثبت مباشرةً. يحفظ Pi الاعتمادات في مخزنه الأصلي، ولا يحفظ الموقع أي مفاتيح أو يعتبر التهيئة تحققًا من المزوّد. النماذج والأوامر ليست اتصالات منفصلة.')));
+    const box=section(body,tr('Connect a new provider through Pi','ربط مزوّد جديد عبر Pi'));
+    box.append(node('p',tr('Choose a provider not yet configured in Pi. The form sends login to Pi and waits for Pi to return its stored state. Existing providers and installed Pi commands are shown separately. No balance or remaining credits are assumed.','اختر مزوّدًا غير مهيأ في Pi. يرسل النموذج طلب الدخول إلى Pi وينتظر ردّ Pi بحالة الحفظ. تظهر المزوّدات المحفوظة وأوامر Pi المثبتة منفصلة. لا نفترض توفر رصيد أو اعتمادات استخدام.')));
     const comboWrap=node('div','','provider-combo'),combo=node('input');combo.type='search';
     combo.value=body.dataset.providerQuery||'';combo.placeholder=tr('Search providers…','ابحث عن المزوّدات…');combo.setAttribute('role','combobox');combo.setAttribute('aria-expanded','false');combo.autocomplete='off';combo.setAttribute('aria-label',combo.placeholder);
     const options=node('div','','provider-combo-options');options.hidden=true;comboWrap.append(combo,options);box.append(comboWrap);
@@ -155,7 +155,7 @@
     // These names come exclusively from the existing Native provider inventory.
     const catalogCount=node('p','','provider-catalog-count');box.append(catalogCount);
     const catalogList=node('div','','provider-catalog-grid');box.append(catalogList);
-    const connectedBox=section(body,tr('Native credential inventory','مخزن مفاتيح Pi Native'));
+    const connectedBox=section(body,tr('Already configured in Pi','المزوّدات المهيأة مسبقًا في Pi'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
     let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
     let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
@@ -178,7 +178,10 @@
       return (native.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
         id:p.id,name:p.name||p.id,model_count:Object.keys(p.models||{}).length,
         connected:connected.has(p.id),public_free:(native.public_free||[]).includes(p.id),
-        verified:false,
+        credential_stored:p.credential_stored===true,
+        credential_source:p.credential_source||'none',
+        pi_available_models:p.pi_available_models||[],
+        credit_status:'unknown',verified:false,
         visible:true,allowed:true,
         default_model:native.default?.[p.id]
       })).sort((a,b)=>Number(b.connected)-Number(a.connected)
@@ -215,7 +218,7 @@
     let providerMutation=false;
     async function openPiLogin(p){
       if(!alive()||!view.ready||providerMutation)return;
-      if(p.connected){message(tr('This provider is already configured in Pi.','هذا المزوّد مهيأ بالفعل في Pi.'),true);return;}
+      if(p.connected){message(tr('Pi already has this provider configured. Manage it in the existing providers section.','هذا المزوّد مهيأ بالفعل في Pi. يمكنك إدارته من قسم المزوّدات المحفوظة.'),true);return;}
       const methods=await window.nativeDirectTest.direct('provider/auth');
       if(!Array.isArray(methods?.[p.id]))throw Error(tr('Pi does not recognize this provider.','لم يتعرف Pi على هذا المزوّد.'));
       if(!methods[p.id].some(m=>m.type==='api')){
@@ -246,12 +249,13 @@
           // reread the Pi-reported configuration after Pi finishes saving.
           window.nativeDirectTest.forget({fresh:true});
           const piState=await window.nativeDirectTest.catalog({force:true});
-          if(!piState.connected.includes(p.id))
-            throw Error(tr('Pi has not yet reported this provider as configured. Refresh Pi state.','لم يُعلن Pi بعد تهيئة هذا المزوّد. حدّث حالة Pi.'));
+          const saved=piState.all.find(row=>row.id===p.id);
+          if(!piState.connected.includes(p.id)||saved?.credential_stored!==true)
+            throw Error(tr('Pi has not confirmed a stored credential for this provider. Refresh Pi state.','لم يؤكد Pi حفظ اعتماد هذا المزوّد. حدّث حالة Pi.'));
           window.workspaceRuntime?.clear();
           dlg.close();
           await refresh(true);
-          message(tr('Pi confirmed the stored provider configuration. Remote API-key validity is not tested.','أكد Pi حفظ تهيئة المزوّد. لم تُختبر صلاحية المفتاح لدى المزوّد.'));
+          message(tr('Pi confirmed the saved credential. Provider credit and request availability remain unknown until Pi reports an execution result.','أكد Pi حفظ الاعتماد. يظل الرصيد وإمكانية تنفيذ الطلبات غير معلومين حتى يعلن Pi نتيجة التنفيذ.'));
           window.refreshWorkspaceChoices?.('',false)?.catch(()=>{});
         }catch(error){
           state.textContent=error.message||String(error);
@@ -263,7 +267,7 @@
       f.openDialog();
     }
     async function logoutPi(p){
-      if(!alive()||providerMutation||!p.connected)return;
+      if(!alive()||providerMutation||!p.connected||!p.credential_stored)return;
       const confirmed=await window.confirmAction?.(tr(
         'Remove the credential for '+(p.name||p.id)+' from the shared installed Pi configuration? Other TEST clients may be affected.',
         'إزالة اعتماد '+(p.name||p.id)+' من إعدادات Pi المثبتة المشتركة؟ قد يؤثر ذلك على عملاء TEST الآخرين.'));
@@ -283,30 +287,39 @@
       }catch(error){message(error.message||String(error),true);await refresh(true).catch(()=>{});}
       finally{providerMutation=false;}
     }
+    function piStateLabel(p){
+      if(!p.connected)return tr('Not configured in Pi','غير مهيأ داخل Pi');
+      const source=p.credential_stored
+        ?tr('Pi saved credential','اعتماد محفوظ داخل Pi')
+        :tr('Pi configuration / environment','إعدادات Pi أو البيئة');
+      return source+' · '+tr('Credits unknown','الرصيد غير معلوم');
+    }
     function renderSelected(p){
-      const state=p.public_free?tr('Pi free provider','مزوّد Pi مجاني')
-        :p.connected?tr('Configured in Pi · not remotely verified','مهيأ داخل Pi · غير متحقق منه عن بُعد')
-        :tr('Not configured in Pi','غير مهيأ داخل Pi');
       status.replaceChildren(node('strong',p.name||p.id),
-        node('span',state+' · '+String(p.model_count??p.models?.length??0)+' '+tr('models','نموذج')));
+        node('span',piStateLabel(p)+' · '+
+          String(p.model_count??p.models?.length??0)+' '+tr('models','نموذج')));
       if(view.ready){
         const actions=node('div','','manage-actions');
-        if(p.connected)actions.append(button(tr('Disconnect through Pi','إلغاء الربط عبر Pi'),()=>logoutPi(p)));
-        else if(!p.public_free)actions.append(button(tr('Connect through Pi','الربط عبر Pi'),()=>openPiLogin(p).catch(error=>message(error.message,true))));
+        if(p.connected&&p.credential_stored)
+          actions.append(button(tr('Remove Pi-saved credential','إزالة الاعتماد المحفوظ في Pi'),()=>logoutPi(p)));
+        else if(!p.connected)
+          actions.append(button(tr('Connect with Pi','الربط عبر Pi'),()=>openPiLogin(p).catch(error=>message(error.message,true))));
         status.append(actions);
       }
     }
     function renderConnected(){
-      connectedBox.replaceChildren(node('h2',tr('Providers configured in Pi','المزوّدات المهيأة داخل Pi')));
-      connectedBox.append(node('p',tr('Configuration comes from Pi only. It is not proof of a successful remote model request.','تأتي حالة التهيئة من Pi فقط، وليست دليلاً على نجاح طلب لدى المزوّد.')));
-      const selected=(snapshot?.providers||[]).find(p=>p.id===selectedProviderId);
-      if(selected)renderSelected(selected);
-      const rows=(snapshot?.providers||[]).filter(p=>p.connected||p.public_free);
-      if(!rows.length){connectedBox.append(node('p',tr('No providers configured in Pi.','لا توجد مزوّدات مهيأة داخل Pi.')));return;}
+      connectedBox.replaceChildren(node('h2',tr('Already configured in Pi','المزوّدات المهيأة مسبقًا في Pi')));
+      connectedBox.append(node('p',tr('These entries come only from Pi. Saved credentials and default providers are not proof of remaining credits or successful requests.','هذه البيانات من Pi فقط. الاعتمادات المحفوظة والمزوّدات الافتراضية لا تثبت توفر رصيد أو نجاح الطلبات.')));
+      const rows=(snapshot?.providers||[]).filter(p=>p.connected);
+      if(!rows.length){
+        connectedBox.append(node('p',tr('No providers configured in Pi.','لا توجد مزوّدات مهيأة في Pi.')));
+        return;
+      }
       for(const p of rows){
         const item=node('div','','manage-actions');
-        item.append(node('strong',p.name||p.id),node('span',p.public_free?
-          tr('Pi free provider','مزوّد Pi مجاني'):tr('Configured by Pi','مهيأ بواسطة Pi')));
+        item.append(node('strong',p.name||p.id),node('span',piStateLabel(p)));
+        if(p.credential_stored)
+          item.append(button(tr('Disconnect via Pi','إلغاء الربط عبر Pi'),()=>logoutPi(p)));
         connectedBox.append(item);
       }
     }
@@ -314,9 +327,11 @@
       const renderStarted=performance.now();
       const query=(combo.value||'').trim().toLowerCase();const previous=new Map([...options.children].map(n=>[n.dataset.providerId,n]));
       const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
-      const rows=[...new Map(available.map(p=>[p.id,p])).values()].filter(p=>(query||p.visible!==false)&&(!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query)));
+      // New-provider picker does not duplicate the already-configured list.
+      const rows=[...new Map(available.map(p=>[p.id,p])).values()]
+        .filter(p=>!p.connected&&(!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query)));
       for(const p of rows){
-        const state=p.public_free?tr('Free Native models','نماذج Native مجانية'):p.verified===true?tr('Tested','تم اختباره'):p.auth_status==='configured'?tr('Configured · not tested','مهيأ · لم يُختبر'):p.connected?tr('Configured in Pi · not verified','مهيأ داخل Pi · غير متحقق منه'):tr('Not configured in Pi','غير مهيأ داخل Pi');
+        const state=tr('Not configured · credit unknown','غير مهيأ · الرصيد غير معلوم');
         const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
         const o=previous.get(p.id)||node('button','','provider-combo-option');previous.delete(p.id);o.dataset.providerId=p.id;o.textContent=(p.name||p.id)+' · '+state+restriction;o.type='button';
         o.onclick=()=>{
@@ -333,12 +348,12 @@
         const tiles=rows.map(p=>{
           const tile=node('button','','provider-catalog-tile');
           tile.type='button';tile.textContent=p.name||p.id;
-          tile.title=(p.connected?tr('Configured','مهيأ'):tr('Available in Pi catalog','متاح في فهرس Pi'))+' · '+(p.name||p.id);
+          tile.title=tr('Available for Pi login · not configured','متاح للربط عبر Pi · غير مهيأ')+' · '+(p.name||p.id);
           tile.onclick=()=>{selectedProviderId=p.id;renderSelected(p);};
           return tile;
         });
         catalogList.replaceChildren(...tiles);
-        catalogCount.textContent=tr('Providers reported by Pi: ','المزوّدات التي أعلن عنها Pi: ')+rows.length;
+        catalogCount.textContent=tr('Pi providers available for new login: ','مزوّدو Pi المتاحون للربط الجديد: ')+rows.length;
       }
       options.hidden=!optionsOpen||!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
       window.gatewayProviderTimings={...window.gatewayProviderTimings,render_sync_ms:performance.now()-renderStarted,rendered_options:rows.length};
