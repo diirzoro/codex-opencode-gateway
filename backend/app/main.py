@@ -13,83 +13,25 @@ from .services import workspace_cache, customer_lifecycle, preview_access
 from .routes import preview_public, native_sessions, payment_gateways
 from .config import settings
 
-# # async def retention_maintenance():
-# async def retention_maintenance():
-#     # Retention bookkeeping must not delay the HTML shell or authentication.
-#     for initialize in (workspace_cache.initialize, customer_lifecycle.initialize):
-#         try:
-#             await asyncio.to_thread(initialize)
-#         except Exception:
-#             import logging
-#             logging.getLogger(__name__).warning("Retention policy initialization could not complete")
-#     while True:
-#         await asyncio.sleep(300)
-#         from .services import email_notifications, github as github_service, registration_drafts
-#         for job in (customer_lifecycle.archive_due, email_notifications.sweep,
-#                     github_service.expire_pending_authorizations, registration_drafts.sweep):
-#             try:
-#                 await asyncio.to_thread(job)
-#             except Exception:
-#                 # Jobs log sanitized IDs/categories; never print operational data.
-#                 import logging
-#                 logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
-# async def retention_maintenance():
-#    # Retention bookkeeping must not delay the HTML shell or authentication.
-#    for initialize in (workspace_cache.initialize, customer_lifecycle.initialize):
-#        try:
-#            await asyncio.to_thread(initialize)
-#        except Exception:
-#            import logging
-#            logging.getLogger(__name__).warning("Retention policy initialization could not complete")
-#    while True:
-#        await asyncio.sleep(300)
-#        from .services import email_notifications, github as github_service, registration_drafts
-#        for job in (customer_lifecycle.archive_due, email_notifications.sweep,
-#                    github_service.expire_pending_authorizations, registration_drafts.sweep):
-#            try:
-#                await asyncio.to_thread(job)
-#            except Exception:
-#                # Jobs log sanitized IDs/categories; never print operational data.
-#                import logging
-#                logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
-# async def retention_maintenance():
-#
-#    # Retention bookkeeping must not delay the HTML shell or authentication.
-#    for initialize in (workspace_cache.initialize, customer_lifecycle.initialize):
-#        try:
-#            await asyncio.to_thread(initialize)
-#        except Exception:
-#            import logging
-#            logging.getLogger(__name__).warning("Retention policy initialization could not complete")
-#    while True:
-#        await asyncio.sleep(300)
-#        from .services import email_notifications, github as github_service, registration_drafts
-#        for job in (customer_lifecycle.archive_due, email_notifications.sweep,
-#                    github_service.expire_pending_authorizations, registration_drafts.sweep):
-#            try:
-#                await asyncio.to_thread(job)
-#            except Exception:
-#                # Jobs log sanitized IDs/categories; never print operational data.
-#                import logging
-#                logging.getLogger(__name__).warning("Retention maintenance pass could not complete").
-#     # Retention bookkeeping must not delay the HTML shell or authentication.
-#     for initialize in (workspace_cache.initialize, customer_lifecycle.initialize):
-#         try:
-#             await asyncio.to_thread(initialize)
-#         except Exception:
-#             import logging
-#             logging.getLogger(__name__).warning("Retention policy initialization could not complete")
-#     while True:
-#         await asyncio.sleep(300)
-#         from .services import email_notifications, github as github_service, registration_drafts
-#         for job in (customer_lifecycle.archive_due, email_notifications.sweep,
-#                     github_service.expire_pending_authorizations, registration_drafts.sweep):
-#             try:
-#                 await asyncio.to_thread(job)
-#             except Exception:
-#                 # Jobs log sanitized IDs/categories; never print operational data.
-#                 import logging
-#                 logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
+async def retention_maintenance():
+    # Retention bookkeeping must not delay the HTML shell or authentication.
+    for initialize in (workspace_cache.initialize, customer_lifecycle.initialize):
+        try:
+            await asyncio.to_thread(initialize)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("Retention policy initialization could not complete")
+    while True:
+        await asyncio.sleep(300)
+        from .services import email_notifications, github as github_service, registration_drafts
+        for job in (customer_lifecycle.archive_due, email_notifications.sweep,
+                    github_service.expire_pending_authorizations, registration_drafts.sweep):
+            try:
+                await asyncio.to_thread(job)
+            except Exception:
+                # Jobs log sanitized IDs/categories; never print operational data.
+                import logging
+                logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
         # Never run AI catalog refresh or session-history deletion from Python
         # when OpenCode Native is the execution/storage owner. Native retains
         # and manages its own source-of-truth cache, conversations and history.

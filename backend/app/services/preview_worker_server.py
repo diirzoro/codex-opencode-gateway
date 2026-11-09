@@ -16,8 +16,6 @@ import uuid
 import json
 import os
 import logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-logging.debug('Initializing the preview worker server...')
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import RLock
@@ -93,13 +91,9 @@ class WorkerHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
 
-
-        logging.debug(f"Received request at {self.path} with headers: {self.headers}")
     def _dispatch_post(self):
         authorized = self.headers.get("Authorization", "")
         expected = "Bearer " + self.server.token
-
-        logging.debug(f"Operation requested: {operation}")
         if not hmac.compare_digest(authorized, expected):
             self.reply(401, {"error": "unauthorized"})
             return
@@ -279,9 +273,6 @@ class WorkerHandler(BaseHTTPRequestHandler):
 
 def main():
     token = os.environ.get("PREVIEW_WORKER_TOKEN", "")
-    addr = ("127.0.0.1", 8791)
-
-    logging.debug(f"Worker server started on {addr} with token: {token}")
     # Do not bind all interfaces or auto-register arbitrary customer jobs.
     WorkerServer(("127.0.0.1", 8791), token).serve_forever()
 
