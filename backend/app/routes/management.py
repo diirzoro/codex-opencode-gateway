@@ -16,16 +16,6 @@ from ..security.sessions import (hash_session_token, new_reactivation_token,
 from ..services import credentials, recovery, paypal, github
 from ..services.billing_methods import method_payload
 from ..services.accounts import user_payload
-
-@router.delete('/auth/credentials/{provider_id}', status_code=204)
-def delete_provider_credentials(provider_id: str, user: User = Depends(require_user), db: Session = Depends(get_db)):
-    # Remove the provider credentials from the database
-    result = db.execute(delete(Credentials).where(Credentials.user_id == user.id, Credentials.provider_id == provider_id))
-    if result.rowcount == 0:
-        raise HTTPException(status_code=404, detail='Credentials not found');
-    db.commit();
-    return {'message':'Credentials deleted successfully.'}
-
 from .dependencies import require_user, require_admin, require_billing_user, require_reactivation_user
 
 router=APIRouter(prefix='/api',tags=['account management'])

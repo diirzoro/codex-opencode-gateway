@@ -1,13 +1,3 @@
-async def authenticate_provider(provider: str, api_key: str, db: Session = Depends(get_db)):
-    async with httpx.AsyncClient() as client:
-        response = await client.post('/api/provider/auth', json={'api_key': api_key})
-        if not response.ok:
-            raise HTTPException(
-                status_code=response.status,
-                detail='Failed to authenticate provider'
-            )
-        response_json = await response.json()
-
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -28,36 +18,6 @@ from ..services.accounts import user_payload
 from ..services.location_validation import validate_locations
 from ..services.disposable_email import require_permanent_email
 from ..services import email_verification, registration_drafts
-
-@router.post('/auth/provider/auth')
-async def authenticate_provider(provider: str, api_key: str, db: Session = Depends(get_db)):
-    # Implement direct call to authenticate the provider
-    async with httpx.AsyncClient() as client: 
-        response = await client.post('/api/provider/auth', json={'api_key': api_key})
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-   ,
-        json={'api_key': api_key}
-    response = await client.post('/api/provider/auth', json={'api_key': api_key})
-    if not response.ok:
-        raise HTTPException(
-            status_code=response.status,
-            detail='Failed to authenticate provider'
-        )
-
-    response_json = await response.json()
-    );
-
-
-                if not response.ok:
-        raise HTTPException(
-            status_code=response.status,
-            detail='Failed to authenticate provider'
-        );
-    }
-    return await response.json()
-
 from ..services.entitlements import CORE_TRIAL_DAYS
 from .dependencies import require_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
