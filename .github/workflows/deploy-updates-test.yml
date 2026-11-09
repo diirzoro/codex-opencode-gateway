@@ -1,4 +1,4 @@
-name: TEST | Deploy changed files only
+name: TEST | Deploy changed project files
 
 on:
   workflow_dispatch:
@@ -16,13 +16,14 @@ jobs:
     environment: test
     timeout-minutes: 15
     steps:
-      - name: Copy changed files to the existing TEST project
+      - name: Apply existing TEST source updates
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           USER: ${{ secrets.VPS_USER }}
           KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
           KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
           PORT: ${{ secrets.TEST_VPS_SSH_PORT }}
+          SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
           TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -32,6 +33,7 @@ jobs:
           : "${USER:?Missing VPS_USER}"
           : "${KEY:?Missing STAGING_SSH_PRIVATE_KEY}"
           : "${KNOWN_HOSTS:?Missing STAGING_SSH_KNOWN_HOSTS}"
+          : "${SUDO_PASSWORD:?Missing VPS_SUDO_PASSWORD}"
           port="${PORT:-22}"
 
           install -d -m 700 "$HOME/.ssh"
@@ -40,10 +42,15 @@ jobs:
           printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
-          # Source-file sync ONLY. The existing release script is read directly
-          # from the pinned Git commit; no deploy helper is staged on the VPS.
-          # No sudo, systemctl, service restarts, Nginx edits, database
-          # migrations, health checks, or extra Pi services.
-          ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$USER@$HOST" \
-            "bash -lc 'set -euo pipefail; cd /home/tahir/opencode-gateway-test; git fetch --no-tags origin updates </dev/null; git show ${TARGET_SHA}:scripts/full_test_git_release.py | python3 -I - deploy ${TARGET_SHA}'"
+          # Run the deployment code directly from the pinned Git revision.
+          # Only changed files are synchronized. The script handles selective
+          # migrations, retired source cleanup, and restarts of affected apps.
+          # No Nginx edits, unit changes, health probes, or new services.
+          printf '%s\n' "$SUDO_PASSWORD" | \
+            ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              "$USER@$HOST" \
+              "cd /home/tahir/opencode-gateway-test && \
+               git fetch --no-tags origin updates </dev/null && \
+               TEST_SUDO_PASS_STDIN=1 python3 -I -c \
+               'import subprocess,sys; s=sys.argv[2]; b=subprocess.check_output([\"git\",\"show\",s+\":scripts/full_test_git_release.py\"]); sys.argv=[\"release\",\"deploy\",s]; exec(compile(b,\"release\",\"exec\"),{\"__name__\":\"__main__\"})' \
+               deploy ${TARGET_SHA}"
