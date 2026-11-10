@@ -167,11 +167,28 @@
     async function openGatewayLogin(p=null,replaceExisting=false){
       if(!alive()||providerMutation)return;
       const host=node('div'),f=node('form','','manage-form');
-      const providerField=replaceExisting?null:input(f,tr('Provider ID','معرّف المزوّد'),'provider_id');
+      const providerField=replaceExisting?null:input(f,tr('Find a supported provider','ابحث عن اسم المزوّد'),'provider_id');
+      let approvedProviders=[],suggestions=null,providerHint=null;
+      const selectedProvider=()=>{
+        const text=providerField?.value.trim().toLowerCase()||'';
+        return approvedProviders.find(p=>p.id.toLowerCase()===text||
+          p.name.toLowerCase()===text)||null;
+      };
       if(providerField){
         providerField.required=true;providerField.maxLength=120;providerField.autocomplete='off';
-        providerField.placeholder='openrouter, deepseek, google…';
-        providerField.pattern='[A-Za-z0-9._-]{1,120}';
+        providerField.placeholder=tr('Type DeepSeek, OpenRouter, Google…',
+          'اكتب DeepSeek أو OpenRouter أو Google…');
+        providerField.setAttribute('role','combobox');
+        providerField.setAttribute('aria-autocomplete','list');
+        suggestions=node('div','','provider-real-suggestions');
+        suggestions.hidden=true;
+        suggestions.id='verified-providers-'+Math.random().toString(36).slice(2);
+        suggestions.setAttribute('role','listbox');
+        providerField.setAttribute('aria-controls',suggestions.id);
+        providerField.setAttribute('aria-expanded','false');
+        providerHint=node('p',tr('Loading supported providers…',
+          'جارٍ تحميل أسماء المزوّدين المدعومين…'),'provider-picker-help');
+        f.append(suggestions,providerHint);
       }
       const key=input(f,tr('Personal API key','مفتاح API الشخصي'),'api_key');
       key.type='password';key.required=true;key.autocomplete='off';key.maxLength=8192;
@@ -182,13 +199,73 @@
       host.append(f);document.body.append(host);
       const dialog=window.mountFormDialog(host,f,replaceExisting?tr('Replace provider key','استبدال مفتاح المزوّد'):tr('Connect provider','ربط المزوّد'));
       f.dialogTrigger.hidden=true;
+      if(providerField){
+        submit.disabled=true;
+        const showMatches=()=>{
+          if(!dialog.open)return;
+          const text=providerField.value.trim().toLowerCase();
+          const matches=approvedProviders.filter(p=>!text||
+            p.name.toLowerCase().includes(text)||p.id.toLowerCase().includes(text)).slice(0,12);
+          suggestions.replaceChildren();
+          for(const item of matches){
+            const option=node('button','','provider-real-option');option.type='button';
+            option.setAttribute('role','option');
+            option.append(node('strong',item.name),node('small',item.id));
+            option.onclick=()=>{
+              providerField.value=item.id;
+              suggestions.hidden=true;
+              providerField.setAttribute('aria-expanded','false');
+              providerHint.textContent=tr('Selected provider: ','المزوّد المختار: ')+item.name;
+              submit.disabled=false;key.focus();
+            };
+            suggestions.append(option);
+          }
+          suggestions.hidden=!matches.length;
+          providerField.setAttribute('aria-expanded',String(matches.length>0));
+          const matched=selectedProvider();
+          providerHint.textContent=matched?
+            tr('Selected provider: ','المزوّد المختار: ')+matched.name:
+            tr('Choose one of these verified providers.','اختر مزوّدًا صحيحًا من الخيارات المدعومة.');
+          submit.disabled=!matched;
+        };
+        providerField.addEventListener('input',showMatches);
+        providerField.addEventListener('focus',showMatches);
+        providerField.addEventListener('keydown',event=>{
+          if(event.key==='Escape'){
+            suggestions.hidden=true;
+            providerField.setAttribute('aria-expanded','false');
+          }
+          if(event.key==='Enter'&&!selectedProvider()){
+            const first=suggestions.querySelector('button');
+            if(first){event.preventDefault();first.click();}
+          }
+        });
+        api('/api/opencode/catalog/providers?connected_only=true').then(data=>{
+          if(!host.isConnected)return;
+          approvedProviders=(data.connectable||[]).filter(p=>p&&
+            typeof p.id==='string'&&typeof p.name==='string'&&
+            /^[a-z0-9._-]{1,120}$/.test(p.id));
+          if(!approvedProviders.length)throw Error(tr(
+            'No verifiable API provider is currently configured.',
+            'لا يوجد مزوّد مدعوم للتحقق من مفتاح API حاليًا.'));
+          providerHint.textContent=tr('Type a provider name to see matching real services.',
+            'اكتب اسم المزوّد لتظهر لك الخدمات الحقيقية المطابقة.');
+          if(dialog.open)showMatches();
+        }).catch(error=>{
+          if(host.isConnected){providerHint.textContent=error.message;submit.disabled=true;}
+        });
+      }
       f.onsubmit=async event=>{
         event.preventDefault();
         if(providerMutation||!alive()||!dialog.open||!f.reportValidity())return;
+        if(providerField&&!selectedProvider()){
+          feedback.textContent=tr('Choose a supported provider from the results before linking.',
+            'اختر مزوّدًا صحيحًا من النتائج قبل الربط.');return;
+        }
         providerMutation=true;submit.disabled=true;
-        feedback.textContent=tr('Checking the provider…','جارٍ التحقق من المزوّد…');
+        feedback.textContent=tr('Verifying your API key with the real provider…','جارٍ التحقق من المفتاح لدى المزوّد الحقيقي…');
         const value=key.value;key.value='';
-        const providerId=replaceExisting?p.id:providerField.value.trim().toLowerCase();
+        const providerId=replaceExisting?p.id:selectedProvider().id;
         try{
           const result=await api('/api/opencode/connections'+(replaceExisting?'/'+encodeURIComponent(providerId):''),{
             method:replaceExisting?'PUT':'POST',body:JSON.stringify({provider_id:providerId,api_key:value})});
