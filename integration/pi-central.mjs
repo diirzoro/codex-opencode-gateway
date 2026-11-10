@@ -383,7 +383,7 @@ class SdkAgent {
     this.events.clear();pool.delete(this.id);
   }
 }
-async function gatewayCredential(req,scope,provider){
+async function gatewayCredential(req,scope,provider,modelId){
   const token=process.env.PI_GATEWAY_INTERNAL_TOKEN||"";
   if(token.length<32)throw Object.assign(
     new Error("Pi-Gateway internal credential channel is not configured"),{status:503});
@@ -393,7 +393,8 @@ async function gatewayCredential(req,scope,provider){
   let response;
   try{
     response=await fetch(GATEWAY+"/api/opencode/connections/"+encodeURIComponent(provider)+
-      "?workspace_id="+encodeURIComponent(scope.workspaceId),{
+      "?workspace_id="+encodeURIComponent(scope.workspaceId)+
+      "&model_id="+encodeURIComponent(modelId),{
       redirect:"manual",signal:AbortSignal.timeout(6000),
       headers:{cookie,host:HOST,"x-forwarded-proto":"https",
         "x-pi-gateway-token":token,accept:"application/json"}
@@ -708,7 +709,7 @@ const server=http.createServer(async(req,res)=>{
         return error(res,403,"Native skill and extension execution requires isolated TEST owner access");
       // Authenticate on EVERY prompt: deletions/rotations take effect before
       // another request can run. Never fall back to shared Pi credentials.
-      const authorizedKey=await gatewayCredential(req,s,b.model.providerID);
+      const authorizedKey=await gatewayCredential(req,s,b.model.providerID,b.model.modelID);
       reserveExecution(a);
       try {
         try{await a.setCredential(b.model.providerID,authorizedKey);}
