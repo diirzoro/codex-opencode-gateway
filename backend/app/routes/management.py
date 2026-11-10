@@ -503,6 +503,25 @@ def _ai_allowed(db, provider_id, model_id=None, rules=None):
     return True
 
 
+def _ai_personal_allowed(db, provider_id, model_id=None, rules=None):
+    """Personal BYOK models may be free OR paid.
+
+    Platform-curated allowlists select shared/default offers, not the universe
+    of models usable with the customer's own verified key. An administrator's
+    explicit hidden provider/model restrictions still always apply.
+    """
+    if rules is None:
+        rules = _ai_policy(db)
+    if provider_id in (rules.get("hidden_providers") or []):
+        return False
+    if model_id is not None:
+        hidden = rules.get("hidden_models") or {}
+        if model_id in hidden.get(provider_id, []) or (
+                provider_id + "/" + model_id) in hidden.get(provider_id, []):
+            return False
+    return True
+
+
 # Per-customer model preferences are encrypted WITH the existing verified
 # connection, avoiding schema changes and keeping legacy encrypted API keys
 # readable. No account preferences or secrets live in browser storage.
@@ -627,7 +646,10 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
             AiProviderModel.active.is_(True)).order_by(
             AiProviderModel.provider_id, AiProviderModel.name))
         for model in models:
-            if _ai_allowed(db, model.provider_id, model.model_id, rules=rules):
+            shared_model = model.model_id in platform.get(model.provider_id, {}).get("models", set())
+            personal_model = (model.provider_id in connected and
+                _ai_personal_allowed(db, model.provider_id, model.model_id, rules=rules))
+            if (shared_model and _ai_allowed(db, model.provider_id, model.model_id, rules=rules)) or personal_model:
                 models_by_provider.setdefault(model.provider_id, {})[model.model_id] = {
                     **json.loads(model.details_json or "{}"),
                     "id": model.model_id, "name": model.name,
@@ -637,7 +659,9 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
     checked_at = now()
     result = []
     for provider in rows:
-        allowed = _ai_allowed(db, provider.id, rules=rules)
+        allowed = (_ai_allowed(db, provider.id, rules=rules) or
+                   (provider.id in connected and
+                    _ai_personal_allowed(db, provider.id, rules=rules)))
         # Never hide the customer's own verified/suspended account connection
         # merely because it cannot currently execute under admin policy.
         if not allowed and provider.id not in owned and provider.id not in platform:
@@ -1006,9 +1030,9 @@ def _ai_models_for_connection(db, record, provider_id):
          "free_eligible": _ai_model_zero_price(model),
          **_ai_model_display_info(model),
          "enabled": (model.model_id in locked or model.model_id not in disabled)
-                     and _ai_allowed(db, provider_id, model.model_id, rules=rules),
+                     and (model.model_id in locked or _ai_personal_allowed(db, provider_id, model.model_id, rules=rules)),
          "platform_locked": model.model_id in locked,
-         "admin_allowed": _ai_allowed(db, provider_id, model.model_id, rules=rules)}
+         "admin_allowed": model.model_id in locked or _ai_personal_allowed(db, provider_id, model.model_id, rules=rules)}
         for model in models]}
 
 
@@ -1029,8 +1053,8 @@ def _ai_update_connection_models(db, record, provider_id, model_ids, enabled):
     locked = _ai_active_platform_defaults(db).get(provider_id, {}).get("models", set())
     if not enabled and ids.intersection(locked):
         raise HTTPException(403, "Administrator platform models cannot be disabled")
-    if enabled and any(not _ai_allowed(db, provider_id, mid, rules=rules) for mid in ids):
-        raise HTTPException(403, "An administrator has restricted one or more models")
+    if enabled and any(not _ai_personal_allowed(db, provider_id, mid, rules=rules) for mid in ids):
+        raise HTTPException(403, "An administrator has hidden one or more models")
     key, disabled = _ai_connection_secret_and_models(record)
     if enabled:
         disabled.difference_update(ids)
