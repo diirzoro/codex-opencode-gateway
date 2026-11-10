@@ -45,7 +45,7 @@ class WorkspaceSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 class ProjectNativeSessionBinding(Base):
-    """Platform-only reference. Native messages and session history stay in OpenCode."""
+    """Platform-only reference. Pi owns native message/session history."""
     __tablename__ = "project_native_session_bindings"
     __table_args__ = (
         UniqueConstraint("native_session_id", name="uq_project_native_binding_native_session"),
