@@ -474,11 +474,13 @@ def _ai_connection_payload(row):
             "connected": row.auth_status == "verified", "verified": row.auth_status == "verified"}
 
 
-def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, provider_id=None):
+def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, provider_id=None, connected_only=False):
     _ai_schema(db)
     connected = {row.provider_id: row for row in db.scalars(
         select(AiUserConnection).where(AiUserConnection.user_id == user_id))}
     provider_query = select(AiProviderCatalog).order_by(AiProviderCatalog.name)
+    if connected_only:
+        provider_query = provider_query.where(AiProviderCatalog.id.in_(connected))
     if provider_id:
         provider_query = provider_query.where(AiProviderCatalog.id == provider_id)
     if query:
@@ -518,11 +520,17 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
 @router.get("/opencode/catalog/providers")
 def ai_catalog_list(provider_id: str | None = None, query: str = "",
                     include_connected_models: bool = False,
+                    connected_only: bool = False, discover: bool = False,
                     user: User = Depends(require_user), db: Session = Depends(get_db)):
-    """Existing compatibility URL; now Gateway-only indexed metadata, not OpenCode."""
+    """Read saved metadata; discover from Pi only on an explicit new-link request."""
+    # No Pi discovery during workspace use, chat, tools, uploads or normal
+    # account-connection reads. Reuse the 7-day PostgreSQL snapshot when fresh.
+    if discover:
+        _ai_catalog_refresh_if_due()
+        db.expire_all()
     rows = _ai_provider_rows(db, user.id, query=query[:120],
                              include_connected_models=include_connected_models,
-                             provider_id=provider_id)
+                             provider_id=provider_id, connected_only=connected_only)
     return {"all": rows, "connected": [p["id"] for p in rows if p["connected"]],
             "default": {}, "source": "gateway", "refresh_days": _AI_REFRESH_DAYS,
             "stale_after_days": _AI_STALE_DAYS}
@@ -674,8 +682,8 @@ def ai_internal_credential(provider_id: str, request: Request, workspace_id: uui
             "key": credentials.decrypt(record.ciphertext)}
 
 
-def ai_catalog_refresh():
-    """Reuse existing Gateway maintenance loop: no scheduler/service added."""
+def _ai_catalog_refresh_if_due():
+    """Explicit new-connection discovery only; cache results in existing PostgreSQL."""
     from ..database import SessionLocal
     with SessionLocal() as db:
         try:
