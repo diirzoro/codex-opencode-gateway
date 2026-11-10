@@ -576,9 +576,11 @@ function providerCatalog(models,providerDefinitions=[],mode="full",selectedProvi
     if(row)row.name=provider.name||row.name;
     else grouped.set(provider.id,{id:provider.id,name:provider.name||provider.id,models:{}});
   }
-  const all=[...grouped.values()]
-    .filter(row=>mode!=="free"||row.id===selectedProviderId)
-    .map(row=>{
+  // Free-mode snapshots include ALL provider names supplied by installed Pi,
+  // but include model details ONLY for selected :free OpenRouter models.
+  // This keeps fortnightly Gateway discovery light without concealing Pi
+  // providers from the saved, manually searchable registry.
+  const all=[...grouped.values()].map(row=>{
     const count=Object.keys(row.models).length;
     const show=mode==="full"||(mode==="provider"&&selectedProviderId===row.id);
     // Minimal periodic seed: only the explicitly free OpenRouter subset is
