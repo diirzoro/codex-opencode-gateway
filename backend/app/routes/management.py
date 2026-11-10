@@ -672,7 +672,7 @@ def ai_catalog_refresh():
             count = db.scalar(select(func.count()).select_from(AiProviderCatalog)) or 0
             if count and last is not None and now() - aware(last) < timedelta(days=_AI_REFRESH_DAYS):
                 return
-            locked = db.scalar(select(_ai_text("pg_try_advisory_xact_lock(732062611)")))
+            locked = db.execute(_ai_text("SELECT pg_try_advisory_xact_lock(732062611)")).scalar_one()
             if not locked:
                 return
             sock = os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")
