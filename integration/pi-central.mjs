@@ -113,7 +113,14 @@ async function scope(req, query) {
   const detail=await gateway(req,"/api/workspaces/"+encodeURIComponent(match[2]));
   if(detail.native_directory!==directory || detail.id!==match[2] || !detail.project_id)
     throw Object.assign(new Error("Workspace not owned"),{status:403});
-  return {directory,workspaceId:match[2],projectId:String(detail.project_id),userId:match[1]};
+  // Owner-only TEST tooling is opt-in. Never turn a service-wide toggle into
+  // shell/tool access for every account on this shared-UID VPS.
+  let testOwner=false;
+  if(process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1"){
+    const identity=await gateway(req,"/api/auth/me");
+    testOwner=identity?.role==="owner"&&String(identity.id)===match[1];
+  }
+  return {directory,workspaceId:match[2],projectId:String(detail.project_id),userId:match[1],testOwner};
 }
 // Read only public model definitions. Provider metadata must NEVER open the
 // shared auth.json or inspect credentials belonging to the VPS operator.
@@ -241,7 +248,7 @@ class SdkAgent {
       throw Object.assign(new Error("Existing Pi session requires deliberate recovery; not creating another"),{status:409});
     const manager=exact?sdk.SessionManager.open(exact.path,sessionDir):
       sdk.SessionManager.create(scope.directory,sessionDir,{id:expectedId});
-    const allowTools=process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1";
+    const allowTools=scope.testOwner===true;
     const {session}=await sdk.createAgentSession({
       cwd:scope.directory,modelRuntime:runtime,sessionManager:manager,
       settingsManager:sdk.SettingsManager.inMemory(),
@@ -374,7 +381,12 @@ async function gatewayCredential(req,scope,provider){
 async function agent(s) {
   const id=projectIdFor(s);
   const current=pool.get(id);
-  if(current&&!current.closed)return current;
+  if(current&&!current.closed){
+    if(current.scope.testOwner===s.testOwner)return current;
+    if(current.active||current.running||executing.has(current))
+      throw Object.assign(new Error("Project permissions changed during an active run"),{status:409});
+    current.close(); // recreate with the updated role, no stale shell tools
+  }
   const pending=creating.get(id);
   if(pending)return pending;
   // Include in-flight SDK initializations in the worker cap. Concurrent
@@ -693,6 +705,7 @@ const server=http.createServer(async(req,res)=>{
         // Keep the original Pi command/skill mechanism. Do not invent agents.
         let prompt=message;
         if(b.agent) {
+          if(!s.testOwner)return error(res,403,"Native skill and extension execution requires isolated TEST owner access");
           const commands=await a.command("get_commands");
           const command=(commands?.commands||[]).find(c=>c?.name===b.agent);
           if(!command) {
