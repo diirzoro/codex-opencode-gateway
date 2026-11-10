@@ -283,31 +283,22 @@ class SdkAgent {
     if(type!=="prompt")throw Object.assign(new Error("Unsupported Pi SDK command"),{status:501});
     if(this.active||this.running)
       throw Object.assign(new Error("Project already has an active Pi run"),{status:409});
-    // SDK prompt resolves at completion; use preflight acknowledgement instead
-    // of holding HTTP 204 open throughout the model/tool execution.
+    // Pi SDK prompt() resolves on completion, not dispatch. Return the
+    // existing HTTP 204 after admission, never wait for model execution.
     const images=Array.isArray(fields.images)?fields.images:[];
-    let acknowledge,failAck,acknowledged=false;
-    const preflight=new Promise((resolve,reject)=>{acknowledge=resolve;failAck=reject;});
-    const promise=Promise.resolve().then(()=>this.session.prompt(fields.message,{
-      images,preflightResult:ok=>{
-        acknowledged=true;
-        if(ok)acknowledge();
-        else failAck(Object.assign(new Error("Pi rejected prompt preflight"),{status:422}));
-      }
-    }));
-    this.running=promise;
-    promise.then(()=>{
-      if(!acknowledged)acknowledge();
-    }).catch(()=>{
-      if(!acknowledged)failAck(Object.assign(new Error("Pi rejected prompt"),{status:502}));
+    const run=Promise.resolve().then(()=>this.session.prompt(fields.message,
+      images.length?{images}:undefined));
+    this.running=run;
+    // Register observers before sending admission acknowledgement.
+    run.catch(()=>{
       for(const res of this.events)try{res.write("data: "+JSON.stringify({
         type:"pi.error",properties:{message:"Pi execution failed"}
-      })+"\n\n");}catch{}
+      })+"\n\n");}catch{this.events.delete(res);}
     }).finally(()=>{
       this.running=null;this.active=false;releaseExecution(this);
+      // SDK normally emits agent_settled; also handle errors before start.
       this.consume({type:"agent_settled"});
     });
-    await preflight;
     return {accepted:true};
   }
   close(){
