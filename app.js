@@ -125,14 +125,17 @@ window.nativeDirectTest=(()=>{
   }
   async function catalog({force=false}={}){
     const user=ownerScope(),revision=presentationRevision;
-    // Keep only a browser-memory reference to Native's original /provider.
-    // Never build a second persistent catalog or refresh models on every prompt.
+    // Gateway PostgreSQL is the account-owned source of provider/model views.
+    // Return full models only for verified customer connections, not for 200+ providers.
     if(!force&&catalogSnapshot)return catalogSnapshot;
     if(catalogPending)return catalogPending;
-    // Fetch only models for providers that Pi currently reports configured.
-    // A provider's model count remains searchable without transferring its full catalogue.
-    const promise=direct('provider?models=connected').then(data=>{
-      if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid Pi provider response');
+    const promise=(async()=>{
+      const response=await fetch('/api/opencode/catalog/providers?include_connected_models=true',
+        {credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(20000)});
+      if(!response.ok)throw Error('Gateway model catalog HTTP '+response.status);
+      return response.json();
+    })().then(data=>{
+      if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid Gateway provider catalog');
       if(ownerScope()!==user)throw Error('Account changed during Native provider discovery');
       if(revision!==presentationRevision)throw Error('Native provider state changed; retry discovery');
       catalogSnapshot=data;workspaceSnapshot=null;
@@ -217,108 +220,24 @@ window.nativeDirectTest=(()=>{
     workspacePending=job;
     try{return await job;}finally{if(workspacePending===job)workspacePending=null;}
   }
-  // Shared, Native-reported availability for Dashboard, Connections and Workspace.
-  // Presence in /provider.connected is NOT proof that a key works or belongs
-  // to this account. Display Native's result without a second verification list.
-  const nativeReported=(p,data)=>publicFree(p)||(data.connected||[]).includes(p.id);
-  const idx=(p,data)=>({
-    id:p.id,name:p.name||p.id,visible:true,allowed:true,
-    connected:nativeReported(p,data),configured:nativeReported(p,data),
-    public_free:false,credential_stored:p.credential_stored===true,
-    credential_source:p.credential_source||'none',
-    pi_available_models:p.pi_available_models||[],
-    credit_status:'unknown',
-    auth_status:nativeReported(p,data)?'pi_configured':'pi_not_configured',
-    verified:false,model_count:p.model_count??Object.keys(p.models||{}).length,
-    default_model:data.default?.[p.id]
-  });
-  function ordered(data,query=''){
-    const q=query.trim().toLowerCase();
-    return data.all.filter(p=>!q||p.id.toLowerCase().includes(q)||(p.name||'').toLowerCase().includes(q))
-      .sort((a,b)=>Number(data.connected.includes(b.id))-Number(data.connected.includes(a.id))
-        
-        ||(a.name||a.id).localeCompare(b.name||b.id));
-  }
-  function find(data,pid){
-    const q=decodeURIComponent(pid).trim().toLowerCase();
-    const p=data.all.find(p=>p.id.toLowerCase()===q)||data.all.find(p=>(p.name||'').toLowerCase()===q);
-    if(!p){const e=new Error('Provider not found in Pi: '+pid);e.status=404;throw e;}
-    return p;
-  }
-  function modelDetails(p,data){
-    return {provider_id:p.id,connected:nativeReported(p,data),allowed:true,
-      configured:nativeReported(p,data),credit_status:'unknown',
-      pi_available_models:p.pi_available_models||[],
-      default_model:data.default?.[p.id],models:Object.entries(p.models||{}).map(([id,m])=>({...m,id,
-        // Pi's credential availability is distinct from actual credit balance.
-        pi_auth_available:(p.pi_available_models||[]).includes(id),
-        credit_status:'unknown',allowed:true,visible:true}))};
-  }
-  // Present actual Native execution errors; do not run a separate key checker.
-  function nativeFailure(value){
-    const raw=[value?.name,value?.message,value?.data?.message,value?.data?.statusCode,
-      value?.data?.code,value?.status,value?.error?.message]
-      .filter(v=>v!==undefined&&v!==null).join(' ').slice(0,3000);
-    // Surface the human-readable Native/provider message so the user sees the
-    // same reason Pi shows. Only the readable message text is used; raw
-    // exception bodies (which may embed keys) are never echoed.
-    const safeDetail=[value?.message,value?.error?.message,value?.data?.message]
-      .filter(v=>typeof v==='string'&&v.trim()&&!/^(error|failed|retryerror|provider.?error)$/i.test(v.trim()))
-      .map(v=>v.trim())[0]||'';
-    const detail=safeDetail?safeDetail.slice(0,400):'';
-    const withDetail=(m)=>detail&&!m.includes(detail)?m+' '+detail:m;
-    if(/(?:401|unauthoriz|invalid.{0,40}(?:api.?key|token|credential)|incorrect.{0,30}key|authentication.?error|api.?key.{0,30}(?:invalid|incorrect|missing))/i.test(raw))
-      return {kind:'invalid_key',message:withDetail('رفض المزود مفتاح API (401 أو بيانات اعتماد غير صحيحة).')};
-    if(/(?:403|forbidden|access.denied|permission.denied)/i.test(raw))
-      return {kind:'access_denied',message:withDetail('رفض المزود صلاحية هذا المفتاح (403).')};
-    if(/(?:429|quota|rate.limit|free usage exceeded|insufficient|billing|credits|balance)/i.test(raw))
-      return {kind:'quota',message:withDetail('طلب Pi رُفض بسبب الرصيد أو حدود استخدام المزود.')};
-    if(/(?:model.{0,40}(?:not.found|unavailable|not supported)|invalid.model|(?:404).{0,30}model)/i.test(raw))
-      return {kind:'model_unavailable',message:withDetail('الموديل المختار غير متاح لدى المزود.')};
-    if(/(?:timeout|timed.out|network|connect|econn|enotfound|fetch.failed)/i.test(raw))
-      return {kind:'network',message:withDetail('تعذر اتصال Pi بمزود النموذج.')};
-    return {kind:'provider_error',message:withDetail('أعاد Pi خطأ من المزود.')};
-  }
   const matches=(path)=>{
-    // TEST provider operations are Native-only even before auth is ready.
-    // They MUST NOT fall back to Python if the user session/direct link fails.
+    // Preserve existing compatibility paths. They are now implemented in
+    // authenticated Gateway routes instead of the obsolete Native adapter.
     if(!nativeMode())return false;
-    if(/^\/api\/opencode\/connections(?:\/|$)/.test(path))return true;
-    return /^\/api\/workspaces\/[^/]+\/providers(?:\/|$|\?)/.test(path);
+    return /^\/api\/opencode\/connections(?:\/|$)/.test(path) ||
+      /^\/api\/workspaces\/[^/]+\/providers(?:\/|$|\?)/.test(path);
   };
   async function route(path,options={}){
-    if(!active())throw Error('Pi connection requires sign-in');
-    const method=(options.method||'GET').toUpperCase();
-    const parsed=new URL(path,location.origin),name=parsed.pathname,segments=name.split('/').filter(Boolean);
-    if(method!=='GET')throw Error('Pi provider inventory is read-only. Credentials are managed by installed Pi.');
-    // Native /provider is the shared catalog source for Dashboard and Workspace.
-    const data=await catalog();
-    if(name.endsWith('/providers/search')){
-      const query=parsed.searchParams.get('query')||'';
-      const items=ordered(data,query).map(p=>idx(p,data));
-      return name.startsWith('/api/workspaces/')?{native:true,providers:items}:items;
+    if(!active())throw Error('Gateway provider access requires sign-in');
+    const response=await fetch(path,{...options,credentials:'same-origin',cache:'no-store',
+      headers:{...(options.body?{'Content-Type':'application/json'}:{}),...options.headers}});
+    if(response.status===204)return null;
+    if(!response.ok){
+      const failure=await response.json().catch(()=>({}));
+      const detail=typeof failure.detail==='string'?failure.detail:'Gateway provider request failed';
+      const e=new Error(detail);e.status=response.status;throw e;
     }
-    if(name.endsWith('/providers/resolve')){
-      const p=find(data,parsed.searchParams.get('name')||'');
-      const item=idx(p,data);
-      return name.startsWith('/api/workspaces/')?{native:true,providers:[item]}:item;
-    }
-    if(name==='/api/opencode/connections')return nativeConnections(data).map(provider_id=>({
-      provider_id,auth_status:'native_reported_unverified',verified:false}));
-    const isAccount=segments[0]==='api'&&segments[1]==='opencode'&&segments[2]==='connections';
-    const isWorkspace=segments[0]==='api'&&segments[1]==='workspaces'&&segments[3]==='providers';
-    if(!isAccount&&!isWorkspace)throw Error('Unsupported Native provider route');
-    if(isWorkspace&&segments.length===4)
-      return ordered(data).map(p=>idx(p,data));
-    const providerId=isAccount?segments[3]:segments[4];
-    if(!providerId)throw Error('Missing Native provider ID');
-    const p=find(data,providerId),tail=segments.slice(isAccount?4:5);
-    if(tail.length===1&&tail[0]==='models'){
-      // Workspace availability follows Native, not a Gateway connection ledger.
-      const item=modelDetails(p,data);
-      return isWorkspace&&!item.connected?{...item,models:[]}:item;
-    }
-    throw Error('Unsupported Pi provider action: '+name);
+    return response.json();
   }
   return {active,testHost,url,direct,catalog,configuredProviders,agents,registry,workspaceRegistry,forget,acknowledgeNativeCredential,matches,route,
     classifyError:nativeFailure,rootFromFile,defaultDirectory};
