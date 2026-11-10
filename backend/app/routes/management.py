@@ -489,13 +489,30 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
             (func.lower(AiProviderCatalog.name).contains(query.lower())))
     rows = list(db.scalars(provider_query.limit(1000)))
     rules = _ai_policy(db)
+    # Fetch connected model details in ONE indexed query instead of one SQL
+    # round-trip per provider. Read-only Dashboard opens stay lightweight.
+    details_for = {provider.id for provider in rows
+                   if provider_id == provider.id or
+                   (include_connected_models and provider.id in connected)}
+    models_by_provider = {}
+    if details_for:
+        models = db.scalars(select(AiProviderModel).where(
+            AiProviderModel.provider_id.in_(details_for),
+            AiProviderModel.active.is_(True)).order_by(
+            AiProviderModel.provider_id, AiProviderModel.name))
+        for model in models:
+            if _ai_allowed(db, model.provider_id, model.model_id, rules=rules):
+                models_by_provider.setdefault(model.provider_id, {})[model.model_id] = {
+                    **json.loads(model.details_json or "{}"),
+                    "id": model.model_id, "name": model.name}
+    checked_at = now()
     result = []
     for provider in rows:
         if not _ai_allowed(db, provider.id, rules=rules):
             continue
         record = connected.get(provider.id)
         stale = (not provider.models_synced_at or
-                 now() - aware(provider.models_synced_at) > timedelta(days=_AI_STALE_DAYS))
+                 checked_at - aware(provider.models_synced_at) > timedelta(days=_AI_STALE_DAYS))
         item = {"id": provider.id, "name": provider.name,
                 "model_count": provider.model_count, "models": {},
                 "connected": bool(record and record.auth_status == "verified"),
@@ -504,15 +521,8 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                 "auth_status": record.auth_status if record else "not_connected",
                 "credit_status": record.credit_status if record else "unknown",
                 "last_synced_at": provider.models_synced_at, "stale": stale}
-        if provider_id == provider.id or (include_connected_models and record):
-            models = db.scalars(select(AiProviderModel).where(
-                AiProviderModel.provider_id == provider.id, AiProviderModel.active.is_(True))
-                .order_by(AiProviderModel.name))
-            item["models"] = {
-                m.model_id: {**json.loads(m.details_json or "{}"),
-                    "id": m.model_id, "name": m.name}
-                for m in models if _ai_allowed(db, provider.id, m.model_id, rules=rules)
-            }
+        if provider.id in details_for:
+            item["models"] = models_by_provider.get(provider.id, {})
         result.append(item)
     return result
 
