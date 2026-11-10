@@ -719,15 +719,17 @@ def _ai_catalog_refresh_if_due():
             if not locked:
                 return False
             sock = os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")
+            # Only PUBLIC model metadata is fetched over the existing local
+            # filesystem-protected Pi UNIX socket. Customer API credentials
+            # still require the separate authenticated internal token.
             internal_token = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
-            if len(internal_token) < 32:
-                raise RuntimeError("Pi catalog internal authorization is not configured for TEST")
+            headers = ({"x-pi-gateway-token": internal_token}
+                       if len(internal_token) >= 32 else {})
             with _ai_httpx.Client(transport=_ai_httpx.HTTPTransport(uds=sock),
                                   timeout=60, trust_env=False) as client:
                 result = client.get("http://pi/provider", params={
                     "directory": os.getenv("PI_CATALOG_DIRECTORY", "/home/tahir/pi-test"),
-                    "models": "full"}, headers={
-                    "x-pi-gateway-token": internal_token})
+                    "models": "full"}, headers=headers)
                 result.raise_for_status()
                 payload = result.json()
             all_rows = payload.get("all")
