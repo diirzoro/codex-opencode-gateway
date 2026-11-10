@@ -469,8 +469,8 @@ document.addEventListener('click',event=>{
  // Includes late-added header/sidebar Login buttons.
  if(event.target.closest('[data-go="authPage"]'))$('[data-auth-tab="login"]')?.click();
 },true);
-$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));
-$('[data-open-workspace]').forEach(el=>el.onclick=async()=>{
+$$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));
+$$('[data-open-workspace]').forEach(el=>el.onclick=async()=>{
   // Preserve the existing login form and project restore flow.
   if(!currentUser){
     await page('authPage');
