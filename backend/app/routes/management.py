@@ -1084,11 +1084,10 @@ def ai_admin_customer_models_bulk(customer_id: uuid.UUID, provider_id: str,
     _ai_schema(db)
     row = _ai_admin_customer_connection(db, customer_id, provider_id,
                                         for_update=True)
-    result = _ai_update_connection_models(db, row, provider_id,
-                                          data.model_ids, data.enabled)
+    # Audit is committed together with the encrypted model preference change.
     audit(db, actor, "ai.customer_models.updated", subject=customer_id)
-    db.commit()
-    return result
+    return _ai_update_connection_models(db, row, provider_id,
+                                        data.model_ids, data.enabled)
 
 
 def _ai_refresh_selected_provider(db, provider_id):
