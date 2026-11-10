@@ -91,13 +91,18 @@ window.nativeDirectTest=(()=>{
     if(!response.ok){
       // Surface the actual Pi transport error instead of a generic 503 toast.
       // The bridge sends short, sanitized diagnostic descriptions, never keys.
-      let detail='';
+      let detail='',receipt='';
       try{
         const failure=await response.json();
         if(typeof failure?.error==='string')detail=failure.error.slice(0,240);
+        if(failure?.receipt==='not_submitted')receipt='not_submitted';
       }catch{}
       const e=new Error('Pi HTTP '+response.status+' ('+path+')'+(detail?': '+detail:''));
-      e.status=response.status;throw e;
+      e.status=response.status;
+      // Only the Pi bridge can assert non-delivery after rejecting a
+      // credential/model preflight. Network timeouts remain uncertain.
+      if(receipt)e.receipt=receipt;
+      throw e;
     }
     if(response.status===204)return null;
     const body=await response.text();
