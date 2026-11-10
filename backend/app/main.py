@@ -32,10 +32,13 @@ async def retention_maintenance():
                 # Jobs log sanitized IDs/categories; never print operational data.
                 import logging
                 logging.getLogger(__name__).warning("Retention maintenance pass could not complete")
-        # Never run AI catalog refresh or session-history deletion from Python
-        # when OpenCode Native is the execution/storage owner. Native retains
-        # and manages its own source-of-truth cache, conversations and history.
-        # Existing account, project and upload housekeeping above remains.
+        # Gateway stores only public provider/model metadata and customer-owned
+        # encrypted credentials. Pi exclusively executes AI messages/tools/SSE.
+        try:
+            await asyncio.to_thread(management.ai_catalog_refresh)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("AI catalog update skipped")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -49,13 +52,13 @@ async def lifespan(app):
 
 preview_access.install_access_log_redaction()
 
-app = FastAPI(title="OpenCode Gateway API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Pi Gateway API", version="0.1.0", lifespan=lifespan)
 app.include_router(auth.router); app.include_router(profile.router); app.include_router(locations.router); app.include_router(admin.router)
 app.include_router(native_sessions.router)
 app.include_router(workspaces.router)
 app.include_router(preview_public.router)
-# AI conversations, execution, tools, approvals and SSE are owned exclusively by
-# the existing OpenCode Native process; there is no Python agent/queue router.
+# Pi Central owns AI execution, messages, tools, approvals and SSE.
+# Gateway only controls account-owned credentials and metadata.
 app.include_router(github.router)
 app.include_router(dashboard.router)
 app.include_router(plans.router)
@@ -85,21 +88,8 @@ async def browser_boundary(request: Request, call_next):
     if direct_port == settings.app_port:
         return JSONResponse({"detail": "Not found"}, status_code=404,
                             headers={"Cache-Control": "no-store"})
-    # TEST OpenCode provider operations must never enter Python Gateway.
-    # The browser uses /native-direct/api/* -> Nginx -> OpenCode Native.
-    # Reject every legacy/catch-all account/workspace provider route here,
-    # including if the browser adapter fails to initialize.
-    if native_sessions.deployment() == 'test':
-        path=request.url.path
-        legacy_provider=(
-            path.startswith('/api/opencode/connections')
-            or path.startswith('/api/opencode/catalog/providers')
-            or path == '/api/opencode/catalog/agents'
-            or bool(re.fullmatch(r'/api/workspaces/[0-9a-fA-F-]{36}/providers(?:/.*)?',path))
-        )
-        if legacy_provider:
-            return JSONResponse({'detail':'TEST provider/model/auth services are OpenCode Native-only; Python Gateway route disabled'},
-                                status_code=410,headers={'Cache-Control':'no-store'})
+    # Gateway-owned provider/model/account operations reuse the existing
+    # authenticated API URLs. No OpenCode engine or Python AI executor is used.
     if preview_access.is_preview_host(request) and (
         request.method not in {'GET','HEAD'} or not request.url.path.startswith('/preview/')):
         return JSONResponse({'detail':'Not found'},status_code=404,
