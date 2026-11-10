@@ -926,6 +926,59 @@ def _ai_save(data, user, db, replace=False):
     return _ai_connection_payload(existing)
 
 
+@router.get("/opencode/connections/{provider_id}")
+def ai_pi_connection_credential(provider_id: str, workspace_id: uuid.UUID,
+                                model_id: str, request: Request, response: Response,
+                                user: User = Depends(require_user),
+                                db: Session = Depends(get_db)):
+    """One-model credential release ONLY to Pi Central's local authenticated bridge.
+
+    Never available to a browser client even with a valid user session.
+    Every call checks session ownership, the chosen model and runtime policy.
+    """
+    if getattr(getattr(db.bind, "url", None), "database", None) != "opencode_gateway_test":
+        raise HTTPException(403, "Pi credential bridge is TEST-only")
+    expected = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
+    provided = request.headers.get("x-pi-gateway-token", "")
+    if (request.client is None or request.client.host not in ("127.0.0.1", "::1")
+            or len(expected) < 32 or
+            not _ai_hmac.compare_digest(expected, provided)):
+        raise HTTPException(403, "Authenticated Pi credential channel required")
+    _ai_schema(db)
+    workspace = db.scalar(select(Workspace.id).where(
+        Workspace.id == workspace_id,
+        Workspace.user_id == user.id))
+    if workspace is None:
+        raise HTTPException(404, "Owned workspace not found")
+    if not model_id or len(model_id) > 300:
+        raise HTTPException(422, "Valid Pi model ID required")
+    model = db.get(AiProviderModel, (provider_id, model_id))
+    if model is None or not model.active:
+        raise HTTPException(403, "Selected model is not in the active Pi catalog")
+    # Shared platform models always use the platform account; never spend
+    # the customer's personal quota on a model sold as included.
+    shared = _ai_active_platform_defaults(db).get(provider_id)
+    record = None
+    key = None
+    if shared and model_id in shared["models"] and _ai_allowed(db, provider_id, model_id):
+        record = shared["connection"]
+        key, _ = _ai_connection_secret_and_models(record)
+    elif _ai_personal_allowed(db, provider_id, model_id):
+        record = db.scalar(select(AiUserConnection).where(
+            AiUserConnection.user_id == user.id,
+            AiUserConnection.provider_id == provider_id,
+            AiUserConnection.auth_status == "verified"))
+        if record is not None:
+            key, disabled = _ai_connection_secret_and_models(record)
+            if model_id in disabled:
+                raise HTTPException(403, "This model is disabled for your account")
+    if record is None or not key:
+        raise HTTPException(403, "No verified account or administrator-approved model connection")
+    response.headers["Cache-Control"] = "no-store"
+    return {"provider_id": provider_id, "connection_id": str(record.id),
+            "key": key}
+
+
 @router.post("/opencode/connections", status_code=201)
 def ai_connect(data: AiKeyInput, user: User = Depends(require_user), db: Session = Depends(get_db)):
     return _ai_save(data, user, db)
