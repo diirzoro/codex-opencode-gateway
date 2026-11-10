@@ -449,19 +449,61 @@
             overview.append(node('p',tr('No customer connections.','لا توجد اتصالات للعملاء.')));return;
           }
           for(const entry of records){
-            const line=node('div','','policy-provider-row');
-            line.append(node('strong',entry.username||entry.user_id),
-              node('span',entry.provider_id),
-              node('small',entry.enabled?tr('Enabled','مفعّل'):tr('Suspended','موقوف')));
+            const detail=node('details','','provider-connected-detail provider-admin-customer');
+            const header=node('summary','','provider-connected-summary');
+            const info=node('div','','provider-summary-info');
+            info.append(node('strong',(entry.username||entry.user_id)+' · '+entry.provider_id),
+              node('small',entry.enabled?tr('Customer link · active','اتصال العميل · مفعّل'):
+                tr('Customer link · suspended','اتصال العميل · موقوف')));
+            const label=node('span','','provider-summary-action');
+            const count=node('small',tr('Customer models','نماذج العميل'));
+            const hint=node('span',tr('Manage models','إدارة النماذج'),'provider-expand-hint');
+            const arrow=node('span','⌄','provider-expand-chevron');
+            arrow.setAttribute('aria-hidden','true');
+            label.append(count,hint,arrow);header.append(info,label);
+            const content=node('div','','provider-connected-content');
+            const actions=node('div','','manage-actions');
             const toggle=button(entry.enabled?
-              tr('Suspend','إيقاف'):tr('Restore','إعادة التفعيل'),async()=>{
+              tr('Suspend customer provider','إيقاف مزوّد العميل'):
+              tr('Restore customer provider','إعادة تفعيل مزوّد العميل'),async()=>{
               if(!await window.confirmAction(tr('Change this customer connection status?','تغيير حالة اتصال هذا العميل؟')))return;
-              await api('/api/admin/ai-connections/'+encodeURIComponent(entry.user_id)+'/'+encodeURIComponent(entry.provider_id),{
-                method:'PATCH',body:JSON.stringify({enabled:!entry.enabled})
-              });
-              await reload();
+              toggle.disabled=true;
+              try{
+                await api('/api/admin/ai-connections/'+encodeURIComponent(entry.user_id)+'/'+encodeURIComponent(entry.provider_id),{
+                  method:'PATCH',body:JSON.stringify({enabled:!entry.enabled})
+                });
+                await reload();
+              }catch(error){toggle.disabled=false;toast(error.message||String(error));}
             });
-            line.append(toggle);overview.append(line);
+            const remove=button(tr('Delete customer connection','حذف اتصال العميل'),async()=>{
+              if(!await window.confirmAction(tr(
+                'Permanently delete this customer provider connection and its encrypted key? This cannot be undone.',
+                'حذف اتصال العميل ومفتاحه المشفر نهائيًا؟ لا يمكن التراجع عن ذلك.')))return;
+              remove.disabled=true;
+              try{
+                await api('/api/admin/ai-connections/'+encodeURIComponent(entry.user_id)+'/'+encodeURIComponent(entry.provider_id),{method:'DELETE'});
+                await reload();
+              }catch(error){remove.disabled=false;toast(error.message||String(error));}
+            });
+            actions.append(toggle,remove);content.append(actions);
+            const modelBox=node('div','','provider-connected-models');content.append(modelBox);
+            detail.append(header,content);overview.append(detail);
+            detail.addEventListener('toggle',async()=>{
+              hint.textContent=detail.open?tr('Hide models','إخفاء النماذج'):
+                tr('Manage models','إدارة النماذج');
+              if(!detail.open||detail.dataset.modelsLoaded||!alive())return;
+              detail.dataset.modelsLoaded='loading';
+              modelBox.textContent=tr('Loading saved models…','جارٍ تحميل النماذج المحفوظة…');
+              try{
+                await renderModelPanel({id:entry.provider_id,name:entry.provider_id,
+                  personal_connected:true},modelBox,count,entry.user_id);
+                detail.dataset.modelsLoaded='yes';
+              }catch(error){
+                delete detail.dataset.modelsLoaded;
+                modelBox.replaceChildren(node('p',error.message||String(error),'connection-error'),
+                  button(tr('Retry','إعادة المحاولة'),()=>{detail.open=false;detail.open=true;}));
+              }
+            });
           }
         }).catch(error=>{if(alive()&&overview.isConnected)overview.append(node('p',error.message));});
       }
