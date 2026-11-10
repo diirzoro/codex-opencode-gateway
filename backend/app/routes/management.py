@@ -531,6 +531,10 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                    if provider_id == provider.id or
                    (include_connected_models and provider.id in connected)}
     models_by_provider = {}
+    disabled_by_provider = {
+        pid: _ai_connection_secret_and_models(connected[pid])[1]
+        for pid in details_for if pid in connected
+    }
     if details_for:
         models = db.scalars(select(AiProviderModel).where(
             AiProviderModel.provider_id.in_(details_for),
@@ -540,7 +544,8 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
             if _ai_allowed(db, model.provider_id, model.model_id, rules=rules):
                 models_by_provider.setdefault(model.provider_id, {})[model.model_id] = {
                     **json.loads(model.details_json or "{}"),
-                    "id": model.model_id, "name": model.name}
+                    "id": model.model_id, "name": model.name,
+                    "enabled": model.model_id not in disabled_by_provider.get(model.provider_id, set())}
     checked_at = now()
     result = []
     for provider in rows:
