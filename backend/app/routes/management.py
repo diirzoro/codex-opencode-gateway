@@ -654,7 +654,15 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
     rows = _ai_provider_rows(db, user.id, query=query[:120],
                              include_connected_models=include_connected_models,
                              provider_id=provider_id, connected_only=connected_only)
+    # A small on-demand list of *verifiable* providers is independent of
+    # automatic Pi model discovery. This keeps the manual connection form
+    # usable even when the database starts with zero provider catalog rows.
+    connectable = [{"id": pid,
+                    "name": next((p["name"] for p in rows if p["id"] == pid),
+                                 pid.replace("-", " ").title())}
+                   for pid in sorted(_AI_VERIFY_URLS) if _ai_allowed(db, pid)]
     return {"all": rows, "connected": [p["id"] for p in rows if p["connected"]],
+            "connectable": connectable,
             "default": {}, "source": "gateway", "refresh_days": _AI_REFRESH_DAYS,
             "stale_after_days": _AI_STALE_DAYS}
 
@@ -775,8 +783,8 @@ def _ai_verify(provider_id, key):
 
 def _ai_save(data, user, db, replace=False):
     _ai_schema(db)
-    if not _ai_allowed(db, data.provider_id) or not db.get(AiProviderCatalog, data.provider_id):
-        raise HTTPException(404, "Unknown or hidden provider")
+    if not _ai_allowed(db, data.provider_id) or data.provider_id not in _AI_VERIFY_URLS:
+        raise HTTPException(422, "Provider is not enabled for verified API-key linking")
     if not credentials.available():
         raise HTTPException(503, "Encrypted credential storage is not configured")
     existing = db.scalar(select(AiUserConnection).where(
@@ -789,6 +797,14 @@ def _ai_save(data, user, db, replace=False):
     if existing is None and replace:
         raise HTTPException(404, "Connection not found")
     credit = _ai_verify(data.provider_id, data.api_key)
+    # An explicitly verified connection may be the very first record for
+    # this provider. Do not require an unrelated periodic catalog download
+    # before the user can securely link their key.
+    if db.get(AiProviderCatalog, data.provider_id) is None:
+        db.add(AiProviderCatalog(id=data.provider_id,
+                                 name=data.provider_id.replace("-", " ").title(),
+                                 model_count=0))
+        db.flush()
     # Preserve this customer's model preferences when rotating a key.
     disabled = _ai_connection_secret_and_models(existing)[1] if existing else set()
     cipher = _ai_seal_connection(data.api_key, disabled)
