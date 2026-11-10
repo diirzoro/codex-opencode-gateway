@@ -1202,9 +1202,12 @@ def _ai_catalog_refresh_if_due():
             return True
         try:
             _ai_schema(db)
-            last = db.scalar(select(func.min(AiProviderCatalog.models_synced_at)))
-            count = db.scalar(select(func.count()).select_from(AiProviderCatalog)) or 0
-            if count and last is not None and now() - aware(last) < timedelta(days=_AI_REFRESH_DAYS):
+            # Only the administrator-eligible free OpenRouter subset is
+            # maintained automatically. All other provider records are
+            # created/loaded ONLY when someone verifies a personal key.
+            last = db.scalar(select(AiProviderCatalog.models_synced_at).where(
+                AiProviderCatalog.id == "openrouter"))
+            if last is not None and now() - aware(last) < timedelta(days=_AI_REFRESH_DAYS):
                 return True
             locked = db.execute(_ai_text("SELECT pg_try_advisory_xact_lock(732062611)")).scalar_one()
             if not locked:
@@ -1235,6 +1238,8 @@ def _ai_catalog_refresh_if_due():
                 if not isinstance(item, dict):
                     continue
                 pid = item.get("id")
+                if pid != "openrouter":
+                    continue
                 incoming = item.get("models")
                 if (not isinstance(pid, str) or not 0 < len(pid) <= 120 or
                         not isinstance(incoming, dict)):
