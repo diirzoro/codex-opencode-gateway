@@ -402,3 +402,366 @@ def disable_location(kind:str,location_id:int,user:User=Depends(require_admin),d
     row=db.get(location_model(kind),location_id)
     if not row: raise HTTPException(404,'Location not found')
     row.enabled=False; audit(db,user,'location.disabled'); db.commit()
+
+
+# ---- Gateway-owned AI catalog and BYOK connections (existing API paths) ----
+# AI execution and streaming stay exclusively inside Pi Central. This module
+# handles ONLY model metadata, authentication checks and encrypted credentials.
+import os
+import json as _ai_json
+import hmac as _ai_hmac
+import httpx as _ai_httpx
+from sqlalchemy import inspect as _ai_inspect, text as _ai_text
+from sqlalchemy.exc import SQLAlchemyError as _AiSqlError
+from ..models import AiProviderCatalog, AiProviderModel, AiUserConnection, Project, Workspace
+from ..models.platform import get_policy as _ai_get_policy
+
+_AI_TABLES = ("ai_provider_catalog", "ai_provider_models", "ai_user_connections")
+_AI_VERIFY_URLS = {
+    "openrouter": "https://openrouter.ai/api/v1/key",
+    "deepseek": "https://api.deepseek.com/user/balance",
+    "openai": "https://api.openai.com/v1/models",
+    "groq": "https://api.groq.com/openai/v1/models",
+    "mistral": "https://api.mistral.ai/v1/models",
+    "xai": "https://api.x.ai/v1/models",
+    "together": "https://api.together.xyz/v1/models",
+    "cerebras": "https://api.cerebras.ai/v1/models",
+}
+_AI_REFRESH_DAYS = 7
+_AI_STALE_DAYS = 14
+
+
+def _ai_schema(db):
+    existing = set(_ai_inspect(db.bind).get_table_names())
+    if not set(_AI_TABLES).issubset(existing):
+        raise HTTPException(503, "TEST AI catalog schema is not installed. Apply the reviewed manual PostgreSQL migration before enabling provider connections.")
+
+
+def _ai_policy(db):
+    return _ai_get_policy(db).as_payload()
+
+
+def _ai_allowed(db, provider_id, model_id=None):
+    rules = _ai_policy(db)
+    allowed = rules.get("allowed_providers") or []
+    if provider_id in (rules.get("hidden_providers") or []):
+        return False
+    if allowed and provider_id not in allowed:
+        return False
+    if model_id is not None:
+        allowed_models = rules.get("allowed_models") or []
+        hidden = rules.get("hidden_models") or {}
+        if model_id in hidden.get(provider_id, []):
+            return False
+        if allowed_models and not any(x in allowed_models for x in (model_id, provider_id + "/" + model_id)):
+            return False
+    return True
+
+
+def _ai_connection_payload(row):
+    return {"connection_id": str(row.id), "provider_id": row.provider_id,
+            "auth_status": row.auth_status, "credit_status": row.credit_status,
+            "last4": row.last4, "verified_at": row.verified_at,
+            "connected": row.auth_status == "verified", "verified": row.auth_status == "verified"}
+
+
+def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, provider_id=None):
+    _ai_schema(db)
+    connected = {row.provider_id: row for row in db.scalars(
+        select(AiUserConnection).where(AiUserConnection.user_id == user_id))}
+    provider_query = select(AiProviderCatalog).order_by(AiProviderCatalog.name)
+    if provider_id:
+        provider_query = provider_query.where(AiProviderCatalog.id == provider_id)
+    if query:
+        provider_query = provider_query.where(
+            (func.lower(AiProviderCatalog.id).contains(query.lower())) |
+            (func.lower(AiProviderCatalog.name).contains(query.lower())))
+    rows = list(db.scalars(provider_query.limit(1000)))
+    result = []
+    for provider in rows:
+        if not _ai_allowed(db, provider.id):
+            continue
+        record = connected.get(provider.id)
+        stale = (not provider.models_synced_at or
+                 now() - aware(provider.models_synced_at) > timedelta(days=_AI_STALE_DAYS))
+        item = {"id": provider.id, "name": provider.name,
+                "model_count": provider.model_count, "models": {},
+                "connected": bool(record and record.auth_status == "verified"),
+                "verified": bool(record and record.auth_status == "verified"),
+                "credential_stored": False, "credential_source": "gateway" if record else "none",
+                "auth_status": record.auth_status if record else "not_connected",
+                "credit_status": record.credit_status if record else "unknown",
+                "last_synced_at": provider.models_synced_at, "stale": stale}
+        if provider_id == provider.id or (include_connected_models and record):
+            models = db.scalars(select(AiProviderModel).where(
+                AiProviderModel.provider_id == provider.id, AiProviderModel.active.is_(True))
+                .order_by(AiProviderModel.name))
+            item["models"] = {
+                m.model_id: {**_ai_json.loads(m.details_json or "{}"),
+                    "id": m.model_id, "name": m.name}
+                for m in models if _ai_allowed(db, provider.id, m.model_id)
+            }
+        result.append(item)
+    return result
+
+
+@router.get("/opencode/catalog/providers")
+def ai_catalog_list(provider_id: str | None = None, query: str = "",
+                    include_connected_models: bool = False,
+                    user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """Existing compatibility URL; now Gateway-only indexed metadata, not OpenCode."""
+    rows = _ai_provider_rows(db, user.id, query=query[:120],
+                             include_connected_models=include_connected_models,
+                             provider_id=provider_id)
+    return {"all": rows, "connected": [p["id"] for p in rows if p["connected"]],
+            "default": {}, "source": "gateway", "refresh_days": _AI_REFRESH_DAYS,
+            "stale_after_days": _AI_STALE_DAYS}
+
+
+@router.get("/opencode/connections")
+def ai_connections(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    _ai_schema(db)
+    return [_ai_connection_payload(x) for x in db.scalars(
+        select(AiUserConnection).where(AiUserConnection.user_id == user.id)
+        .order_by(AiUserConnection.provider_id))]
+
+
+class AiKeyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    provider_id: str = Field(pattern=r"^[a-zA-Z0-9._-]{1,120}$")
+    api_key: str = Field(min_length=8, max_length=8192)
+
+
+def _ai_verify(provider_id, key):
+    url = _AI_VERIFY_URLS.get(provider_id)
+    if not url:
+        raise HTTPException(422, "This provider has no approved real API-key verification method yet")
+    # Only fixed trusted HTTPS endpoints; no user-supplied URLs or SSRF.
+    try:
+        with _ai_httpx.Client(timeout=12, follow_redirects=False, trust_env=False) as client:
+            response = client.get(url, headers={"Authorization": "Bearer " + key,
+                                                   "Accept": "application/json"})
+    except _ai_httpx.RequestError:
+        raise HTTPException(503, "Provider verification unavailable; key was not stored") from None
+    status = response.status_code
+    if status == 401:
+        raise HTTPException(422, "Provider rejected this API key (401); key was not stored")
+    if status == 402:
+        raise HTTPException(402, "Provider reports insufficient balance; authentication was not independently confirmed")
+    if status == 403:
+        raise HTTPException(403, "Provider denied API access; key was not stored")
+    if status == 429:
+        raise HTTPException(429, "Provider verification rate limited; retry later")
+    if status != 200:
+        raise HTTPException(503, "Provider verification was inconclusive; key was not stored")
+    try:
+        document = response.json()
+    except ValueError:
+        raise HTTPException(503, "Provider returned invalid verification data") from None
+    if not isinstance(document, dict):
+        raise HTTPException(503, "Provider verification data was unrecognized")
+    if provider_id == "openrouter" and not isinstance(document.get("data"), dict):
+        raise HTTPException(503, "OpenRouter did not return authenticated key details")
+    if provider_id == "deepseek" and "is_available" not in document and "balance_infos" not in document:
+        raise HTTPException(503, "DeepSeek did not return authenticated balance details")
+    if provider_id not in ("openrouter", "deepseek") and not isinstance(document.get("data"), (list, dict)):
+        raise HTTPException(503, "Model-provider verification was inconclusive")
+    credit = "unknown"
+    if provider_id == "deepseek":
+        credit = "available" if document.get("is_available") is True else "insufficient_balance"
+    return credit
+
+
+def _ai_save(data, user, db, replace=False):
+    _ai_schema(db)
+    if not _ai_allowed(db, data.provider_id) or not db.get(AiProviderCatalog, data.provider_id):
+        raise HTTPException(404, "Unknown or hidden provider")
+    if not credentials.available():
+        raise HTTPException(503, "Encrypted credential storage is not configured")
+    existing = db.scalar(select(AiUserConnection).where(
+        AiUserConnection.user_id == user.id, AiUserConnection.provider_id == data.provider_id)
+        .with_for_update())
+    if existing is not None and not replace:
+        raise HTTPException(409, "Connection already exists; use replace")
+    if existing is None and replace:
+        raise HTTPException(404, "Connection not found")
+    credit = _ai_verify(data.provider_id, data.api_key)
+    cipher = credentials.encrypt(data.api_key)
+    if existing is None:
+        existing = AiUserConnection(user_id=user.id, provider_id=data.provider_id,
+                                    ciphertext=cipher, last4=data.api_key[-4:],
+                                    auth_status="verified", credit_status=credit,
+                                    verified_at=now())
+        db.add(existing)
+    else:
+        existing.ciphertext = cipher
+        existing.last4 = data.api_key[-4:]
+        existing.auth_status = "verified"
+        existing.credit_status = credit
+        existing.verified_at = now()
+    audit(db, user, "ai.connection.verified")
+    db.commit()
+    db.refresh(existing)
+    return _ai_connection_payload(existing)
+
+
+@router.post("/opencode/connections", status_code=201)
+def ai_connect(data: AiKeyInput, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    return _ai_save(data, user, db)
+
+
+@router.put("/opencode/connections/{provider_id}")
+def ai_replace(provider_id: str, data: AiKeyInput,
+               user: User = Depends(require_user), db: Session = Depends(get_db)):
+    if provider_id != data.provider_id:
+        raise HTTPException(422, "Provider mismatch")
+    return _ai_save(data, user, db, replace=True)
+
+
+@router.delete("/opencode/connections/{provider_id}", status_code=204)
+def ai_disconnect(provider_id: str, user: User = Depends(require_user),
+                  db: Session = Depends(get_db)):
+    _ai_schema(db)
+    record = db.scalar(select(AiUserConnection).where(
+        AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id)
+        .with_for_update())
+    if record is None:
+        raise HTTPException(404, "Connection not found")
+    db.delete(record)
+    audit(db, user, "ai.connection.deleted")
+    db.commit()
+
+
+@router.get("/opencode/connections/{provider_id}")
+def ai_internal_credential(provider_id: str, request: Request, workspace_id: uuid.UUID,
+                           user: User = Depends(require_user),
+                           db: Session = Depends(get_db)):
+    """Internal Pi-only retrieval. Never expose plaintext to a browser."""
+    secret = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
+    claimed = request.headers.get("x-pi-gateway-token", "")
+    if not secret or len(secret) < 32 or not _ai_hmac.compare_digest(secret, claimed):
+        raise HTTPException(404, "Not found")
+    if not request.client or request.client.host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(404, "Not found")
+    workspace = db.scalar(select(Workspace).join(Project, Project.id == Workspace.project_id).where(
+        Workspace.id == workspace_id, Workspace.user_id == user.id,
+        Project.user_id == user.id, Project.archived_at.is_(None)))
+    if workspace is None:
+        raise HTTPException(404, "Workspace unavailable")
+    _ai_schema(db)
+    if not _ai_allowed(db, provider_id):
+        raise HTTPException(403, "Provider unavailable")
+    record = db.scalar(select(AiUserConnection).where(
+        AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
+        AiUserConnection.auth_status == "verified"))
+    if not record:
+        raise HTTPException(403, "No verified customer connection for the selected provider")
+    return {"provider_id": provider_id, "connection_id": str(record.id),
+            "key": credentials.decrypt(record.ciphertext)}
+
+
+def ai_catalog_refresh():
+    """Reuse existing Gateway maintenance loop: no scheduler/service added."""
+    from ..database import SessionLocal
+    with SessionLocal() as db:
+        try:
+            _ai_schema(db)
+            last = db.scalar(select(func.min(AiProviderCatalog.models_synced_at)))
+            count = db.scalar(select(func.count()).select_from(AiProviderCatalog)) or 0
+            if count and last is not None and now() - aware(last) < timedelta(days=_AI_REFRESH_DAYS):
+                return
+            locked = db.scalar(select(_ai_text("pg_try_advisory_xact_lock(732062611)")))
+            if not locked:
+                return
+            sock = os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")
+            with _ai_httpx.Client(transport=_ai_httpx.HTTPTransport(uds=sock),
+                                  timeout=25, trust_env=False) as client:
+                result = client.get("http://pi/provider", params={
+                    "directory": os.getenv("PI_CATALOG_DIRECTORY", "/home/tahir/pi-test"),
+                    "models": "full"})
+                result.raise_for_status()
+                payload = result.json()
+            all_rows = payload.get("all")
+            if not isinstance(all_rows, list) or not all_rows:
+                return
+            stamped = now()
+            for item in all_rows:
+                pid = item.get("id")
+                if not isinstance(pid, str) or len(pid) > 120:
+                    continue
+                row = db.get(AiProviderCatalog, pid)
+                if row is None:
+                    row = AiProviderCatalog(id=pid, name=str(item.get("name") or pid)[:200])
+                    db.add(row)
+                    db.flush()
+                row.name = str(item.get("name") or pid)[:200]
+                incoming = item.get("models") or {}
+                if not isinstance(incoming, dict):
+                    continue
+                row.model_count = len(incoming)
+                row.models_synced_at = stamped
+                row.last_sync_error = None
+                prior = {x.model_id: x for x in db.scalars(select(AiProviderModel)
+                         .where(AiProviderModel.provider_id == pid))}
+                for model_id, data in incoming.items():
+                    if not isinstance(model_id, str) or len(model_id) > 300 or not isinstance(data, dict):
+                        continue
+                    m = prior.pop(model_id, None)
+                    if m is None:
+                        m = AiProviderModel(provider_id=pid, model_id=model_id, name=model_id)
+                        db.add(m)
+                    m.name = str(data.get("name") or model_id)[:300]
+                    m.details_json = _ai_json.dumps(data, separators=(",", ":"))[:12000]
+                    m.active = True
+                for old in prior.values():
+                    old.active = False
+            db.commit()
+        except (HTTPException, _AiSqlError, _ai_httpx.RequestError, ValueError, OSError):
+            db.rollback()
+            # Fail closed and preserve the last catalog; never log secrets.
+            import logging
+            logging.getLogger(__name__).warning("AI catalog synchronization postponed")
+
+
+@router.get("/workspaces/{workspace_id}/providers")
+def ai_workspace_providers(workspace_id: uuid.UUID, user: User = Depends(require_user),
+                           db: Session = Depends(get_db)):
+    workspace = db.scalar(select(Workspace.id).where(
+        Workspace.id == workspace_id, Workspace.user_id == user.id))
+    if workspace is None:
+        raise HTTPException(404, "Workspace not found")
+    return _ai_provider_rows(db, user.id, include_connected_models=True)
+
+
+@router.get("/workspaces/{workspace_id}/providers/search")
+def ai_workspace_provider_search(workspace_id: uuid.UUID, query: str = "",
+                                  user: User = Depends(require_user),
+                                  db: Session = Depends(get_db)):
+    if db.scalar(select(Workspace.id).where(Workspace.id == workspace_id,
+                                          Workspace.user_id == user.id)) is None:
+        raise HTTPException(404, "Workspace not found")
+    return {"native": False, "providers": _ai_provider_rows(db, user.id, query=query[:120])}
+
+
+@router.get("/workspaces/{workspace_id}/providers/resolve")
+def ai_workspace_provider_resolve(workspace_id: uuid.UUID, name: str = "",
+                                   user: User = Depends(require_user),
+                                   db: Session = Depends(get_db)):
+    if db.scalar(select(Workspace.id).where(Workspace.id == workspace_id,
+                                          Workspace.user_id == user.id)) is None:
+        raise HTTPException(404, "Workspace not found")
+    records = _ai_provider_rows(db, user.id, query=name[:120])
+    return {"native": False, "providers": records[:1]}
+
+
+@router.get("/workspaces/{workspace_id}/providers/{provider_id}/models")
+def ai_workspace_models(workspace_id: uuid.UUID, provider_id: str,
+                         user: User = Depends(require_user),
+                         db: Session = Depends(get_db)):
+    if db.scalar(select(Workspace.id).where(Workspace.id == workspace_id,
+                                          Workspace.user_id == user.id)) is None:
+        raise HTTPException(404, "Workspace not found")
+    rows = _ai_provider_rows(db, user.id, provider_id=provider_id)
+    if not rows:
+        raise HTTPException(404, "Provider unavailable")
+    return rows[0]
