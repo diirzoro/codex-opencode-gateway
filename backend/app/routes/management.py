@@ -698,8 +698,9 @@ def ai_admin_connection_state(customer_id: uuid.UUID, provider_id: str,
         AiUserConnection.provider_id == provider_id).with_for_update())
     if record is None:
         raise HTTPException(404, "Customer provider connection not found")
-    if data.enabled and record.verified_at is None:
-        raise HTTPException(409, "Provider was not previously verified")
+    if data.enabled and (record.verified_at is None or
+                         record.auth_status not in {"verified", "admin_disabled"}):
+        raise HTTPException(409, "Provider must have a previously verified connection")
     record.auth_status = "verified" if data.enabled else "admin_disabled"
     audit(db, actor, "ai.connection.enabled" if data.enabled
           else "ai.connection.disabled", subject=customer_id)
@@ -947,23 +948,24 @@ def ai_internal_credential(provider_id: str, request: Request, workspace_id: uui
     model = db.get(AiProviderModel, (provider_id, model_id))
     if model is None or not model.active or not _ai_allowed(db, provider_id, model_id):
         raise HTTPException(403, "Model not available under administrator policy")
-    # Prefer the customer's own verified key for models they have enabled.
-    # The administrator's shared key is only used as a fallback for explicitly
-    # approved default models; neither key is ever returned to the browser.
-    personal = db.scalar(select(AiUserConnection).where(
-        AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
-        AiUserConnection.auth_status == "verified"))
+    # An administrator-default model ALWAYS uses the platform's encrypted
+    # account credential. All other models use only this customer's own
+    # verified connection. Never silently spend a customer's personal quota
+    # on a model presented as an included Gateway service.
     record = None
     key = None
-    if personal:
-        personal_key, disabled = _ai_connection_secret_and_models(personal)
-        if model_id not in disabled:
-            record, key = personal, personal_key
-    if record is None:
-        shared = _ai_active_platform_defaults(db).get(provider_id)
-        if shared and model_id in shared["models"]:
-            record = shared["connection"]
-            key, _ = _ai_connection_secret_and_models(record)
+    shared = _ai_active_platform_defaults(db).get(provider_id)
+    if shared and model_id in shared["models"]:
+        record = shared["connection"]
+        key, _ = _ai_connection_secret_and_models(record)
+    else:
+        personal = db.scalar(select(AiUserConnection).where(
+            AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
+            AiUserConnection.auth_status == "verified"))
+        if personal:
+            personal_key, disabled = _ai_connection_secret_and_models(personal)
+            if model_id not in disabled:
+                record, key = personal, personal_key
     if record is None or not key:
         raise HTTPException(403, "No verified personal or administrator-approved model connection")
     return {"provider_id": provider_id, "connection_id": str(record.id),
