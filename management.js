@@ -139,11 +139,6 @@
     const controller=new AbortController();body.providerController=controller;
     const view={owner:currentUser.id,workspaceId:body.dataset.connectionWorkspace||'',ready:false,refresh:null};body.providerView=view;
     const alive=()=>body.isConnected&&body.providerView===view&&currentUser?.id===view.owner;
-    const workspaceSettings=section(body,tr('Runtime / workspace settings','إعدادات وقت التشغيل ومساحة العمل'));
-    const picker=select(workspaceSettings,tr('Workspace','مساحة العمل'),'workspace',[['',tr('Account connections · all projects','اتصالات الحساب · كل المشاريع')]]);
-    picker.disabled=true;
-    if(activeWorkspace)picker.add(new Option(activeProject?.name||tr('Selected workspace','مساحة العمل المختارة'),activeWorkspace.id));
-    picker.value=view.workspaceId;
     const box=section(body,tr('Connect verified providers','ربط المزوّدين الموثقين'));
     box.append(node('p',tr(
       'Enter a provider ID and your personal API key. Only connected providers and administrator-enabled platform models appear below.',
@@ -151,8 +146,8 @@
     const progress=node('p','','provider-loading');progress.setAttribute('role','status');
     progress.setAttribute('aria-live','polite');box.append(progress);
     const connectedBox=section(body,tr('Connected providers and models','المزوّدون المربوطون والنماذج'));
-    const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
-    let workspaceId=view.workspaceId,workspaces=[],projects=[],snapshot=null;
+    // Provider credentials are account-wide and must not switch projects.
+    let snapshot=null;
     async function accountCatalogRows(){
       const result=await api('/api/opencode/catalog/providers?connected_only=true');
       return (result.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
@@ -361,7 +356,7 @@
       message(tr('Loading account connections…','جارٍ تحميل اتصالات الحساب…'));
       try{
         const rows=await accountCatalogRows();
-        if(!alive()||!contextCurrent())return;
+        if(!alive())return;
         snapshot={providers:rows};
         view.ready=true;renderConnected();
         message(rows.length?tr('Connected services: ','الخدمات المربوطة: ')+rows.length:'');
@@ -370,9 +365,7 @@
     function invalidateOwnedWorkspaceProviders(){
       // Account connections are shared across all of this user's workspaces.
       // Clear stale composer snapshots without changing active project/session.
-      for(const workspace of workspaces){
-        if(workspace?.id)window.workspaceRuntime.invalidate(workspace.id);
-      }
+      if(activeWorkspace?.id)window.workspaceRuntime.invalidate(activeWorkspace.id);
     }
     async function reload(){
       // Invalidate only account catalog presentation; keep active Pi session.
@@ -382,30 +375,7 @@
       return refresh();
     }
     view.refresh=refresh;
-    async function initialize(){
-      message(tr('Loading saved connections…','جارٍ تحميل الاتصالات المحفوظة…'));renderConnected();
-      // Account discovery must not wait for Python workspace/project requests.
-      if(!body.dataset.connectionWorkspace){await refresh();return;}
-      try{
-        const [owned,projectRows]=await Promise.all([api('/api/workspaces'),api('/api/projects'),window.workspaceContextReady||Promise.resolve()]);
-        if(!alive())return;workspaces=owned;projects=projectRows;
-        picker.replaceChildren(new Option(tr('Account connections · all projects','اتصالات الحساب · كل المشاريع'),''));
-        for(const w of workspaces)picker.add(new Option((projects.find(p=>p.id===w.project_id)?.name||tr('Workspace','مساحة العمل'))+' · '+w.status,w.id));
-        // Account connections never depend on a remembered project/runtime.
-        const selected=workspaces.find(w=>w.id===body.dataset.connectionWorkspace);
-        workspaceId=selected?.id||'';view.workspaceId=workspaceId;picker.value=workspaceId;picker.disabled=false;
-        base='/api/workspaces/'+workspaceId+'/providers/';
-        if(!workspaceId){await refresh();return;}
-        snapshot=window.workspaceRuntime.peek(workspaceId);await refresh();
-      }catch(error){if(alive())message(error.message,true);}
-    }
-    picker.onchange=async()=>{
-      const w=workspaces.find(w=>w.id===picker.value);view.ready=false;
-      body.dataset.connectionWorkspace=w?.id||'';
-      if(!w){await open('providers');return;}
-      try{const project=projects.find(p=>p.id===w.project_id)||await api('/api/projects/'+w.project_id);await openWorkspace(project,w,{navigate:false});await open('providers');}catch(error){message(error.message,true);}
-    };
-    await initialize();
+    await refresh();
   }
 
   async function roles(body,platform=false){const box=section(body,tr('User roles','أدوار المستخدمين'));for(const u of await api('/api/admin/users'))row(box,u.username,u.role,[...(currentUser.role==='owner'&&u.id!==currentUser.id&&u.role!=='owner'?[button(tr('Change role','تغيير الدور'),async()=>{const picked=await window.requestForm(tr('Change role','تغيير الدور'),[{name:'role',label:tr('Role','الدور'),value:u.role,options:['admin','support','finance','customer']}]);const role=picked?.role;if(!role)return;await api('/api/admin/users/'+u.id+'/role',{method:'PUT',body:JSON.stringify({role})});await open('roles',true)})]:[])]);box.append(node('p',tr('Only an owner can assign roles. Finance can manage platform payment methods through its authorized API. Support currently has account-only access.','المالك وحده يعيّن الأدوار. دور المالية يتيح إدارة وسائل المنصة عبر واجهته المصرح بها. الدعم يمتلك حاليًا صلاحيات الحساب الشخصي فقط.')))}
