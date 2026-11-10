@@ -705,6 +705,10 @@ def _ai_catalog_refresh_if_due():
     """
     from ..database import SessionLocal
     with SessionLocal() as db:
+        # This automatic catalog is TEST-only. Never query Pi or write a
+        # production catalog if this source is promoted in a later release.
+        if getattr(getattr(db.bind, "url", None), "database", None) != "opencode_gateway_test":
+            return True
         try:
             _ai_schema(db)
             last = db.scalar(select(func.min(AiProviderCatalog.models_synced_at)))
@@ -719,7 +723,7 @@ def _ai_catalog_refresh_if_due():
             if len(internal_token) < 32:
                 raise RuntimeError("Pi catalog internal authorization is not configured for TEST")
             with _ai_httpx.Client(transport=_ai_httpx.HTTPTransport(uds=sock),
-                                  timeout=25, trust_env=False) as client:
+                                  timeout=60, trust_env=False) as client:
                 result = client.get("http://pi/provider", params={
                     "directory": os.getenv("PI_CATALOG_DIRECTORY", "/home/tahir/pi-test"),
                     "models": "full"}, headers={
@@ -792,8 +796,11 @@ def _ai_catalog_refresh_if_due():
             db.rollback()
             # Never log Pi responses, provider payloads, tokens or account keys.
             import logging
+            status = (exc.response.status_code
+                      if isinstance(exc, _ai_httpx.HTTPStatusError) else None)
             logging.getLogger(__name__).warning(
-                "TEST AI catalog synchronization postponed (%s)", type(exc).__name__)
+                "TEST AI catalog synchronization postponed (%s, upstream_http=%s)",
+                type(exc).__name__, status if status is not None else "-")
             return False
 
 
