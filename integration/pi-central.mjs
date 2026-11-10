@@ -537,49 +537,30 @@ function mapped(messages, id) {
   });
 }
 
-function providerCatalog(models,userId,availableProviders=[],providerDefinitions=[],providerStates={},piAvailableModels=[],modelView="full",selectedProviderId=""){
-  // Pi model availability is not authentication. A model in the catalog must
-  // NEVER imply that an account has an API key or a verified connection.
+// Public metadata only. Gateway PostgreSQL is the sole source of customer
+// connected/verified state; this catalog never reads or implies API key status.
+function providerCatalog(models,providerDefinitions=[],mode="full",selectedProviderId=""){
   const grouped=new Map();
   for(const model of models){
-    if(!model || typeof model.id!=="string" || typeof model.provider!=="string")continue;
-    const id=model.provider;
-    // The Pi provider named "opencode" (if listed) is a model source,
-    // not the retired standalone OpenCode coding engine.
-    let row=grouped.get(id);
-    if(!row){row={id,name:id,models:{}};grouped.set(id,row);}
-    row.models[model.id]={id:model.id,name:model.name||model.id,reasoning:Boolean(model.reasoning),
-      context:model.contextWindow,maxTokens:model.maxTokens,cost:model.cost||null};
+    if(!model||typeof model.id!=="string"||typeof model.provider!=="string")continue;
+    let row=grouped.get(model.provider);
+    if(!row){row={id:model.provider,name:model.provider,models:{}};grouped.set(model.provider,row);}
+    row.models[model.id]={id:model.id,name:model.name||model.id,
+      reasoning:Boolean(model.reasoning),context:model.contextWindow,
+      maxTokens:model.maxTokens,cost:model.cost||null};
   }
-  // Provider registry comes from installed Pi, including providers without a key.
   for(const provider of providerDefinitions){
-    if(!provider?.id||typeof provider.id!=="string")continue;
+    if(typeof provider?.id!=="string"||!provider.id)continue;
     const row=grouped.get(provider.id);
     if(row)row.name=provider.name||row.name;
     else grouped.set(provider.id,{id:provider.id,name:provider.name||provider.id,models:{}});
   }
-  // Only installed Pi can report configuration and model availability.
-  // Neither saved credentials nor getAvailableSnapshot proves remaining credits.
-  const nativeModels=new Set(piAvailableModels);
-  const available=new Set(availableProviders);
   const all=[...grouped.values()].map(row=>{
-    const state=providerStates[row.id]||{};
-    const modelIDs=Object.keys(row.models||{});
-    const exposeModels=modelView==="full" ||
-      (modelView==="connected"&&available.has(row.id)) ||
-      (modelView==="provider"&&selectedProviderId===row.id);
-    return {...row,model_count:modelIDs.length,
-      models:exposeModels?row.models:{},
-      configured:available.has(row.id),
-      credential_source:state.source||"none",
-      credential_stored:state.stored===true,
-      pi_available_models:exposeModels?modelIDs.filter(id=>nativeModels.has(row.id+"\0"+id)):[],
-      credit_status:"unknown",verified:false};
+    const count=Object.keys(row.models).length;
+    const show=mode==="full"||(mode==="provider"&&selectedProviderId===row.id);
+    return {...row,model_count:count,models:show?row.models:{}};
   });
-  // Exact provider IDs only. A DeepSeek model under OpenRouter is not
-  // a direct DeepSeek provider connection.
-  const connected=all.filter(row=>row.configured).map(row=>row.id);
-  return {all,connected,default:{}};
+  return {all,connected:[],default:{}};
 }
 async function nativeDiscovery(userId) {
   const cached=modelsSnapshots.get(userId);
@@ -601,8 +582,7 @@ async function nativeDiscovery(userId) {
       throw Object.assign(new Error("Installed Pi provider registry is unavailable"),{status:502});
     // Metadata only. No listCredentials(), stored auth state, or shared
     // runtime fallback is required to populate Gateway's model catalog.
-    const value={models,availableProviders:[],providers,providerStates:{},
-      piAvailableModels:[],time:Date.now()};
+    const value={models,providers,time:Date.now()};
     modelsSnapshots.set(userId,value);
     return value;
   })();
@@ -649,8 +629,7 @@ const server=http.createServer(async(req,res)=>{
         const mode=query.get("models");
         const view=["connected","provider"].includes(mode)?mode:"full";
         const selected=view==="provider"?(query.get("providerID")||""):"";
-        return json(res,200,providerCatalog(native.models,s.userId,native.availableProviders,
-          native.providers,native.providerStates,native.piAvailableModels,view,selected));
+        return json(res,200,providerCatalog(native.models,native.providers,view,selected));
       }
       // Pi's registered extension/skill/prompt commands are its discoverable
       // capabilities. Do not invent "build", "plan" or other agents.
