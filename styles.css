@@ -1402,6 +1402,9 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 .provider-model-choice span{min-width:0;overflow-wrap:anywhere;flex:1}
 .provider-model-choice small{font-size:11px;color:var(--muted);max-width:46%;overflow-wrap:anywhere}
 .provider-model-choice input{width:17px;height:17px;flex:0 0 auto;accent-color:var(--primary)}
+.provider-personal-model{display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer}
+.provider-personal-model span{flex:1;min-width:0;overflow-wrap:anywhere}
+.provider-model-choice>label:not(.provider-personal-model){display:flex;align-items:center;gap:5px;white-space:nowrap;cursor:pointer}
 .provider-model-choice[hidden]{display:none}
 @media(max-width:650px){
   .provider-model-choice-list{grid-template-columns:1fr}
