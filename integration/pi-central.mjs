@@ -10,7 +10,7 @@
  */
 import http from "node:http";
 import { spawn, execFileSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, readdirSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
@@ -87,7 +87,21 @@ async function scope(req, query) {
   const directory=query.get("directory");
   // Catalogue and agent discovery come straight from installed Pi, not Python.
   // Existing Nginx is the web entry boundary for this private socket.
-  if(directory===CATALOG_DIRECTORY)return {catalog:true,userId:"shared"};
+  if(directory===CATALOG_DIRECTORY){
+    // The catalog may be called by an authenticated browser or the already
+    // existing Gateway maintenance worker. No anonymous discovery.
+    const cookie=req.headers.cookie||"";
+    if(cookie){
+      await gateway(req,"/api/auth/me");
+    }else{
+      const expected=process.env.PI_GATEWAY_INTERNAL_TOKEN||"";
+      const candidate=String(req.headers["x-pi-gateway-token"]||"");
+      if(expected.length<32||candidate.length!==expected.length||
+         !timingSafeEqual(Buffer.from(expected),Buffer.from(candidate)))
+        throw Object.assign(new Error("Gateway catalog authorization required"),{status:401});
+    }
+    return {catalog:true,userId:"shared"};
+  }
   if(!directory || directory.length>4096)
     throw Object.assign(new Error("Owned project directory required"),{status:400});
   // One narrow platform lookup establishes the workspace-file ownership;
