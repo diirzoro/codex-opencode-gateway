@@ -2237,7 +2237,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   document.addEventListener('click',event=>{if(event.target.closest('#clientNav [data-client-view=billing]'))loadPaymentOrders().catch(e=>toast(e.message));if(event.target.closest('#adminNav [data-admin-view=billing]'))loadPaymentOrders(true).catch(e=>toast(e.message));});
   matchMedia('(max-width:1100px)').addEventListener('change',()=>{q('sessionSidebar').classList.remove('open');overlay(false);});
   applyPrefs();
-  if(document.documentElement.dataset.restorePage==='workspacePage')initializeWorkspace();
+  // Workspace initialization remains lazy until the signed-in user opens it.
   q('promptInput').disabled=true;q('homeNewProject').disabled=true;
   window.showBootstrapFrame?.();
 })();
