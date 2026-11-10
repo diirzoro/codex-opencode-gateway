@@ -171,8 +171,8 @@
       let approvedProviders=[],suggestions=null,providerHint=null,searchProviderButton=null;
       const selectedProvider=()=>{
         const text=providerField?.value.trim().toLowerCase()||'';
-        return approvedProviders.find(p=>p.id.toLowerCase()===text||
-          p.name.toLowerCase()===text)||null;
+        return approvedProviders.find(p=>p.api_key_supported===true&&
+          (p.id.toLowerCase()===text||p.name.toLowerCase()===text))||null;
       };
       if(providerField){
         providerField.required=true;providerField.maxLength=120;providerField.autocomplete='off';
@@ -223,7 +223,11 @@
           for(const item of matches){
             const option=node('button','','provider-real-option');option.type='button';
             option.setAttribute('role','option');
-            option.append(node('strong',item.name),node('small',item.id));
+            option.append(node('strong',item.name),node('small',
+              item.api_key_supported?item.id:
+              tr('Pi supported · API key verification unavailable',
+                 'يدعمه Pi · ربط API غير متاح حاليًا')));
+            option.disabled=item.api_key_supported!==true;
             option.onclick=()=>{
               providerField.value=item.id;
               suggestions.hidden=true;
@@ -237,8 +241,9 @@
           providerField.setAttribute('aria-expanded',String(matches.length>0));
           const matched=selectedProvider();
           providerHint.textContent=matched?
-            tr('Selected provider: ','المزوّد المختار: ')+matched.name:
-            tr('Choose one of these verified providers.','اختر مزوّدًا صحيحًا من الخيارات المدعومة.');
+            tr('Pi provider selected: ','تم اختيار مزوّد من Pi: ')+matched.name:
+            tr('Results come from the installed Pi provider registry. Only verified API-key integrations can be linked.',
+              'النتائج مأخوذة من سجل المزوّدين في Pi. الربط متاح فقط حيث يدعم Gateway التحقق من المفتاح.');
           submit.disabled=!matched;
         };
         // Clicking Search explicitly opens real, backend-supported names.
@@ -261,18 +266,26 @@
             if(first){event.preventDefault();first.click();}
           }
         });
-        api('/api/opencode/catalog/providers?connected_only=true').then(data=>{
+        api('/api/opencode/catalog/providers?pi_supported=true').then(data=>{
           if(!host.isConnected)return;
-          approvedProviders=(data.connectable||[]).filter(p=>p&&
+          if(data.source!=='pi-native'||!Array.isArray(data.connectable))
+            throw Error(tr('Pi did not return an authenticated provider registry.',
+              'لم يُرجع Pi سجل المزوّدين الصحيح.'));
+          approvedProviders=data.connectable.filter(p=>p&&
             typeof p.id==='string'&&typeof p.name==='string'&&
-            /^[a-z0-9._-]{1,120}$/.test(p.id));
+            /^[a-zA-Z0-9._-]{1,120}$/.test(p.id)).map(p=>({
+              id:p.id,name:p.name,api_key_supported:p.api_key_supported===true
+            }));
           if(!approvedProviders.length)throw Error(tr(
-            'No verifiable API provider is currently configured.',
-            'لا يوجد مزوّد مدعوم للتحقق من مفتاح API حاليًا.'));
+            'Installed Pi returned no supported providers.',
+            'لم يُرجع Pi أي مزوّد مدعوم.'));
+          if(!approvedProviders.some(p=>p.api_key_supported))
+            throw Error(tr('Pi providers were found, but API-key verification is not configured for any of them.',
+              'عُثر على مزوّدات Pi، لكن التحقق من مفاتيح API غير مهيأ لأي منها.'));
           searchProviderButton.disabled=false;
           providerHint.textContent=tr(
-            'Click Search provider or type a name to choose a real supported service.',
-            'اضغط «بحث عن المزوّد» أو اكتب اسمه لاختيار مزوّد حقيقي مدعوم.');
+            'Search only providers installed in Pi. Providers without a secure API verification method are listed but cannot be linked.',
+            'البحث يقتصر على مزوّدات Pi المثبتة. تظهر المزوّدات التي لا تتوفر لها آلية تحقق آمنة، لكن لا يمكن ربطها بعد.');
           if(dialog.open&&providerField.value.trim())showMatches();
         }).catch(error=>{
           if(host.isConnected){providerHint.textContent=error.message;submit.disabled=true;}
