@@ -496,3 +496,104 @@ Browser: TEST Dashboard
 6. **`E2E-RESOURCES — NOT VERIFIED`:** اختبار TEST بأسرار اختبار مملوكة بوضوح، ضغط CPU/RAM وPostgreSQL، وRead/Edit/Tools/SSE وReload وعزل الحسابين.
 
 **تعليمات لمتابعة التنفيذ:** حافظ على الملفات والخدمات الحالية. لا تعيد إحياء `runtime.login/logout` المشترك كاختصار لإكمال ربط العميل، ولا تخترع تخزينًا في Browser أو ملفات محلية. فقط بعد وجود Schema سليمة يمكن إكمال Gateway-owned connections + Pi SDK isolation وإعادة واجهة الربط بصورة آمنة. لا تمس بيانات التاريخ أو ملفات المشاريع أو مفاتيح Pi الموجودة على VPS دون تحقق الملكية والبديل.
+
+
+## 17. إعداد SQL اليدوي لقاعدة TEST — بعد اكتمال الكود وقبل اختبار TEST
+
+**توجيه المالك:** لا تُنشأ ملفات Migration جديدة. الجداول الثلاثة التالية جديدة **داخل PostgreSQL TEST القائمة** لا خادم أو قاعدة بيانات أو خدمة جديدة؛ تُطبق يدويًا عبر Terminal في نافذة النشر/الاختبار اللاحقة، وليس ضمن هذه التعديلات على GitHub. يُمنع التنفيذ على LIVE. كل ملفات Python/JS التي أُضيف إليها المنطق موجودة أصلاً.
+
+### 17.1 شروط تشغيل SQL بأمان
+
+1. على VPS تحقّق من اسم قاعدة TEST ودور PostgreSQL المالك باستخدام `SELECT current_database(), current_user;`. قاعدة TEST التاريخية `opencode_gateway_test`؛ إذا خالفت ذلك **لا تكمل**.
+2. اختر اتصال `psql` ببيانات اعتماد **TEST فقط**. لا تُطبع DSN/كلمة المرور في Terminal log أو في المذكرة؛ يمكن استخدام `psql -d opencode_gateway_test` عندما يكون الدور المسموح موثقًا على الجهاز. لا تستعمل حساب LIVE أو ترفع صلاحيات قاعدة LIVE.
+3. افحص `SELECT version_num FROM alembic_version;` و`\dt ai_*`؛ إذا ظهرت جداول بالاسم نفسه سلفًا، افحص تعريفها والقيود قبل التنفيذ، ولا تحذفها أو تُسقطها تلقائيًا.
+4. نفّذ الكتلة التالية **كمعاملة واحدة** في جلسة `psql` المتصلة حصريًا بقاعدة TEST. لا تعدل ترحيل `0036` القديم؛ هذا التغيير اليدوي يجب توثيقه في قسم 17 مع وقت التنفيذ واسم الـDB وSchema checksum فقط، دون بيانات اعتماد.
+5. لأن هذه الخطوة SQL يدوية خارج سلسلة Alembic، **لا تدّعِ أنها Alembic-managed**. عند اعتماد استثناء ملف ترحيل مستقبلي، تتم المصالحة مع schema الموجودة بدل تكرار CREATE.
+
+### 17.2 SQL جاهز للتنفيذ — TEST فقط
+
+```sql
+BEGIN;
+DO $guard$
+BEGIN
+  IF current_database() <> 'opencode_gateway_test' THEN
+    RAISE EXCEPTION 'Refusing AI schema creation outside TEST database';
+  END IF;
+END
+$guard$;
+
+CREATE TABLE ai_provider_catalog (
+    id VARCHAR(120) PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    model_count INTEGER NOT NULL DEFAULT 0,
+    models_synced_at TIMESTAMPTZ,
+    last_sync_error VARCHAR(120),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE ai_provider_models (
+    provider_id VARCHAR(120) NOT NULL
+        REFERENCES ai_provider_catalog(id) ON DELETE CASCADE,
+    model_id VARCHAR(300) NOT NULL,
+    name VARCHAR(300) NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT pk_ai_provider_models PRIMARY KEY (provider_id, model_id)
+);
+CREATE INDEX ix_ai_provider_models_name
+    ON ai_provider_models (provider_id, lower(name));
+
+CREATE TABLE ai_user_connections (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider_id VARCHAR(120) NOT NULL REFERENCES ai_provider_catalog(id),
+    ciphertext TEXT NOT NULL,
+    last4 VARCHAR(4) NOT NULL,
+    auth_status VARCHAR(40) NOT NULL DEFAULT 'verified',
+    credit_status VARCHAR(40) NOT NULL DEFAULT 'unknown',
+    verified_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_ai_user_provider UNIQUE (user_id, provider_id)
+);
+CREATE INDEX ix_ai_user_connections_user_id
+    ON ai_user_connections (user_id);
+COMMIT;
+```
+
+**بعد التنفيذ:** تأكد من أن دور تطبيق Gateway TEST لديه `SELECT, INSERT, UPDATE, DELETE` على الجداول الثلاثة. إذا لم يكن مالكًا لها، يُراجَع `GRANT` محدد إلى دور TEST المعروف فقط؛ لا تضع أسماء أدوار تخمينية أو تمنح `PUBLIC`. ثم افحص:
+
+```sql
+SELECT current_database(), current_user;
+SELECT table_name FROM information_schema.tables
+ WHERE table_schema = current_schema() AND table_name LIKE 'ai_%'
+ ORDER BY table_name;
+SELECT conrelid::regclass, conname FROM pg_constraint
+ WHERE conrelid IN ('ai_provider_catalog'::regclass,
+                    'ai_provider_models'::regclass,
+                    'ai_user_connections'::regclass);
+```
+
+لا تنفذ حذفًا/تعديلًا لأسرار Pi القديمة تلقائيًا؛ عملية نقل مفاتيح قديمة تحتاج إثبات ملكية وموافقة مستقلة. البيانات الجديدة تبدأ بدون مفاتيح، والمزوّدون يُستخرجون في الخلفية من Pi مرة واحدة ثم كل سبعة أيام تقريبًا.
+
+### 17.3 شرط البيئة الموثوقة
+
+- على **Gateway TEST وPi Central TEST** يُضبط نفس السر الطويل العشوائي `PI_GATEWAY_INTERNAL_TOKEN` (32 محرفًا على الأقل) في البيئة الخاصة بهما قبل تشغيل التغييرات. لا يوضع في GitHub/DB/browser/logs. طلب مفتاح العميل الداخلي يحتاج توكن صحيحًا و`Cookie` العميل و`workspace_id` يملكه العميل واتصالًا موثقًا.
+- `CREDENTIALS_ENCRYPTION_KEY` يجب أن يكون مضبوطًا مسبقًا لGateway TEST؛ عدم وجوده يُوقف تخزين المفاتيح ولا يدّعي نجاحًا. احفظه خارج قاعدة البيانات، ولا تغيّره عشوائيًا بعد حفظ مفاتيح مشفرة.
+- `PI_TEST_SINGLE_OWNER_TOOLS=1` **اختياري للاختبار الفردي المصرح به فقط**؛ تعطلت أدوات Bash/Edit/Write لعملاء متعددين افتراضيًا لحين إثبات OS-level isolation. لا تفعّل أدوات Shell على منصة متعددة العملاء دون عزل مثبت. الاختبار الفعلي يتطلب موافقة تشغيل TEST وحده.
+- لا تستخدم `OPENROUTER_API_KEY` ولا غيره في بيئة Pi Central كمخزن مشترك لBYOK؛ الجسر يحاول منع fallback البيئي للنماذج المعروفة ويستخدم `InMemoryCredentialStore` لكل جلسة.
+
+## 18. تنفيذ المهام البرمجية على updates — قبل رفع/اختبار VPS
+
+| المجموعة | الحالة على GitHub (غير مثبتة على VPS) | ملفات المصدر التي تغيرت |
+|---|---|---|
+| `A-DB` | **IMPLEMENTED IN SOURCE, NEEDS MANUAL SQL & TEST**: تعريف provider/model/connection وفصل الملكية، مع إبقاء Backend Gateway إداريًا فقط | `backend/app/models/platform.py` و`backend/app/models/__init__.py` و`backend/app/routes/management.py` |
+| `B-AUTH` | **IMPLEMENTED IN SOURCE, NOT VERIFIED LIVE**: تحقق API حقيقي مع whitelist لOpenRouter وDeepSeek وOpenAI وGroq وMistral وxAI وTogether وCerebras؛ رفض المفاتيح غير المثبتة؛ تشفير وحذف/تبديل بعد نجاح التحقق. OAuth وبقية المزوّدين التي لم يثبت لها اختبار مدعوم تبقى `422 unsupported`، ولا يزعم النظام Verified | `backend/app/routes/management.py` و`management.js` و`backend/app/services/credentials.py` (إعادة استخدام بدون تغيير) |
+| `C-CATALOG` | **IMPLEMENTED IN SOURCE, NEEDS TEST**: مصدر Metadata من Pi عبر socket Unix الحالي؛ فهرس provider+model في PostgreSQL واسترجاع خفيف؛ التحديث عبر صيانة Gateway القائمة كل 7 أيام والتنبيه بعد 14 يومًا؛ لا جدول آخر ولا خدمة إضافية | `backend/app/main.py` و`backend/app/routes/management.py` و`backend/app/models/platform.py` و`app.js` |
+| `D-PI` | **IMPLEMENTED IN SOURCE, SDK VERSION/INFERENCE UNVERIFIED**: جلسة SDK خاصة بالمشروع و`ModelRuntime` بمفاتيح في الذاكرة، فحص اتصال العميل عند كل Prompt، واستعمال socket Pi Central الحالي. أدوات Shell/Edit/Write غير مفعلة افتراضيًا على النظام المشترك لحين وجود عزل OS | `integration/pi-central.mjs` |
+| `UI-WORKSPACE` | **IMPLEMENTED IN SOURCE, NEEDS BROWSER TEST**: Dashboard تحفظ/تحذف المفاتيح عبر Gateway وتقرأ كتالوج DB، Workspace تأخذ اتصالات الحساب ذاتها من Gateway | `management.js` و`app.js`، والاستفادة من `native-session-client.js` و`runtime-client.js` دون ملفات/خدمة جديدة |
+| `E2E-RESOURCES` | **NOT VERIFIED**: لا نشر ولا فحص VPS ولا استدعاء API مدفوع ولا اختبار مستخدمين؛ يلزم تنفيذ TEST بعد SQL والبيئة والموافقة | لم يُشغل |
+
+**ملاحظات الحدود:** تنفيذ الكود على GitHub فقط لا يعني جاهزية الإنتاج. يجب اختبار Pi SDK بالإصدار الموجود 1.5.0، التوافق مع JSONL السابق، وسلوك بطاقات الأسئلة/المرفقات وSSE والـAbort والتوقف والاستئناف، وسلوك الأخطاء/timeout والأداء على خادم 1 vCPU/4GB. كذلك لا تتوفر عملية OS sandbox متعددة العملاء ضمن القيود «لا خدمات جديدة». لا تُحمّل هذا التوثيق معنى «اختبارات PASS» قبل إجرائها.
+
+**تثبيت القرار:** بعد تطبيق SQL اليدوي على TEST، يجب تحديث هذا القسم بوقت التنفيذ ورقم الـcommit المنشور ونتائج الاختبارات الواقعية. لا تدمج `updates` إلى `master` ولا تُغيّر LIVE تلقائيًا.
