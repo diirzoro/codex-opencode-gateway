@@ -193,6 +193,136 @@ class Agent {
     this.child.kill("SIGTERM");releaseExecution(this);pool.delete(this.id);
   }
 }
+
+// In-process Pi SDK session: one isolated, in-memory credential runtime per
+// project, keeping the existing bridge/socket/routes and persistent Pi JSONL.
+class SdkAgent {
+  static async create(scope) {
+    const sdk=await import("@earendil-works/pi-coding-agent");
+    const ai=await import("@earendil-works/pi-ai");
+    if(!sdk.ModelRuntime?.create||!sdk.createAgentSession||
+       !sdk.SessionManager?.continueRecent||!ai.InMemoryCredentialStore)
+      throw Object.assign(new Error("Installed Pi SDK lacks isolated runtime/session APIs"),{status:503});
+    // Credentials and settings are not read from the shared Pi auth.json.
+    const runtime=await sdk.ModelRuntime.create({
+      credentials:new ai.InMemoryCredentialStore(),modelsPath:null,allowModelNetwork:false
+    });
+    const sessionDir=path.join(ROOT,"projects",scope.userId,scope.workspaceId);
+    mkdirSync(sessionDir,{recursive:true,mode:0o700});
+    const manager=sdk.SessionManager.continueRecent(scope.directory,sessionDir);
+    const allowTools=process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1";
+    const {session}=await sdk.createAgentSession({
+      cwd:scope.directory,modelRuntime:runtime,sessionManager:manager,
+      settingsManager:sdk.SettingsManager.inMemory(),
+      tools:allowTools?["read","bash","edit","write","grep","find","ls"]:[],
+      noExtensions:!allowTools,noSkills:!allowTools
+    });
+    return new SdkAgent(scope,session,runtime);
+  }
+  constructor(scope,session,runtime){
+    this.scope=scope;this.id=projectIdFor(scope);this.title=scope.projectId;
+    this.session=session;this.runtime=runtime;
+    this.events=new Set();this.busy=false;this.active=false;this.closed=false;
+    this.last=Date.now();this.running=null;
+    this.unsub=session.subscribe(event=>this.consume(event));
+  }
+  consume(event){
+    if(this.closed)return;
+    this.last=Date.now();
+    if(event.type==="agent_start")this.active=true;
+    if(event.type==="agent_settled"){this.active=false;releaseExecution(this);}
+    const serialized=JSON.stringify({type:"pi."+event.type,properties:event});
+    for(const res of this.events)try{res.write("data: "+serialized+"\n\n");}catch{this.events.delete(res);}
+    if(event.type==="agent_settled"){
+      const now=Date.now();
+      for(const res of this.events)try{
+        res.write("data: "+JSON.stringify({type:"message.updated",
+          properties:{info:{id:"pi-refresh-"+now,sessionID:this.id,role:"assistant",
+          time:{created:now}}}})+"\n\n");
+        res.write("data: "+JSON.stringify({type:"session.idle",
+          properties:{sessionID:this.id}})+"\n\n");
+      }catch{}
+    }
+  }
+  async setCredential(provider,key){
+    if(this.closed)throw Object.assign(new Error("Pi session ended"),{status:503});
+    await this.runtime.setRuntimeApiKey(provider,key);
+  }
+  async command(type,fields={}){
+    if(this.closed)throw Object.assign(new Error("Pi session ended"),{status:503});
+    this.last=Date.now();
+    if(type==="get_state")return {sessionId:this.id,messageCount:this.session.messages.length};
+    if(type==="get_messages")return {messages:this.session.messages};
+    if(type==="get_commands")return {commands:await nativeCommandDiscovery(this.scope.userId)};
+    if(type==="set_model"){
+      const model=this.runtime.getModel(fields.provider,fields.modelId);
+      if(!model)throw Object.assign(new Error("Selected provider/model not in installed Pi runtime"),{status:422});
+      await this.session.setModel(model);
+      return {};
+    }
+    if(type==="abort"){await this.session.abort();return {};}
+    if(type!=="prompt")throw Object.assign(new Error("Unsupported Pi SDK command"),{status:501});
+    if(this.active||this.running)
+      throw Object.assign(new Error("Project already has an active Pi run"),{status:409});
+    // SDK prompt resolves at completion; use preflight acknowledgement instead
+    // of holding HTTP 204 open throughout the model/tool execution.
+    const images=Array.isArray(fields.images)?fields.images:[];
+    let acknowledge,failAck,acknowledged=false;
+    const preflight=new Promise((resolve,reject)=>{acknowledge=resolve;failAck=reject;});
+    const promise=Promise.resolve().then(()=>this.session.prompt(fields.message,{
+      images,preflightResult:ok=>{
+        acknowledged=true;
+        if(ok)acknowledge();
+        else failAck(Object.assign(new Error("Pi rejected prompt preflight"),{status:422}));
+      }
+    }));
+    this.running=promise;
+    promise.then(()=>{
+      if(!acknowledged)acknowledge();
+    }).catch(()=>{
+      if(!acknowledged)failAck(Object.assign(new Error("Pi rejected prompt"),{status:502}));
+      for(const res of this.events)try{res.write("data: "+JSON.stringify({
+        type:"pi.error",properties:{message:"Pi execution failed"}
+      })+"\n\n");}catch{}
+    }).finally(()=>{
+      this.running=null;this.active=false;releaseExecution(this);
+      this.consume({type:"agent_settled"});
+    });
+    await preflight;
+    return {accepted:true};
+  }
+  close(){
+    if(this.closed)return;this.closed=true;
+    releaseExecution(this);
+    try{this.unsub?.();}catch{}
+    try{this.session.dispose();}catch{}
+    for(const res of this.events)try{res.end();}catch{}
+    this.events.clear();pool.delete(this.id);
+  }
+}
+async function gatewayCredential(req,scope,provider){
+  const token=process.env.PI_GATEWAY_INTERNAL_TOKEN||"";
+  if(token.length<32)throw Object.assign(
+    new Error("Pi-Gateway internal credential channel is not configured"),{status:503});
+  const cookie=req.headers.cookie||"";
+  if(!cookie||cookie.length>8192)
+    throw Object.assign(new Error("Authentication required"),{status:401});
+  let response;
+  try{
+    response=await fetch(GATEWAY+"/api/opencode/connections/"+encodeURIComponent(provider)+
+      "?workspace_id="+encodeURIComponent(scope.workspaceId),{
+      redirect:"manual",signal:AbortSignal.timeout(6000),
+      headers:{cookie,host:HOST,"x-forwarded-proto":"https",
+        "x-pi-gateway-token":token,accept:"application/json"}
+    });
+  }catch{throw Object.assign(new Error("Gateway credentials unavailable"),{status:503});}
+  if(!response.ok)throw Object.assign(
+    new Error("Verified account connection unavailable"),{status:response.status===404?403:response.status});
+  const data=await response.json();
+  if(data.provider_id!==provider||typeof data.key!=="string"||!data.key)
+    throw Object.assign(new Error("Invalid Gateway connection response"),{status:502});
+  return data.key;
+}
 async function agent(s) {
   const id=projectIdFor(s);
   let a=pool.get(id);
@@ -206,7 +336,7 @@ async function agent(s) {
   }
   if(pool.size>=MAX_PROCS)
     throw Object.assign(new Error("Every Pi worker is currently executing; retry shortly"),{status:503});
-  a=new Agent(s);pool.set(id,a);
+  a=await SdkAgent.create(s);pool.set(id,a);
   try { await a.command("get_state"); return a; }
   catch(e) { a.close(); throw e; }
 }
@@ -504,10 +634,15 @@ const server=http.createServer(async(req,res)=>{
       const {message,images}=piPromptParts(b.parts,s,a.id);
       if((!message.trim()&&!images.length)||message.length>100000)
         return error(res,422,"Prompt required");
+      if(!b.model?.providerID||!b.model?.modelID)
+        return error(res,422,"Select a verified provider and model from Gateway");
+      // Authenticate on EVERY prompt: deletions/rotations take effect before
+      // another request can run. Never fall back to shared Pi credentials.
+      const authorizedKey=await gatewayCredential(req,s,b.model.providerID);
       reserveExecution(a);
       try {
-        if(b.model?.providerID&&b.model?.modelID)
-          await a.command("set_model",{provider:b.model.providerID,modelId:b.model.modelID});
+        await a.setCredential(b.model.providerID,authorizedKey);
+        await a.command("set_model",{provider:b.model.providerID,modelId:b.model.modelID});
         // Keep the original Pi command/skill mechanism. Do not invent agents.
         let prompt=message;
         if(b.agent) {
