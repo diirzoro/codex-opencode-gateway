@@ -88,14 +88,25 @@ async function scope(req, query) {
   // Catalogue and agent discovery come straight from installed Pi, not Python.
   // Existing Nginx is the web entry boundary for this private socket.
   if(directory===CATALOG_DIRECTORY){
-    // The catalog may be called by an authenticated browser or the already
-    // existing Gateway maintenance worker. No anonymous discovery.
+    const pathname=cleanPath(req.url||"/").pathname;
     const cookie=req.headers.cookie||"";
     if(cookie){
+      // The global capability list does not require a Project lookup.
+      // Owner-only extensions remain gated by an authenticated Gateway user.
+      if(pathname==="/agent"&&process.env.PI_TEST_SINGLE_OWNER_TOOLS!=="1")
+        return {catalog:true,userId:"catalog",testOwner:false};
       const actor=await gateway(req,"/api/auth/me");
       return {catalog:true,userId:String(actor.id),testOwner:
         process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1"&&actor.role==="owner"};
     }
+    // This server listens ONLY on the existing, filesystem-protected UNIX
+    // socket. Permit an internal no-cookie GET of PUBLIC provider/model
+    // metadata for first-time PostgreSQL seeding. Browser traffic still goes
+    // through Nginx auth_request; credential and project endpoints are never
+    // granted this exception.
+    if(pathname==="/provider"&&req.method==="GET"&&
+       !req.headers["x-forwarded-for"]&&!req.headers["x-real-ip"])
+      return {catalog:true,userId:"internal",testOwner:false};
     const expected=process.env.PI_GATEWAY_INTERNAL_TOKEN||"";
     const candidate=String(req.headers["x-pi-gateway-token"]||"");
     if(expected.length<32||candidate.length!==expected.length||
