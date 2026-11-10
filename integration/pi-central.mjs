@@ -616,13 +616,39 @@ function projectFileRequest(scope,pathname,query) {
   throw Object.assign(new Error("Unsupported project file operation"),{status:404});
 }
 function mapped(messages, id) {
-  return messages.map((m,index)=>{
-    const text=Array.isArray(m.content) ? m.content.filter(x=>x.type==="text").map(x=>x.text||"").join("\n"):typeof m.content==="string"?m.content:"";
+  // Map ONLY actual Pi SDK tool calls and corresponding tool results.
+  // The text "<tool_call>" is ordinary model text and never an execution.
+  const receipts=new Map();
+  for(const m of messages)if(m?.role==="toolResult"&&typeof m.toolCallId==="string")
+    receipts.set(m.toolCallId,m);
+  return messages.flatMap((m,index)=>{
+    if(!m||m.role==="toolResult")return [];
     const mid="msg_"+createHash("sha256").update(id+":"+index).digest("hex").slice(0,24);
-    return {info:{id:mid,sessionID:id,role:m.role==="assistant"?"assistant":m.role==="user"?"user":"tool",time:{created:Date.now()},
+    const parts=[],blocks=Array.isArray(m.content)?m.content:[];
+    const text=blocks.length?blocks.filter(x=>x?.type==="text").map(x=>x.text||"").join("\n"):
+      typeof m.content==="string"?m.content:"";
+    if(text)parts.push({id:"part_"+mid,messageID:mid,sessionID:id,type:"text",text});
+    for(const block of blocks){
+      if(block?.type!=="toolCall"||typeof block.id!=="string"||
+         typeof block.name!=="string")continue;
+      const receipt=receipts.get(block.id);
+      const input=block.arguments&&typeof block.arguments==="object"?block.arguments:{};
+      // Preserve the native tool identity and execution status, not raw file
+      // contents, model tool arguments or potentially secret command output.
+      const filePath=typeof input.path==="string"?input.path:
+        typeof input.filePath==="string"?input.filePath:"";
+      parts.push({
+        id:"tool_"+mid+"_"+parts.length,messageID:mid,sessionID:id,
+        type:"tool",callID:block.id,tool:block.name,
+        state:{status:receipt?(receipt.isError?"error":"completed"):"pending",
+          input:filePath?{filePath}:{},metadata:{}}
+      });
+    }
+    return [{info:{id:mid,sessionID:id,role:m.role==="assistant"?"assistant":
+      m.role==="user"?"user":"tool",time:{created:Date.now()},
       ...(m.role==="assistant"&&(m.stopReason==="error"||m.errorMessage)
         ?{error:{name:"ProviderError",kind:piProviderFailure(m)}}:{})},
-      parts:[{id:"part_"+mid,messageID:mid,sessionID:id,type:"text",text}]};
+      parts}];
   });
 }
 

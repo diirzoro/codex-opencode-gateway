@@ -282,7 +282,7 @@
   function toolActivity(part,row){
     const state=part.state||{},input=state.input||{},metadata=state.metadata||{},files=[];
     const add=(value,operation)=>{const path=relativeFile(value,row);if(path&&!files.some(f=>f.path===path&&f.operation===operation))files.push({path,operation});};
-    if(['read','edit','write','multiedit'].includes(part.tool))add(input.filePath,part.tool==='read'?'inspected':'changed');
+    if(['read','edit','write','multiedit'].includes(part.tool))add(input.filePath||input.path,part.tool==='read'?'inspected':'changed');
     if(part.tool==='apply_patch'&&Array.isArray(metadata.files))for(const file of metadata.files.slice(0,50)){const operation={add:'created',update:'changed',delete:'deleted',move:'moved'}[file?.type];if(operation){add(file.relativePath||file.filePath,operation);if(file.movePath)add(file.movePath,'moved');}}
     const status=['pending','running','completed','error'].includes(state.status)?state.status:'pending';
     const result={native:true,workspace_id:row?.workspace_id,id:part.callID,tool:part.tool,status,stage:'tool_activity',files};
