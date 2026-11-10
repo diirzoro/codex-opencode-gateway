@@ -1094,21 +1094,25 @@ const navigationReady=authReady.then(async()=>{
  // before a refresh, rather than sending them to the public Landing page.
  // The per-account page identifier contains no sensitive data or credentials.
  // Project restoration still revalidates ownership through Gateway.
- let savedPage='';
- try{savedPage=sessionStorage.getItem('og-current-page:'+currentUser.id)||'';}catch{}
+ let savedPage='',savedAdminPanel='',savedClientPanel='';
+ try{
+   savedPage=sessionStorage.getItem('og-current-page:'+currentUser.id)||'';
+   savedAdminPanel=sessionStorage.getItem('og-current-admin-panel:'+currentUser.id)||'overview';
+   savedClientPanel=sessionStorage.getItem('og-current-client-panel:'+currentUser.id)||'dashboard';
+ }catch{}
  const oauthReturn=Boolean(new URLSearchParams(location.search).get('github'))||
                    socialResult==='success';
  if(!oauthReturn){
    if(['admin','owner'].includes(currentUser.role)){
      await page('adminPage');
-     await window.restoreSavedAdminPanel?.();
+     await window.restoreSavedAdminPanel?.(savedAdminPanel);
    }else if(savedPage==='workspacePage'){
      await openWorkspaceAfterLogin();
    }else if(['connectionsPage','workspaceHomePage','onboarding'].includes(savedPage)){
      await page(savedPage);
    }else if(['clientPage','accountPage','billingPage'].includes(savedPage)){
      await page('clientPage');
-     await window.restoreSavedClientPanel?.();
+     await window.restoreSavedClientPanel?.(savedClientPanel);
    }else{
      await page('workspaceHomePage');
    }
