@@ -796,7 +796,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(!values||currentUser?.id!==owner||activeWorkspace?.id!==id)return;
     const data=await api('/api/workspaces/'+id+'/providers/'+encodeURIComponent(values.provider)+'/models');
     if(currentUser?.id!==owner||activeWorkspace?.id!==id)return;
-    if(!data.connected||data.allowed===false||!data.models.some(m=>m.id===values.model&&m.allowed!==false))throw Error(tr('Connect this provider to your account and choose an allowed Native model.','اربط هذا المزوّد بحسابك واختر نموذج Native مسموحًا.'));
+    if(!data.connected||data.allowed===false||!data.models?.[values.model]||data.models[values.model].enabled===false)throw Error(tr('Connect this provider to your account and choose an allowed Native model.','اربط هذا المزوّد بحسابك واختر نموذج Native مسموحًا.'));
     chosenProvider=values.provider;chosenModel=values.model;await refreshChoices(chosenProvider,true);saveNativeSelection();
   });controls.append(manualModel);
   function saveNativeSelection(){if(window.nativeSession?.active()&&activeSession)window.nativeSession.select(activeSession.id,{providerID:q('providerSelect').value,modelID:q('modelSelect').value,agent:agent.value,variant:nativeVariant.value||undefined});}
@@ -1604,7 +1604,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     providers=(snapshot.providers||[]).filter(p=>p.connected);
     q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
     for(const p of providers){
-      const label=p.name+' · '+tr('Configured in Pi · credits unknown','مهيأ في Pi · الرصيد غير معلوم');
+      const label=p.name+' · '+tr('Verified account connection','اتصال موثق لهذا الحساب');
       const option=new Option(label,p.id);
       option.disabled=!p.connected;
       q('providerSelect').add(option);
