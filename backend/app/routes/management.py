@@ -1191,6 +1191,34 @@ class AiPlatformDefaultIn(BaseModel):
     model_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
+@router.get("/admin/ai-catalog")
+def ai_admin_catalog_status(_: User = Depends(require_admin),
+                            db: Session = Depends(get_db)):
+    """Read compact persisted Pi provider counts, not customer credentials."""
+    _ai_schema(db)
+    registry = _ai_pi_registry(db)
+    ids = registry.get("provider_ids")
+    ids = [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
+    saved = db.scalar(select(func.count()).select_from(AiProviderCatalog)) or 0
+    connected = db.scalar(select(func.count()).select_from(AiUserConnection).where(
+        AiUserConnection.auth_status == "verified")) or 0
+    return {"pi_providers": len(ids), "saved_providers": saved,
+            "connected_accounts": connected,
+            "last_synced_at": registry.get("synced_at"),
+            "refresh_days": _AI_REFRESH_DAYS,
+            "source": "pi-saved", "models_fetched": "linked-providers-only"}
+
+
+@router.post("/admin/ai-catalog/refresh")
+def ai_admin_refresh_catalog(_: User = Depends(require_admin)):
+    """Explicit operator request; same bounded Pi names-only maintenance."""
+    if not _ai_catalog_refresh_if_due(force=True):
+        raise HTTPException(503, "Pi registry refresh did not complete; last saved snapshot retained")
+    from ..database import SessionLocal
+    with SessionLocal() as db:
+        return ai_admin_catalog_status(_, db)
+
+
 @router.get("/admin/ai-defaults")
 def ai_platform_default_status(_: User = Depends(require_admin),
                                db: Session = Depends(get_db)):
@@ -1297,7 +1325,7 @@ def ai_platform_set_provider(provider_id: str, data: AiPlatformDefaultIn,
     return {"provider_id": provider_id, "models": sorted(ids), "active": bool(ids)}
 
 
-def _ai_catalog_refresh_if_due():
+def _ai_catalog_refresh_if_due(*, force=False):
     """Refresh missing or 14-day-old Pi metadata in existing TEST PostgreSQL.
 
     Runs from existing Gateway maintenance; never during Pi inference, chats,
@@ -1318,7 +1346,7 @@ def _ai_catalog_refresh_if_due():
             # model sync timestamps, so linking a key cannot delay a refresh.
             registry = _ai_pi_registry(db)
             last = registry.get("synced_at")
-            if isinstance(last, str):
+            if not force and isinstance(last, str):
                 try:
                     if now() - aware(datetime.fromisoformat(last.replace("Z", "+00:00"))) < timedelta(days=_AI_REFRESH_DAYS):
                         return True
