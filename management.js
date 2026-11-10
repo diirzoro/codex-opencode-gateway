@@ -338,7 +338,8 @@
       const platformChoices=new Map();
       let saving=false;
       const updateCounter=()=>{
-        const editable=items.filter(x=>!x.toggle.disabled);
+        const editable=items.filter(x=>x.model.platform_locked!==true&&
+          x.model.admin_allowed!==false);
         const selected=editable.filter(x=>x.toggle.checked).length;
         shown.textContent=selected+' / '+editable.length+' '+tr('personal models enabled','نموذج شخصي مفعّل');
       };
@@ -356,7 +357,8 @@
         if(!modelIds.length||saving)return;
         saving=true;
         const before=new Map(items.map(item=>[item.model.id,item.toggle.checked]));
-        for(const item of items)if(modelIds.includes(item.model.id))item.toggle.checked=enabled;
+        const changed=new Set(modelIds);
+        for(const item of items)if(changed.has(item.model.id))item.toggle.checked=enabled;
         for(const item of items)item.toggle.disabled=true;
         selectAll.disabled=clearAll.disabled=true;updateCounter();
         try{
@@ -375,7 +377,8 @@
         }
       }
       function bulk(enabled){
-        const ids=items.filter(item=>!item.toggle.disabled&&item.toggle.checked!==enabled)
+        const ids=items.filter(item=>item.model.platform_locked!==true&&
+          item.model.admin_allowed!==false&&item.toggle.checked!==enabled)
           .map(item=>item.model.id);
         return sendBulk(ids,enabled);
       }
