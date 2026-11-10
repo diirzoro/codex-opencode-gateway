@@ -491,7 +491,9 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
     selection=data.hidden_models if data.hidden_models is not None else previous['hidden_models']
     if len(selection)>1000 or sum(len(v) for v in selection.values())>10000 or any(not key or len(key)>200 or any(not v or len(v)>300 for v in values) for key,values in selection.items()) or any(not p or len(p)>200 for p in hidden):
         raise HTTPException(422,'Invalid provider/model policy')
-    row.allowed_providers = json.dumps({'allowed':sorted({p.strip() for p in data.allowed_providers if p.strip()}),'hidden':sorted(set(hidden))})
+    # Preserve platform-wide defaults when editing unrelated provider visibility.
+    # Those defaults are managed only through the verified-key admin endpoint.
+    row.allowed_providers = json.dumps({'allowed':sorted({p.strip() for p in data.allowed_providers if p.strip()}),'hidden':sorted(set(hidden)), 'platform_defaults':previous.get('platform_defaults') or {}})
     row.allowed_models = json.dumps({'allowed':sorted({m.strip() for m in data.allowed_models if m.strip()}),'hidden':{key:sorted(set(values)) for key,values in selection.items()}})
     row.allowed_tools = json.dumps(sorted({t.strip() for t in data.allowed_tools if t.strip()}))
     row.require_tool_approval = data.require_tool_approval
