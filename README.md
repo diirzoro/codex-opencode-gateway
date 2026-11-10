@@ -13,9 +13,10 @@ its native RPC protocol.
 
 The Gateway owns account authentication, projects, workspace ownership,
 GitHub integration, administrative policies, plans, and billing. **Pi alone**
-owns model execution, messages, conversation history, tools, extensions,
-skills, and AI credentials. There is no Python AI engine or second
-provider-credential registry.
+executes model requests, messages, conversation history, tools, extensions,
+and skills. The approved design transfers customer AI credentials and their
+verification to Gateway-owned encrypted records in PostgreSQL, not to shared
+Pi configuration. This credential migration is NOT IMPLEMENTED yet.
 
 TEST and LIVE have separate database identities. Keep account data, project
 files and Pi sessions distinct. An account's Pi `auth.json` must not be
@@ -37,16 +38,23 @@ do not mean the OpenCode engine is installed or supported.
   default account directory is `/home/tahir/.pi/agent`.
 - GitHub's `integration/pi-central.mjs` is an HTTP-to-Pi RPC transport,
   not a second agent engine. It now points to the installed shared Pi
-  configuration in `/home/tahir/.pi/agent`, removes separate provider stores,
-  and lets Pi load its native coding tools, skills and extensions.
+  configuration in `/home/tahir/.pi/agent` for existing runtime discovery,
+  and lets Pi load its native coding tools, skills and extensions. Browser
+  login/logout to that shared Pi credential store have now been disabled
+  in source to prevent unchecked or cross-customer credential mutation.
   Image parts are passed to Pi RPC; non-image inline uploads are staged inside
   the selected workspace for Pi's tools to inspect. These changes still require
   deployment and an actual server test.
 - Deployment run `42671819015` failed with no reported jobs; do not infer
   that GitHub source changes were installed on VPS.
-- Saving any nonempty provider key is **not** authentication verification.
-  The connected-provider list must not claim a provider is verified before a
-  successful real Pi model request.
+- A nonempty provider key is **not** authentication verification. Shared Pi
+  credential add/delete routes are retired; Connections currently presents
+  runtime/catalog metadata read-only, NOT customer-owned verified connections.
+  The customer-owned PostgreSQL registry, real upstream verification, isolated
+  SDK credentials and 7–14 day DB sync are pending the tracked implementation
+  and safe schema migration. The current Pi runtime may still have a shared
+  credential configured by the VPS operator; it must not be mistaken for a
+  customer's saved key.
 - The gateway workspace currently expects OpenCode-shaped compatibility
   routes; these are existing UI transport paths, **not** permission to run
   or reinstall the retired OpenCode engine.
