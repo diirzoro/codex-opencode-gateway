@@ -120,7 +120,11 @@ window.nativeDirectTest=(()=>{
     presentationRevision++;
     catalogSnapshot=agentsSnapshot=workspaceSnapshot=configuredSnapshot=null;
     catalogPending=agentsPending=workspacePending=configuredPending=null;
-    if(!keepSession){window.nativeSession?.invalidate();window.workspaceRuntime?.clear();}
+    // Clear UI snapshots even when preserving the active Pi conversation.
+    // Otherwise newly connected providers exist in PostgreSQL but remain
+    // absent from Workspace until a full sign-out/reload.
+    window.nativeSession?.invalidate();
+    if(!keepSession)window.workspaceRuntime?.clear();
   }
   async function catalog({force=false}={}){
     const user=ownerScope(),revision=presentationRevision;
