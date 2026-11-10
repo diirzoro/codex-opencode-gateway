@@ -657,6 +657,55 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
             "stale_after_days": _AI_STALE_DAYS}
 
 
+
+class AiAdminConnectionState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+@router.get("/admin/ai-connections")
+def ai_admin_connections(_: User = Depends(require_admin),
+                         db: Session = Depends(get_db)):
+    """Metadata-only oversight; never decrypt or disclose customer API keys."""
+    _ai_schema(db)
+    results = db.execute(
+        select(AiUserConnection, User.username, User.role)
+        .join(User, User.id == AiUserConnection.user_id)
+        .where(User.role.notin_(("admin", "owner")))
+        .order_by(User.username, AiUserConnection.provider_id).limit(500)
+    ).all()
+    return {"connections": [
+        {"user_id": str(row.user_id), "username": username,
+         "provider_id": row.provider_id, "auth_status": row.auth_status,
+         "enabled": row.auth_status == "verified"}
+        for row, username, _role in results]}
+
+
+@router.patch("/admin/ai-connections/{customer_id}/{provider_id}")
+def ai_admin_connection_state(customer_id: uuid.UUID, provider_id: str,
+                              data: AiAdminConnectionState,
+                              actor: User = Depends(require_admin),
+                              db: Session = Depends(get_db)):
+    """Suspend/resume an owned customer connection without touching its key."""
+    _ai_schema(db)
+    customer = db.get(User, customer_id)
+    if customer is None or customer.role in {"admin", "owner"}:
+        raise HTTPException(404, "Customer not found")
+    record = db.scalar(select(AiUserConnection).where(
+        AiUserConnection.user_id == customer_id,
+        AiUserConnection.provider_id == provider_id).with_for_update())
+    if record is None:
+        raise HTTPException(404, "Customer provider connection not found")
+    if data.enabled and record.verified_at is None:
+        raise HTTPException(409, "Provider was not previously verified")
+    record.auth_status = "verified" if data.enabled else "admin_disabled"
+    audit(db, actor, "ai.connection.enabled" if data.enabled
+          else "ai.connection.disabled", subject=customer_id)
+    db.commit()
+    return {"user_id": str(customer_id), "provider_id": provider_id,
+            "enabled": data.enabled, "auth_status": record.auth_status}
+
+
 @router.get("/opencode/connections")
 def ai_connections(user: User = Depends(require_user), db: Session = Depends(get_db)):
     _ai_schema(db)
@@ -730,6 +779,8 @@ def _ai_save(data, user, db, replace=False):
     existing = db.scalar(select(AiUserConnection).where(
         AiUserConnection.user_id == user.id, AiUserConnection.provider_id == data.provider_id)
         .with_for_update())
+    if existing is not None and existing.auth_status == "admin_disabled":
+        raise HTTPException(403, "Administrator disabled this connection; contact support")
     if existing is not None and not replace:
         raise HTTPException(409, "Connection already exists; use replace")
     if existing is None and replace:
@@ -788,6 +839,11 @@ def ai_disconnect(provider_id: str, user: User = Depends(require_user),
         .with_for_update())
     if record is None:
         raise HTTPException(404, "Connection not found")
+    if record.auth_status == "admin_disabled":
+        raise HTTPException(403, "Administrator disabled this connection; contact support")
+    active_default = _ai_platform_defaults(db).get(provider_id)
+    if active_default and active_default.get("owner_id") == str(user.id):
+        raise HTTPException(409, "Remove the administrator's shared default models first")
     db.delete(record)
     audit(db, user, "ai.connection.deleted")
     db.commit()
