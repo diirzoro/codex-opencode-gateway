@@ -723,7 +723,8 @@
       providers:first.map(p=>({
         ...p,connected:connected.has(p.id),allowed:true,visible:true,
         default_model:providers.default?.[p.id],
-        models:Object.entries(p.models||{}).map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
+        models:Object.entries(p.models||{}).filter(([,m])=>m?.enabled!==false)
+          .map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
       }))};
   }
   window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
