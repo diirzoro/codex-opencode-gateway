@@ -937,35 +937,33 @@ def _ai_model_display_info(row):
             "reasoning": bool(data.get("reasoning"))}
 
 
-@router.get("/opencode/connections/{provider_id}/models")
-def ai_my_connection_models(provider_id: str, user: User = Depends(require_user),
-                            db: Session = Depends(get_db)):
-    """Lazy, owned model list for the expanded connected-provider accordion."""
+class AiBulkModelPreference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_ids: list[str] = Field(min_length=1, max_length=2000)
+    enabled: bool
+
+
+def _ai_models_for_connection(db, record, provider_id):
+    """Shared personal-model view for customer and administrator, without keys."""
     _ai_schema(db)
-    record = db.scalar(select(AiUserConnection).where(
-        AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
-        AiUserConnection.auth_status == "verified"))
-    if record is None:
-        raise HTTPException(404, "Verified account connection not found")
     disabled = _ai_connection_secret_and_models(record)[1]
     shared = _ai_active_platform_defaults(db).get(provider_id)
     locked = shared["models"] if shared else set()
     rules = _ai_policy(db)
+
     def saved_models():
         return list(db.scalars(select(AiProviderModel).where(
-            AiProviderModel.provider_id == provider_id, AiProviderModel.active.is_(True))
-            .order_by(AiProviderModel.name).limit(2000)))
+            AiProviderModel.provider_id == provider_id,
+            AiProviderModel.active.is_(True)).order_by(AiProviderModel.name).limit(2000)))
+
     models = saved_models()
     if not models:
-        # One scoped first-load for a legacy VERIFIED connection with no saved
-        # model metadata. This is not a provider-catalog refresh UI and never
-        # downloads unrelated providers. Throttle retries after a failed Pi
-        # socket call instead of retrying on every accordion expansion.
+        # For pre-existing verified links, lazily import ONLY this provider's
+        # models; never discover every provider and never retry on every click.
         import time
         current = time.monotonic()
-        key = provider_id
-        if current - _AI_MODEL_FIRST_LOAD_ATTEMPT.get(key, -1000) >= 900:
-            _AI_MODEL_FIRST_LOAD_ATTEMPT[key] = current
+        if current - _AI_MODEL_FIRST_LOAD_ATTEMPT.get(provider_id, -1000) >= 900:
+            _AI_MODEL_FIRST_LOAD_ATTEMPT[provider_id] = current
             try:
                 _ai_refresh_selected_provider(db, provider_id)
                 models = saved_models()
@@ -973,95 +971,124 @@ def ai_my_connection_models(provider_id: str, user: User = Depends(require_user)
                 db.rollback()
         if not models:
             raise HTTPException(503,
-                "This provider's models are not yet available from Pi; no connection was changed")
-    return {"provider_id": provider_id,
-            "models": [{"id": m.model_id, "name": m.name,
-                        "free_eligible": _ai_model_zero_price(m),
-                        **_ai_model_display_info(m),
-                        "enabled": (m.model_id in locked or m.model_id not in disabled) and
-                        _ai_allowed(db, provider_id, m.model_id, rules=rules),
-                        "platform_locked": m.model_id in locked,
-                        "admin_allowed": _ai_allowed(db, provider_id, m.model_id, rules=rules)}
-                       for m in models]}
+                "Provider models are not yet available from Pi; your connection was not changed")
+    return {"provider_id": provider_id, "models": [
+        {"id": model.model_id, "name": model.name,
+         "free_eligible": _ai_model_zero_price(model),
+         **_ai_model_display_info(model),
+         "enabled": (model.model_id in locked or model.model_id not in disabled)
+                     and _ai_allowed(db, provider_id, model.model_id, rules=rules),
+         "platform_locked": model.model_id in locked,
+         "admin_allowed": _ai_allowed(db, provider_id, model.model_id, rules=rules)}
+        for model in models]}
+
+
+def _ai_update_connection_models(db, record, provider_id, model_ids, enabled):
+    """Validate and atomically save a bulk update inside existing encrypted key."""
+    ids = set(model_ids)
+    if len(ids) != len(model_ids) or any(not isinstance(i, str) or
+                                          not 0 < len(i) <= 300 for i in ids):
+        raise HTTPException(422, "Invalid or duplicate model IDs")
+    models = {model.model_id: model for model in db.scalars(
+        select(AiProviderModel).where(
+            AiProviderModel.provider_id == provider_id,
+            AiProviderModel.model_id.in_(ids),
+            AiProviderModel.active.is_(True)))}
+    if set(models) != ids:
+        raise HTTPException(422, "Some models are not available in the saved Pi catalog")
+    rules = _ai_policy(db)
+    locked = _ai_active_platform_defaults(db).get(provider_id, {}).get("models", set())
+    if not enabled and ids.intersection(locked):
+        raise HTTPException(403, "Administrator platform models cannot be disabled")
+    if enabled and any(not _ai_allowed(db, provider_id, mid, rules=rules) for mid in ids):
+        raise HTTPException(403, "An administrator has restricted one or more models")
+    key, disabled = _ai_connection_secret_and_models(record)
+    if enabled:
+        disabled.difference_update(ids)
+    else:
+        disabled.update(ids)
+    record.ciphertext = _ai_seal_connection(key, disabled)
+    db.commit()
+    return {"provider_id": provider_id, "enabled": enabled,
+            "updated": len(ids), "model_ids": sorted(ids)}
+
+
+@router.get("/opencode/connections/{provider_id}/models")
+def ai_my_connection_models(provider_id: str, user: User = Depends(require_user),
+                            db: Session = Depends(get_db)):
+    record = db.scalar(select(AiUserConnection).where(
+        AiUserConnection.user_id == user.id,
+        AiUserConnection.provider_id == provider_id,
+        AiUserConnection.auth_status == "verified"))
+    if record is None:
+        raise HTTPException(404, "Verified personal connection not found")
+    return _ai_models_for_connection(db, record, provider_id)
 
 
 @router.post("/opencode/connections/{provider_id}/models")
 def ai_set_connection_model(provider_id: str, data: AiModelPreference,
                             user: User = Depends(require_user),
                             db: Session = Depends(get_db)):
-    """Persist model toggles in the customer's encrypted connection only."""
-    _ai_schema(db)
     record = db.scalar(select(AiUserConnection).where(
-        AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
+        AiUserConnection.user_id == user.id,
+        AiUserConnection.provider_id == provider_id,
         AiUserConnection.auth_status == "verified").with_for_update())
     if record is None:
-        raise HTTPException(404, "Verified account connection not found")
-    model = db.get(AiProviderModel, (provider_id, data.model_id))
-    if model is None or not model.active:
-        raise HTTPException(404, "Pi model is not in the saved provider catalog")
-    if data.enabled and not _ai_allowed(db, provider_id, data.model_id):
-        raise HTTPException(403, "The administrator disabled this model")
-    shared = _ai_active_platform_defaults(db).get(provider_id)
-    if not data.enabled and shared and data.model_id in shared["models"]:
-        raise HTTPException(403, "An administrator's platform model cannot be disabled by a customer")
-    key, disabled = _ai_connection_secret_and_models(record)
-    if data.enabled:
-        disabled.discard(data.model_id)
-    else:
-        disabled.add(data.model_id)
-    record.ciphertext = _ai_seal_connection(key, disabled)
-    db.commit()
-    return {"provider_id": provider_id, "model_id": data.model_id,
-            "enabled": data.enabled}
+        raise HTTPException(404, "Verified personal connection not found")
+    return _ai_update_connection_models(db, record, provider_id,
+                                        [data.model_id], data.enabled)
 
 
-@router.get("/opencode/connections/{provider_id}")
-def ai_internal_credential(provider_id: str, request: Request, workspace_id: uuid.UUID,
-                           user: User = Depends(require_user),
-                           db: Session = Depends(get_db)):
-    """Internal Pi-only retrieval. Never expose plaintext to a browser."""
-    secret = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
-    claimed = request.headers.get("x-pi-gateway-token", "")
-    if not secret or len(secret) < 32 or not _ai_hmac.compare_digest(secret, claimed):
-        raise HTTPException(404, "Not found")
-    if not request.client or request.client.host not in {"127.0.0.1", "::1"}:
-        raise HTTPException(404, "Not found")
-    workspace = db.scalar(select(Workspace).join(Project, Project.id == Workspace.project_id).where(
-        Workspace.id == workspace_id, Workspace.user_id == user.id,
-        Project.user_id == user.id, Project.archived_at.is_(None)))
-    if workspace is None:
-        raise HTTPException(404, "Workspace unavailable")
+@router.put("/opencode/connections/{provider_id}/models/bulk")
+def ai_set_connection_models_bulk(provider_id: str, data: AiBulkModelPreference,
+                                  user: User = Depends(require_user),
+                                  db: Session = Depends(get_db)):
+    record = db.scalar(select(AiUserConnection).where(
+        AiUserConnection.user_id == user.id,
+        AiUserConnection.provider_id == provider_id,
+        AiUserConnection.auth_status == "verified").with_for_update())
+    if record is None:
+        raise HTTPException(404, "Verified personal connection not found")
+    return _ai_update_connection_models(db, record, provider_id,
+                                        data.model_ids, data.enabled)
+
+
+def _ai_admin_customer_connection(db, customer_id, provider_id, *, for_update=False):
+    customer = db.get(User, customer_id)
+    if not customer or customer.role in {"admin", "owner"}:
+        raise HTTPException(404, "Customer not found")
+    stmt = select(AiUserConnection).where(
+        AiUserConnection.user_id == customer_id,
+        AiUserConnection.provider_id == provider_id,
+        AiUserConnection.auth_status.in_(("verified", "admin_disabled")))
+    row = db.scalar(stmt.with_for_update() if for_update else stmt)
+    if row is None:
+        raise HTTPException(404, "Customer provider connection not found")
+    return row
+
+
+@router.get("/admin/ai-connections/{customer_id}/{provider_id}/models")
+def ai_admin_customer_models(customer_id: uuid.UUID, provider_id: str,
+                             actor: User = Depends(require_admin),
+                             db: Session = Depends(get_db)):
     _ai_schema(db)
-    if not _ai_allowed(db, provider_id):
-        raise HTTPException(403, "Provider unavailable")
-    model_id = request.query_params.get("model_id")
-    if not model_id:
-        raise HTTPException(422, "A specific approved Pi model is required")
-    model = db.get(AiProviderModel, (provider_id, model_id))
-    if model is None or not model.active or not _ai_allowed(db, provider_id, model_id):
-        raise HTTPException(403, "Model not available under administrator policy")
-    # An administrator-default model ALWAYS uses the platform's encrypted
-    # account credential. All other models use only this customer's own
-    # verified connection. Never silently spend a customer's personal quota
-    # on a model presented as an included Gateway service.
-    record = None
-    key = None
-    shared = _ai_active_platform_defaults(db).get(provider_id)
-    if shared and model_id in shared["models"]:
-        record = shared["connection"]
-        key, _ = _ai_connection_secret_and_models(record)
-    else:
-        personal = db.scalar(select(AiUserConnection).where(
-            AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
-            AiUserConnection.auth_status == "verified"))
-        if personal:
-            personal_key, disabled = _ai_connection_secret_and_models(personal)
-            if model_id not in disabled:
-                record, key = personal, personal_key
-    if record is None or not key:
-        raise HTTPException(403, "No verified personal or administrator-approved model connection")
-    return {"provider_id": provider_id, "connection_id": str(record.id),
-            "key": key}
+    row = _ai_admin_customer_connection(db, customer_id, provider_id)
+    return _ai_models_for_connection(db, row, provider_id)
+
+
+@router.put("/admin/ai-connections/{customer_id}/{provider_id}/models/bulk")
+def ai_admin_customer_models_bulk(customer_id: uuid.UUID, provider_id: str,
+                                  data: AiBulkModelPreference,
+                                  actor: User = Depends(require_admin),
+                                  db: Session = Depends(get_db)):
+    _ai_schema(db)
+    row = _ai_admin_customer_connection(db, customer_id, provider_id,
+                                        for_update=True)
+    result = _ai_update_connection_models(db, row, provider_id,
+                                          data.model_ids, data.enabled)
+    audit(db, actor, "ai.customer_models.updated", subject=customer_id)
+    db.commit()
+    return result
 
 
 def _ai_refresh_selected_provider(db, provider_id):
