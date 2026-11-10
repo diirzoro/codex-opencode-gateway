@@ -428,18 +428,10 @@ _AI_VERIFY_URLS = {
     "together": "https://api.together.xyz/v1/models",
     "cerebras": "https://api.cerebras.ai/v1/models",
 }
-_AI_PROVIDER_DISPLAY_NAMES = {
-    "openrouter": "OpenRouter", "deepseek": "DeepSeek",
-    "openai": "OpenAI", "anthropic": "Anthropic",
-    "google": "Google Gemini", "groq": "Groq",
-    "mistral": "Mistral AI", "xai": "xAI",
-    "together": "Together AI", "cerebras": "Cerebras",
-}
 _AI_REFRESH_DAYS = 14
 _AI_STALE_DAYS = 14
 _AI_SCHEMA_OK_UNTIL = 0.0
 _AI_MODEL_FIRST_LOAD_ATTEMPT = {}
-_AI_PI_SUPPORTED_CACHE = {"at": 0.0, "providers": None}
 
 
 def _ai_pi_registry(db):
@@ -1364,6 +1356,7 @@ def _ai_catalog_refresh_if_due():
                 pid = item.get("id")
                 incoming = item.get("models")
                 if (not isinstance(pid, str) or not 0 < len(pid) <= 120 or
+                        not pid.isascii() or
                         not pid.replace("-", "").replace("_", "").replace(".", "").isalnum()
                         or not isinstance(incoming, dict)):
                     continue
