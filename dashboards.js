@@ -1602,15 +1602,19 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     // Workspace shows Pi-configured connections only. New provider discovery
     // belongs to Connections; neither config nor model listing proves credits.
     providers=snapshot.providers||[];
-    q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
+    const linkedGroup=document.createElement('optgroup');
+    linkedGroup.label=tr('My connected providers','المزوّدون المربوطون');
+    const browseGroup=document.createElement('optgroup');
+    browseGroup.label=tr('Pi catalog · requires connection','فهرس Pi · يحتاج ربطًا للتشغيل');
     for(const p of providers){
       const label=p.name+' · '+(p.connected?
-        tr('Verified connection','اتصال موثق'):
-        tr('Browse models · connect to run','تصفح النماذج · الربط مطلوب للتشغيل'));
+        tr('Verified','موثق'):tr('Catalog','فهرس'));
       const option=new Option(label,p.id);
-      option.disabled=false;
-      q('providerSelect').add(option);
+      (p.connected?linkedGroup:browseGroup).append(option);
     }
+    q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
+    if(linkedGroup.children.length)q('providerSelect').append(linkedGroup);
+    if(browseGroup.children.length)q('providerSelect').append(browseGroup);
     if(preferredProvider)chosenProvider=preferredProvider;
     if(!providers.some(p=>p.id===chosenProvider)){chosenProvider='';chosenModel='';}
     if(!chosenProvider){const configured=snapshot.config?.model;const configuredProvider=providers.find(p=>typeof configured==='string'&&configured.startsWith(p.id+'/'));const connected=providers.filter(p=>p.connected&&p.allowed!==false);chosenProvider=configuredProvider?.id||connected[0]?.id||providers[0]?.id||'';if(configuredProvider)chosenModel=configured.slice(configuredProvider.id.length+1);}
@@ -1644,10 +1648,15 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const current=()=>stamp===modelRequest&&activeWorkspace?.id===workspaceId&&q('providerSelect').value===selected?.id;
     modelsReady=false;retryModels.hidden=true;
     const render=rows=>{
-      rows=rows.filter(m=>m.visible!==false||m.id===chosenModel);
+      const zeroPrice=m=>typeof m.cost?.input==='number'&&m.cost.input===0&&
+        typeof m.cost?.output==='number'&&m.cost.output===0;
+      rows=rows.filter(m=>m.visible!==false||m.id===chosenModel)
+        .sort((a,b)=>Number(zeroPrice(b))-Number(zeroPrice(a))||
+          String(a.name||a.id).localeCompare(String(b.name||b.id)));
       q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));
       for(const model of rows){
-        const option=new Option(model.name||model.id,model.id);
+        const option=new Option((model.name||model.id)+
+          (zeroPrice(model)?tr(' · $0 listed price',' · سعر مدرج $0'):''),model.id);
         option.disabled=model.allowed===false;
         option.title=tr('Pi model · remaining credits not confirmed','نموذج Pi · الرصيد المتبقي غير مؤكد');
         q('modelSelect').add(option);
