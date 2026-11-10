@@ -442,63 +442,37 @@ _AI_MODEL_FIRST_LOAD_ATTEMPT = {}
 _AI_PI_SUPPORTED_CACHE = {"at": 0.0, "providers": None}
 
 
-def _ai_pi_supported_providers():
-    """Get names ONLY from the installed Pi SDK via the existing local socket.
-
-    Search never contacts external providers and never reads Pi auth.json.
-    The list is cached briefly only for manual provider selection. A provider
-    may be selectable for personal API linking only if Gateway ALSO knows how
-    to verify its key, which is a separate condition from Pi support.
-    """
-    import re
-    import time
-
-    current = time.monotonic()
-    cached = _AI_PI_SUPPORTED_CACHE["providers"]
-    if cached is not None and current - _AI_PI_SUPPORTED_CACHE["at"] < 120:
-        return cached
-    token = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
-    headers = {"x-pi-gateway-token": token} if len(token) >= 32 else {}
+def _ai_pi_registry(db):
+    """Single authoritative saved Pi registry snapshot in existing policy JSON."""
+    _ai_schema(db)
     try:
-        with _ai_httpx.Client(
-            transport=_ai_httpx.HTTPTransport(
-                uds=os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")),
-            timeout=20, trust_env=False) as client:
-            result = client.get("http://pi/provider", params={
-                "directory": os.getenv("PI_CATALOG_DIRECTORY", "/home/tahir/pi-test"),
-                "models": "connected"
-            }, headers=headers)
-            result.raise_for_status()
-            payload = result.json()
-    except (_ai_httpx.HTTPError, OSError, ValueError):
-        raise HTTPException(
-            503, "Pi native provider registry is unavailable; search and linking were not completed"
-        ) from None
-    if not isinstance(payload, dict) or not isinstance(payload.get("all"), list):
-        raise HTTPException(503, "Pi did not return a valid native provider registry")
-    providers = []
-    seen = set()
-    for item in payload["all"]:
-        if not isinstance(item, dict):
-            continue
-        pid = item.get("id")
-        if not isinstance(pid, str) or not re.fullmatch(r"[a-zA-Z0-9._-]{1,120}", pid):
-            continue
-        if pid in seen:
-            continue
-        seen.add(pid)
-        raw_name = item.get("name")
-        name = raw_name[:200] if isinstance(raw_name, str) and raw_name.strip() else pid
-        providers.append({
-            "id": pid, "name": name,
-            "api_key_supported": pid in _AI_VERIFY_URLS,
-        })
-    if not providers:
-        raise HTTPException(503, "Pi native provider registry returned no providers")
-    providers.sort(key=lambda row: (row["name"].casefold(), row["id"]))
-    _AI_PI_SUPPORTED_CACHE["providers"] = providers
-    _AI_PI_SUPPORTED_CACHE["at"] = current
-    return providers
+        rules = json.loads(_ai_get_policy(db).allowed_providers or "[]")
+    except (ValueError, TypeError):
+        rules = {}
+    snapshot = rules.get("pi_registry") if isinstance(rules, dict) else None
+    return snapshot if isinstance(snapshot, dict) else {}
+
+
+def _ai_pi_supported_providers(db):
+    """Search ONLY the last Pi-native registry saved in PostgreSQL.
+
+    No external provider lookup, no live Pi HTTP request during browser search,
+    and no accidental acceptance of providers created by old manual links.
+    """
+    saved = _ai_pi_registry(db)
+    provider_ids = saved.get("provider_ids")
+    if not isinstance(provider_ids, list) or not provider_ids:
+        raise HTTPException(503,
+            "Pi provider inventory has not been saved yet; TEST maintenance will retry")
+    ids = {pid for pid in provider_ids if isinstance(pid, str)
+           and 0 < len(pid) <= 120}
+    rows = list(db.scalars(select(AiProviderCatalog).where(
+        AiProviderCatalog.id.in_(ids)).order_by(AiProviderCatalog.name).limit(1000)))
+    return [
+        {"id": row.id, "name": row.name,
+         "api_key_supported": row.id in _AI_VERIFY_URLS}
+        for row in rows if row.id in ids
+    ]
 
 
 def _ai_schema(db):
@@ -719,9 +693,9 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
                     user: User = Depends(require_user), db: Session = Depends(get_db)):
     """Read saved catalog, or explicitly search Pi native providers on demand."""
     if pi_supported:
-        # Only an explicit manual-link search reads Pi's installed registry.
-        # Workspace, chat and account connection reads stay database-only.
-        return {"source": "pi-native", "connectable": _ai_pi_supported_providers()}
+        # Names were read from Pi by the existing fortnightly maintenance job;
+        # this manual-link search reads PostgreSQL ONLY.
+        return {"source": "pi-saved", "connectable": _ai_pi_supported_providers(db)}
     # No Pi requests during workspace use, chat, tools, uploads or normal
     # account-connection reads. Reuse the 14-day database snapshot.
     # Legacy discover=true is retained for compatibility but it is now
@@ -880,7 +854,7 @@ def _ai_save(data, user, db, replace=False):
     # An account-owned API key is independent from the platform's default
     # provider whitelist. Admin policy still governs *execution*, but must
     # not prevent a real upstream verification or a personal connection.
-    native = _ai_pi_supported_providers()
+    native = _ai_pi_supported_providers(db)
     if data.provider_id not in {provider["id"] for provider in native}:
         raise HTTPException(422, "Provider is not supported by the installed Pi runtime")
     if data.provider_id not in _AI_VERIFY_URLS:
