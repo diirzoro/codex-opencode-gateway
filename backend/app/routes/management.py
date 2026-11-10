@@ -535,16 +535,13 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
     """Read saved PostgreSQL catalog; metadata synchronization runs in maintenance."""
     # No Pi requests during workspace use, chat, tools, uploads or normal
     # account-connection reads. Reuse the 14-day database snapshot.
+    # Legacy discover=true is retained for compatibility but it is now
+    # read-only. The EXISTING Gateway maintenance task owns Pi synchronization,
+    # not browser clicks, workspace chats or per-request authentication.
     if discover:
-        # Check the manual TEST schema once before attempting any discovery,
-        # so a missing migration yields a clean 503 instead of an SQL 500.
         _ai_schema(db)
-        _ai_catalog_refresh_if_due()
-        db.expire_all()
-        # Do not report discovery as successful when the first catalog
-        # synchronization failed or another request is still running.
         if db.scalar(select(AiProviderCatalog.id).limit(1)) is None:
-            raise HTTPException(503, "No saved provider catalog is available; retry connection discovery")
+            raise HTTPException(503, "Pi catalog initial synchronization pending; check TEST maintenance logs")
     rows = _ai_provider_rows(db, user.id, query=query[:120],
                              include_connected_models=include_connected_models,
                              provider_id=provider_id, connected_only=connected_only)
