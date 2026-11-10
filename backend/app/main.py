@@ -21,6 +21,13 @@ async def retention_maintenance():
         except Exception:
             import logging
             logging.getLogger(__name__).warning("Retention policy initialization could not complete")
+    # Bootstrap the catalog asynchronously in the existing maintenance task,
+    # so database migration readiness never blocks login or the HTML shell.
+    try:
+        await asyncio.to_thread(management.ai_catalog_refresh)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Initial AI catalog synchronization postponed")
     while True:
         await asyncio.sleep(300)
         from .services import email_notifications, github as github_service, registration_drafts
