@@ -536,6 +536,9 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
     # No Pi discovery during workspace use, chat, tools, uploads or normal
     # account-connection reads. Reuse the 7-day PostgreSQL snapshot when fresh.
     if discover:
+        # Check the manual TEST schema once before attempting any discovery,
+        # so a missing migration yields a clean 503 instead of an SQL 500.
+        _ai_schema(db)
         _ai_catalog_refresh_if_due()
         db.expire_all()
         # Do not report discovery as successful when the first catalog
