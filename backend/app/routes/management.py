@@ -1082,10 +1082,19 @@ def _ai_models_for_connection(db, record, provider_id):
         {"id": model.model_id, "name": model.name,
          "free_eligible": _ai_model_zero_price(model),
          **_ai_model_display_info(model),
-         "enabled": (model.model_id in locked or model.model_id not in disabled)
-                     and (model.model_id in locked or _ai_personal_allowed(db, provider_id, model.model_id, rules=rules)),
+         # Personal selection is separate from runtime access. A client may
+         # save their choice even while an administrator has hidden execution.
+         # Platform defaults remain available independently of this choice.
+         "personal_enabled": model.model_id not in disabled,
+         "personal_selectable": True,
+         "enabled": model.model_id in locked or (
+             model.model_id not in disabled and
+             _ai_personal_allowed(db, provider_id, model.model_id, rules=rules)),
          "platform_locked": model.model_id in locked,
-         "admin_allowed": model.model_id in locked or _ai_personal_allowed(db, provider_id, model.model_id, rules=rules)}
+         "admin_allowed": _ai_personal_allowed(db, provider_id, model.model_id, rules=rules),
+         "restriction_reason": ("Disabled by administrator policy"
+                                if not _ai_personal_allowed(
+                                    db, provider_id, model.model_id, rules=rules) else None)}
         for model in models]}
 
 
@@ -1102,12 +1111,11 @@ def _ai_update_connection_models(db, record, provider_id, model_ids, enabled):
             AiProviderModel.active.is_(True)))}
     if set(models) != ids:
         raise HTTPException(422, "Some models are not available in the saved Pi catalog")
-    rules = _ai_policy(db)
-    locked = _ai_active_platform_defaults(db).get(provider_id, {}).get("models", set())
-    if not enabled and ids.intersection(locked):
-        raise HTTPException(403, "Administrator platform models cannot be disabled")
-    if enabled and any(not _ai_personal_allowed(db, provider_id, mid, rules=rules) for mid in ids):
-        raise HTTPException(403, "An administrator has hidden one or more models")
+    # Only the PERSONAL preference is being changed. The administrator's
+    # shared platform defaults are stored separately, and no customer request
+    # can alter them or bypass effective runtime authorization.
+    # An admin-hidden model can be personally selected for later use, but is
+    # still excluded by _ai_personal_allowed at credential/runtime lookup.
     key, disabled = _ai_connection_secret_and_models(record)
     if enabled:
         disabled.difference_update(ids)
