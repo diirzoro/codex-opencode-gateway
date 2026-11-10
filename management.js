@@ -224,10 +224,15 @@
       for(const p of rows){
         const details=node('details','','provider-connected-detail');
         const summary=node('summary','','provider-connected-summary');
-        const state=p.platform?tr('Gateway default · locked','افتراضي للمنصة · ثابت'):
-          p.personal_status==='admin_disabled'?tr('Suspended by administrator','موقوف من الإدارة'):
-          tr('My connection','اتصالي الشخصي');
-        summary.append(node('strong',p.name||p.id),node('small',state));
+        const state=p.platform&&p.personal_connected
+          ?tr('Platform models + my personal connection','نماذج المنصة + اتصالي الشخصي')
+          :p.platform?tr('Gateway default · locked','افتراضي للمنصة · ثابت')
+          :p.personal_status==='admin_disabled'?tr('Suspended by administrator','موقوف من الإدارة')
+          :tr('My personal API connection','اتصالي الشخصي بمفتاح API');
+        const source=p.connection_last4
+          ?state+' · '+tr('Saved key ending ','مفتاح محفوظ ينتهي بـ ')+'••••'+p.connection_last4
+          :state;
+        summary.append(node('strong',p.name||p.id),node('small',source));
         const content=node('div','','provider-connected-content');
         const actions=node('div','','manage-actions');
         if(p.personal_connected){
