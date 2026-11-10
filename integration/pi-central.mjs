@@ -59,7 +59,9 @@ const json = (res, status, value) => {
     "cache-control": "no-store", "x-content-type-options": "nosniff" });
   res.end(JSON.stringify(value));
 };
-function error(res, status, message) { json(res,status,{error:message}); }
+function error(res, status, message, receipt) {
+  json(res,status,{error:message,...(receipt==="not_submitted"?{receipt:"not_submitted"}:{})});
+}
 function cleanPath(uri) {
   const url = new URL(uri, "http://localhost");
   return { pathname:url.pathname.replace(/^\/native-direct\/api/,"") || "/", query:url.searchParams };
@@ -648,6 +650,10 @@ function nativeCommands(commands) {
       source:c.source,description:String(c.description||"").slice(0,400)}));
 }
 const server=http.createServer(async(req,res)=>{
+  // A failed gateway credential lookup or model preflight means Pi NEVER
+  // received a prompt. Once prompt() is dispatched, an HTTP error can be
+  // ambiguous and MUST NOT be labelled as a safe-to-retry rejection.
+  let promptDispatched=false;
   try{
     const {pathname,query}=cleanPath(req.url||"/");
     if(pathname==="/health" && req.method==="GET")return json(res,200,{service:"pi-central",status:"ready",activeWorkers:pool.size,maxWorkers:MAX_PROCS,activeExecutions:executing.size,maxActiveExecutions:MAX_ACTIVE_EXECUTIONS});
@@ -758,11 +764,11 @@ const server=http.createServer(async(req,res)=>{
       const b=await body(req);
       const {message,images}=piPromptParts(b.parts,s,a.id);
       if((!message.trim()&&!images.length)||message.length>100000)
-        return error(res,422,"Prompt required");
+        return error(res,422,"Prompt required","not_submitted");
       if(!b.model?.providerID||!b.model?.modelID)
-        return error(res,422,"Select a verified provider and model from Gateway");
+        return error(res,422,"Select a verified provider and model from Gateway","not_submitted");
       if(b.agent&&!s.testOwner)
-        return error(res,403,"Native skill and extension execution requires isolated TEST owner access");
+        return error(res,403,"Native skill and extension execution requires isolated TEST owner access","not_submitted");
       // Authenticate on EVERY prompt: deletions/rotations take effect before
       // another request can run. Never fall back to shared Pi credentials.
       const authorizedKey=await gatewayCredential(req,s,b.model.providerID,b.model.modelID);
@@ -778,10 +784,11 @@ const server=http.createServer(async(req,res)=>{
           const command=(commands?.commands||[]).find(c=>c?.name===b.agent);
           if(!command) {
             releaseExecution(a);
-            return error(res,422,"Selected Pi capability is no longer installed");
+            return error(res,422,"Selected Pi capability is no longer installed","not_submitted");
           }
           prompt="/"+command.name+(message.trim()?" "+message:"");
         }
+        promptDispatched=true;
         const accepted=await a.command("prompt",{message:prompt,...(images.length?{images}:{})});
         // Pi can consume an extension command without starting a model run.
         // A started/queued prompt stays reserved until agent_settled or exit.
@@ -796,7 +803,12 @@ const server=http.createServer(async(req,res)=>{
     }
     if(action==="abort" && req.method==="POST"){await a.command("abort",{},30000);return json(res,200,true);}
     return error(res,501,"Pi operation not implemented");
-  }catch(e){return error(res,e.status||502,e.message||"Pi adapter error");}
+  }catch(e){
+    const isPrompt=(req.method==="POST"&&
+      /^\/session\/[^/]+\/prompt_async(?:\?|$)/.test(cleanPath(req.url||"/").pathname));
+    return error(res,e.status||502,e.message||"Pi adapter error",
+      isPrompt&&!promptDispatched?"not_submitted":undefined);
+  }
 });
 server.on("clientError",(_,s)=>s.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 mkdirSync(path.dirname(SOCK),{recursive:true,mode:0o700});
