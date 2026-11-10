@@ -679,6 +679,13 @@ const server=http.createServer(async(req,res)=>{
         return error(res,410,"Shared Pi credential endpoints retired. Verified account-owned connections must be managed by Gateway.");
       return error(res,404,"Pi account endpoint not found");
     }
+    // The old OpenCode client polls question/permission queue endpoints.
+    // This Pi SDK integration does not create an HTTP approval queue; Pi
+    // handles its configured extension/tool lifecycle internally. A queue
+    // *read* is empty, not a non-existent "session" 404. Do not invent
+    // affirmative permission replies or claim a prompt was approved.
+    if(req.method==="GET"&&["/question","/permission"].includes(pathname))
+      return json(res,200,[]);
     // File tree reads should not consume an agent process or compete with a
     // running Pi conversation for RPC worker slots.
     if(req.method==="GET"&&["/file","/file/content","/file/status","/vcs"].includes(pathname))
