@@ -1320,13 +1320,18 @@ def _ai_catalog_refresh_if_due():
             return True
         try:
             _ai_schema(db)
-            # Only the administrator-eligible free OpenRouter subset is
-            # maintained automatically. All other provider records are
-            # created/loaded ONLY when someone verifies a personal key.
-            last = db.scalar(select(AiProviderCatalog.models_synced_at).where(
-                AiProviderCatalog.id == "openrouter"))
-            if last is not None and now() - aware(last) < timedelta(days=_AI_REFRESH_DAYS):
-                return True
+            # The Pi-backed PROVIDER NAMES are refreshed once every 14 days;
+            # only free OpenRouter model details accompany this light snapshot.
+            # The last successful registry stamp is separate from per-provider
+            # model sync timestamps, so linking a key cannot delay a refresh.
+            registry = _ai_pi_registry(db)
+            last = registry.get("synced_at")
+            if isinstance(last, str):
+                try:
+                    if now() - aware(datetime.fromisoformat(last.replace("Z", "+00:00"))) < timedelta(days=_AI_REFRESH_DAYS):
+                        return True
+                except (ValueError, OverflowError):
+                    pass
             locked = db.execute(_ai_text("SELECT pg_try_advisory_xact_lock(732062611)")).scalar_one()
             if not locked:
                 return False
@@ -1348,20 +1353,24 @@ def _ai_catalog_refresh_if_due():
             if not isinstance(all_rows, list) or not all_rows:
                 raise ValueError("Pi returned an empty provider catalog")
             stamped = now()
-            # One provider query and one model query per explicit discovery,
-            # instead of one SELECT and one flush for every provider.
+            # One light Pi SDK snapshot with all provider names and ONLY
+            # verified zero-priced OpenRouter model metadata. No bulk
+            # downloads of paid or unrelated provider model definitions.
             known = {row.id: row for row in db.scalars(select(AiProviderCatalog))}
             valid = {}
             for item in all_rows:
                 if not isinstance(item, dict):
                     continue
                 pid = item.get("id")
-                if pid != "openrouter":
-                    continue
                 incoming = item.get("models")
                 if (not isinstance(pid, str) or not 0 < len(pid) <= 120 or
-                        not isinstance(incoming, dict)):
+                        not pid.replace("-", "").replace("_", "").replace(".", "").isalnum()
+                        or not isinstance(incoming, dict)):
                     continue
+                # A malicious, incompatible or incomplete payload must never
+                # push non-free models into the periodic catalog.
+                if pid != "openrouter" and incoming:
+                    raise ValueError("Pi names-only response contained unexpected model data")
                 valid[pid] = (str(item.get("name") or pid)[:200], incoming)
                 if pid not in known:
                     row = AiProviderCatalog(id=pid, name=valid[pid][0])
@@ -1370,14 +1379,18 @@ def _ai_catalog_refresh_if_due():
             if not valid:
                 raise ValueError("Pi catalog contains no valid providers")
             db.flush()  # parent rows must exist before model foreign keys
-            prior = {}
-            for model in db.scalars(select(AiProviderModel).where(
-                    AiProviderModel.provider_id.in_(valid))):
-                prior.setdefault(model.provider_id, {})[model.model_id] = model
+            # Existing model rows for other providers remain untouched.
+            prior = {model.model_id: model for model in db.scalars(
+                select(AiProviderModel).where(
+                    AiProviderModel.provider_id == "openrouter"))}
             for pid, (name, incoming) in valid.items():
                 row = known[pid]
                 row.name = name
-                old_models = prior.get(pid, {})
+                if pid != "openrouter":
+                    # Only the name is synchronized. Keep all previously
+                    # imported personal models/counts/status as-is.
+                    continue
+                old_models = prior
                 # Never deactivate a healthy saved catalog because a provider
                 # temporarily returned an empty or incomplete inventory.
                 if not incoming and old_models:
@@ -1408,10 +1421,29 @@ def _ai_catalog_refresh_if_due():
                     if model_id not in seen and (pid != "openrouter" or
                                                  model_id.endswith(":free")):
                         previous.active = False
-                row.model_count = (len(old_models | {mid: None for mid in seen})
-                                   if pid == "openrouter" else len(seen))
+                row.model_count = len(set(old_models) | seen)
                 row.models_synced_at = stamped
                 row.last_sync_error = None
+            # Store the provenance of supported providers in the EXISTING
+            # policy JSON. This is not a new table or a customer-facing
+            # platform-default selection.
+            from ..models import PlatformPolicy
+            _ai_get_policy(db)
+            policy = db.scalar(select(PlatformPolicy).where(
+                PlatformPolicy.id == 1).with_for_update())
+            if policy is None:
+                raise RuntimeError("Existing TEST platform policy is unavailable")
+            try:
+                rules = json.loads(policy.allowed_providers or "[]")
+            except (ValueError, TypeError):
+                rules = []
+            if isinstance(rules, list):
+                rules = {"allowed": rules, "hidden": []}
+            if not isinstance(rules, dict):
+                raise ValueError("Invalid existing TEST provider policy")
+            rules["pi_registry"] = {"synced_at": stamped.isoformat(),
+                                    "provider_ids": sorted(valid)}
+            policy.allowed_providers = json.dumps(rules, separators=(",", ":"))
             db.commit()
             return True
         except (HTTPException, _AiSqlError, _ai_httpx.HTTPError, ValueError, OSError, RuntimeError) as exc:
