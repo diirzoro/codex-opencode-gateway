@@ -26,6 +26,11 @@ if(new URLSearchParams(location.hash.slice(1)).has('reset-password')){
 }
 const protectedPages=new Set(['clientPage','accountPage','onboarding','workspacePage','billingPage','adminPage']);
 function invalidateProviderMutation(path,method='GET'){
+  if(((method||'GET').toUpperCase()==='POST'&&/^\/api\/(?:projects|workspaces)$/.test(path))||
+     ((method||'GET').toUpperCase()==='DELETE'&&/^\/api\/projects\/[^/?]+$/.test(path))){
+    // A new or removed workspace needs a new one-time Pi account grant.
+    window.nativeDirectTest?.forget({keepSession:true});
+  }
   if(/^\/api\/opencode\/connections(?:\/[^/?]+)?$/.test(path)&&
       ['POST','PUT','DELETE'].includes((method||'GET').toUpperCase())){
     window.nativeDirectTest?.forget({keepSession:true});
@@ -443,7 +448,11 @@ function clearAuthenticatedState(destination='authPage',options={}){
  for(const select of $$('#agentSelect,#providerSelect,#modelSelect')){select.replaceChildren(new Option(select.id==='agentSelect'?(lang==='ar'?'افتراضي Pi':'Pi default'):'',''));select.disabled=true;}
  pendingIdea='';window.dispatchEvent(new Event('authentication-cleared'));updateNavigation();showPage(destination);
 }
-window.logoutSession=async()=>{try{await api('/api/auth/logout',{method:'POST',signal:AbortSignal.timeout(5000)});}finally{clearAuthenticatedState();}};
+window.logoutSession=async()=>{try{
+  // End Pi's own browser session without sending logout through Python.
+  await fetch('/native-direct/api/logout',{method:'POST',credentials:'same-origin',signal:AbortSignal.timeout(3000)}).catch(()=>{});
+  await api('/api/auth/logout',{method:'POST',signal:AbortSignal.timeout(5000)});
+}finally{clearAuthenticatedState();}};
 window.workspaceRetentionNotice=cache=>{
  if(!cache)return '';
  const ar=lang==='ar',github=cache.scope==='github_working_copy';

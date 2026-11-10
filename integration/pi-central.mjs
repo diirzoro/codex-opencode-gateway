@@ -654,6 +654,16 @@ const server=http.createServer(async(req,res)=>{
       revokeBrowserGrants(uid||null);
       return json(res,200,{invalidated:true});
     }
+    if(pathname==="/logout"&&req.method==="POST"){
+      const raw=String(req.headers.cookie||"");
+      const sid=raw.match(/(?:^|;\s*)pi_test_session=([0-9a-f-]{36})(?:;|$)/i)?.[1];
+      if(sid)browserGrants.delete(sid);
+      res.writeHead(204,{"set-cookie":PI_COOKIE+
+        "=; Path=/native-direct/api/; Max-Age=0; HttpOnly; Secure; SameSite=Strict",
+        "cache-control":"no-store"});
+      res.end();
+      return;
+    }
     if(pathname==="/bootstrap"&&req.method==="POST"){
       const ticket=String((await body(req))?.ticket||"");
       const grant=pendingTickets.get(ticket);
