@@ -782,7 +782,7 @@ def _ai_catalog_refresh_if_due():
                 row.models_synced_at = stamped
                 row.last_sync_error = None
             db.commit()
-        except (HTTPException, _AiSqlError, _ai_httpx.RequestError, ValueError, OSError):
+        except (HTTPException, _AiSqlError, _ai_httpx.HTTPError, ValueError, OSError):
             db.rollback()
             # Fail closed and preserve the last catalog; never log secrets.
             import logging
