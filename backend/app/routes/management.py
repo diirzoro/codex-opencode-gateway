@@ -850,18 +850,28 @@ def ai_internal_credential(provider_id: str, request: Request, workspace_id: uui
     _ai_schema(db)
     if not _ai_allowed(db, provider_id):
         raise HTTPException(403, "Provider unavailable")
-    record = db.scalar(select(AiUserConnection).where(
-        AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
-        AiUserConnection.auth_status == "verified"))
-    if not record:
-        raise HTTPException(403, "No verified customer connection for the selected provider")
     model_id = request.query_params.get("model_id")
-    key, disabled = _ai_connection_secret_and_models(record)
-    if model_id:
-        model = db.get(AiProviderModel, (provider_id, model_id))
-        if (model_id in disabled or model is None or not model.active
-                or not _ai_allowed(db, provider_id, model_id)):
-            raise HTTPException(403, "Model is disabled or not available for this account")
+    if not model_id:
+        raise HTTPException(422, "A specific approved Pi model is required")
+    model = db.get(AiProviderModel, (provider_id, model_id))
+    if model is None or not model.active or not _ai_allowed(db, provider_id, model_id):
+        raise HTTPException(403, "Model not available under administrator policy")
+    # Shared administrator models are immutable for customers. Their encrypted
+    # API key is only released to the existing localhost/token-protected Pi
+    # bridge for one explicitly selected, administrator-approved model.
+    shared = _ai_active_platform_defaults(db).get(provider_id)
+    if shared and model_id in shared["models"]:
+        record = shared["connection"]
+        key, _ = _ai_connection_secret_and_models(record)
+    else:
+        record = db.scalar(select(AiUserConnection).where(
+            AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
+            AiUserConnection.auth_status == "verified"))
+        if record is None:
+            raise HTTPException(403, "A verified personal provider connection is required")
+        key, disabled = _ai_connection_secret_and_models(record)
+        if model_id in disabled:
+            raise HTTPException(403, "Personal model is disabled")
     return {"provider_id": provider_id, "connection_id": str(record.id),
             "key": key}
 
