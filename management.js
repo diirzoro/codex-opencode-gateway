@@ -161,13 +161,15 @@
     const catalogCount=node('p','','provider-catalog-count');box.append(catalogCount);
     // One compact native select, not dozens of provider tiles.
     const catalogList=node('select','','provider-catalog-picker');
-    catalogList.setAttribute('aria-label',tr('Choose a provider','اختر المزوّد'));
-    box.append(catalogList);
-    catalogList.hidden=true;catalogCount.hidden=true;
+    catalogList.setAttribute('aria-label',tr('Choose a provider to connect','اختر المزوّد الذي تريد ربطه'));
+    const pickerLabel=node('label',tr('Provider (personal API key)','المزوّد (مفتاح API شخصي)'));
+    pickerLabel.append(catalogList);
+    box.append(pickerLabel);
+    pickerLabel.hidden=true;catalogCount.hidden=true;
     const connectedBox=section(body,tr('My verified provider connections','اتصالات مزوّداتي الموثقة'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
     let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
-    let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,workspaces=[],projects=[],selectedProviderId='';
+    let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,workspaces=[],projects=[],selectedProviderId='',connectableRows=[];
     let searchRows=[],searchQuery='',searchTimer=null,searchAbort=null,searchSequence=0,optionsOpen=false;
     const searchState=node('p','','provider-search-status');searchState.setAttribute('role','status');comboWrap.after(searchState);
     searchState.hidden=true;
@@ -177,7 +179,8 @@
       const result=await api('/api/opencode/catalog/providers?connected_only='+
         String(!catalogRequested));
       const connected=new Set(result.connected||[]);
-      return (result.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
+      connectableRows=(result.connectable||[]).filter(p=>p&&typeof p.id==='string');
+      const current=(result.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
         id:p.id,name:p.name||p.id,
         model_count:p.model_count??Object.keys(p.models||{}).length,
         connected:connected.has(p.id),personal_connected:p.personal_connected===true,
@@ -188,6 +191,20 @@
         last_synced_at:p.last_synced_at||null,visible:true,allowed:true
       })).sort((a,b)=>Number(b.connected)-Number(a.connected)||
         a.name.localeCompare(b.name));
+      // Connecting a personal provider is an explicit action. Do not surface
+      // unlinked catalog entries in the default customer view.
+      if(!catalogRequested)return current;
+      const seen=new Set(current.map(p=>p.id));
+      for(const p of connectableRows){
+        if(!seen.has(p.id)){
+          current.push({id:p.id,name:p.name||p.id,connected:false,
+            personal_connected:false,personal_status:'not_connected',
+            platform:false,platform_models:[],api_key_supported:true,
+            model_count:0,credit_status:'unknown',visible:true,allowed:true});
+          seen.add(p.id);
+        }
+      }
+      return current;
     }
     async function lookup(kind,value,signal){
       if(signal?.aborted||!alive()||!contextCurrent())
@@ -422,13 +439,14 @@
       if(!catalogRequested){
         catalogList.replaceChildren();catalogCount.textContent='';return;
       }
-      const rows=(snapshot?.providers||[]).filter(p=>!p.personal_connected&&p.personal_status!=='admin_disabled'&&
+      const rows=(snapshot?.providers||[]).filter(p=>p.api_key_supported===true&&
+        !p.personal_connected&&p.personal_status!=='admin_disabled'&&
         (!query||p.id.toLowerCase().includes(query)||p.name.toLowerCase().includes(query)));
       const selected=selectedProviderId;
       catalogList.replaceChildren(new Option(tr('Select a provider…','اختر المزوّد…'),''),
         ...rows.map(p=>new Option(p.name||p.id,p.id)));
       if(rows.some(p=>p.id===selected))catalogList.value=selected;
-      catalogCount.textContent=tr('Providers available: ','المزوّدون المتاحون: ')+rows.length;
+      catalogCount.textContent=tr('Providers available for manual linking: ','المزوّدون المتاحون للربط اليدوي: ')+rows.length;
       options.hidden=true;combo.setAttribute('aria-expanded','false');
     };
     catalogList.addEventListener('change',()=>{
@@ -463,9 +481,9 @@
         const selected=rows.find(p=>p.id===selectedProviderId);
         if(selected)renderSelected(selected);
         if(catalogRequested&&combo.value.trim().length>=2)scheduleSearch();
-        if(catalogRequested&&!rows.length){
-          message(tr('The Pi catalog has not been stored yet; TEST maintenance will retry automatically.',
-            'لم يُحفظ فهرس مزوّدي Pi بعد؛ ستعيد صيانة TEST المحاولة تلقائيًا.'),true);
+        if(catalogRequested&&!connectableRows.length){
+          message(tr('No supported API-key provider can be linked right now.',
+            'لا يوجد مزوّد مدعوم للتحقق من مفتاح API حاليًا.'),true);
         }else{
           message(tr('Saved connections ready','الاتصالات المحفوظة جاهزة')+' · '+
             rows.filter(p=>p.personal_connected).length);
@@ -474,7 +492,7 @@
     }
     const browse=button(tr('Connect a new provider','ربط مزوّد جديد'),async()=>{
       if(catalogLoading||!alive())return;
-      if(catalogRequested){combo.focus();return;}
+      if(catalogRequested){pickerLabel.hidden=false;catalogList.focus();return;}
       catalogLoading=true;browse.disabled=true;
       message(tr('Loading available providers and models…',
         'جارٍ تحميل المزوّدين ونماذجهم…'));
@@ -482,8 +500,10 @@
         // Display the already-saved PostgreSQL snapshot. No user-facing
         // action causes Pi to fetch the multi-provider inventory.
         catalogRequested=true;
-        comboWrap.hidden=false;catalogCount.hidden=false;
-        catalogList.hidden=false;status.hidden=false;searchState.hidden=true;
+        // A single provider dropdown backed by approved API verifiers.
+        // No prerequisite full Pi catalog and no duplicated free-text form.
+        comboWrap.hidden=true;catalogCount.hidden=false;
+        pickerLabel.hidden=false;status.hidden=false;searchState.hidden=true;
         await refresh(true);
       }catch(error){if(alive())message(error.message,true);}
       finally{catalogLoading=false;browse.disabled=false;}
