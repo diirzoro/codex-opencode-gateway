@@ -92,15 +92,16 @@ async function scope(req, query) {
     // existing Gateway maintenance worker. No anonymous discovery.
     const cookie=req.headers.cookie||"";
     if(cookie){
-      await gateway(req,"/api/auth/me");
-    }else{
-      const expected=process.env.PI_GATEWAY_INTERNAL_TOKEN||"";
-      const candidate=String(req.headers["x-pi-gateway-token"]||"");
-      if(expected.length<32||candidate.length!==expected.length||
-         !timingSafeEqual(Buffer.from(expected),Buffer.from(candidate)))
-        throw Object.assign(new Error("Gateway catalog authorization required"),{status:401});
+      const actor=await gateway(req,"/api/auth/me");
+      return {catalog:true,userId:String(actor.id),testOwner:
+        process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1"&&actor.role==="owner"};
     }
-    return {catalog:true,userId:"shared"};
+    const expected=process.env.PI_GATEWAY_INTERNAL_TOKEN||"";
+    const candidate=String(req.headers["x-pi-gateway-token"]||"");
+    if(expected.length<32||candidate.length!==expected.length||
+       !timingSafeEqual(Buffer.from(expected),Buffer.from(candidate)))
+      throw Object.assign(new Error("Gateway catalog authorization required"),{status:401});
+    return {catalog:true,userId:"internal",testOwner:false};
   }
   if(!directory || directory.length>4096)
     throw Object.assign(new Error("Owned project directory required"),{status:400});
@@ -634,6 +635,9 @@ const server=http.createServer(async(req,res)=>{
       // Pi's registered extension/skill/prompt commands are its discoverable
       // capabilities. Do not invent "build", "plan" or other agents.
       if(pathname==="/agent"&&req.method==="GET") {
+        // Catalog reads cannot invoke the operator's installed extensions for
+        // ordinary customers. Owner-only TEST tools must be explicitly enabled.
+        if(!s.testOwner)return json(res,200,[]);
         const commands=await nativeCommandDiscovery(s.userId);
         return json(res,200,nativeCommands(commands));
       }
