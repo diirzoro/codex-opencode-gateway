@@ -389,8 +389,8 @@
       records.sort((a,b)=>Number(b.price_type==='free')-Number(a.price_type==='free')||
         String(a.name||a.id).localeCompare(String(b.name||b.id)));
       const panelTitle=node('p',tr(
-        'Enable or disable personal models. Platform models remain locked.',
-        'فعّل أو عطّل النماذج الشخصية؛ نماذج المنصة تبقى ثابتة.'),'provider-model-help');
+        'Choose models for your personal API key. Platform defaults are managed separately. Restricted models cannot run until an administrator allows them.',
+        'اختر نماذج مفتاح API الشخصي. نماذج المنصة يديرها الأدمن بشكل مستقل. النموذج المحجوب لا يعمل حتى تسمح به الإدارة.'),'provider-model-help');
       const filter=node('input','','provider-model-search');filter.type='search';
       filter.placeholder=tr('Search models within this provider…','ابحث في نماذج هذا المزوّد…');
       const onlyFree=node('label','','provider-free-filter'),freeCheck=node('input');
@@ -403,8 +403,7 @@
       const platformChoices=new Map();
       let saving=false;
       const updateCounter=()=>{
-        const editable=items.filter(x=>x.model.platform_locked!==true&&
-          x.model.admin_allowed!==false);
+        const editable=items.filter(x=>x.model.personal_selectable!==false);
         const selected=editable.filter(x=>x.toggle.checked).length;
         shown.textContent=selected+' / '+editable.length+' '+tr('personal models enabled','نموذج شخصي مفعّل');
       };
@@ -418,16 +417,30 @@
         }
         updateCounter();
       }
-      async function sendBulk(modelIds,enabled){
+      async function sendBulk(modelIds,enabled,previousStates=null){
         if(!modelIds.length||saving)return;
         saving=true;
         const before=new Map(items.map(item=>[item.model.id,item.toggle.checked]));
+        if(previousStates)for(const [id,checked] of previousStates)before.set(id,checked);
         const changed=new Set(modelIds);
         for(const item of items)if(changed.has(item.model.id))item.toggle.checked=enabled;
         for(const item of items)item.toggle.disabled=true;
         selectAll.disabled=clearAll.disabled=true;updateCounter();
         try{
-          await api(route+'/bulk',{method:'PUT',body:JSON.stringify({model_ids:modelIds,enabled})});
+          const receipt=await api(route+'/bulk',{method:'PUT',body:JSON.stringify({model_ids:modelIds,enabled})});
+          if(receipt?.provider_id!==p.id||receipt.updated!==modelIds.length)
+            throw Error(tr('Gateway did not confirm model selection.','لم يؤكد Gateway حفظ اختيار النماذج.'));
+          for(const item of items)if(changed.has(item.model.id)){
+            item.model.personal_enabled=enabled;
+            item.model.enabled=enabled&&item.model.admin_allowed!==false||
+              item.model.platform_locked===true;
+          }
+          const restricted=items.some(item=>changed.has(item.model.id)&&
+            item.model.admin_allowed===false);
+          toast(restricted?
+            tr('Personal choice saved; administrator restrictions still apply.',
+              'تم حفظ الاختيار الشخصي، وتبقى قيود الأدمن سارية.'):
+            tr('Model selection saved','تم حفظ اختيار النماذج'));
           invalidateOwnedWorkspaceProviders();
           window.nativeDirectTest?.forget({keepSession:true});
           if(window.refreshWorkspaceChoices)
@@ -436,21 +449,23 @@
           for(const item of items)item.toggle.checked=before.get(item.model.id);
           toast(error.message||String(error));
         }finally{
-          for(const item of items)item.toggle.disabled=item.model.platform_locked===true||
-            item.model.admin_allowed===false;
+          for(const item of items)item.toggle.disabled=item.model.personal_selectable===false;
           saving=false;selectAll.disabled=clearAll.disabled=false;updateCounter();
         }
       }
       function bulk(enabled){
-        const ids=items.filter(item=>item.model.platform_locked!==true&&
-          item.model.admin_allowed!==false&&item.toggle.checked!==enabled)
+        const ids=items.filter(item=>item.model.personal_selectable!==false&&
+          item.toggle.checked!==enabled)
           .map(item=>item.model.id);
         return sendBulk(ids,enabled);
       }
       for(const m of records){
         const row=node('div','','provider-model-choice');
-        const toggle=node('input');toggle.type='checkbox';toggle.checked=m.enabled===true;
-        toggle.disabled=m.platform_locked===true||m.admin_allowed===false;
+        const toggle=node('input');toggle.type='checkbox';
+        toggle.checked=m.personal_enabled===undefined?m.enabled===true:m.personal_enabled===true;
+        toggle.disabled=m.personal_selectable===false;
+        toggle.setAttribute('aria-label',
+          tr('Use personal key for ','استخدام المفتاح الشخصي مع ')+(m.name||m.id));
         const personal=node('label','','provider-personal-model');
         const modelName=node('div','','provider-model-label');
         modelName.append(node('span',m.name||m.id),node('small',m.id));
@@ -461,10 +476,19 @@
             m.price_type==='paid'?tr('Paid','مدفوع'):
             tr('Price unknown','السعر غير محدد'),
             'provider-model-tag '+(m.price_type||'unknown'));
-        personal.append(toggle,modelName,tag);row.append(personal);
+        personal.append(toggle,modelName,tag);
+        if(m.admin_allowed===false){
+          const warning=node('small',tr('Restricted by administrator · selection can be saved but execution is blocked',
+            'محجوب من الأدمن · يمكن حفظ اختيارك لكن التشغيل ممنوع'),'provider-model-restriction');
+          modelName.append(warning);
+          row.title=warning.textContent;
+        }
+        row.append(personal);
         toggle.addEventListener('change',()=>{
-          const enabled=toggle.checked;toggle.checked=!enabled;
-          void sendBulk([m.id],enabled);
+          const enabled=toggle.checked;
+          // Keep the native checkbox's immediate visual response. If
+          // saving fails, restore the exact previous state for this row.
+          void sendBulk([m.id],enabled,new Map([[m.id,!enabled]]));
         });
         if(platform&&admin()&&!isCustomerAdmin&&m.free_eligible&&m.admin_allowed!==false){
           const adminLabel=node('label','','provider-platform-choice');
