@@ -75,7 +75,7 @@ window.nativeDirectTest=(()=>{
     // model catalog. Allow transfer time over slower connections without
     // changing Pi's cache, requesting an external refresh, or adding
     // a Gateway registry. Other GET endpoints retain their original budget.
-    const timeout=method==='GET'&&path==='provider'?90000:method==='GET'?18000:30000;
+    const timeout=method==='GET'&&path.startsWith('provider')?90000:method==='GET'?18000:30000;
     const deadline=AbortSignal.timeout(timeout);
     const effectiveSignal=signal?AbortSignal.any([signal,deadline]):deadline;
     const options={method,cache:'no-store',credentials:'same-origin',signal:effectiveSignal};
@@ -129,7 +129,9 @@ window.nativeDirectTest=(()=>{
     // Never build a second persistent catalog or refresh models on every prompt.
     if(!force&&catalogSnapshot)return catalogSnapshot;
     if(catalogPending)return catalogPending;
-    const promise=direct('provider').then(data=>{
+    // Fetch only models for providers that Pi currently reports configured.
+    // A provider's model count remains searchable without transferring its full catalogue.
+    const promise=direct('provider?models=connected').then(data=>{
       if(!Array.isArray(data?.all)||!Array.isArray(data?.connected))throw Error('Invalid Pi provider response');
       if(ownerScope()!==user)throw Error('Account changed during Native provider discovery');
       if(revision!==presentationRevision)throw Error('Native provider state changed; retry discovery');
