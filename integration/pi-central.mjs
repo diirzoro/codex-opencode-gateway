@@ -258,21 +258,25 @@ class SdkAgent {
     const manager=existing.length?
       sdk.SessionManager.open(existing[0].path):
       sdk.SessionManager.create(scope.directory,sessionDir);
-    const allowTools=scope.testOwner===true;
+    // Use the complete existing Pi installation for every account.
+    // Pi SDK remains the only agent, tool, skill and extension executor.
     const settingsManager=sdk.SettingsManager.inMemory();
-    const scopedAgentDir=allowTools?PI_AGENT_DIR:path.join(sessionDir,"isolated-agent");
     const resourceLoader=new sdk.DefaultResourceLoader({
-      cwd:scope.directory,agentDir:scopedAgentDir,settingsManager,
-      noExtensions:!allowTools,noSkills:!allowTools,
-      noPromptTemplates:!allowTools,noContextFiles:!allowTools
+      cwd:scope.directory,agentDir:PI_AGENT_DIR,settingsManager,
+      noExtensions:false,noSkills:false,
+      noPromptTemplates:false,noContextFiles:false
     });
     await resourceLoader.reload();
     const {session}=await sdk.createAgentSession({
-      cwd:scope.directory,agentDir:scopedAgentDir,
+      cwd:scope.directory,agentDir:PI_AGENT_DIR,
       modelRuntime:runtime,sessionManager:manager,settingsManager,
-      resourceLoader,noTools:!allowTools,
-      tools:allowTools?["read","bash","edit","write","grep","find","ls"]:[]
+      resourceLoader,noTools:false
     });
+    // Activate every tool already registered in Pi, including the seven
+    // built-ins and installed extension tools. No new tools or APIs are added.
+    if(typeof session.getAllTools==="function"&&
+       typeof session.setActiveToolsByName==="function")
+      session.setActiveToolsByName(session.getAllTools().map(tool=>tool.name));
     return new SdkAgent(scope,session,runtime);
   }
   constructor(scope,session,runtime){
@@ -406,10 +410,9 @@ async function agent(s) {
   const id=projectIdFor(s);
   const current=pool.get(id);
   if(current&&!current.closed){
-    if(current.scope.testOwner===s.testOwner)return current;
-    if(current.active||current.running||executing.has(current))
-      throw Object.assign(new Error("Project permissions changed during an active run"),{status:409});
-    current.close(); // recreate with the updated role, no stale shell tools
+    // Tool availability is no longer role-dependent; reuse this project's
+    // existing Pi SDK session without closing or resetting conversations.
+    return current;
   }
   const pending=creating.get(id);
   if(pending)return pending;
@@ -703,12 +706,9 @@ const server=http.createServer(async(req,res)=>{
         const selected=["provider","free"].includes(view)?(query.get("providerID")||""):"";
         return json(res,200,providerCatalog(native.models,native.providers,view,selected));
       }
-      // Pi's registered extension/skill/prompt commands are its discoverable
-      // capabilities. Do not invent "build", "plan" or other agents.
+      // Discover installed Pi extensions, skills and prompts for all signed-in
+      // accounts through Pi itself; no second registry or Python proxy.
       if(pathname==="/agent"&&req.method==="GET") {
-        // Catalog reads cannot invoke the operator's installed extensions for
-        // ordinary customers. Owner-only TEST tools must be explicitly enabled.
-        if(!s.testOwner)return json(res,200,[]);
         const commands=await nativeCommandDiscovery(s.userId);
         return json(res,200,nativeCommands(commands));
       }
@@ -801,8 +801,6 @@ const server=http.createServer(async(req,res)=>{
         return error(res,422,"Prompt required","not_submitted");
       if(!b.model?.providerID||!b.model?.modelID)
         return error(res,422,"Select a verified provider and model from Gateway","not_submitted");
-      if(b.agent&&!s.testOwner)
-        return error(res,403,"Native skill and extension execution requires isolated TEST owner access","not_submitted");
       // One-time Gateway handoff already authorized this account's Pi session.
       // Prompts never fetch a credential or model policy from Python.
       const authorizedKey=nativeCredential(s,b.model.providerID,b.model.modelID);

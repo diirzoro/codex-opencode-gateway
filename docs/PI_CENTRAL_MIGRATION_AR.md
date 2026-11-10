@@ -1112,3 +1112,14 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - تعرض text_delta وtext_end مباشرة من Pi SDK، وتقرأ التاريخ النهائي بعد agent_settled مرة واحدة بدل القراءة لكل Token.
 - Pi وحده يصنف أخطاء المزوّد، ومنها insufficient_balance وrate_limited وinvalid_key وmodel_unavailable؛ لا يتم تفسير 429 وحده بأنه نفاد رصيد.
 - تحديث إصدار ملفات المتصفح في index.html. لم يحدث نشر TEST أو تجربة حيّة، ولا تعديل LIVE أو master أو Workflow.
+
+
+## 38. تفعيل إمكانات Pi الأصلية لجميع الحسابات — SOURCE ONLY — 11 نوفمبر 2026
+
+- استُبدل الشرط القديم `allowTools = scope.testOwner===true` في `SdkAgent.create` بتهيئة Pi SDK كاملة لجميع الحسابات: `noTools:false`, `noExtensions:false`, `noSkills:false`, `noPromptTemplates:false`, `noContextFiles:false`.
+- تستخدم الجلسات `PI_AGENT_DIR` الحالي لاكتشاف المهارات والإضافات والقوالب المثبتة والمشروع دون أي خدمة أو أداة مصطنعة. يستخدم Pi SDK `getAllTools()/setActiveToolsByName()` لإتاحة جميع الأدوات التي سجلها Pi بالفعل، وليس قائمة أدوات جديدة مكتوبة داخل Gateway.
+- أزيل منع قراءة `/agent` لغير المالك، وكذلك منع اختيار أمر Pi مثبت من `prompt_async`. أصبحت جلسة Pi نفسها تستخدم قائمة الأدوات والمهارات والأوامر المكتشفة.
+- بقي `ModelRuntime` و`InMemoryCredentialStore` المعزولان حسب الجلسة ومسار المحادثة المباشر إلى Pi دون تغيير؛ لا يستدعى Python في تنفيذ Prompt أو الأداة.
+- لا يوجد هنا تنفيذ جديد لـTodo أو Python Tool Proxy أو تغيير للواجهات أو قواعد البيانات. المزايا المتوفرة فعليًا تعتمد على ما هو مثبت في Pi على TEST.
+- **ملاحظة تشغيلية واضحة:** قبل نشر هذا الإعداد في نظام متعدد العملاء، فإن تفعيل Bash وقراءة الملفات والإضافات من نفس حساب خدمة VPS يمنح مستخدمي الأدوات صلاحيات عملية ذلك الحساب على الخادم. التغيير مصدر TEST فقط، ولم يُنشر أو يُختبر على الخادم فعليًا.
+- بقيت `master` وLIVE وWorkflow بلا تعديل.
