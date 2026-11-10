@@ -1601,17 +1601,19 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   function renderProviders(snapshot,preferredProvider=''){
     // Workspace shows Pi-configured connections only. New provider discovery
     // belongs to Connections; neither config nor model listing proves credits.
-    providers=(snapshot.providers||[]).filter(p=>p.connected);
+    providers=snapshot.providers||[];
     q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
     for(const p of providers){
-      const label=p.name+' · '+tr('Verified account connection','اتصال موثق لهذا الحساب');
+      const label=p.name+' · '+(p.connected?
+        tr('Verified connection','اتصال موثق'):
+        tr('Browse models · connect to run','تصفح النماذج · الربط مطلوب للتشغيل'));
       const option=new Option(label,p.id);
-      option.disabled=!p.connected;
+      option.disabled=false;
       q('providerSelect').add(option);
     }
     if(preferredProvider)chosenProvider=preferredProvider;
     if(!providers.some(p=>p.id===chosenProvider)){chosenProvider='';chosenModel='';}
-    if(!chosenProvider){const configured=snapshot.config?.model;const configuredProvider=providers.find(p=>typeof configured==='string'&&configured.startsWith(p.id+'/'));const connected=providers.filter(p=>p.connected&&p.allowed!==false);chosenProvider=configuredProvider?.id||(window.nativeSession?.active()?connected[0]?.id||'':connected.length===1?connected[0].id:'');if(configuredProvider)chosenModel=configured.slice(configuredProvider.id.length+1);}
+    if(!chosenProvider){const configured=snapshot.config?.model;const configuredProvider=providers.find(p=>typeof configured==='string'&&configured.startsWith(p.id+'/'));const connected=providers.filter(p=>p.connected&&p.allowed!==false);chosenProvider=configuredProvider?.id||connected[0]?.id||providers[0]?.id||'';if(configuredProvider)chosenModel=configured.slice(configuredProvider.id.length+1);}
     if(providers.some(p=>p.id===chosenProvider))q('providerSelect').value=chosenProvider;
     q('providerSelect').onchange=()=>{chosenProvider=q('providerSelect').value;chosenModel='';models();};q('modelSelect').onchange=()=>{chosenModel=q('modelSelect').value;renderNativeVariants();saveNativeSelection();updateSend();};models();
   }
@@ -1654,7 +1656,23 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       q('modelSelect').value=rows.some(m=>m.id===preferred&&m.allowed!==false)?preferred:(window.nativeSession?.active()?rows.find(m=>m.allowed!==false)?.id||'':'');
     };
     render(selected&&workspaceId?window.workspaceRuntime.peekModels(workspaceId,selected.id)?.models||[]:[]);updateSend();
-    if(!runtimeReady||!selected?.connected||selected.allowed===false)return;
+    if(!runtimeReady||!selected||selected.allowed===false)return;
+    if(!selected.connected){
+      // Browse the saved Pi catalog without requiring credentials. These
+      // options are explicitly disabled until a verified connection exists.
+      try{
+        const data=await api('/api/workspaces/'+encodeURIComponent(workspaceId)+
+          '/providers/'+encodeURIComponent(selected.id)+'/models');
+        if(!current())return;
+        render(Object.entries(data.models||{}).map(([id,m])=>({
+          ...m,id,allowed:false,visible:true
+        })));
+        q('modelSelect').title=tr('Connect a verified provider key to run these Pi models.',
+          'تحتاج إلى ربط مفتاح موثق لدى المزوّد لتشغيل هذه النماذج.');
+        updateSend();
+      }catch(error){if(current())q('modelSelect').title=error.message;}
+      return;
+    }
     if(q('modelSelect').options.length===1)q('modelSelect').options[0].textContent=tr('Loading models…','جارٍ تحميل النماذج…');
     try{
       const data=await window.workspaceRuntime.loadModels(workspaceId,selected.id);
