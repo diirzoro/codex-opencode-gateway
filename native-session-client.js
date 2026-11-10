@@ -399,6 +399,7 @@
   async function start(){
     stop();const id=activeSession?.id,user=owner();if(!id)return;
     const row=await context(id);if(!current(id,user))return;
+    await window.nativeDirectTest.ensureSession();
     const source=new EventSource(url(row.workspace_id,'event'));stream=source;streamId=id;let timer,fileTimer,pending=false,lastMessageRead=0,opened=false,needsSnapshot=false;const eventIDs=new Set(),changedTools=new Set();
     function filesChanged(){clearTimeout(fileTimer);fileTimer=setTimeout(()=>{if(stream===source&&current(id,user))window.refreshNativeFiles?.({workspaceId:row.workspace_id,owner:user});},400);}
     // Coalesce token/part bursts into bounded snapshots. The native SSE

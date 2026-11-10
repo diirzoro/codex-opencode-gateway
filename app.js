@@ -67,7 +67,34 @@ window.nativeDirectTest=(()=>{
     if(typeof file!=='string'||!file.startsWith('file:'))return null;
     try{return decodeURIComponent(new URL(file).pathname).replace(/\/+$/,'');}catch{return null;}
   };
+  let piGrantOwner="",piGrantExpires=0,piGrantPending=null;
+  async function ensureSession({force=false}={}){
+    const owner=String(currentUser?.id||"");
+    if(!owner)throw Error("Sign in to open the Pi session");
+    if(!force&&owner===piGrantOwner&&Date.now()<piGrantExpires)return;
+    if(piGrantPending)return piGrantPending;
+    const task=(async()=>{
+      const response=await fetch("/api/opencode/pi-bootstrap",{
+        method:"POST",credentials:"same-origin",cache:"no-store",
+        headers:{"Content-Type":"application/json"},body:"{}"
+      });
+      if(!response.ok)throw Error("Pi session handoff HTTP "+response.status);
+      const data=await response.json();
+      if(typeof data.ticket!=="string")throw Error("Pi session ticket unavailable");
+      const linked=await fetch(url("bootstrap"),{
+        method:"POST",credentials:"same-origin",cache:"no-store",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ticket:data.ticket})
+      });
+      if(!linked.ok)throw Error("Pi session activation HTTP "+linked.status);
+      if(owner!==String(currentUser?.id||""))throw Error("Account changed during Pi handoff");
+      piGrantOwner=owner;piGrantExpires=Date.now()+11*60_000;
+    })();
+    piGrantPending=task;
+    try{return await task;}finally{if(piGrantPending===task)piGrantPending=null;}
+  }
   const direct=async(path,{method='GET',value,signal,directory=defaultDirectory()}={})=>{
+    await ensureSession();
     // Timebox each Native control request. The larger verification deadline
     // cannot stop a single fetch stuck at Nginx/upstream otherwise.
     // Native /provider can return 7+ MB from the server's already-persisted
@@ -122,6 +149,7 @@ window.nativeDirectTest=(()=>{
     return user;
   }
   function forget({fresh=false,keepSession=false}={}){
+    piGrantExpires=0;
     presentationRevision++;
     catalogSnapshot=agentsSnapshot=workspaceSnapshot=configuredSnapshot=null;
     catalogPending=agentsPending=workspacePending=configuredPending=null;
@@ -266,7 +294,7 @@ window.nativeDirectTest=(()=>{
     }
     return response.json();
   }
-  return {active,testHost,url,direct,catalog,configuredProviders,agents,registry,workspaceRegistry,forget,matches,route,
+  return {active,testHost,url,direct,ensureSession,catalog,configuredProviders,agents,registry,workspaceRegistry,forget,matches,route,
     classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 

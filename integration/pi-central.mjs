@@ -66,80 +66,68 @@ function cleanPath(uri) {
   const url = new URL(uri, "http://localhost");
   return { pathname:url.pathname.replace(/^\/native-direct\/api/,"") || "/", query:url.searchParams };
 }
-async function gateway(req, endpoint) {
-  const c=req.headers.cookie || "";
-  if (!c || c.length > 8192) throw Object.assign(new Error("Authentication required"), {status:401});
-  const ctrl = AbortSignal.timeout(8000);
-  const headers={cookie:c,host:HOST,"x-forwarded-proto":"https",accept:"application/json"};
-  let response;
-  try {
-    response=await fetch(GATEWAY+endpoint, {signal:ctrl,redirect:"manual",headers});
-    // A stale internal port can point to the retired service and return 404
-    // even though the TEST Gateway has the owned workspace. Retry ONLY the
-    // canonical TEST HTTPS host and apply the exact same ownership checks.
-    // Never contact LIVE or infer ownership from the filesystem.
-    if(response.status===404&&GATEWAY!=="https://"+HOST)
-      response=await fetch("https://"+HOST+endpoint,
-        {signal:ctrl,redirect:"manual",headers});
-  } catch { throw Object.assign(new Error("Gateway unavailable"),{status:503}); }
-  if (!response.ok) {
-    const status=response.status;
-    throw Object.assign(new Error("Gateway ownership lookup returned HTTP "+status),
-      {status: [400,401,403,404,410].includes(status)?status:502});
-  }
-  return response.json();
+// Pi handles every chat, file, tool and SSE request without a Python lookup.
+// Gateway hands account-owned capabilities to this existing UNIX-socket process
+// once when a browser opens/renews an authenticated Pi session.
+const BOOTSTRAP_HOST="pi-internal";
+const PI_COOKIE="pi_test_session";
+const PI_SESSION_DURATION_MS=14*60_000;
+const browserGrants=new Map();
+const pendingTickets=new Map();
+function fromGateway(req){
+  return req.headers.host===BOOTSTRAP_HOST &&
+    !req.headers["x-forwarded-for"]&&!req.headers["x-real-ip"];
 }
-async function scope(req, query) {
-  // Only Platform-owned paths are admitted; never run an arbitrary user URL directory.
+function browserPrincipal(req){
+  const cookie=String(req.headers.cookie||"");
+  const id=cookie.match(/(?:^|;\s*)pi_test_session=([0-9a-f-]{36})(?:;|$)/i)?.[1];
+  const existing=id?browserGrants.get(id):null;
+  if(!existing||existing.expires<=Date.now()){
+    if(id)browserGrants.delete(id);
+    throw Object.assign(new Error("Pi session expired; reopen the workspace"),{status:401});
+  }
+  return existing.account;
+}
+function issueBrowserGrant(res,account){
+  const sid=randomUUID();
+  browserGrants.set(sid,{account,expires:Date.now()+PI_SESSION_DURATION_MS});
+  res.writeHead(204,{"set-cookie":PI_COOKIE+"="+sid+
+    "; Path=/native-direct/api/; Max-Age=840; HttpOnly; Secure; SameSite=Strict",
+    "cache-control":"no-store"});
+  res.end();
+}
+function revokeBrowserGrants(userId){
+  for(const [sid,grant] of browserGrants)
+    if(!userId||grant.account.user_id===userId)browserGrants.delete(sid);
+  for(const [ticket,entry] of pendingTickets)
+    if(!userId||entry.account.user_id===userId)pendingTickets.delete(ticket);
+  for(const worker of pool.values())
+    if(!userId||worker.scope.userId===userId)try{worker.close();}catch{}
+}
+async function scope(req,query){
   const directory=query.get("directory");
-  // Catalogue and agent discovery come straight from installed Pi, not Python.
-  // Existing Nginx is the web entry boundary for this private socket.
   if(directory===CATALOG_DIRECTORY){
     const pathname=cleanPath(req.url||"/").pathname;
-    const cookie=req.headers.cookie||"";
-    if(cookie){
-      // The global capability list does not require a Project lookup.
-      // Owner-only extensions remain gated by an authenticated Gateway user.
-      if(pathname==="/agent"&&process.env.PI_TEST_SINGLE_OWNER_TOOLS!=="1")
-        return {catalog:true,userId:"catalog",testOwner:false};
-      const actor=await gateway(req,"/api/auth/me");
-      return {catalog:true,userId:String(actor.id),testOwner:
-        process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1"&&actor.role==="owner"};
-    }
-    // This server listens ONLY on the existing, filesystem-protected UNIX
-    // socket. Permit an internal no-cookie GET of PUBLIC provider/model
-    // metadata for first-time PostgreSQL seeding. Browser traffic still goes
-    // through Nginx auth_request; credential and project endpoints are never
-    // granted this exception.
-    if(pathname==="/provider"&&req.method==="GET"&&
-       !req.headers["x-forwarded-for"]&&!req.headers["x-real-ip"])
+    if(pathname==="/provider"&&req.method==="GET"&&fromGateway(req))
       return {catalog:true,userId:"internal",testOwner:false};
-    const expected=process.env.PI_GATEWAY_INTERNAL_TOKEN||"";
-    const candidate=String(req.headers["x-pi-gateway-token"]||"");
-    if(expected.length<32||candidate.length!==expected.length||
-       !timingSafeEqual(Buffer.from(expected),Buffer.from(candidate)))
-      throw Object.assign(new Error("Gateway catalog authorization required"),{status:401});
-    return {catalog:true,userId:"internal",testOwner:false};
+    const account=browserPrincipal(req);
+    return {catalog:true,userId:account.user_id,testOwner:
+      process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1"&&account.role==="owner"};
   }
-  if(!directory || directory.length>4096)
+  const account=browserPrincipal(req);
+  if(!directory||directory.length>4096)
     throw Object.assign(new Error("Owned project directory required"),{status:400});
-  // One narrow platform lookup establishes the workspace-file ownership;
-  // it never manages providers, models, agent state, or conversations.
   const match=directory.match(/\/([0-9a-f-]{36})\/([0-9a-f-]{36})\/repo\/?$/i);
-  if(!match)throw Object.assign(new Error("Invalid workspace directory"),{status:403});
-  // The existing project endpoint already checks the logged-in owner's
-  // cookie. No separate Python auth/me or AI service check is required.
-  const detail=await gateway(req,"/api/workspaces/"+encodeURIComponent(match[2]));
-  if(detail.native_directory!==directory || detail.id!==match[2] || !detail.project_id)
-    throw Object.assign(new Error("Workspace not owned"),{status:403});
-  // Owner-only TEST tooling is opt-in. Never turn a service-wide toggle into
-  // shell/tool access for every account on this shared-UID VPS.
-  let testOwner=false;
-  if(process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1"){
-    const identity=await gateway(req,"/api/auth/me");
-    testOwner=identity?.role==="owner"&&String(identity.id)===match[1];
-  }
-  return {directory,workspaceId:match[2],projectId:String(detail.project_id),userId:match[1],testOwner};
+  if(!match||match[1]!==account.user_id)
+    throw Object.assign(new Error("Invalid owned workspace directory"),{status:403});
+  const work=(account.workspaces||[]).find(w=>w.id===match[2]&&
+    w.directory===directory&&typeof w.project_id==="string");
+  if(!work)throw Object.assign(new Error("Workspace not in the Pi account grant"),{status:403});
+  if(!existsSync(directory)||realpathSync(directory)!==directory)
+    throw Object.assign(new Error("Workspace path unavailable"),{status:404});
+  return {directory,workspaceId:work.id,projectId:work.project_id,
+    userId:account.user_id,account,testOwner:
+    process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1"&&account.role==="owner"};
 }
 // Read only public model definitions. Provider metadata must NEVER open the
 // shared auth.json or inspect credentials belonging to the VPS operator.
@@ -385,29 +373,16 @@ class SdkAgent {
     this.events.clear();pool.delete(this.id);
   }
 }
-async function gatewayCredential(req,scope,provider,modelId){
-  const token=process.env.PI_GATEWAY_INTERNAL_TOKEN||"";
-  if(token.length<32)throw Object.assign(
-    new Error("Pi-Gateway internal credential channel is not configured"),{status:503});
-  const cookie=req.headers.cookie||"";
-  if(!cookie||cookie.length>8192)
-    throw Object.assign(new Error("Authentication required"),{status:401});
-  let response;
-  try{
-    response=await fetch(GATEWAY+"/api/opencode/connections/"+encodeURIComponent(provider)+
-      "?workspace_id="+encodeURIComponent(scope.workspaceId)+
-      "&model_id="+encodeURIComponent(modelId),{
-      redirect:"manual",signal:AbortSignal.timeout(6000),
-      headers:{cookie,host:HOST,"x-forwarded-proto":"https",
-        "x-pi-gateway-token":token,accept:"application/json"}
-    });
-  }catch{throw Object.assign(new Error("Gateway credentials unavailable"),{status:503});}
-  if(!response.ok)throw Object.assign(
-    new Error("Verified account connection unavailable"),{status:response.status===404?403:response.status});
-  const data=await response.json();
-  if(data.provider_id!==provider||typeof data.key!=="string"||!data.key)
-    throw Object.assign(new Error("Invalid Gateway connection response"),{status:502});
-  return data.key;
+function nativeCredential(scope,provider,modelId){
+  const account=scope.account;
+  if(!account)throw Object.assign(new Error("Pi account grant unavailable"),{status:401});
+  const shared=account.shared?.[provider];
+  if(shared&&shared.models?.includes(modelId)&&typeof shared.key==="string"&&shared.key)
+    return shared.key;
+  const personal=account.personal?.[provider];
+  if(personal&&personal.models?.includes(modelId)&&typeof personal.key==="string"&&personal.key)
+    return personal.key;
+  throw Object.assign(new Error("Model is not enabled for the connected Pi account"),{status:403});
 }
 async function agent(s) {
   const id=projectIdFor(s);
@@ -658,6 +633,35 @@ const server=http.createServer(async(req,res)=>{
     const {pathname,query}=cleanPath(req.url||"/");
     if(pathname==="/health" && req.method==="GET")return json(res,200,{service:"pi-central",status:"ready",activeWorkers:pool.size,maxWorkers:MAX_PROCS,activeExecutions:executing.size,maxActiveExecutions:MAX_ACTIVE_EXECUTIONS});
     if(!["GET","POST","PATCH","PUT","DELETE"].includes(req.method))return error(res,405,"Method not allowed");
+    // Restricted control plane: Gateway speaks to Pi over the original UDS.
+    // Nginx sends Host test.opencode-gateway.codes, never pi-internal.
+    if(pathname==="/internal/bootstrap"&&req.method==="POST"){
+      if(!fromGateway(req))return error(res,403,"Local Gateway handoff only");
+      const payload=await body(req);
+      if(typeof payload?.user_id!=="string"||
+         !/^[0-9a-f-]{36}$/i.test(payload.user_id)||
+         !Array.isArray(payload.workspaces)||!payload.personal||!payload.shared)
+        return error(res,422,"Invalid account handoff");
+      const ticket=randomUUID();
+      pendingTickets.set(ticket,{account:payload,expires:Date.now()+45000});
+      return json(res,200,{ticket});
+    }
+    if(pathname==="/internal/invalidate"&&req.method==="POST"){
+      if(!fromGateway(req))return error(res,403,"Local Gateway invalidation only");
+      const payload=await body(req),uid=payload?.user_id;
+      if(uid!=null&&(typeof uid!=="string"||!/^[0-9a-f-]{36}$/i.test(uid)))
+        return error(res,422,"Invalid account ID");
+      revokeBrowserGrants(uid||null);
+      return json(res,200,{invalidated:true});
+    }
+    if(pathname==="/bootstrap"&&req.method==="POST"){
+      const ticket=String((await body(req))?.ticket||"");
+      const grant=pendingTickets.get(ticket);
+      if(!grant||grant.expires<=Date.now())
+        return error(res,401,"Pi handoff ticket expired");
+      pendingTickets.delete(ticket);
+      return issueBrowserGrant(res,grant.account);
+    }
     const s=await scope(req,query);
     if(s.catalog){
       if(pathname==="/provider"&&req.method==="GET") {
@@ -769,9 +773,9 @@ const server=http.createServer(async(req,res)=>{
         return error(res,422,"Select a verified provider and model from Gateway","not_submitted");
       if(b.agent&&!s.testOwner)
         return error(res,403,"Native skill and extension execution requires isolated TEST owner access","not_submitted");
-      // Authenticate on EVERY prompt: deletions/rotations take effect before
-      // another request can run. Never fall back to shared Pi credentials.
-      const authorizedKey=await gatewayCredential(req,s,b.model.providerID,b.model.modelID);
+      // One-time Gateway handoff already authorized this account's Pi session.
+      // Prompts never fetch a credential or model policy from Python.
+      const authorizedKey=nativeCredential(s,b.model.providerID,b.model.modelID);
       reserveExecution(a);
       try {
         try{await a.setCredential(b.model.providerID,authorizedKey);}
@@ -815,4 +819,9 @@ mkdirSync(path.dirname(SOCK),{recursive:true,mode:0o700});
 if(existsSync(SOCK))unlinkSync(SOCK);
 server.listen(SOCK,()=>{chmodSync(SOCK,0o660);console.log("Pi TEST bridge on UNIX socket");});
 setInterval(()=>{for(const a of pool.values())if(!a.active&&!executing.has(a)&&!a.events.size&&Date.now()-a.last>IDLE_MS)a.close();},60000).unref();
+setInterval(()=>{
+  const current=Date.now();
+  for(const [id,entry] of browserGrants)if(entry.expires<=current)browserGrants.delete(id);
+  for(const [id,entry] of pendingTickets)if(entry.expires<=current)pendingTickets.delete(id);
+},60000).unref();
 process.on("SIGTERM",()=>{server.close();for(const a of pool.values())a.close();});
