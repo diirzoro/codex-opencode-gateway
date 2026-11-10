@@ -467,6 +467,42 @@ def _ai_allowed(db, provider_id, model_id=None, rules=None):
     return True
 
 
+# Per-customer model preferences are encrypted WITH the existing verified
+# connection, avoiding schema changes and keeping legacy encrypted API keys
+# readable. No account preferences or secrets live in browser storage.
+_AI_CONNECTION_ENVELOPE = "GATEWAY-AI-CONNECTION-V1:"
+
+def _ai_connection_secret_and_models(row):
+    value = credentials.decrypt(row.ciphertext)
+    if not value.startswith(_AI_CONNECTION_ENVELOPE):
+        return value, set()
+    try:
+        payload = json.loads(value[len(_AI_CONNECTION_ENVELOPE):])
+        key = payload["key"]
+        disabled = payload.get("disabled_models", [])
+        if not isinstance(key, str) or not key or not isinstance(disabled, list):
+            raise ValueError("Invalid encrypted connection")
+        return key, {x for x in disabled if isinstance(x, str)}
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(503, "Stored account connection requires recovery") from None
+
+
+def _ai_seal_connection(key, disabled):
+    if not disabled:
+        return credentials.encrypt(key)
+    if len(disabled) > 2000:
+        raise HTTPException(422, "Too many model overrides")
+    return credentials.encrypt(_AI_CONNECTION_ENVELOPE + json.dumps({
+        "key": key, "disabled_models": sorted(disabled)
+    }, separators=(",", ":")))
+
+
+class AiModelPreference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_id: str = Field(min_length=1, max_length=300)
+    enabled: bool
+
+
 def _ai_connection_payload(row):
     return {"connection_id": str(row.id), "provider_id": row.provider_id,
             "auth_status": row.auth_status, "credit_status": row.credit_status,
@@ -618,7 +654,9 @@ def _ai_save(data, user, db, replace=False):
     if existing is None and replace:
         raise HTTPException(404, "Connection not found")
     credit = _ai_verify(data.provider_id, data.api_key)
-    cipher = credentials.encrypt(data.api_key)
+    # Preserve this customer's model preferences when rotating a key.
+    disabled = _ai_connection_secret_and_models(existing)[1] if existing else set()
+    cipher = _ai_seal_connection(data.api_key, disabled)
     if existing is None:
         existing = AiUserConnection(user_id=user.id, provider_id=data.provider_id,
                                     ciphertext=cipher, last4=data.api_key[-4:],
@@ -668,6 +706,56 @@ def ai_disconnect(provider_id: str, user: User = Depends(require_user),
     db.commit()
 
 
+@router.get("/opencode/connections/{provider_id}/models")
+def ai_my_connection_models(provider_id: str, user: User = Depends(require_user),
+                            db: Session = Depends(get_db)):
+    """Lazy, owned model list for the expanded connected-provider accordion."""
+    _ai_schema(db)
+    record = db.scalar(select(AiUserConnection).where(
+        AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
+        AiUserConnection.auth_status == "verified"))
+    if record is None:
+        raise HTTPException(404, "Verified account connection not found")
+    disabled = _ai_connection_secret_and_models(record)[1]
+    rules = _ai_policy(db)
+    models = list(db.scalars(select(AiProviderModel).where(
+        AiProviderModel.provider_id == provider_id, AiProviderModel.active.is_(True))
+        .order_by(AiProviderModel.name).limit(2000)))
+    return {"provider_id": provider_id,
+            "models": [{"id": m.model_id, "name": m.name,
+                        "enabled": m.model_id not in disabled and
+                        _ai_allowed(db, provider_id, m.model_id, rules=rules),
+                        "admin_allowed": _ai_allowed(db, provider_id, m.model_id, rules=rules)}
+                       for m in models]}
+
+
+@router.post("/opencode/connections/{provider_id}/models")
+def ai_set_connection_model(provider_id: str, data: AiModelPreference,
+                            user: User = Depends(require_user),
+                            db: Session = Depends(get_db)):
+    """Persist model toggles in the customer's encrypted connection only."""
+    _ai_schema(db)
+    record = db.scalar(select(AiUserConnection).where(
+        AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
+        AiUserConnection.auth_status == "verified").with_for_update())
+    if record is None:
+        raise HTTPException(404, "Verified account connection not found")
+    model = db.get(AiProviderModel, (provider_id, data.model_id))
+    if model is None or not model.active:
+        raise HTTPException(404, "Pi model is not in the saved provider catalog")
+    if data.enabled and not _ai_allowed(db, provider_id, data.model_id):
+        raise HTTPException(403, "The administrator disabled this model")
+    key, disabled = _ai_connection_secret_and_models(record)
+    if data.enabled:
+        disabled.discard(data.model_id)
+    else:
+        disabled.add(data.model_id)
+    record.ciphertext = _ai_seal_connection(key, disabled)
+    db.commit()
+    return {"provider_id": provider_id, "model_id": data.model_id,
+            "enabled": data.enabled}
+
+
 @router.get("/opencode/connections/{provider_id}")
 def ai_internal_credential(provider_id: str, request: Request, workspace_id: uuid.UUID,
                            user: User = Depends(require_user),
@@ -692,8 +780,15 @@ def ai_internal_credential(provider_id: str, request: Request, workspace_id: uui
         AiUserConnection.auth_status == "verified"))
     if not record:
         raise HTTPException(403, "No verified customer connection for the selected provider")
+    model_id = request.query_params.get("model_id")
+    key, disabled = _ai_connection_secret_and_models(record)
+    if model_id:
+        model = db.get(AiProviderModel, (provider_id, model_id))
+        if (model_id in disabled or model is None or not model.active
+                or not _ai_allowed(db, provider_id, model_id)):
+            raise HTTPException(403, "Model is disabled or not available for this account")
     return {"provider_id": provider_id, "connection_id": str(record.id),
-            "key": credentials.decrypt(record.ciphertext)}
+            "key": key}
 
 
 def _ai_catalog_refresh_if_due():
