@@ -231,7 +231,7 @@ class SdkAgent {
     const sdk=await import("@earendil-works/pi-coding-agent");
     const ai=await import("@earendil-works/pi-ai");
     if(!sdk.ModelRuntime?.create||!sdk.createAgentSession||
-       !sdk.SessionManager?.create||!sdk.SessionManager?.list||!ai.InMemoryCredentialStore)
+       !sdk.SessionManager?.create||!sdk.SessionManager?.list||!sdk.DefaultResourceLoader||!ai.InMemoryCredentialStore)
       throw Object.assign(new Error("Installed Pi SDK lacks isolated runtime/session APIs"),{status:503});
     // Credentials and settings are not read from the shared Pi auth.json.
     const runtime=await sdk.ModelRuntime.create({
@@ -249,11 +249,19 @@ class SdkAgent {
     const manager=exact?sdk.SessionManager.open(exact.path,sessionDir):
       sdk.SessionManager.create(scope.directory,sessionDir,{id:expectedId});
     const allowTools=scope.testOwner===true;
+    const settingsManager=sdk.SettingsManager.inMemory();
+    const scopedAgentDir=allowTools?PI_AGENT_DIR:path.join(sessionDir,"isolated-agent");
+    const resourceLoader=new sdk.DefaultResourceLoader({
+      cwd:scope.directory,agentDir:scopedAgentDir,settingsManager,
+      noExtensions:!allowTools,noSkills:!allowTools,
+      noPromptTemplates:!allowTools,noContextFiles:!allowTools
+    });
+    await resourceLoader.reload();
     const {session}=await sdk.createAgentSession({
-      cwd:scope.directory,modelRuntime:runtime,sessionManager:manager,
-      settingsManager:sdk.SettingsManager.inMemory(),
-      tools:allowTools?["read","bash","edit","write","grep","find","ls"]:[],
-      noExtensions:!allowTools,noSkills:!allowTools
+      cwd:scope.directory,agentDir:scopedAgentDir,
+      modelRuntime:runtime,sessionManager:manager,settingsManager,
+      resourceLoader,noTools:!allowTools,
+      tools:allowTools?["read","bash","edit","write","grep","find","ls"]:[]
     });
     return new SdkAgent(scope,session,runtime);
   }
