@@ -468,7 +468,11 @@
           tr('Use personal key for ','استخدام المفتاح الشخصي مع ')+(m.name||m.id));
         const personal=node('label','','provider-personal-model');
         const modelName=node('div','','provider-model-label');
-        modelName.append(node('span',m.name||m.id),node('small',m.id));
+        const title=node('span',m.name||m.id,'provider-model-title');
+        title.title=m.name||m.id;
+        const modelId=node('small',m.id,'provider-model-id');
+        modelId.dir='ltr';modelId.title=m.id;
+        modelName.append(title,modelId);
         const isOpenRouterFree=p.id==='openrouter'&&m.price_type==='free'&&m.id.endsWith(':free');
         const tag=m.platform_locked?node('span',tr('Platform default','منصة'),'provider-model-tag locked'):
           isOpenRouterFree?node('span',tr('OpenRouter FREE','مجاني OpenRouter'),'provider-model-tag free'):
@@ -476,14 +480,14 @@
             m.price_type==='paid'?tr('Paid','مدفوع'):
             tr('Price unknown','السعر غير محدد'),
             'provider-model-tag '+(m.price_type||'unknown'));
-        personal.append(toggle,modelName,tag);
+        personal.append(toggle,modelName);
         if(m.admin_allowed===false){
           const warning=node('small',tr('Restricted by administrator · selection can be saved but execution is blocked',
             'محجوب من الأدمن · يمكن حفظ اختيارك لكن التشغيل ممنوع'),'provider-model-restriction');
           modelName.append(warning);
           row.title=warning.textContent;
         }
-        row.append(personal);
+        row.append(personal,tag);
         toggle.addEventListener('change',()=>{
           const enabled=toggle.checked;
           // Keep the native checkbox's immediate visual response. If
