@@ -577,6 +577,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
   function setAdminView(name) {
     if (!['overview','users','plans','billing','reports','audit','health','policy','github','email','trial','settings','security','account'].includes(name)) name='overview';
     adminView = name;
+    if(currentUser?.id)try{sessionStorage.setItem('og-current-admin-panel:'+currentUser.id,name);}catch{}
     document.querySelectorAll('#adminNav [data-admin-view]').forEach(function (b) { b.classList.toggle('active', b.dataset.adminView === name); });
     document.querySelectorAll('#adminPage [data-admin-panel]').forEach(function (p) { p.classList.toggle('active', p.dataset.adminPanel === name); });
     var loader = ADMIN_LOADERS[name];
@@ -590,6 +591,12 @@ window.renderGithubConfirmation=function(root,status,refresh){
   });
 
   loadAdminUsers = async function () { await setAdminView(adminView || 'overview'); };
+  window.restoreSavedAdminPanel=async function(){
+    if(!admin()||!currentUser?.id)return;
+    let view='overview';
+    try{view=sessionStorage.getItem('og-current-admin-panel:'+currentUser.id)||'overview';}catch{}
+    if(view!=='overview')await setAdminView(view);
+  };
 
   async function connectProviderCredential() {
     if (!activeWorkspace) { toast('Open a workspace first'); return; }
@@ -915,12 +922,20 @@ window.renderGithubConfirmation=function(root,status,refresh){
   }
   var CLIENT_LOADERS = { dashboard: loadClientDashboard, projects: loadClientDashboard, sessions: loadClientDashboard, github: loadClientGithub, ai: loadClientAi, security: async function () {} };
   function setClientView(name) {
-    clientView = name;try{localStorage.setItem('og-clientview',name);}catch(error){}
+    clientView = name;
+    if(currentUser?.id)try{sessionStorage.setItem('og-current-client-panel:'+currentUser.id,name);}catch{}
+    try{localStorage.setItem('og-clientview',name);}catch(error){}
     document.querySelectorAll('#clientNav [data-client-view]').forEach(function (b) { b.classList.toggle('active', b.dataset.clientView === name); });
     document.querySelectorAll('#clientPage [data-client-panel]').forEach(function (p) { p.classList.toggle('active', p.dataset.clientPanel === name); });
     var loader = CLIENT_LOADERS[name];
     if (loader) return loader();
   }
+  window.restoreSavedClientPanel=async function(){
+    if(!currentUser?.id)return;
+    let view='dashboard';
+    try{view=sessionStorage.getItem('og-current-client-panel:'+currentUser.id)||'dashboard';}catch{}
+    if(CLIENT_LOADERS[view])await setClientView(view);
+  };
   document.querySelectorAll('#clientNav [data-client-view]').forEach(function (button) {
     button.onclick = function () { setClientView(button.dataset.clientView).catch(function (e) { toast(e.message); }); };
   });
