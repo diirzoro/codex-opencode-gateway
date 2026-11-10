@@ -215,6 +215,151 @@
     }
     // ONE reusable list for shared and personal models. Administrative
     // actions are added by role, never by creating another provider screen.
+    // One model panel for my own connection AND the administrator's customer
+    // oversight. The server uses the same encrypted preference mutation for
+    // both, but scopes each route to the authorized account.
+    async function renderModelPanel(p,models,countLabel,customerId=''){
+      const isCustomerAdmin=Boolean(customerId);
+      if(!p.personal_connected&&!isCustomerAdmin){
+        models.replaceChildren();
+        const shared=p.platform_models||[];
+        countLabel.textContent=shared.length+' '+tr('platform models','نموذج منصة');
+        for(const id of shared){
+          const row=node('div','','provider-model-choice provider-locked-model');
+          row.append(node('span',id),node('span',tr('Platform default · locked','منصة · ثابت'),'provider-model-tag locked'));
+          models.append(row);
+        }
+        if(!shared.length)models.append(node('p',tr('No platform models are enabled yet.','لا توجد نماذج منصة مفعلة بعد.')));
+        return;
+      }
+      const route=isCustomerAdmin
+        ?'/api/admin/ai-connections/'+encodeURIComponent(customerId)+'/'+encodeURIComponent(p.id)+'/models'
+        :'/api/opencode/connections/'+encodeURIComponent(p.id)+'/models';
+      const data=await api(route);
+      if(!alive()||!models.isConnected)return;
+      const records=Array.isArray(data.models)?data.models:[];
+      models.replaceChildren();
+      countLabel.textContent=records.length+' '+tr('models','نموذج');
+      if(!records.length){
+        models.append(node('p',tr('No models are stored for this provider yet.','لا توجد نماذج محفوظة لهذا المزوّد بعد.')));
+        return;
+      }
+      records.sort((a,b)=>Number(b.price_type==='free')-Number(a.price_type==='free')||
+        String(a.name||a.id).localeCompare(String(b.name||b.id)));
+      const panelTitle=node('p',tr(
+        'Enable or disable personal models. Platform models remain locked.',
+        'فعّل أو عطّل النماذج الشخصية؛ نماذج المنصة تبقى ثابتة.'),'provider-model-help');
+      const filter=node('input','','provider-model-search');filter.type='search';
+      filter.placeholder=tr('Search models within this provider…','ابحث في نماذج هذا المزوّد…');
+      const onlyFree=node('label','','provider-free-filter'),freeCheck=node('input');
+      freeCheck.type='checkbox';onlyFree.append(freeCheck,node('span',tr('Show free models only','عرض المجانية فقط')));
+      const bar=node('div','','provider-model-toolbar');
+      const shown=node('small','','provider-model-counter');
+      const selectAll=button(tr('Enable all','تحديد الكل'),()=>bulk(true));
+      const clearAll=button(tr('Deselect all','إلغاء تحديد الكل'),()=>bulk(false));
+      const list=node('div','','provider-model-choice-list'),items=[];
+      const platformChoices=new Map();
+      let saving=false;
+      const updateCounter=()=>{
+        const editable=items.filter(x=>!x.toggle.disabled);
+        const selected=editable.filter(x=>x.toggle.checked).length;
+        shown.textContent=selected+' / '+editable.length+' '+tr('personal models enabled','نموذج شخصي مفعّل');
+      };
+      function repaint(){
+        const search=filter.value.trim().toLowerCase();
+        for(const item of items){
+          const m=item.model;
+          item.row.hidden=(!!search&&!String(m.name||m.id).toLowerCase().includes(search)
+            &&!m.id.toLowerCase().includes(search))||
+            (freeCheck.checked&&m.price_type!=='free');
+        }
+        updateCounter();
+      }
+      async function sendBulk(modelIds,enabled){
+        if(!modelIds.length||saving)return;
+        saving=true;
+        const before=new Map(items.map(item=>[item.model.id,item.toggle.checked]));
+        for(const item of items)if(modelIds.includes(item.model.id))item.toggle.checked=enabled;
+        for(const item of items)item.toggle.disabled=true;
+        selectAll.disabled=clearAll.disabled=true;updateCounter();
+        try{
+          await api(route+'/bulk',{method:'PUT',body:JSON.stringify({model_ids:modelIds,enabled})});
+          invalidateOwnedWorkspaceProviders();
+          window.nativeDirectTest?.forget({keepSession:true});
+          if(window.refreshWorkspaceChoices)
+            window.refreshWorkspaceChoices('',false).catch(()=>{});
+        }catch(error){
+          for(const item of items)item.toggle.checked=before.get(item.model.id);
+          toast(error.message||String(error));
+        }finally{
+          for(const item of items)item.toggle.disabled=item.model.platform_locked===true||
+            item.model.admin_allowed===false;
+          saving=false;selectAll.disabled=clearAll.disabled=false;updateCounter();
+        }
+      }
+      function bulk(enabled){
+        const ids=items.filter(item=>!item.toggle.disabled&&item.toggle.checked!==enabled)
+          .map(item=>item.model.id);
+        return sendBulk(ids,enabled);
+      }
+      for(const m of records){
+        const row=node('div','','provider-model-choice');
+        const toggle=node('input');toggle.type='checkbox';toggle.checked=m.enabled===true;
+        toggle.disabled=m.platform_locked===true||m.admin_allowed===false;
+        const personal=node('label','','provider-personal-model');
+        const modelName=node('div','','provider-model-label');
+        modelName.append(node('span',m.name||m.id),node('small',m.id));
+        const isOpenRouterFree=p.id==='openrouter'&&m.price_type==='free'&&m.id.endsWith(':free');
+        const tag=m.platform_locked?node('span',tr('Platform default','منصة'),'provider-model-tag locked'):
+          isOpenRouterFree?node('span',tr('OpenRouter FREE','مجاني OpenRouter'),'provider-model-tag free'):
+          node('span',m.price_type==='free'?tr('Free','مجاني'):
+            m.price_type==='paid'?tr('Paid','مدفوع'):
+            tr('Price unknown','السعر غير محدد'),
+            'provider-model-tag '+(m.price_type||'unknown'));
+        personal.append(toggle,modelName,tag);row.append(personal);
+        toggle.addEventListener('change',()=>{
+          const enabled=toggle.checked;toggle.checked=!enabled;
+          void sendBulk([m.id],enabled);
+        });
+        if(platform&&admin()&&!isCustomerAdmin&&m.free_eligible&&m.admin_allowed!==false){
+          const adminLabel=node('label','','provider-platform-choice');
+          const platformCheck=node('input');platformCheck.type='checkbox';
+          platformCheck.checked=m.platform_locked===true;
+          adminLabel.append(platformCheck,node('span',tr('Platform','للمنصة')));
+          row.append(adminLabel);platformChoices.set(m.id,platformCheck);
+        }
+        list.append(row);items.push({row,toggle,model:m});
+      }
+      filter.oninput=repaint;freeCheck.onchange=repaint;
+      bar.append(shown,selectAll,clearAll,onlyFree);
+      models.append(panelTitle,filter,bar,list);
+      updateCounter();
+      if(platform&&admin()&&!isCustomerAdmin){
+        const adminBar=node('div','','provider-platform-controls');
+        const platformAll=button(tr('Select all free for platform','اختيار جميع المجانية للمنصة'),()=>{
+          for(const check of platformChoices.values())check.checked=true;
+        });
+        const platformNone=button(tr('Clear platform selection','إلغاء جميع اختيارات المنصة'),()=>{
+          for(const check of platformChoices.values())check.checked=false;
+        });
+        const save=button(tr('Save platform models','حفظ نماذج المنصة'),async()=>{
+          if(saving)return;
+          saving=true;save.disabled=true;
+          try{
+            const modelIds=[...platformChoices].filter(([,check])=>check.checked)
+              .map(([id])=>id);
+            await api('/api/admin/ai-defaults/'+encodeURIComponent(p.id),{
+              method:'PUT',body:JSON.stringify({model_ids:modelIds})
+            });
+            await reload();
+          }catch(error){toast(error.message||String(error));}
+          finally{saving=false;save.disabled=false;}
+        });
+        adminBar.append(node('p',tr('Administrator defaults: only verified free models are eligible.','اختيارات الأدمن للمنصة: النماذج المجانية المتحقَّق منها فقط.')),
+          platformAll,platformNone,save);
+        models.append(adminBar);
+      }
+    }
     function renderConnected(){
       connectedBox.replaceChildren(node('h2',tr('Connected providers and models','المزوّدون المربوطون والنماذج')));
       const rows=(snapshot?.providers||[]).filter(p=>p.platform||p.personal_connected||
@@ -276,91 +421,15 @@
           details.dataset.modelsLoaded='loading';
           models.textContent=tr('Loading saved models…','جارٍ تحميل النماذج المحفوظة…');
           try{
-            if(!p.personal_connected){
-              models.replaceChildren();
-              for(const id of p.platform_models||[])
-                models.append(node('p','✓ '+id+' · '+tr('platform controlled','تديره المنصة')));
-              if(!p.platform_models?.length)
-                models.append(node('p',tr('No active models for this connection.','لا توجد نماذج نشطة لهذا الاتصال.')));
-              details.dataset.modelsLoaded='yes';return;
-            }
-            const response=await api('/api/opencode/connections/'+encodeURIComponent(p.id)+'/models');
-            if(!alive()||!details.isConnected)return;
-            details.dataset.modelsLoaded='yes';models.replaceChildren();
-            if(!response.models?.length){
-              models.append(node('p',tr('No models are available for this provider yet.','لا توجد نماذج متاحة لهذا المزوّد حتى الآن.')));
-              return;
-            }
-            countLabel.textContent=response.models.length+' '+tr('models','نموذج');
-            const modelSearch=node('input','','provider-model-search');modelSearch.type='search';
-            modelSearch.placeholder=tr('Find a model in this provider…','ابحث داخل نماذج هذا المزوّد…');
-            const rowsBox=node('div','','provider-model-choice-list'),items=[];
-            const defaultChoices=new Map();
-            for(const m of response.models){
-              const label=node('div','','provider-model-choice'),toggle=node('input');
-              toggle.type='checkbox';toggle.checked=m.enabled===true;
-              toggle.disabled=m.platform_locked===true||m.admin_allowed===false;
-              const title=node('span',m.name||m.id);
-              const personalLabel=node('label','','provider-personal-model');
-              const detailsText=node('div','','provider-model-label');
-              detailsText.append(title,node('small',m.id));
-              const modelState=m.platform_locked?
-                node('span',tr('Platform default','منصة'),'provider-model-tag locked'):
-                node('span',m.price_type==='free'?tr('Free','مجاني'):
-                  m.price_type==='paid'?tr('Paid','مدفوع'):
-                  tr('Pricing unknown','السعر غير محدد'),
-                  'provider-model-tag '+(m.price_type||'unknown'));
-              personalLabel.append(toggle,detailsText,modelState);
-              label.append(personalLabel);
-              toggle.addEventListener('change',async()=>{
-                const enabled=toggle.checked;toggle.disabled=true;
-                try{
-                  await api('/api/opencode/connections/'+encodeURIComponent(p.id)+'/models',{
-                    method:'POST',body:JSON.stringify({model_id:m.id,enabled})
-                  });
-                  invalidateOwnedWorkspaceProviders();
-                  window.nativeDirectTest?.forget({keepSession:true});
-                  if(window.refreshWorkspaceChoices)
-                    window.refreshWorkspaceChoices('',false).catch(()=>{});
-                }catch(error){toggle.checked=!enabled;toast(error.message);}
-                finally{toggle.disabled=m.platform_locked===true||m.admin_allowed===false;}
-              });
-              if(platform&&admin()&&m.free_eligible&&m.admin_allowed!==false){
-                const adminLabel=node('label',tr('Platform','للمنصة')),check=node('input');
-                check.type='checkbox';check.checked=Boolean(m.platform_locked);
-                adminLabel.prepend(check);label.append(adminLabel);
-                defaultChoices.set(m.id,check);
-              }
-              rowsBox.append(label);items.push({label,model:m});
-            }
-            modelSearch.addEventListener('input',()=>{
-              const term=modelSearch.value.trim().toLowerCase();
-              for(const item of items)
-                item.label.hidden=!!term&&!String(item.model.name||item.model.id).toLowerCase().includes(term)
-                  &&!item.model.id.toLowerCase().includes(term);
-            });
-            models.append(modelSearch,rowsBox);
-            if(platform&&admin()){
-              const controls=node('div','','manage-actions');
-              controls.append(button(tr('Save platform defaults','حفظ النماذج الافتراضية'),async()=>{
-                const ids=[...defaultChoices].filter(([,check])=>check.checked).map(([id])=>id);
-                await api('/api/admin/ai-defaults/'+encodeURIComponent(p.id),{
-                  method:'PUT',body:JSON.stringify({model_ids:ids})
-                });
-                await reload();
-              }));
-              models.append(controls);
-            }
+            await renderModelPanel(p,models,countLabel);
+            details.dataset.modelsLoaded='yes';
           }catch(error){
             delete details.dataset.modelsLoaded;
             if(details.isConnected){
-              const err=node('p',error.message||String(error),'connection-error');
-              const retry=button(tr('Retry loading models','إعادة محاولة عرض النماذج'),()=>{
-                delete details.dataset.modelsLoaded;
-                details.open=false;
-                details.open=true;
+              const retry=button(tr('Retry loading models','إعادة عرض النماذج'),()=>{
+                details.open=false;details.open=true;
               });
-              models.replaceChildren(err,retry);
+              models.replaceChildren(node('p',error.message||String(error),'connection-error'),retry);
             }
           }
         });
