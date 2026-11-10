@@ -428,12 +428,21 @@ _AI_VERIFY_URLS = {
 }
 _AI_REFRESH_DAYS = 7
 _AI_STALE_DAYS = 14
+_AI_SCHEMA_OK_UNTIL = 0.0
 
 
 def _ai_schema(db):
+    # Cache only a POSITIVE table check for one minute. Before manual SQL
+    # migration, missing tables are never cached as available.
+    global _AI_SCHEMA_OK_UNTIL
+    import time
+    current = time.monotonic()
+    if current < _AI_SCHEMA_OK_UNTIL:
+        return
     existing = set(_ai_inspect(db.bind).get_table_names())
     if not set(_AI_TABLES).issubset(existing):
         raise HTTPException(503, "TEST AI catalog schema is not installed. Apply the reviewed manual PostgreSQL migration before enabling provider connections.")
+    _AI_SCHEMA_OK_UNTIL = current + 60.0
 
 
 def _ai_policy(db):
