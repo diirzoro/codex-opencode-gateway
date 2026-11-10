@@ -412,7 +412,7 @@ import json as _ai_json
 import hmac as _ai_hmac
 import httpx as _ai_httpx
 from sqlalchemy import inspect as _ai_inspect, text as _ai_text
-from sqlalchemy.exc import SQLAlchemyError as _AiSqlError
+from sqlalchemy.exc import SQLAlchemyError as _AiSqlError, IntegrityError as _AiIntegrityError
 from ..models import AiProviderCatalog, AiProviderModel, AiUserConnection, Project, Workspace
 from ..models.platform import get_policy as _ai_get_policy
 
@@ -602,7 +602,11 @@ def _ai_save(data, user, db, replace=False):
         existing.credit_status = credit
         existing.verified_at = now()
     audit(db, user, "ai.connection.verified")
-    db.commit()
+    try:
+        db.commit()
+    except _AiIntegrityError:
+        db.rollback()
+        raise HTTPException(409, "A connection for this provider already exists") from None
     db.refresh(existing)
     return _ai_connection_payload(existing)
 
