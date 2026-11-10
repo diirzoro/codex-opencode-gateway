@@ -173,11 +173,9 @@
       // "connected" means reported by Native, not a verified API key.
       const native=await window.nativeDirectTest.configuredProviders();
       const connected=new Set(native.connected||[]);
-      const preferred=new Set();
       return (native.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
         id:p.id,name:p.name||p.id,model_count:p.model_count??Object.keys(p.models||{}).length,
         connected:connected.has(p.id),public_free:(native.public_free||[]).includes(p.id),
-        credential_stored:p.credential_stored===true,
         credential_source:p.credential_source||'none',
         pi_available_models:p.pi_available_models||[],
         credit_status:p.credit_status||'unknown',verified:p.verified===true,
@@ -185,7 +183,6 @@
         visible:true,allowed:true,
         default_model:native.default?.[p.id]
       })).sort((a,b)=>Number(b.connected)-Number(a.connected)
-        ||Number(preferred.has(b.id))-Number(preferred.has(a.id))
         ||a.name.localeCompare(b.name));
     }
     async function lookup(kind,value,signal){
@@ -235,7 +232,6 @@
             throw Error(tr('Provider did not confirm authentication','لم يؤكد المزوّد صلاحية المفتاح'));
           dialog.close();await reload();
           message(tr('Verified and saved for your account','تم التحقق والحفظ لحسابك فقط'));
-          window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser?.id}}));
         }catch(error){if(dialog.open)feedback.textContent=error.message||String(error);}
         finally{providerMutation=false;submit.disabled=false;}
       };
@@ -250,7 +246,6 @@
         await api('/api/opencode/connections/'+encodeURIComponent(p.id),{method:'DELETE'});
         await reload();
         message(tr('Connection deleted from your account','تم حذف الاتصال من حسابك'));
-        window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser?.id}}));
       }catch(error){message(error.message||String(error),true);}
       finally{providerMutation=false;}
     }
@@ -341,7 +336,7 @@
       if(!alive())return;
       if(force&&window.nativeDirectTest?.active()){
         view.nativeCatalogRequested=false;
-        window.nativeDirectTest.forget({fresh:true});
+        window.nativeDirectTest.forget({fresh:true,keepSession:true});
       }
       if(!workspaceId){
         view.ready=false;
