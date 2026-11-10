@@ -210,7 +210,7 @@ class SdkAgent {
     const sdk=await import("@earendil-works/pi-coding-agent");
     const ai=await import("@earendil-works/pi-ai");
     if(!sdk.ModelRuntime?.create||!sdk.createAgentSession||
-       !sdk.SessionManager?.continueRecent||!ai.InMemoryCredentialStore)
+       !sdk.SessionManager?.create||!sdk.SessionManager?.list||!ai.InMemoryCredentialStore)
       throw Object.assign(new Error("Installed Pi SDK lacks isolated runtime/session APIs"),{status:503});
     // Credentials and settings are not read from the shared Pi auth.json.
     const runtime=await sdk.ModelRuntime.create({
@@ -218,7 +218,15 @@ class SdkAgent {
     });
     const sessionDir=path.join(ROOT,"projects",scope.userId,scope.workspaceId);
     mkdirSync(sessionDir,{recursive:true,mode:0o700});
-    const manager=sdk.SessionManager.continueRecent(scope.directory,sessionDir);
+    // Never restore an unrelated older conversation or silently replace a
+    // project session after loss of its JSONL file.
+    const expectedId=projectIdFor(scope);
+    const existing=await sdk.SessionManager.list(scope.directory,sessionDir);
+    const exact=existing.find(item=>item.id===expectedId);
+    if(!exact&&existing.length)
+      throw Object.assign(new Error("Existing Pi session requires deliberate recovery; not creating another"),{status:409});
+    const manager=exact?sdk.SessionManager.open(exact.path,sessionDir):
+      sdk.SessionManager.create(scope.directory,sessionDir,{id:expectedId});
     const allowTools=process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1";
     const {session}=await sdk.createAgentSession({
       cwd:scope.directory,modelRuntime:runtime,sessionManager:manager,
