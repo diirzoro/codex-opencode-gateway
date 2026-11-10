@@ -268,24 +268,24 @@
         });
         api('/api/opencode/catalog/providers?pi_supported=true').then(data=>{
           if(!host.isConnected)return;
-          if(data.source!=='pi-native'||!Array.isArray(data.connectable))
-            throw Error(tr('Pi did not return an authenticated provider registry.',
-              'لم يُرجع Pi سجل المزوّدين الصحيح.'));
+          if(data.source!=='pi-saved'||!Array.isArray(data.connectable))
+            throw Error(tr('Gateway has no saved Pi provider list.',
+              'لا توجد قائمة مزوّدات Pi محفوظة في Gateway.'));
           approvedProviders=data.connectable.filter(p=>p&&
             typeof p.id==='string'&&typeof p.name==='string'&&
             /^[a-zA-Z0-9._-]{1,120}$/.test(p.id)).map(p=>({
               id:p.id,name:p.name,api_key_supported:p.api_key_supported===true
             }));
           if(!approvedProviders.length)throw Error(tr(
-            'Installed Pi returned no supported providers.',
-            'لم يُرجع Pi أي مزوّد مدعوم.'));
+            'No saved Pi providers are available yet.',
+            'لم تُحفظ قائمة مزوّدات Pi بعد.'));
           if(!approvedProviders.some(p=>p.api_key_supported))
             throw Error(tr('Pi providers were found, but API-key verification is not configured for any of them.',
               'عُثر على مزوّدات Pi، لكن التحقق من مفاتيح API غير مهيأ لأي منها.'));
           searchProviderButton.disabled=false;
           providerHint.textContent=tr(
-            'Search only providers installed in Pi. Providers without a secure API verification method are listed but cannot be linked.',
-            'البحث يقتصر على مزوّدات Pi المثبتة. تظهر المزوّدات التي لا تتوفر لها آلية تحقق آمنة، لكن لا يمكن ربطها بعد.');
+            'Search the Pi-supported provider names saved by Gateway (updated every 14 days). Unsupported API-key methods cannot be linked.',
+            'ابحث في أسماء مزوّدات Pi المحفوظة في Gateway (تُحدّث كل 14 يومًا). لا يمكن ربط مزوّد دون آلية آمنة للتحقق من مفتاحه.');
           if(dialog.open&&providerField.value.trim())showMatches();
         }).catch(error=>{
           if(host.isConnected){providerHint.textContent=error.message;submit.disabled=true;}
