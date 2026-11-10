@@ -408,12 +408,11 @@ def disable_location(kind:str,location_id:int,user:User=Depends(require_admin),d
 # AI execution and streaming stay exclusively inside Pi Central. This module
 # handles ONLY model metadata, authentication checks and encrypted credentials.
 import os
-import json as _ai_json
 import hmac as _ai_hmac
 import httpx as _ai_httpx
 from sqlalchemy import inspect as _ai_inspect, text as _ai_text
 from sqlalchemy.exc import SQLAlchemyError as _AiSqlError, IntegrityError as _AiIntegrityError
-from ..models import AiProviderCatalog, AiProviderModel, AiUserConnection, Project, Workspace
+from ..models import AiProviderCatalog, AiProviderModel, AiUserConnection, Project
 from ..models.platform import get_policy as _ai_get_policy
 
 _AI_TABLES = ("ai_provider_catalog", "ai_provider_models", "ai_user_connections")
@@ -499,7 +498,7 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                 AiProviderModel.provider_id == provider.id, AiProviderModel.active.is_(True))
                 .order_by(AiProviderModel.name))
             item["models"] = {
-                m.model_id: {**_ai_json.loads(m.details_json or "{}"),
+                m.model_id: {**json.loads(m.details_json or "{}"),
                     "id": m.model_id, "name": m.name}
                 for m in models if _ai_allowed(db, provider.id, m.model_id, rules=rules)
             }
@@ -721,9 +720,9 @@ def ai_catalog_refresh():
                         m = AiProviderModel(provider_id=pid, model_id=model_id, name=model_id)
                         db.add(m)
                     m.name = str(data.get("name") or model_id)[:300]
-                    metadata = _ai_json.dumps(data, separators=(",", ":"))
+                    metadata = json.dumps(data, separators=(",", ":"))
                     if len(metadata) > 12000:
-                        metadata = _ai_json.dumps({"id": model_id, "name": m.name})
+                        metadata = json.dumps({"id": model_id, "name": m.name})
                     m.details_json = metadata
                     m.active = True
                 for old in prior.values():
