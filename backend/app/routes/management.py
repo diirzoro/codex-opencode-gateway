@@ -909,7 +909,7 @@ def _ai_catalog_refresh_if_due():
                                   timeout=60, trust_env=False) as client:
                 result = client.get("http://pi/provider", params={
                     "directory": os.getenv("PI_CATALOG_DIRECTORY", "/home/tahir/pi-test"),
-                    "models": "full"}, headers=headers)
+                    "models": "free", "providerID": "openrouter"}, headers=headers)
                 result.raise_for_status()
                 payload = result.json()
             all_rows = payload.get("all")
