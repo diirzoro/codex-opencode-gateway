@@ -181,6 +181,7 @@
         credential_source:p.credential_source||'none',
         pi_available_models:p.pi_available_models||[],
         credit_status:p.credit_status||'unknown',verified:p.verified===true,
+        stale:p.stale===true,last_synced_at:p.last_synced_at||null,
         visible:true,allowed:true,
         default_model:native.default?.[p.id]
       })).sort((a,b)=>Number(b.connected)-Number(a.connected)
@@ -254,8 +255,10 @@
       finally{providerMutation=false;}
     }
     function piStateLabel(p){
-      if(!p.connected)return tr('Available in catalog · not connected','متاح في الفهرس · غير متصل');
-      return tr('Verified for this account','موثق لهذا الحساب')+' · '+(p.credit_status||'unknown');
+      if(!p.connected)return tr('Available in catalog · not connected','متاح في الفهرس · غير متصل')+
+        (p.stale?' · '+tr('Catalog refresh overdue','تحديث الفهرس متأخر'):'');
+      return tr('Verified for this account','موثق لهذا الحساب')+' · '+(p.credit_status||'unknown')+
+        (p.stale?' · '+tr('Model catalog older than 14 days','فهرس النماذج أقدم من 14 يومًا'):'');
     }
     function renderSelected(p){
       status.replaceChildren(node('strong',p.name||p.id),
