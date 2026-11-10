@@ -471,9 +471,10 @@
         return;
       }
       if(e.type==="pi.provider_error"){
+        const status=document.getElementById("submissionStatus");
+        if(status?.dataset.piProviderError===(p.kind||"provider_error"))return;
         const failure=window.nativeDirectTest?.classifyError({kind:p.kind||"provider_error"});
         const readable=failure?.message||label("Provider request failed.","فشل الطلب لدى المزوّد.");
-        const status=document.getElementById("submissionStatus");
         if(status){status.dataset.piProviderError=p.kind||"provider_error";status.textContent=readable;}
         const line=document.getElementById("runtimeStatus");if(line)line.textContent=readable;
         statuses.set(id,"failed");if(activeSession?.id===id)activeSession.execution_status="failed";
@@ -489,8 +490,9 @@
       }
       if(e.type==="pi.agent_start"){statuses.set(id,"submitted");return;}
       if(e.type==="pi.agent_settled"){
-        statuses.set(id,"idle");statusEvents.set(id,(statusEvents.get(id)||0)+1);
-        if(activeSession?.id===id)activeSession.execution_status="idle";
+        const finalState=statuses.get(id)==="failed"?"failed":"idle";
+        statuses.set(id,finalState);statusEvents.set(id,(statusEvents.get(id)||0)+1);
+        if(activeSession?.id===id)activeSession.execution_status=finalState;
         void history(id,true).then(async()=>{
           if(stream!==source||!current(id,user))return;
           await refreshMessages();clearPiReply(id);

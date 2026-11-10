@@ -1913,6 +1913,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
       // Immediate visual receipt; no Python entitlement round-trip per Pi prompt.
       showSendingPreview(prompt);
+      delete submissionStatus.dataset.piProviderError;
       submissionStatus.textContent=tr('Sending directly to Pi…','جارٍ الإرسال مباشرة إلى Pi…');
       try{if(!workAccess){clearSendingPreview();return;}if(!activeSession)await createSession({checked:true});
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
