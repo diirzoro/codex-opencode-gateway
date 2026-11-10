@@ -38,7 +38,28 @@
   }
   window.workspaceRuntime={
     load,loadAgents,
-    async loadModels(id,pid){return models(await load(id),pid);},
+    async loadModels(id,pid){
+      const snapshot=await load(id);
+      const result=models(snapshot,pid);
+      if(!result?.connected||result.models.length)return result;
+      // A verified link may have been saved before its first Pi model
+      // metadata fetch finished. Request ONLY this account's connected
+      // provider; Gateway tries a bounded, throttled one-provider import.
+      // Never load the global Pi catalog into the workspace.
+      const provider=snapshot?.providers?.find(p=>p.id===pid);
+      if(provider?.personal_connected!==true)return result;
+      const detail=await api('/api/opencode/connections/'+encodeURIComponent(pid)+'/models');
+      if(!Array.isArray(detail?.models))throw Error('Invalid saved Pi model list');
+      result.models=detail.models.filter(m=>m?.enabled===true&&m.admin_allowed!==false)
+        .map(m=>({
+          id:m.id,name:m.name||m.id,
+          allowed:true,visible:true,enabled:true,
+          cost:m.cost||{},
+          price_type:m.price_type||'unknown',
+          reasoning:m.reasoning===true,context:m.context_window
+        }));
+      return result;
+    },
     peek,peekAgents:peek,
     peekModels(id,pid){return models(peek(id),pid);},
     clear(){window.nativeSession?.invalidate();},
