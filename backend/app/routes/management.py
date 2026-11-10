@@ -505,6 +505,45 @@ class AiModelPreference(BaseModel):
     enabled: bool
 
 
+def _ai_platform_defaults(db):
+    """Admin-only choices, not credentials, in the EXISTING policy JSON."""
+    raw = _ai_policy(db).get("platform_defaults") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {pid: item for pid, item in raw.items()
+            if isinstance(pid, str) and isinstance(item, dict)
+            and isinstance(item.get("owner_id"), str)
+            and isinstance(item.get("models"), list)}
+
+
+def _ai_active_platform_defaults(db):
+    """Never advertise shared access if the administrator's key is revoked."""
+    configured = _ai_platform_defaults(db)
+    if not configured:
+        return {}
+    rules = _ai_policy(db)
+    result = {}
+    for pid, item in configured.items():
+        try:
+            owner = uuid.UUID(item["owner_id"])
+        except (ValueError, TypeError):
+            continue
+        actor = db.get(User, owner)
+        if not actor or actor.role not in {"admin", "owner"} or actor.status != "active":
+            continue
+        record = db.scalar(select(AiUserConnection).where(
+            AiUserConnection.user_id == owner,
+            AiUserConnection.provider_id == pid,
+            AiUserConnection.auth_status == "verified"))
+        if not record:
+            continue
+        models = {m for m in item["models"] if isinstance(m, str)
+                  and _ai_allowed(db, pid, m, rules=rules)}
+        if models:
+            result[pid] = {"owner_id": owner, "models": models, "connection": record}
+    return result
+
+
 def _ai_connection_payload(row):
     return {"connection_id": str(row.id), "provider_id": row.provider_id,
             "auth_status": row.auth_status, "credit_status": row.credit_status,
@@ -515,10 +554,13 @@ def _ai_connection_payload(row):
 def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, provider_id=None, connected_only=False):
     _ai_schema(db)
     connected = {row.provider_id: row for row in db.scalars(
-        select(AiUserConnection).where(AiUserConnection.user_id == user_id))}
+        select(AiUserConnection).where(AiUserConnection.user_id == user_id,
+                                       AiUserConnection.auth_status == "verified"))}
+    platform = _ai_active_platform_defaults(db)
     provider_query = select(AiProviderCatalog).order_by(AiProviderCatalog.name)
     if connected_only:
-        provider_query = provider_query.where(AiProviderCatalog.id.in_(connected))
+        provider_query = provider_query.where(
+            AiProviderCatalog.id.in_(set(connected) | set(platform)))
     if provider_id:
         provider_query = provider_query.where(AiProviderCatalog.id == provider_id)
     if query:
@@ -531,7 +573,8 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
     # round-trip per provider. Read-only Dashboard opens stay lightweight.
     details_for = {provider.id for provider in rows
                    if provider_id == provider.id or
-                   (include_connected_models and provider.id in connected)}
+                   (include_connected_models and (provider.id in connected
+                                                  or provider.id in platform))}
     models_by_provider = {}
     disabled_by_provider = {
         pid: _ai_connection_secret_and_models(connected[pid])[1]
@@ -547,20 +590,34 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                 models_by_provider.setdefault(model.provider_id, {})[model.model_id] = {
                     **json.loads(model.details_json or "{}"),
                     "id": model.model_id, "name": model.name,
-                    "enabled": model.model_id not in disabled_by_provider.get(model.provider_id, set())}
+                    "enabled": (model.model_id in platform.get(model.provider_id, {}).get("models", set())
+                                or model.model_id not in disabled_by_provider.get(model.provider_id, set())),
+                    "platform_locked": model.model_id in platform.get(model.provider_id, {}).get("models", set())}
     checked_at = now()
     result = []
     for provider in rows:
         if not _ai_allowed(db, provider.id, rules=rules):
             continue
         record = connected.get(provider.id)
+        shared = platform.get(provider.id)
+        # Without a personal key, only selected global models are exposed,
+        # never every model of the administrator's provider account.
+        if shared and not record and provider.id in models_by_provider:
+            models_by_provider[provider.id] = {
+                mid: value for mid, value in models_by_provider[provider.id].items()
+                if mid in shared["models"]}
         stale = (not provider.models_synced_at or
                  checked_at - aware(provider.models_synced_at) > timedelta(days=_AI_STALE_DAYS))
         item = {"id": provider.id, "name": provider.name,
                 "model_count": provider.model_count, "models": {},
-                "connected": bool(record and record.auth_status == "verified"),
-                "verified": bool(record and record.auth_status == "verified"),
-                "credential_stored": False, "credential_source": "gateway" if record else "none",
+                "connected": bool(record or shared),
+                "verified": bool(record or shared),
+                "personal_connected": bool(record),
+                "platform": bool(shared),
+                "platform_locked": bool(shared),
+                "platform_models": sorted(shared["models"]) if shared else [],
+                "credential_stored": False,
+                "credential_source": "platform" if shared and not record else "gateway" if record else "none",
                 "api_key_supported": provider.id in _AI_VERIFY_URLS,
                 "auth_status": record.auth_status if record else "not_connected",
                 "credit_status": record.credit_status if record else "unknown",
