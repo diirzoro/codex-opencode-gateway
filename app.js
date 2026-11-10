@@ -200,7 +200,9 @@ window.nativeDirectTest=(()=>{
     const user=ownerScope(),revision=presentationRevision;
     if(!force&&workspaceSnapshot)return workspaceSnapshot;
     if(workspacePending)return workspacePending;
-    const job=Promise.all([configuredProviders({force}),agents({force})])
+    // Provider/model choices must still render if optional Pi command discovery
+    // fails (e.g. an agent endpoint 404). Execution authorization is separate.
+    const job=Promise.all([configuredProviders({force}),agents({force}).catch(()=>[])])
       .then(([data,agentRows])=>{
         if(ownerScope()!==user)throw Error('Account changed during Pi workspace discovery');
         if(revision!==presentationRevision)throw Error('Pi state changed; retry discovery');
