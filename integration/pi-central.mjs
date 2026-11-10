@@ -694,6 +694,8 @@ const server=http.createServer(async(req,res)=>{
         return error(res,422,"Prompt required");
       if(!b.model?.providerID||!b.model?.modelID)
         return error(res,422,"Select a verified provider and model from Gateway");
+      if(b.agent&&!s.testOwner)
+        return error(res,403,"Native skill and extension execution requires isolated TEST owner access");
       // Authenticate on EVERY prompt: deletions/rotations take effect before
       // another request can run. Never fall back to shared Pi credentials.
       const authorizedKey=await gatewayCredential(req,s,b.model.providerID);
@@ -705,7 +707,6 @@ const server=http.createServer(async(req,res)=>{
         // Keep the original Pi command/skill mechanism. Do not invent agents.
         let prompt=message;
         if(b.agent) {
-          if(!s.testOwner)return error(res,403,"Native skill and extension execution requires isolated TEST owner access");
           const commands=await a.command("get_commands");
           const command=(commands?.commands||[]).find(c=>c?.name===b.agent);
           if(!command) {
