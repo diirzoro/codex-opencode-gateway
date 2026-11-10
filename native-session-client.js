@@ -3,7 +3,7 @@
   let identity='',configuration=null,configurationPending=null,stream=null,streamId='';
   const rows=new Map(),snapshots=new Map(),statuses=new Map(),statusEvents=new Map(),statusReads=new Map();
   const permissionReplies=new Set(),submissionsInFlight=new Map(),sendGenerations=new Map();
-  const histories=new Map(),pendingReads=new Map(),discoveryReads=new Map(),selections=new Map(),uncertain=new Map();let epoch=0;
+  const histories=new Map(),pendingReads=new Map(),discoveryReads=new Map(),selections=new Map(),uncertain=new Map(),piLive=new Map();let epoch=0;
   const owner=()=>String(currentUser?.id||'');
   const label=(en,ar)=>typeof lang!=='undefined'&&lang==='ar'?ar:en;
   const active=()=>configuration?.enabled===true&&identity===owner();
@@ -27,7 +27,7 @@
     if(configuration.enabled)presentationStyle();
     return configuration.enabled;
   }
-  function clear(){epoch++;for(const controller of submissionsInFlight.values())controller.abort();submissionsInFlight.clear();sendGenerations.clear();stream?.close();stream=null;streamId='';identity='';configuration=null;configurationPending=null;document.getElementById('workspacePage')?.classList.remove('native-mode');permissionReplies.clear();for(const map of [rows,snapshots,statuses,statusEvents,statusReads,histories,pendingReads,discoveryReads,selections,uncertain])map.clear();}
+  function clear(){epoch++;for(const controller of submissionsInFlight.values())controller.abort();submissionsInFlight.clear();sendGenerations.clear();stream?.close();stream=null;streamId='';identity='';configuration=null;configurationPending=null;document.getElementById('workspacePage')?.classList.remove('native-mode');permissionReplies.clear();for(const map of [rows,snapshots,statuses,statusEvents,statusReads,histories,pendingReads,discoveryReads,selections,uncertain,piLive])map.clear();}
   function presentationStyle(){
     if(!document.head||document.getElementById('nativeConversationStyles'))return;
     const style=document.createElement('style');style.id='nativeConversationStyles';style.textContent=`
@@ -304,7 +304,9 @@
       // Native expands attachments into synthetic user text (read arguments and
       // file contents). Keep it available to Native, never in the user's bubble.
       // Use the original flag, not text/regex heuristics that could erase a prompt.
-      return {id:m.info.id,role:m.info.role,text:parts.filter(p=>p.type==='text'&&!p.ignored&&!(m.info.role==='user'&&p.synthetic===true)).map(p=>p.text||'').join(''),activity,
+      const actualText=parts.filter(p=>p.type==='text'&&!p.ignored&&!(m.info.role==='user'&&p.synthetic===true)).map(p=>p.text||'').join('');
+      const failureText=m.info?.error?window.nativeDirectTest?.classifyError(m.info.error)?.message||'':'';
+      return {id:m.info.id,role:m.info.role,text:actualText||failureText,activity,
         ...(m.info.error?{state:m.info.error.name==='MessageAbortedError'?'cancelled':'failed'}:{}),attachments:parts.filter(p=>p.type==='file').map(p=>({name:typeof p.filename==='string'?p.filename.split(/[\\/]/).at(-1)||'Attachment':'Attachment',mime:p.mime}))};
     });
   }
@@ -396,6 +398,28 @@
     if(epoch!==generation||owner()!==user||statusReads.get(id)!==sequence||(statusEvents.get(id)||0)!==seen||!valid())return;
     statuses.set(id,live[row.runtime_id]?.type&&live[row.runtime_id].type!=='idle'?'submitted':'idle');
   }
+  function piReply(id,fragment,final=false){
+    if(!current(id,owner())||typeof fragment!=="string")return;
+    const feed=document.getElementById("agentFeed");if(!feed)return;
+    let view=piLive.get(id);
+    if(!view){
+      const node=document.createElement("article");node.className="agent-response pi-native-stream";node.dir="auto";
+      const avatar=document.createElement("span");avatar.className="message-avatar";avatar.textContent="Pi";
+      const content=document.createElement("div");content.className="message-content";content.style.whiteSpace="pre-wrap";
+      node.append(avatar,content);view={node,content,text:"",frame:0};piLive.set(id,view);
+    }
+    view.text=final?fragment:view.text+fragment;
+    if(!view.node.isConnected)feed.append(view.node);
+    if(!view.frame)view.frame=requestAnimationFrame(()=>{
+      view.frame=0;if(piLive.get(id)!==view)return;
+      view.content.textContent=view.text;
+      if(feed.workspaceFollow?.following)feed.scrollTop=feed.scrollHeight;
+    });
+  }
+  function clearPiReply(id){
+    const view=piLive.get(id);if(!view)return;piLive.delete(id);
+    if(view.frame)cancelAnimationFrame(view.frame);view.node.remove();
+  }
   async function start(){
     stop();const id=activeSession?.id,user=owner();if(!id)return;
     const row=await context(id);if(!current(id,user))return;
@@ -439,7 +463,42 @@
         window.refreshWorkspaceChoices?.('',true).catch(error=>{if(current(id,user))$('#runtimeStatus').textContent=error.message;});
         return;
       }
-      const p=e.properties||{},session=p.sessionID||p.info?.sessionID||p.part?.sessionID;
+      const p=e.properties||{};
+      if(e.type==="pi.message_update"){
+        const part=p.assistantMessageEvent;
+        if(part?.type==="text_delta"&&typeof part.delta==="string"&&part.delta)piReply(id,part.delta);
+        else if(part?.type==="text_end"&&typeof part.content==="string")piReply(id,part.content,true);
+        return;
+      }
+      if(e.type==="pi.provider_error"){
+        const failure=window.nativeDirectTest?.classifyError({kind:p.kind||"provider_error"});
+        const readable=failure?.message||label("Provider request failed.","فشل الطلب لدى المزوّد.");
+        const status=document.getElementById("submissionStatus");
+        if(status){status.dataset.piProviderError=p.kind||"provider_error";status.textContent=readable;}
+        const line=document.getElementById("runtimeStatus");if(line)line.textContent=readable;
+        statuses.set(id,"failed");if(activeSession?.id===id)activeSession.execution_status="failed";
+        toast(readable);return;
+      }
+      if(e.type==="pi.message_end"){
+        const m=p.message;
+        if(m?.role==="assistant"){
+          const content=Array.isArray(m.content)?m.content.filter(x=>x?.type==="text").map(x=>x.text||"").join(""):"";
+          if(content)piReply(id,content,true);
+        }
+        return;
+      }
+      if(e.type==="pi.agent_start"){statuses.set(id,"submitted");return;}
+      if(e.type==="pi.agent_settled"){
+        statuses.set(id,"idle");statusEvents.set(id,(statusEvents.get(id)||0)+1);
+        if(activeSession?.id===id)activeSession.execution_status="idle";
+        void history(id,true).then(async()=>{
+          if(stream!==source||!current(id,user))return;
+          await refreshMessages();clearPiReply(id);
+        }).catch(err=>{if(stream===source&&current(id,user))
+          document.getElementById("runtimeStatus").textContent=err.message;});
+        return;
+      }
+      const session=p.sessionID||p.info?.sessionID||p.part?.sessionID;
       // info.id identifies an individual MESSAGE, not a Native session.
       if(session&&session!==row.runtime_id)return;
       if(!session&&e.type.startsWith('message.')){

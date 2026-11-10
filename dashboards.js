@@ -1911,14 +1911,20 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         return;
       }
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
-      try{await refreshEntitlement();if(!workAccess)return;if(!activeSession)await createSession({checked:true});
+      // Immediate visual receipt; no Python entitlement round-trip per Pi prompt.
+      showSendingPreview(prompt);
+      submissionStatus.textContent=tr('Sending directly to Pi…','جارٍ الإرسال مباشرة إلى Pi…');
+      try{if(!workAccess){clearSendingPreview();return;}if(!activeSession)await createSession({checked:true});
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
         const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type,url:a.url,name:a.name}));
-        await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});sentAttachments({attachments:nativeFiles});draft.confirm();
-        submissionStatus.textContent=tr('Accepted by native Pi','قبله Pi الأصلي');
+        if(sendingPreview)sendingPreview.sessionId=sessionId;
+        await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});
+        sentAttachments({attachments:nativeFiles});draft.confirm();
+        if(sendingPreview){const note=sendingPreview.node.querySelector('.sending-preview-status');if(note)note.textContent=tr('Received by Pi','استلمها Pi');}
+        if(!submissionStatus.dataset.piProviderError)submissionStatus.textContent=tr('Pi received the request; awaiting provider response.','استلم Pi الطلب؛ جارٍ انتظار رد المزوّد.');
         // Pi SSE owns reply presentation. No blocking Gateway history
         // or status request after the Native prompt receipt.
-      }catch(error){toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
+      }catch(error){clearSendingPreview();toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
     }
     // LIVE must not silently fall back to the legacy Python AI queue if Native is unavailable.
     if(location.hostname==='opencode-gateway.codes'&&!window.nativeSession?.active()){

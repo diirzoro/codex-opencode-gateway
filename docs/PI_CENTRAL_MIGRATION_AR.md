@@ -1104,3 +1104,11 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - **حالة التنفيذ: مصدر فرع updates فقط.** نشر المحوّل وتعديل إعداد Nginx TEST الفعلي والتحقق الحقيقي من إرسال رسالة عبر API/SSE لم يُنفذ بعد. لا تُعلن مشكلة HTTP 503 محلولة على TEST دون هذه الاختبارات، ولا يُمس LIVE/master.
 
 - إغلاق الحساب ينهي Cookie Pi مباشرة عبر مسار `/native-direct/api/logout`؛ وإنشاء/حذف مشروع يطلب تهيئة جديدة لكي تُحدّث صلاحيات المجلدات بدون استدعاء Python في كل طلب Pi.
+
+
+## 36. Pi Native SSE والرصيد — 10 نوفمبر 2026 — SOURCE ONLY
+
+- الواجهة تعرض طلب العميل مباشرة ثم ترسله إلى Pi دون refreshEntitlement من Python لكل رسالة.
+- تعرض text_delta وtext_end مباشرة من Pi SDK، وتقرأ التاريخ النهائي بعد agent_settled مرة واحدة بدل القراءة لكل Token.
+- Pi وحده يصنف أخطاء المزوّد، ومنها insufficient_balance وrate_limited وinvalid_key وmodel_unavailable؛ لا يتم تفسير 429 وحده بأنه نفاد رصيد.
+- تحديث إصدار ملفات المتصفح في index.html. لم يحدث نشر TEST أو تجربة حيّة، ولا تعديل LIVE أو master أو Workflow.

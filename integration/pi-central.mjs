@@ -289,6 +289,12 @@ class SdkAgent {
     if(event.type==="agent_settled"){this.active=false;this.settledObserved=true;}
     const serialized=JSON.stringify({type:"pi."+event.type,properties:event});
     for(const res of this.events)try{res.write("data: "+serialized+"\n\n");}catch{this.events.delete(res);}
+    if((event.type==="message_end"||event.type==="turn_end")&&event.message?.role==="assistant"&&
+       (event.message.stopReason==="error"||event.message.errorMessage)){
+      const issue=JSON.stringify({type:"pi.provider_error",
+        properties:{kind:piProviderFailure(event.message)}});
+      for(const res of this.events)try{res.write("data: "+issue+"\n\n");}catch{this.events.delete(res);}
+    }
     if(event.type==="agent_settled"){
       const now=Date.now();
       for(const res of this.events)try{
@@ -348,10 +354,10 @@ class SdkAgent {
       preflightResult:completeAdmission
     }));
     this.running=run;
-    run.then(()=>completeAdmission(true)).catch(()=>{
+    run.then(()=>completeAdmission(true)).catch(e=>{
       completeAdmission(false);
       for(const res of this.events)try{res.write("data: "+JSON.stringify({
-        type:"pi.error",properties:{message:"Pi execution failed"}
+        type:"pi.provider_error",properties:{kind:piProviderFailure(e)}
       })+"\n\n");}catch{this.events.delete(res);}
     }).finally(async()=>{
       // Once Pi settles, promptly erase the customer's runtime API override.
@@ -372,6 +378,18 @@ class SdkAgent {
     for(const res of this.events)try{res.end();}catch{}
     this.events.clear();pool.delete(this.id);
   }
+}
+function piProviderFailure(value){
+  const raw=[value?.errorMessage,value?.message,value?.data?.message,value?.code,
+    value?.status,value?.statusCode,value?.error?.message].filter(x=>x!=null)
+    .map(String).join(" ").slice(0,3000).toLowerCase();
+  if(/insufficient[\s_-]*(?:balance|credits?|funds?)|not enough.{0,25}(?:balance|credits?)|balance.{0,30}(?:insufficient|too low)|recharge|top[\s-]?up|no (?:remaining )?credits|credit balance|402|billing[\s_-]*hard[\s_-]*limit/i.test(raw))return "insufficient_balance";
+  if(/429|rate[\s_-]*limit|too many requests|quota[\s_-]*exceeded|requests per minute/i.test(raw))return "rate_limited";
+  if(/401|unauthori[sz]ed|invalid.{0,20}(?:api[\s_-]*)?key|invalid credentials|authentication failed/i.test(raw))return "invalid_key";
+  if(/model.{0,40}(?:not found|unavailable|not supported)|invalid model/i.test(raw))return "model_unavailable";
+  if(/403|forbidden|permission denied|access denied/i.test(raw))return "access_denied";
+  if(/timeout|timed out|fetch failed|econn|network unreachable/i.test(raw))return "network";
+  return "provider_error";
 }
 function nativeCredential(scope,provider,modelId){
   const account=scope.account;
@@ -530,7 +548,9 @@ function mapped(messages, id) {
   return messages.map((m,index)=>{
     const text=Array.isArray(m.content) ? m.content.filter(x=>x.type==="text").map(x=>x.text||"").join("\n"):typeof m.content==="string"?m.content:"";
     const mid="msg_"+createHash("sha256").update(id+":"+index).digest("hex").slice(0,24);
-    return {info:{id:mid,sessionID:id,role:m.role==="assistant"?"assistant":m.role==="user"?"user":"tool",time:{created:Date.now()}},
+    return {info:{id:mid,sessionID:id,role:m.role==="assistant"?"assistant":m.role==="user"?"user":"tool",time:{created:Date.now()},
+      ...(m.role==="assistant"&&(m.stopReason==="error"||m.errorMessage)
+        ?{error:{name:"ProviderError",kind:piProviderFailure(m)}}:{})},
       parts:[{id:"part_"+mid,messageID:mid,sessionID:id,type:"text",text}]};
   });
 }

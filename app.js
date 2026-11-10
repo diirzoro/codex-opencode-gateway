@@ -257,6 +257,16 @@ window.nativeDirectTest=(()=>{
   // Restore the original provider-error classification for the existing Pi UI.
   // This classifies execution errors; it does not revalidate keys or call Python.
   function nativeFailure(value){
+    const kind=String(value?.kind||value?.data?.code||'');
+    const messages={
+      insufficient_balance:[ 'Insufficient provider credit balance. Add credit to your account.','رصيد المزوّد غير كافٍ. أضف رصيدًا إلى حسابك.' ],
+      rate_limited:[ 'Provider request limit reached (not necessarily low balance).','وصلت إلى حد طلبات المزوّد، ولا يعني ذلك بالضرورة نفاد الرصيد.' ],
+      invalid_key:[ 'The provider rejected the API key.','المزوّد رفض مفتاح API.' ],
+      model_unavailable:[ 'The selected model is unavailable.','النموذج المختار غير متاح لدى المزوّد.' ],
+      access_denied:[ 'The provider rejected access.','رفض المزوّد صلاحية الوصول.' ],
+      network:[ 'Pi could not connect to the provider.','تعذر اتصال Pi بالمزوّد.' ]
+    };
+    if(messages[kind])return {kind,message:messages[kind][lang==='ar'?1:0]};
     const raw=[value?.name,value?.message,value?.data?.message,value?.data?.statusCode,
       value?.data?.code,value?.status,value?.error?.message]
       .filter(v=>v!==undefined&&v!==null).join(' ').slice(0,3000);
@@ -272,8 +282,10 @@ window.nativeDirectTest=(()=>{
       return {kind:'invalid_key',message:withDetail('رفض المزود مفتاح API (401 أو بيانات اعتماد غير صحيحة).')};
     if(/(?:403|forbidden|access.denied|permission.denied)/i.test(raw))
       return {kind:'access_denied',message:withDetail('رفض المزود صلاحية هذا المفتاح (403).')};
-    if(/(?:429|quota|rate.limit|free usage exceeded|insufficient|billing|credits|balance)/i.test(raw))
-      return {kind:'quota',message:withDetail('طلب Pi رُفض بسبب الرصيد أو حدود استخدام المزود.')};
+    if(/(?:insufficient.{0,30}(?:balance|credit|fund)|not.enough.{0,20}(?:balance|credit)|balance.{0,30}insufficient|402|billing.hard.limit)/i.test(raw))
+      return {kind:'insufficient_balance',message:lang==='ar'?'رصيد المزوّد غير كافٍ.':'Insufficient provider credit balance.'};
+    if(/(?:429|quota|rate.limit|free usage exceeded)/i.test(raw))
+      return {kind:'rate_limited',message:lang==='ar'?'المزوّد رفض الطلب بسبب حدود الاستخدام.':'Provider request limit reached.'};
     if(/(?:model.{0,40}(?:not.found|unavailable|not supported)|invalid.model|(?:404).{0,30}model)/i.test(raw))
       return {kind:'model_unavailable',message:withDetail('الموديل المختار غير متاح لدى المزود.')};
     if(/(?:timeout|timed.out|network|connect|econn|enotfound|fetch.failed)/i.test(raw))
