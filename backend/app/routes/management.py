@@ -751,6 +751,12 @@ def _ai_save(data, user, db, replace=False):
         db.rollback()
         raise HTTPException(409, "A connection for this provider already exists") from None
     db.refresh(existing)
+    # Load ONLY this explicitly connected provider's models, once during
+    # onboarding. Never repeat on every workspace open, tool, or prompt.
+    try:
+        _ai_refresh_selected_provider(db, data.provider_id)
+    except (HTTPException, _AiSqlError, ValueError, RuntimeError):
+        db.rollback()  # Credential stays committed; model retry is independent.
     return _ai_connection_payload(existing)
 
 
