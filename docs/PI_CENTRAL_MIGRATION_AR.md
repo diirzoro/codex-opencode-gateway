@@ -694,3 +694,12 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - الملف: `integration/pi-central.mjs`، Commit `7db951bfd74d60f3a0707dcfde8a368bb20fe6f2`.
 - فحص V8 parser **PASS**؛ اختبار تشغيل Extensions/Skills وسلوك عزل الملفات ونسخة Pi 1.5.0 **NOT VERIFIED**؛ لا تُعتبر هذه الطريقة بديلًا كاملًا لعزل OS عند تشغيل Shell متعدد العملاء.
 
+
+
+### المرحلة 8 — كتالوج أخف وتقييد أوامر Pi للمالك
+
+- **تنظيف كتالوج Pi:** حذف حقول `configured` و`credential_stored` و`credential_source` و`pi_available_models` الناتجة من إعدادات Pi القديمة؛ Gateway لا تستخدمها للتحقق، وبيانات العميل الحقيقي تؤخذ فقط من PostgreSQL. أبقينا عقد `/provider` الحالي `{all,connected:[],default:{}}` و`model_count`، وهوية النموذج `provider_id+model_id` دون تغيير. الملف `integration/pi-central.mjs`، Commit `b545cedd2380dd796bf55af425ebf45563007059`. نتيجة: V8 parser **PASS**؛ لا قياس حمولة VPS حتى الآن.
+- **عدم تشغيل إضافات المشغّل للعملاء:** قراءة كتالوج `/agent` لا تشغّل RPC command discovery لمستخدم عادي، وتستجيب بقائمة فارغة ما لم يكن المستخدم `owner` ومعه `PI_TEST_SINGLE_OWNER_TOOLS=1`. خدمة المزامنة الداخلية لا تحتاج هذه الأوامر. يقل عدد عمليات Pi الثانوية ويُمنع ظهور أوامر المشغّل في حساب العملاء. Commit `3675de4ab7afcd6f84e9e819e5dfc9a921467881`.
+- **لا يُحذف الكود الضروري للتوافق:** إبقاء آلية RPC discovery المستخدمة فعليًا للمالك، ومسار جلسة SDK/Unix socket الحاضر، وعدم إنشاء بدائل أو ملفات جديدة. لا تُدّعى جاهزية أدوات العملاء المتعددين قبل عزل OS.
+- **ما لم يُجرَّب:** اختبار Pi SDK live، قاعدة TEST، GitHub Actions/SSH deployment، تشغيل npm/build، والتأكد من سلوك OAuth/Provider حقيقي: **NOT VERIFIED**.
+
