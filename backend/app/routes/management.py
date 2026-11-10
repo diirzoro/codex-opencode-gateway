@@ -676,11 +676,15 @@ def ai_catalog_refresh():
             if not locked:
                 return
             sock = os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")
+            internal_token = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
+            if len(internal_token) < 32:
+                return
             with _ai_httpx.Client(transport=_ai_httpx.HTTPTransport(uds=sock),
                                   timeout=25, trust_env=False) as client:
                 result = client.get("http://pi/provider", params={
                     "directory": os.getenv("PI_CATALOG_DIRECTORY", "/home/tahir/pi-test"),
-                    "models": "full"})
+                    "models": "full"}, headers={
+                    "x-pi-gateway-token": internal_token})
                 result.raise_for_status()
                 payload = result.json()
             all_rows = payload.get("all")
