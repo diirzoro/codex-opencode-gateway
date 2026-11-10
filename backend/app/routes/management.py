@@ -441,8 +441,9 @@ def _ai_policy(db):
     return _ai_get_policy(db).as_payload()
 
 
-def _ai_allowed(db, provider_id, model_id=None):
-    rules = _ai_policy(db)
+def _ai_allowed(db, provider_id, model_id=None, rules=None):
+    if rules is None:
+        rules = _ai_policy(db)
     allowed = rules.get("allowed_providers") or []
     if provider_id in (rules.get("hidden_providers") or []):
         return False
@@ -477,9 +478,10 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
             (func.lower(AiProviderCatalog.id).contains(query.lower())) |
             (func.lower(AiProviderCatalog.name).contains(query.lower())))
     rows = list(db.scalars(provider_query.limit(1000)))
+    rules = _ai_policy(db)
     result = []
     for provider in rows:
-        if not _ai_allowed(db, provider.id):
+        if not _ai_allowed(db, provider.id, rules=rules):
             continue
         record = connected.get(provider.id)
         stale = (not provider.models_synced_at or
@@ -499,7 +501,7 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
             item["models"] = {
                 m.model_id: {**_ai_json.loads(m.details_json or "{}"),
                     "id": m.model_id, "name": m.name}
-                for m in models if _ai_allowed(db, provider.id, m.model_id)
+                for m in models if _ai_allowed(db, provider.id, m.model_id, rules=rules)
             }
         result.append(item)
     return result
