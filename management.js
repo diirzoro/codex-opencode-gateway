@@ -145,63 +145,56 @@
     if(activeWorkspace)picker.add(new Option(activeProject?.name||tr('Selected workspace','مساحة العمل المختارة'),activeWorkspace.id));
     picker.value=view.workspaceId;
     const box=section(body,tr('Connect verified providers','ربط المزوّدين الموثقين'));
+    // Only an explicit new-link action may refresh native provider metadata.
+    let catalogRequested=false,catalogLoading=false;
     box.append(node('p',tr('Gateway verifies each supported API key with the real provider before encrypting it for your account. A catalog entry is not a connection.','يتحقق Gateway من مفتاح API لدى المزوّد الحقيقي قبل حفظه مشفرًا لحسابك. ظهور المزوّد في الفهرس لا يعني اتصاله.')));
     const comboWrap=node('div','','provider-combo'),combo=node('input');combo.type='search';
     combo.value=body.dataset.providerQuery||'';combo.placeholder=tr('Search providers…','ابحث عن المزوّدات…');combo.setAttribute('role','combobox');combo.setAttribute('aria-expanded','false');combo.autocomplete='off';combo.setAttribute('aria-label',combo.placeholder);
     const options=node('div','','provider-combo-options');options.hidden=true;comboWrap.append(combo,options);box.append(comboWrap);
+    comboWrap.hidden=true;
     const progress=node('p','','provider-loading');progress.setAttribute('role','status');progress.setAttribute('aria-live','polite');box.append(progress);
     const status=node('p',tr('Choose a provider to inspect its connection.','اختر مزوّدًا لفحص اتصاله.'),'provider-combo-status');box.append(status);
+    status.hidden=true;
     // The provider catalog is visible without opening the search popover.
     // These names come exclusively from the existing Native provider inventory.
     const catalogCount=node('p','','provider-catalog-count');box.append(catalogCount);
     const catalogList=node('div','','provider-catalog-grid');box.append(catalogList);
+    catalogList.hidden=true;catalogCount.hidden=true;
     const connectedBox=section(body,tr('My verified provider connections','اتصالات مزوّداتي الموثقة'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
     let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
     let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
     let searchRows=[],searchQuery='',searchTimer=null,searchAbort=null,searchSequence=0,optionsOpen=false;
     const searchState=node('p','','provider-search-status');searchState.setAttribute('role','status');comboWrap.after(searchState);
-    // The existing Connections form displays every provider Pi returns.
-    // Search only changes presentation, never truncates Pi's native inventory.
-    // Database-backed catalog revisions do not reuse the old Native workspace generation.
-    // Both Dashboard and Workspace use the same authenticated Gateway catalog.
+    searchState.hidden=true;
+    // Default view: saved PostgreSQL connections only. Native discovery and
+    // provider/model catalog refresh occur solely after "Connect new".
     async function accountCatalogRows(){
-      if(!window.nativeDirectTest?.active())throw Error('Pi Native is unavailable');
-      // Read the already-running Pi Native server once. This
-      // installation does not implement /config/providers (404).
-      // Use the exact same Native-derived inventory as the Workspace composer.
-      // "connected" means reported by Native, not a verified API key.
-      const native=await window.nativeDirectTest.configuredProviders();
-      const connected=new Set(native.connected||[]);
-      return (native.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
-        id:p.id,name:p.name||p.id,model_count:p.model_count??Object.keys(p.models||{}).length,
-        connected:connected.has(p.id),public_free:(native.public_free||[]).includes(p.id),
-        credential_source:p.credential_source||'none',
-        pi_available_models:p.pi_available_models||[],
-        credit_status:p.credit_status||'unknown',verified:p.verified===true,
-        stale:p.stale===true,last_synced_at:p.last_synced_at||null,
-        visible:true,allowed:true,
-        default_model:native.default?.[p.id]
-      })).sort((a,b)=>Number(b.connected)-Number(a.connected)
-        ||a.name.localeCompare(b.name));
+      const result=await api('/api/opencode/catalog/providers?connected_only='+
+        String(!catalogRequested));
+      const connected=new Set(result.connected||[]);
+      return (result.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
+        id:p.id,name:p.name||p.id,
+        model_count:p.model_count??Object.keys(p.models||{}).length,
+        connected:connected.has(p.id),credit_status:p.credit_status||'unknown',
+        verified:p.verified===true,stale:p.stale===true,
+        last_synced_at:p.last_synced_at||null,visible:true,allowed:true
+      })).sort((a,b)=>Number(b.connected)-Number(a.connected)||
+        a.name.localeCompare(b.name));
     }
     async function lookup(kind,value,signal){
-      if(!workspaceId){
-        const rows=await accountCatalogRows();
-        if(signal?.aborted||!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
-        const term=value.trim().toLowerCase();
-        if(kind==='resolve'){
-          const found=rows.find(p=>p.id.toLowerCase()===term)
-            ||rows.find(p=>p.name.toLowerCase()===term);
-          if(!found)throw Error('Provider not found in Pi Native: '+value);
-          return [found];
-        }
-        return rows.filter(p=>p.id.toLowerCase().includes(term)
-          ||p.name.toLowerCase().includes(term));
+      if(signal?.aborted||!alive()||!contextCurrent())
+        throw new DOMException('Workspace changed','AbortError');
+      const term=value.trim().toLowerCase();
+      const rows=snapshot?.providers||[];
+      if(kind==='resolve'){
+        const found=rows.find(p=>p.id.toLowerCase()===term)||
+          rows.find(p=>p.name.toLowerCase()===term);
+        if(!found)throw Error('Provider not found in saved catalog: '+value);
+        return [found];
       }
-      const data=await api(base+kind+'?'+(kind==='search'?'query':'name')+'='+encodeURIComponent(value),{signal});
-      if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
-      return data.providers;
+      return rows.filter(p=>p.id.toLowerCase().includes(term)||
+        p.name.toLowerCase().includes(term));
     }
     const retry=button(tr('Retry','إعادة المحاولة'),()=>metadataReady?refresh(true):initialize());retry.hidden=true;box.append(retry);
     const message=(text,error=false)=>{progress.textContent=text;progress.classList.toggle('connection-error',error);retry.hidden=!error;};
@@ -284,6 +277,10 @@
       }
     }
     const renderOptions=()=>{
+      if(!catalogRequested){
+        options.replaceChildren();catalogList.replaceChildren();
+        catalogCount.textContent='';return;
+      }
       const renderStarted=performance.now();
       const query=(combo.value||'').trim().toLowerCase();const previous=new Map([...options.children].map(n=>[n.dataset.providerId,n]));
       const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
@@ -320,6 +317,7 @@
     };
     function stopSearch(){searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}
     function scheduleSearch(){
+      if(!catalogRequested)return;
       stopSearch();renderOptions();const query=combo.value.trim().toLowerCase();
       if(query.length<2||!view.ready)return;
       const sequence=searchSequence;searchTimer=setTimeout(async()=>{
@@ -334,42 +332,39 @@
     controller.signal.addEventListener('abort',stopSearch,{once:true});
     async function refresh(force=false){
       if(!alive())return;
-      if(force&&window.nativeDirectTest?.active()){
-        view.nativeCatalogRequested=false;
-        window.nativeDirectTest.forget({fresh:true,keepSession:true});
-      }
-      if(!workspaceId){
-        view.ready=false;
-        message(tr('Loading account providers…','جارٍ تحميل مزوّدات الحساب…'));
-        try{
-          const rows=await accountCatalogRows();
-          if(!alive()||workspaceId)return;
-          // Show all native providers; the connected section stays separate.
-          snapshot={providers:rows};
-          view.ready=true;
-          renderOptions();renderConnected();
-          message(tr('Pi providers ready','مزوّدو Pi جاهزون')+' · '+rows.length);
-          const selected=rows.find(p=>p.id===selectedProviderId);if(selected)renderSelected(selected);
-        }catch(error){if(alive()&&error.name!=='AbortError')message(error.message,true);}
-        return;
-      }
       view.ready=false;
-      status.querySelectorAll('button').forEach(button=>button.disabled=true);
-      renderConnected();
-      message(snapshot?tr('Refreshing Pi providers…','جارٍ تحديث مزوّدي Pi…'):tr('Loading Pi providers…','جارٍ تحميل مزوّدي Pi…'));
+      message(tr('Loading saved connections…','جارٍ تحميل الاتصالات المحفوظة…'));
       try{
-        if(force)window.workspaceRuntime.invalidate(workspaceId);
-        const next=await window.workspaceRuntime.load(workspaceId,{force});
+        const rows=await accountCatalogRows();
         if(!alive()||!contextCurrent())return;
-        if(next.providers===null)throw new Error(next.errors?.provider_data?.detail||'Pi provider discovery failed');
-        snapshot=next;view.ready=true;
-        message(tr('Popular and connected Pi providers ready','المزوّدات الشائعة والمتصلة جاهزة')+' · '+snapshot.providers.length);renderOptions();renderConnected();
-        let selected=snapshot.providers.find(p=>p.id===selectedProviderId);
-        if(!selected&&selectedProviderId){try{selected=(await lookup('resolve',selectedProviderId))[0];}catch(error){if(error.name!=='AbortError')status.textContent=error.message;}}
-        if(selected)renderSelected(selected);if(combo.value.trim().length>=2)scheduleSearch();
-        if(window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
+        snapshot={providers:rows};
+        view.ready=true;
+        renderOptions();renderConnected();
+        const selected=rows.find(p=>p.id===selectedProviderId);
+        if(selected)renderSelected(selected);
+        if(catalogRequested&&combo.value.trim().length>=2)scheduleSearch();
+        message(tr('Saved connections ready','الاتصالات المحفوظة جاهزة')+' · '+
+          rows.filter(p=>p.connected).length);
       }catch(error){if(alive()){message(error.message,true);renderOptions();}}
     }
+    const browse=button(tr('Connect a new provider','ربط مزوّد جديد'),async()=>{
+      if(catalogLoading||!alive())return;
+      catalogLoading=true;browse.disabled=true;
+      message(tr('Loading available providers and models…',
+        'جارٍ تحميل المزوّدين ونماذجهم…'));
+      try{
+        // Only the click requests native discovery; Gateway persists the
+        // 7-day snapshot and returns stored provider/model metadata.
+        await api('/api/opencode/catalog/providers?discover=true');
+        if(!alive())return;
+        catalogRequested=true;
+        comboWrap.hidden=false;catalogCount.hidden=false;
+        catalogList.hidden=false;status.hidden=false;searchState.hidden=false;
+        await refresh(true);
+      }catch(error){if(alive())message(error.message,true);}
+      finally{catalogLoading=false;browse.disabled=false;}
+    });
+    box.insertBefore(browse,comboWrap);
     function invalidateOwnedWorkspaceProviders(){
       // Account connections are shared across all of this user's workspaces.
       // Clear stale composer snapshots without changing active project/session.
