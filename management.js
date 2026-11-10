@@ -145,6 +145,35 @@
       'أدخل معرّف المزوّد ومفتاح API الشخصي. لن يظهر أدناه سوى اتصالاتك الخاصة والنماذج التي فعّلتها الإدارة.')));
     const progress=node('p','','provider-loading');progress.setAttribute('role','status');
     progress.setAttribute('aria-live','polite');box.append(progress);
+    // Admin-only inventory controls reuse this SAME page and the SAME
+    // persisted Pi catalog; customer workspaces never download the directory.
+    if(platform&&admin()){
+      const inventory=section(body,tr('Pi supported provider inventory','فهرس مزوّدات Pi المحفوظ'));
+      const status=node('p',tr('Reading saved provider count…','جارٍ قراءة عدد المزوّدات المحفوظة…'),'provider-picker-help');
+      status.setAttribute('role','status');
+      const update=button(tr('Refresh from Pi now','تحديث المزوّدات الآن من Pi'),async()=>{
+        update.disabled=true;
+        status.textContent=tr('Refreshing provider names from Pi…','جارٍ تحديث أسماء المزوّدات من Pi…');
+        try{
+          await api('/api/admin/ai-catalog/refresh',{method:'POST'});
+          await showInventory();
+        }catch(error){
+          status.textContent=tr('Refresh failed; saved list was retained. ','تعذّر التحديث؛ بقيت القائمة المحفوظة. ')+(error.message||String(error));
+        }finally{update.disabled=false;}
+      });
+      async function showInventory(){
+        const data=await api('/api/admin/ai-catalog');
+        if(!alive())return;
+        status.textContent=tr('Pi providers saved: ','مزوّدات Pi المحفوظة: ')+
+          data.pi_providers+' · '+
+          tr('Database providers: ','إجمالي مزوّدات القاعدة: ')+data.saved_providers+
+          ' · '+tr('Last successful update: ','آخر تحديث ناجح: ')+
+          (data.last_synced_at?new Date(data.last_synced_at).toLocaleString(lang):tr('Pending','لم يكتمل بعد'))+
+          ' · '+tr('Automatic: every 14 days','تلقائي: كل 14 يومًا');
+      }
+      inventory.append(status,update);
+      showInventory().catch(error=>{if(alive())status.textContent=error.message||String(error);});
+    }
     const connectedBox=section(body,tr('Connected providers and models','المزوّدون المربوطون والنماذج'));
     // Provider credentials are account-wide and must not switch projects.
     let snapshot=null;
