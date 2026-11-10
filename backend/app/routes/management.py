@@ -426,7 +426,7 @@ _AI_VERIFY_URLS = {
     "together": "https://api.together.xyz/v1/models",
     "cerebras": "https://api.cerebras.ai/v1/models",
 }
-_AI_REFRESH_DAYS = 7
+_AI_REFRESH_DAYS = 14
 _AI_STALE_DAYS = 14
 _AI_SCHEMA_OK_UNTIL = 0.0
 
@@ -532,9 +532,9 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
                     include_connected_models: bool = False,
                     connected_only: bool = False, discover: bool = False,
                     user: User = Depends(require_user), db: Session = Depends(get_db)):
-    """Read saved metadata; discover from Pi only on an explicit new-link request."""
-    # No Pi discovery during workspace use, chat, tools, uploads or normal
-    # account-connection reads. Reuse the 7-day PostgreSQL snapshot when fresh.
+    """Read saved PostgreSQL catalog; metadata synchronization runs in maintenance."""
+    # No Pi requests during workspace use, chat, tools, uploads or normal
+    # account-connection reads. Reuse the 14-day database snapshot.
     if discover:
         # Check the manual TEST schema once before attempting any discovery,
         # so a missing migration yields a clean 503 instead of an SQL 500.
@@ -700,7 +700,12 @@ def ai_internal_credential(provider_id: str, request: Request, workspace_id: uui
 
 
 def _ai_catalog_refresh_if_due():
-    """Explicit new-connection discovery only; cache results in existing PostgreSQL."""
+    """Refresh missing or 14-day-old Pi metadata in existing TEST PostgreSQL.
+
+    Runs from existing Gateway maintenance; never during Pi inference, chats,
+    file operations or normal account reads. A failed refresh keeps the last
+    successful snapshot and is retried on a later maintenance pass.
+    """
     from ..database import SessionLocal
     with SessionLocal() as db:
         try:
@@ -708,14 +713,14 @@ def _ai_catalog_refresh_if_due():
             last = db.scalar(select(func.min(AiProviderCatalog.models_synced_at)))
             count = db.scalar(select(func.count()).select_from(AiProviderCatalog)) or 0
             if count and last is not None and now() - aware(last) < timedelta(days=_AI_REFRESH_DAYS):
-                return
+                return True
             locked = db.execute(_ai_text("SELECT pg_try_advisory_xact_lock(732062611)")).scalar_one()
             if not locked:
-                return
+                return False
             sock = os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")
             internal_token = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
             if len(internal_token) < 32:
-                return
+                raise RuntimeError("Pi catalog internal authorization is not configured for TEST")
             with _ai_httpx.Client(transport=_ai_httpx.HTTPTransport(uds=sock),
                                   timeout=25, trust_env=False) as client:
                 result = client.get("http://pi/provider", params={
@@ -726,7 +731,7 @@ def _ai_catalog_refresh_if_due():
                 payload = result.json()
             all_rows = payload.get("all")
             if not isinstance(all_rows, list) or not all_rows:
-                return
+                raise ValueError("Pi returned an empty provider catalog")
             stamped = now()
             # One provider query and one model query per explicit discovery,
             # instead of one SELECT and one flush for every provider.
@@ -746,7 +751,7 @@ def _ai_catalog_refresh_if_due():
                     db.add(row)
                     known[pid] = row
             if not valid:
-                return
+                raise ValueError("Pi catalog contains no valid providers")
             db.flush()  # parent rows must exist before model foreign keys
             prior = {}
             for model in db.scalars(select(AiProviderModel).where(
@@ -785,11 +790,14 @@ def _ai_catalog_refresh_if_due():
                 row.models_synced_at = stamped
                 row.last_sync_error = None
             db.commit()
-        except (HTTPException, _AiSqlError, _ai_httpx.HTTPError, ValueError, OSError):
+            return True
+        except (HTTPException, _AiSqlError, _ai_httpx.HTTPError, ValueError, OSError, RuntimeError) as exc:
             db.rollback()
-            # Fail closed and preserve the last catalog; never log secrets.
+            # Never log Pi responses, provider payloads, tokens or account keys.
             import logging
-            logging.getLogger(__name__).warning("AI catalog synchronization postponed")
+            logging.getLogger(__name__).warning(
+                "TEST AI catalog synchronization postponed (%s)", type(exc).__name__)
+            return False
 
 
 @router.get("/workspaces/{workspace_id}/providers")
