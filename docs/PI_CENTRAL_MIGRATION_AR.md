@@ -819,3 +819,17 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - **NOT VERIFIED:** لم يُنشر Commit هذه المرحلة بعد على VPS، ولم تُجرَ Browser E2E على TEST ولا فحوص حية للمحادثات أو اختيار المشروع. لا يدعي نجاح إصلاح واجهة المستخدم الحقيقي قبل التجربة.
 - **التجربة بعد نشر `updates` الحالي باستخدام Workflow الموجود:** افتح `/` من متصفح عادي، يجب رؤية Landing أولًا. اضغط Login، يجب أن يظهر نموذج الدخول. بعد نجاحه يجب فتح Workspace المستعادة أو صفحة المشاريع إن لم توجد. عند إعادة تحميل `/` مع Cookie صالحة تظهر Landing، وزر «Open a project» يستعيد السياق بدون تسجيل خروج. اختبر أن Admin يمكنه فتح لوحة الإدارة، وأن OAuth/الدفع لم ينكسرا. إذا بقيت صفحة قديمة، نفّذ Hard Refresh لأن أصول JS تغيرت نسخة Query.
 - **حدود ثابتة:** جميع تغييرات هذه المرحلة اقتصرت على الملفات الثلاثة الموجودة `index.html`, `app.js`, `dashboards.js` وهذه المذكرة. لم تُنشأ ملفات أو مسارات API أو خدمات جديدة. `master` وLIVE لم يُمسّا.
+
+
+## 25. إصلاح توقف Bootstrap وفقدان واجهة Landing الأصلية
+
+**نتيجة أدلة التشغيل، 10 نوفمبر 2026:**
+
+- واجهة TEST بعد نشر `465de9754fc16cdb2ea703af572f4be8047ed0d2` أظهرت Landing بنصوص ثابتة فقط، دون Carousel/Slides وخطط Pricing وأزرار دخول كاملة، مع `bootstrapping=true` و`appLoaded=true` و`enhancementsLoaded=false` و`carouselCards=0` و`pricingCards=0`.
+- المستخدم تحقق من المصدر العام: `app.js`, `enhancements.js`, `dashboards.js`, `styles.css` كلها HTTP 200؛ وكذلك `/api/homepage` (4200 bytes) و`/api/plans` (936 bytes) كلاهما HTTP 200. LIVE اشتغلت كواجهة فقط رغم حذف محرك OpenCode؛ بيانات LIVE وقاعدة TEST منفصلتان.
+- مقارنة `master` و`updates` و`backup/master-before-updates-sync-20261109` أثبتت أن العناصر الأصلية `homeCarousel`, `pricingCards`, إدارة Homepage والقائمة الجانبية موجودة في المصادر، وأن `enhancements.js` و`styles.css` متطابقان بين `master` و`updates`. لم تُنشأ أي ملفات بديلة أو تُنقل بيانات من LIVE.
+- **السبب الجذري المحدد:** داخل `app.js` المحدث، الـIIFE الخاص بـ`window.nativeDirectTest` أعاد خاصية `classifyError:nativeFailure`، لكن تحويل Pi كان قد حذف تعريف `function nativeFailure(value)` الأصلي. النتيجة المتوقعة: `ReferenceError: nativeFailure is not defined` أثناء تنفيذ السكربت، قبل تعريف `authReady` و`navigationReady`؛ يتعطل تحميل `enhancements.js` عند احتياجه للأولى وتبقى الصفحة في Bootstrap دون شرائح أو خطط.
+- **الإصلاح SOURCE DONE:** استعادة الـhelper الأصلي من `master:app.js` داخل **`updates:app.js` نفسه**، مع استبدال اسم المحرك الظاهر في رسائل الخطأ من OpenCode إلى Pi فقط. Commit `67b13e5680c1f4d08af7a84fbb02f93bada3c5aa`. لا ملف جديد، لا مسار أو خدمة جديدة، لا تعديل محرك Pi أو API أو Python أو قواعد البيانات. الـhelper يصنف رسالة الخطأ الفعلية دون استدعاء تحقق جديد.
+- **فحص مصدر PASS:** JavaScript parsing نجح؛ تصنيف عينات مفاتيح HTTP 401/429 وخطأ الاتصال الافتراضي أعاد `invalid_key` و`quota` و`network` على التوالي؛ ويستمر `native-session-client.js` باستخدام نفس الواجهة العامة `window.nativeDirectTest.classifyError`.
+- **Browser E2E NOT VERIFIED YET:** لم يُنشر هذا الـCommit عند توثيق القسم. يجب نشر أحدث SHA من `updates` بواسطة TEST Workflow الحالي فقط، ثم تحديث الصفحة وإعادة فحص `bootstrapping=false` و`enhancementsLoaded=true` ووجود `#homeCarousel .home-card` و`#pricingCards .price-card` بعد التحميل. تأكد من ظهور نافذة Login ومشاريع Workspace دون إنشاء بيانات جديدة. إذا بقيت مشكلة، اقرأ أول خطأ JavaScript من Console قبل تغيير أي شيء آخر.
+- **حدود الأمان:** `master` وLIVE لم يُعدلا؛ لا تغيير Nginx أو systemd أو قواعد البيانات؛ لا إعادة إنشاء خدمات OpenCode؛ احتفظ بكل مشاريع/جلسات العملاء الموجودة ومفاتيحهم. أي إصلاح إضافي يجب أن يكون في ملف أصلي ضمن `updates` فقط.
