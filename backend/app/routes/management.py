@@ -559,14 +559,15 @@ def _ai_connection_payload(row):
 
 def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, provider_id=None, connected_only=False):
     _ai_schema(db)
-    connected = {row.provider_id: row for row in db.scalars(
-        select(AiUserConnection).where(AiUserConnection.user_id == user_id,
-                                       AiUserConnection.auth_status == "verified"))}
+    owned = {row.provider_id: row for row in db.scalars(
+        select(AiUserConnection).where(AiUserConnection.user_id == user_id))}
+    connected = {pid: row for pid, row in owned.items()
+                 if row.auth_status == "verified"}
     platform = _ai_active_platform_defaults(db)
     provider_query = select(AiProviderCatalog).order_by(AiProviderCatalog.name)
     if connected_only:
         provider_query = provider_query.where(
-            AiProviderCatalog.id.in_(set(connected) | set(platform)))
+            AiProviderCatalog.id.in_(set(owned) | set(platform)))
     if provider_id:
         provider_query = provider_query.where(AiProviderCatalog.id == provider_id)
     if query:
@@ -619,13 +620,14 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                 "connected": bool(record or shared),
                 "verified": bool(record or shared),
                 "personal_connected": bool(record),
+                "personal_status": owned[provider.id].auth_status if provider.id in owned else "not_connected",
                 "platform": bool(shared),
                 "platform_locked": bool(shared),
                 "platform_models": sorted(shared["models"]) if shared else [],
                 "credential_stored": False,
                 "credential_source": "platform" if shared and not record else "gateway" if record else "none",
                 "api_key_supported": provider.id in _AI_VERIFY_URLS,
-                "auth_status": record.auth_status if record else "not_connected",
+                "auth_status": owned[provider.id].auth_status if provider.id in owned else "not_connected",
                 "credit_status": record.credit_status if record else "unknown",
                 "last_synced_at": provider.models_synced_at, "stale": stale}
         if provider.id in details_for:
@@ -849,6 +851,20 @@ def ai_disconnect(provider_id: str, user: User = Depends(require_user),
     db.commit()
 
 
+def _ai_model_zero_price(row):
+    try:
+        details = json.loads(row.details_json or "{}")
+    except (ValueError, TypeError):
+        return False
+    cost = details.get("cost") if isinstance(details, dict) else None
+    if not isinstance(cost, dict):
+        return False
+    return (type(cost.get("input")) in (int, float) and
+            type(cost.get("output")) in (int, float) and
+            cost["input"] == 0 and cost["output"] == 0 and
+            (row.provider_id != "openrouter" or row.model_id.endswith(":free")))
+
+
 @router.get("/opencode/connections/{provider_id}/models")
 def ai_my_connection_models(provider_id: str, user: User = Depends(require_user),
                             db: Session = Depends(get_db)):
@@ -868,6 +884,7 @@ def ai_my_connection_models(provider_id: str, user: User = Depends(require_user)
         .order_by(AiProviderModel.name).limit(2000)))
     return {"provider_id": provider_id,
             "models": [{"id": m.model_id, "name": m.name,
+                        "free_eligible": _ai_model_zero_price(m),
                         "enabled": (m.model_id in locked or m.model_id not in disabled) and
                         _ai_allowed(db, provider_id, m.model_id, rules=rules),
                         "platform_locked": m.model_id in locked,
