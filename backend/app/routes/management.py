@@ -538,6 +538,10 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
     if discover:
         _ai_catalog_refresh_if_due()
         db.expire_all()
+        # Do not report discovery as successful when the first catalog
+        # synchronization failed or another request is still running.
+        if db.scalar(select(AiProviderCatalog.id).limit(1)) is None:
+            raise HTTPException(503, "No saved provider catalog is available; retry connection discovery")
     rows = _ai_provider_rows(db, user.id, query=query[:120],
                              include_connected_models=include_connected_models,
                              provider_id=provider_id, connected_only=connected_only)
@@ -721,39 +725,62 @@ def _ai_catalog_refresh_if_due():
             if not isinstance(all_rows, list) or not all_rows:
                 return
             stamped = now()
+            # One provider query and one model query per explicit discovery,
+            # instead of one SELECT and one flush for every provider.
+            known = {row.id: row for row in db.scalars(select(AiProviderCatalog))}
+            valid = {}
             for item in all_rows:
+                if not isinstance(item, dict):
+                    continue
                 pid = item.get("id")
-                if not isinstance(pid, str) or len(pid) > 120:
+                incoming = item.get("models")
+                if (not isinstance(pid, str) or not 0 < len(pid) <= 120 or
+                        not isinstance(incoming, dict)):
                     continue
-                row = db.get(AiProviderCatalog, pid)
-                if row is None:
-                    row = AiProviderCatalog(id=pid, name=str(item.get("name") or pid)[:200])
+                valid[pid] = (str(item.get("name") or pid)[:200], incoming)
+                if pid not in known:
+                    row = AiProviderCatalog(id=pid, name=valid[pid][0])
                     db.add(row)
-                    db.flush()
-                row.name = str(item.get("name") or pid)[:200]
-                incoming = item.get("models") or {}
-                if not isinstance(incoming, dict):
+                    known[pid] = row
+            if not valid:
+                return
+            db.flush()  # parent rows must exist before model foreign keys
+            prior = {}
+            for model in db.scalars(select(AiProviderModel).where(
+                    AiProviderModel.provider_id.in_(valid))):
+                prior.setdefault(model.provider_id, {})[model.model_id] = model
+            for pid, (name, incoming) in valid.items():
+                row = known[pid]
+                row.name = name
+                old_models = prior.get(pid, {})
+                # Never deactivate a healthy saved catalog because a provider
+                # temporarily returned an empty or incomplete inventory.
+                if not incoming and old_models:
                     continue
-                row.model_count = len(incoming)
-                row.models_synced_at = stamped
-                row.last_sync_error = None
-                prior = {x.model_id: x for x in db.scalars(select(AiProviderModel)
-                         .where(AiProviderModel.provider_id == pid))}
+                seen = set()
                 for model_id, data in incoming.items():
-                    if not isinstance(model_id, str) or len(model_id) > 300 or not isinstance(data, dict):
+                    if (not isinstance(model_id, str) or
+                            not 0 < len(model_id) <= 300 or
+                            not isinstance(data, dict)):
                         continue
-                    m = prior.pop(model_id, None)
-                    if m is None:
-                        m = AiProviderModel(provider_id=pid, model_id=model_id, name=model_id)
-                        db.add(m)
-                    m.name = str(data.get("name") or model_id)[:300]
+                    seen.add(model_id)
+                    model = old_models.get(model_id)
+                    if model is None:
+                        model = AiProviderModel(
+                            provider_id=pid, model_id=model_id, name=model_id)
+                        db.add(model)
+                    model.name = str(data.get("name") or model_id)[:300]
                     metadata = json.dumps(data, separators=(",", ":"))
                     if len(metadata) > 12000:
-                        metadata = json.dumps({"id": model_id, "name": m.name})
-                    m.details_json = metadata
-                    m.active = True
-                for old in prior.values():
-                    old.active = False
+                        metadata = json.dumps({"id": model_id, "name": model.name})
+                    model.details_json = metadata
+                    model.active = True
+                for model_id, previous in old_models.items():
+                    if model_id not in seen:
+                        previous.active = False
+                row.model_count = len(seen)
+                row.models_synced_at = stamped
+                row.last_sync_error = None
             db.commit()
         except (HTTPException, _AiSqlError, _ai_httpx.RequestError, ValueError, OSError):
             db.rollback()
