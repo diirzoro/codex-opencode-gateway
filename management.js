@@ -265,8 +265,6 @@
             details.dataset.modelsLoaded='yes';models.replaceChildren();
             if(!response.models?.length){
               models.append(node('p',tr('No models saved yet.','لا توجد نماذج محفوظة بعد.')));
-              if(platform&&admin())models.append(button(tr('Refresh this provider’s models','تحديث نماذج هذا المزوّد'),
-                async()=>{await api('/api/admin/ai-defaults/refresh/'+encodeURIComponent(p.id),{method:'POST'});await reload();}));
               return;
             }
             const modelSearch=node('input','','provider-model-search');modelSearch.type='search';
@@ -317,10 +315,6 @@
                 await api('/api/admin/ai-defaults/'+encodeURIComponent(p.id),{
                   method:'PUT',body:JSON.stringify({model_ids:ids})
                 });
-                await reload();
-              }));
-              controls.append(button(tr('Refresh this provider’s models','تحديث نماذج هذا المزوّد'),async()=>{
-                await api('/api/admin/ai-defaults/refresh/'+encodeURIComponent(p.id),{method:'POST'});
                 await reload();
               }));
               models.append(controls);
@@ -385,14 +379,9 @@
       window.nativeDirectTest?.forget({keepSession:true});
       invalidateOwnedWorkspaceProviders();
       if(window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
-      return refresh(true);
+      return refresh();
     }
     view.refresh=refresh;
-    combo.addEventListener('input',()=>{body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
-    combo.addEventListener('focus',()=>{optionsOpen=false;renderOptions();});
-    combo.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}});
-    document.addEventListener('click',event=>{if(!comboWrap.contains(event.target)){optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}},{signal:controller.signal});
-    box.append(button(tr('Refresh saved connections','تحديث الاتصالات المحفوظة'),()=>refresh(true)));
     async function initialize(){
       message(tr('Loading saved connections…','جارٍ تحميل الاتصالات المحفوظة…'));renderConnected();
       // Account discovery must not wait for Python workspace/project requests.
