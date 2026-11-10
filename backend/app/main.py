@@ -3,6 +3,7 @@ from functools import lru_cache
 import hashlib
 import re
 import asyncio
+import time
 from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -21,8 +22,23 @@ async def retention_maintenance():
         except Exception:
             import logging
             logging.getLogger(__name__).warning("Retention policy initialization could not complete")
+    # Reuse this EXISTING maintenance task for the TEST-only provider/model
+    # snapshot. Pi is contacted only for an empty catalog or once it is 14 days
+    # old. This runs off-thread and never in a chat, prompt, or page request.
+    async def refresh_pi_catalog():
+        try:
+            return await asyncio.to_thread(management._ai_catalog_refresh_if_due)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("TEST AI catalog maintenance unavailable")
+            return False
+    catalog_ready = await refresh_pi_catalog()
+    next_catalog_check = time.monotonic() + (3600 if catalog_ready else 900)
     while True:
         await asyncio.sleep(300)
+        if time.monotonic() >= next_catalog_check:
+            catalog_ready = await refresh_pi_catalog()
+            next_catalog_check = time.monotonic() + (3600 if catalog_ready else 900)
         from .services import email_notifications, github as github_service, registration_drafts
         for job in (customer_lifecycle.archive_due, email_notifications.sweep,
                     github_service.expire_pending_authorizations, registration_drafts.sweep):
