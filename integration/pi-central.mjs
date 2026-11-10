@@ -67,17 +67,22 @@ function cleanPath(uri) {
 async function gateway(req, endpoint) {
   const c=req.headers.cookie || "";
   if (!c || c.length > 8192) throw Object.assign(new Error("Authentication required"), {status:401});
-  const ctrl = AbortSignal.timeout(5000);
+  const ctrl = AbortSignal.timeout(8000);
+  const headers={cookie:c,host:HOST,"x-forwarded-proto":"https",accept:"application/json"};
   let response;
   try {
-    response=await fetch(GATEWAY+endpoint, { signal:ctrl, redirect:"manual",
-      headers:{cookie:c,host:HOST,"x-forwarded-proto":"https",accept:"application/json"} });
+    response=await fetch(GATEWAY+endpoint, {signal:ctrl,redirect:"manual",headers});
+    // A stale internal port can point to the retired service and return 404
+    // even though the TEST Gateway has the owned workspace. Retry ONLY the
+    // canonical TEST HTTPS host and apply the exact same ownership checks.
+    // Never contact LIVE or infer ownership from the filesystem.
+    if(response.status===404&&GATEWAY!=="https://"+HOST)
+      response=await fetch("https://"+HOST+endpoint,
+        {signal:ctrl,redirect:"manual",headers});
   } catch { throw Object.assign(new Error("Gateway unavailable"),{status:503}); }
   if (!response.ok) {
-    // Preserve the genuine Gateway result; a missing workspace is a 404,
-    // not a misleading 503 from the Pi provider or session engine.
     const status=response.status;
-    throw Object.assign(new Error("Project lookup returned HTTP "+status),
+    throw Object.assign(new Error("Gateway ownership lookup returned HTTP "+status),
       {status: [400,401,403,404,410].includes(status)?status:502});
   }
   return response.json();
