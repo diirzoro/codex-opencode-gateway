@@ -240,15 +240,18 @@ class SdkAgent {
     });
     const sessionDir=path.join(ROOT,"projects",scope.userId,scope.workspaceId);
     mkdirSync(sessionDir,{recursive:true,mode:0o700});
-    // Never restore an unrelated older conversation or silently replace a
-    // project session after loss of its JSONL file.
-    const expectedId=projectIdFor(scope);
+    // This directory belongs to exactly one Gateway project workspace.
+    // The SDK does not accept a custom "id" argument to create(), and
+    // open() takes only the native session path. Keep the external Gateway
+    // session id deterministic while Pi persists its own native JSONL id.
     const existing=await sdk.SessionManager.list(scope.directory,sessionDir);
-    const exact=existing.find(item=>item.id===expectedId);
-    if(!exact&&existing.length)
-      throw Object.assign(new Error("Existing Pi session requires deliberate recovery; not creating another"),{status:409});
-    const manager=exact?sdk.SessionManager.open(exact.path,sessionDir):
-      sdk.SessionManager.create(scope.directory,sessionDir,{id:expectedId});
+    if(existing.length>1)
+      throw Object.assign(new Error("Multiple native project sessions require deliberate recovery"),{status:409});
+    if(!existing.length && readdirSync(sessionDir).some(name=>name.endsWith(".jsonl")))
+      throw Object.assign(new Error("Existing Pi history could not be indexed; recovery required"),{status:409});
+    const manager=existing.length?
+      sdk.SessionManager.open(existing[0].path):
+      sdk.SessionManager.create(scope.directory,sessionDir);
     const allowTools=scope.testOwner===true;
     const settingsManager=sdk.SettingsManager.inMemory();
     const scopedAgentDir=allowTools?PI_AGENT_DIR:path.join(sessionDir,"isolated-agent");
