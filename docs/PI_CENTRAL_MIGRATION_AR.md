@@ -649,3 +649,20 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - فحص source: JavaScript syntax **PASS**؛ سلوك Pi SDK runtime على الخادم **NOT VERIFIED**.
 - لا توجد تغييرات في الملفات أو المسارات أو خدمات أو قاعدة بيانات، ولا حذف لأي اعتماد محفوظ بالفعل على VPS.
 
+
+
+### المرحلة 3 — تنظيف فهرس Pi والواجهة (source DONE؛ TEST NOT VERIFIED)
+
+- **Pi metadata فقط:** في `integration/pi-central.mjs` أزلنا تحميل `auth.json` المشترك واستدعاءات `listCredentials/getProviderAuthStatus/getAvailableSnapshot` من اكتشاف المزوّدين. أصبح `ModelRuntime` الخاص بفهرس العرض يستعمل `InMemoryCredentialStore` ويقرأ تعريفات النماذج دون أي مفتاح عميل. Commit `a81d5f9e243a40a08d79f1e49088ef550dbb7c40`.
+- **واجهة أخف وأنظف:** في `app.js` حذفنا `acknowledgeNativeCredential` المتقاعد ودالة `publicFree` التي لا تفعل شيئًا، ووحدنا إبطال كاش اتصالات Gateway في مسار POST/PUT/DELETE الحالي، بما فيه إشعار التبويبات عبر `localStorage`. لا تُعاد تهيئة جلسة Pi النشطة عند تغيير اعتماد الحساب. Commit `44832d542eecadf6eaaa58d9ef5e2368deab2ca0`.
+- **منع التكرار:** في `management.js` حُذفت الإشعارات المكررة عن تحديث الاتصال، وحقول Pi القديمة غير المستخدمة، وفرز لا يضيف أي نتيجة؛ Refresh يحتفظ بالجلسة النشطة. Commit `1af02dafb21c218b2cba2117412b78eb40d41b97`.
+- **نتيجة الفحص:** V8 parser لكل JavaScript مُعدّل **PASS**. لا ندّعي تقليصًا مقاسًا للـRAM أو نجاح Browser E2E قبل TEST.
+- **قرار عدم الحذف:** `class Agent` الخاص بـRPC في الجسر ما زال مستعملًا فعليًا لاكتشاف Pi Commands/Skills عبر `nativeCommandDiscovery`؛ حذفه الآن سيكسر الوظائف الأساسية. لا تُحذف الوحدات لمجرد أن اسمها تاريخي.
+
+### المرحلة 4 — حماية كتالوج Pi ومنع الوصول المجهول (source DONE؛ TEST NOT VERIFIED)
+
+- `integration/pi-central.mjs`: مدخل `/provider` و`/agent` المشترك للاكتشاف يحتاج الآن إما Cookie تمرّ بفحص Gateway `/api/auth/me` وإما `PI_GATEWAY_INTERNAL_TOKEN` الموجود الذي يستعمله Gateway على القناة الداخلية. **لا مسار جديد**. Commit `0a05a9fdc6690500b2b3865045e8dee9201e8eaa`.
+- `backend/app/routes/management.py`: مزامنة النماذج الدورية إلى PostgreSQL ترسل نفس التوكن داخل طلب Unix socket، وتتوقف بوضوح عن التحديث إذا لم يُضبط السر. Commit `3f691f6b3cc5c05a7fd93294af2fd57ea6dedbf5`.
+- لا يحق لأي متصفح إدارة مفاتيح Pi؛ المسارات القديمة `/auth` تبقى 410، وتتحقق اتصالات Gateway من ملكية المستخدم.
+- **الاختبار المطلوب لاحقًا:** طلب كتالوج دون Cookie أو توكن صحيح يجب أن يرد 401؛ طلب عميل مصدق يسمح بقراءة الميتاداتا فقط؛ صيانة Gateway تعمل مع التوكن نفسه. لم تجر اختبارات HTTP الفعلية على VPS.
+
