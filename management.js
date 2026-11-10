@@ -155,15 +155,15 @@
     const progress=node('p','','provider-loading');progress.setAttribute('role','status');progress.setAttribute('aria-live','polite');box.append(progress);
     const status=node('p',tr('Choose a provider to inspect its connection.','اختر مزوّدًا لفحص اتصاله.'),'provider-combo-status');box.append(status);
     status.hidden=true;
-    // The provider catalog is visible without opening the search popover.
-    // These names come exclusively from the existing Native provider inventory.
+    // The provider catalog remains hidden until "Connect a new provider".
+    // Existing connections always load from Gateway PostgreSQL.
     const catalogCount=node('p','','provider-catalog-count');box.append(catalogCount);
     const catalogList=node('div','','provider-catalog-grid');box.append(catalogList);
     catalogList.hidden=true;catalogCount.hidden=true;
     const connectedBox=section(body,tr('My verified provider connections','اتصالات مزوّداتي الموثقة'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
     let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
-    let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
+    let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,workspaces=[],projects=[],selectedProviderId='';
     let searchRows=[],searchQuery='',searchTimer=null,searchAbort=null,searchSequence=0,optionsOpen=false;
     const searchState=node('p','','provider-search-status');searchState.setAttribute('role','status');comboWrap.after(searchState);
     searchState.hidden=true;
@@ -196,7 +196,7 @@
       return rows.filter(p=>p.id.toLowerCase().includes(term)||
         p.name.toLowerCase().includes(term));
     }
-    const retry=button(tr('Retry','إعادة المحاولة'),()=>metadataReady?refresh(true):initialize());retry.hidden=true;box.append(retry);
+    const retry=button(tr('Retry','إعادة المحاولة'),()=>refresh(true));retry.hidden=true;box.append(retry);
     const message=(text,error=false)=>{progress.textContent=text;progress.classList.toggle('connection-error',error);retry.hidden=!error;};
     // Account-owned Gateway credential actions. No Pi auth.json mutations.
     let providerMutation=false;
@@ -300,7 +300,7 @@
         options.append(o);
       }
       for(const old of previous.values())old.remove();
-      // Display the complete list reported by Pi without arbitrary limits.
+      // Display saved PostgreSQL provider names only after explicit discovery.
       if(!query){
         const tiles=rows.map(p=>{
           const tile=node('button','','provider-catalog-tile');
@@ -321,11 +321,11 @@
       stopSearch();renderOptions();const query=combo.value.trim().toLowerCase();
       if(query.length<2||!view.ready)return;
       const sequence=searchSequence;searchTimer=setTimeout(async()=>{
-        searchAbort=new AbortController();searchState.textContent=tr('Searching Pi providers…','جارٍ البحث في مزوّدي Pi…');
+        searchAbort=new AbortController();searchState.textContent=tr('Searching saved providers…','جارٍ البحث في المزوّدين المحفوظين…');
         try{
           const rows=await lookup('search',query,searchAbort.signal);
           if(sequence!==searchSequence)return;searchRows=rows;searchQuery=query;renderOptions();
-          searchState.textContent=rows.length?tr('Pi search results','نتائج بحث Pi'):tr('No matching provider in the installed Pi catalog.','لا يوجد مزوّد مطابق في فهرس Pi المثبت.');
+          searchState.textContent=rows.length?tr('Saved catalog results','نتائج الفهرس المحفوظ'):tr('No matching provider in the saved catalog.','لا يوجد مزوّد مطابق في الفهرس المحفوظ.');
         }catch(error){if(sequence===searchSequence&&error.name!=='AbortError')searchState.textContent=error.message;}
       },350);
     }
@@ -349,6 +349,7 @@
     }
     const browse=button(tr('Connect a new provider','ربط مزوّد جديد'),async()=>{
       if(catalogLoading||!alive())return;
+      if(catalogRequested){combo.focus();return;}
       catalogLoading=true;browse.disabled=true;
       message(tr('Loading available providers and models…',
         'جارٍ تحميل المزوّدين ونماذجهم…'));
@@ -382,14 +383,14 @@
     combo.addEventListener('focus',()=>{optionsOpen=true;scheduleSearch();});
     combo.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}});
     document.addEventListener('click',event=>{if(!comboWrap.contains(event.target)){optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}},{signal:controller.signal});
-    box.append(button(tr('Refresh Pi state','حدّث حالة Pi'),()=>metadataReady?refresh(true):initialize()));
+    box.append(button(tr('Refresh saved connections','تحديث الاتصالات المحفوظة'),()=>refresh(true)));
     async function initialize(){
-      message(snapshot?tr('Refreshing Pi providers…','جارٍ تحديث Pi…'):tr('Loading Pi providers…','جارٍ تحميل مزوّدي Pi…'));renderOptions();renderConnected();
+      message(tr('Loading saved connections…','جارٍ تحميل الاتصالات المحفوظة…'));renderOptions();renderConnected();
       // Account discovery must not wait for Python workspace/project requests.
       if(!body.dataset.connectionWorkspace){await refresh();return;}
       try{
         const [owned,projectRows]=await Promise.all([api('/api/workspaces'),api('/api/projects'),window.workspaceContextReady||Promise.resolve()]);
-        if(!alive())return;workspaces=owned;projects=projectRows;metadataReady=true;
+        if(!alive())return;workspaces=owned;projects=projectRows;
         picker.replaceChildren(new Option(tr('Account connections · all projects','اتصالات الحساب · كل المشاريع'),''));
         for(const w of workspaces)picker.add(new Option((projects.find(p=>p.id===w.project_id)?.name||tr('Workspace','مساحة العمل'))+' · '+w.status,w.id));
         // Account connections never depend on a remembered project/runtime.
