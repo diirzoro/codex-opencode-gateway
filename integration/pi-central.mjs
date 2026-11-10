@@ -20,6 +20,15 @@ const ROOT = process.env.PI_SESSIONS_ROOT || "/home/tahir/pi-test/sessions";
 const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || "/home/tahir/.pi/agent";
 const GATEWAY = process.env.PI_TEST_GATEWAY || "http://127.0.0.1:8001";
 const HOST = "test.opencode-gateway.codes";
+// Runtime credentials MUST originate from Gateway, not service environment.
+// Strip provider key fallbacks before creating Pi SDK model runtimes. Keep
+// PI_GATEWAY_INTERNAL_TOKEN untouched (it authenticates internal fetch only).
+for(const name of [
+  "OPENROUTER_API_KEY","DEEPSEEK_API_KEY","OPENAI_API_KEY","ANTHROPIC_API_KEY",
+  "GOOGLE_API_KEY","GEMINI_API_KEY","GROQ_API_KEY","MISTRAL_API_KEY",
+  "XAI_API_KEY","TOGETHER_API_KEY","CEREBRAS_API_KEY",
+  "FIREWORKS_API_KEY","MOONSHOT_API_KEY","ZAI_API_KEY"
+])delete process.env[name];
 // A bounded pool reuses idle Pi workers rather than rejecting the next workspace.
 // Keep the default pool small on the shared 1-vCPU/4-GB TEST VPS.
 const MAX_PROCS = Math.max(1,Math.min(32,Number(process.env.PI_MAX_WORKERS)||2));
