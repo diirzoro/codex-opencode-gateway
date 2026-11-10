@@ -913,11 +913,8 @@ async function refreshWorkspaceTodos(force=false){
   const data=await api('/api/sessions/'+encodeURIComponent(sessionId)+'/todos');
   if(todoSessionKey!==key||todoEpoch!==token.epoch||activeSession?.id!==sessionId||currentUser?.id!==ownerId)return;
   const rows=Array.isArray(data.items)?data.items:[];
-  const wasHidden=panel.hidden;
   panel.hidden=!data.supported||!rows.length;
   if(panel.hidden)return;
-  // Show newly materialized Pi tasks above chat; preserve later manual collapse.
-  if(wasHidden)panel.open=true;
   const finished=rows.filter(x=>x.status==='completed').length;
   panel.querySelector('summary').textContent=(lang==='ar'?'قائمة المهام':'Task list')+' · '+finished+'/'+rows.length+' '+(lang==='ar'?'مكتمل':'completed');
   const list=panel.querySelector('ol');list.replaceChildren();

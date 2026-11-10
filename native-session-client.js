@@ -282,7 +282,7 @@
   function toolActivity(part,row){
     const state=part.state||{},input=state.input||{},metadata=state.metadata||{},files=[];
     const add=(value,operation)=>{const path=relativeFile(value,row);if(path&&!files.some(f=>f.path===path&&f.operation===operation))files.push({path,operation});};
-    if(['read','edit','write','multiedit'].includes(part.tool))add(input.filePath||input.path,part.tool==='read'?'inspected':'changed');
+    if(['read','edit','write','multiedit'].includes(part.tool))add(input.filePath,part.tool==='read'?'inspected':'changed');
     if(part.tool==='apply_patch'&&Array.isArray(metadata.files))for(const file of metadata.files.slice(0,50)){const operation={add:'created',update:'changed',delete:'deleted',move:'moved'}[file?.type];if(operation){add(file.relativePath||file.filePath,operation);if(file.movePath)add(file.movePath,'moved');}}
     const status=['pending','running','completed','error'].includes(state.status)?state.status:'pending';
     const result={native:true,workspace_id:row?.workspace_id,id:part.callID,tool:part.tool,status,stage:'tool_activity',files};
@@ -374,8 +374,7 @@
     // Optional OpenCode compatibility routes are not native Pi session
     // operations. Do not call them and produce 501 on every workspace open.
     // Workspace git/status remains the authoritative file-change source.
-    if(tail==='todos'&&method==='GET')
-      return {value:await sessionRequest(id,'todos')};
+    if(tail==='todos')return {value:{supported:false,items:[]}};
     if(tail==='diff')return {value:[]};
     if(tail==='stop')return {value:await forceStop(id)};
     if(tail==='questions')return {value:{requests:await requests('question',id)}};
@@ -480,25 +479,6 @@
         const line=document.getElementById("runtimeStatus");if(line)line.textContent=readable;
         statuses.set(id,"failed");if(activeSession?.id===id)activeSession.execution_status="failed";
         toast(readable);return;
-      }
-      if(/^pi\.tool_execution_(?:start|update|end)$/.test(e.type)){
-        // Only real SDK tool execution events (not text resembling <tool_call>)
-        // may create a tool activity entry or update the Pi task panel.
-        const tool=String(p.toolName||"");
-        const status=e.type.endsWith("_start")?"running":
-          e.type.endsWith("_end")?(p.isError?"error":"completed"):"running";
-        if(tool==="todo_write"&&e.type.endsWith("_end")){
-          void Promise.resolve().then(()=>window.refreshWorkspaceTodos?.(true)).catch(()=>{});
-        }else if(tool&&e.type.endsWith("_start")||tool&&e.type.endsWith("_end")){
-          window.renderWorkspaceEventLine?.("activity",{
-            native:true,workspace_id:row.workspace_id,
-            id:String(p.toolCallId||p.toolCallID||tool),
-            tool,status,stage:"tool_activity",files:[]
-          });
-          if(e.type.endsWith("_end")&&!p.isError&&["write","edit"].includes(tool))
-            filesChanged();
-        }
-        return;
       }
       if(e.type==="pi.message_end"){
         const m=p.message;

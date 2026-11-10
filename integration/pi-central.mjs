@@ -11,7 +11,7 @@
 import http from "node:http";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, readdirSync, lstatSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 
@@ -231,46 +231,6 @@ class Agent {
   }
 }
 
-// Per-project Pi task state. This lives beside Pi's JSONL in the existing
-// project-owned session directory, never in Python or the browser.
-const PI_TASK_LIMIT=32;
-const PI_TASK_STATUSES=new Set(["pending","in_progress","completed","cancelled"]);
-function tasksFile(scope){
-  return path.join(ROOT,"projects",scope.userId,scope.workspaceId,"pi-tasks.json");
-}
-function taskItems(scope){
-  const filename=tasksFile(scope);
-  try{
-    if(!existsSync(filename)||lstatSync(filename).isSymbolicLink())return [];
-    const bytes=readFileSync(filename,"utf8");
-    if(bytes.length>24_000)return [];
-    const value=JSON.parse(bytes);
-    if(!Array.isArray(value))return [];
-    return value.slice(0,PI_TASK_LIMIT).filter(x=>
-      x&&typeof x.content==="string"&&x.content.length<=220&&
-      PI_TASK_STATUSES.has(x.status)).map(x=>({content:x.content,status:x.status}));
-  }catch{return [];}
-}
-function persistTaskItems(scope,value){
-  if(!Array.isArray(value)||!value.length||value.length>PI_TASK_LIMIT)
-    throw Error("Provide 1 to 32 Pi tasks");
-  const items=value.map(x=>{
-    const content=String(x?.content||"").trim(),status=String(x?.status||"");
-    if(!content||content.length>220||!PI_TASK_STATUSES.has(status))
-      throw Error("Invalid Pi task content or status");
-    return {content,status};
-  });
-  const filename=tasksFile(scope),directory=path.dirname(filename);
-  mkdirSync(directory,{recursive:true,mode:0o700});
-  if(existsSync(filename)&&lstatSync(filename).isSymbolicLink())
-    throw Error("Invalid Pi task file");
-  const temp=filename+"."+randomUUID()+".tmp";
-  try{
-    writeFileSync(temp,JSON.stringify(items),{mode:0o600,flag:"wx"});
-    renameSync(temp,filename);
-  }finally{if(existsSync(temp))unlinkSync(temp);}
-  return items;
-}
 // In-process Pi SDK session: one isolated, in-memory credential runtime per
 // project, keeping the existing bridge/socket/routes and persistent Pi JSONL.
 class SdkAgent {
@@ -307,47 +267,16 @@ class SdkAgent {
       noPromptTemplates:!allowTools,noContextFiles:!allowTools
     });
     await resourceLoader.reload();
-    // Pi owns a real todo_write tool. If the installed SDK lacks the
-    // custom-tool contract, preserve existing chat/tool initialization.
-    let taskTool=null;
-    try{
-      const {Type}=await import("typebox");
-      if(typeof sdk.defineTool==="function"&&Type?.Object){
-        taskTool=sdk.defineTool({
-          name:"todo_write",label:"Update project task list",
-          description:"Track a multi-step coding task in the project. Use this tool before implementation, and update each item's status after genuine progress. Never mark unverified work completed.",
-          parameters:Type.Object({
-            items:Type.Array(Type.Object({
-              content:Type.String({minLength:1,maxLength:220}),
-              status:Type.Union([
-                Type.Literal("pending"),Type.Literal("in_progress"),
-                Type.Literal("completed"),Type.Literal("cancelled")
-              ])
-            }),{minItems:1,maxItems:PI_TASK_LIMIT})
-          }),
-          execute:async (_id,params)=>{
-            const saved=persistTaskItems(scope,params.items);
-            return {content:[{type:"text",text:"Pi task list saved ("+saved.length+" tasks)."}],
-                    details:{count:saved.length}};
-          }
-        });
-      }
-    }catch{/* Optional Pi task support must not disable working conversations. */}
-    const builtin=allowTools?["read","bash","edit","write","grep","find","ls"]:[];
-    const enabled=[...builtin,...(taskTool?["todo_write"]:[])];
     const {session}=await sdk.createAgentSession({
       cwd:scope.directory,agentDir:scopedAgentDir,
       modelRuntime:runtime,sessionManager:manager,settingsManager,
-      resourceLoader,
-      noTools:allowTools?undefined:"builtin",
-      tools:enabled,
-      ...(taskTool?{customTools:[taskTool]}:{})
+      resourceLoader,noTools:!allowTools,
+      tools:allowTools?["read","bash","edit","write","grep","find","ls"]:[]
     });
-    return new SdkAgent(scope,session,runtime,Boolean(taskTool));
+    return new SdkAgent(scope,session,runtime);
   }
-  constructor(scope,session,runtime,tasksAvailable=false){
+  constructor(scope,session,runtime){
     this.scope=scope;this.id=projectIdFor(scope);this.title=scope.projectId;
-    this.tasksAvailable=tasksAvailable;
     this.session=session;this.runtime=runtime;
     this.events=new Set();this.busy=false;this.active=false;this.closed=false;
     this.last=Date.now();this.running=null;this.credentialProvider=null;this.settledObserved=false;
@@ -616,39 +545,13 @@ function projectFileRequest(scope,pathname,query) {
   throw Object.assign(new Error("Unsupported project file operation"),{status:404});
 }
 function mapped(messages, id) {
-  // Map ONLY actual Pi SDK tool calls and corresponding tool results.
-  // The text "<tool_call>" is ordinary model text and never an execution.
-  const receipts=new Map();
-  for(const m of messages)if(m?.role==="toolResult"&&typeof m.toolCallId==="string")
-    receipts.set(m.toolCallId,m);
-  return messages.flatMap((m,index)=>{
-    if(!m||m.role==="toolResult")return [];
+  return messages.map((m,index)=>{
+    const text=Array.isArray(m.content) ? m.content.filter(x=>x.type==="text").map(x=>x.text||"").join("\n"):typeof m.content==="string"?m.content:"";
     const mid="msg_"+createHash("sha256").update(id+":"+index).digest("hex").slice(0,24);
-    const parts=[],blocks=Array.isArray(m.content)?m.content:[];
-    const text=blocks.length?blocks.filter(x=>x?.type==="text").map(x=>x.text||"").join("\n"):
-      typeof m.content==="string"?m.content:"";
-    if(text)parts.push({id:"part_"+mid,messageID:mid,sessionID:id,type:"text",text});
-    for(const block of blocks){
-      if(block?.type!=="toolCall"||typeof block.id!=="string"||
-         typeof block.name!=="string")continue;
-      const receipt=receipts.get(block.id);
-      const input=block.arguments&&typeof block.arguments==="object"?block.arguments:{};
-      // Preserve the native tool identity and execution status, not raw file
-      // contents, model tool arguments or potentially secret command output.
-      const filePath=typeof input.path==="string"?input.path:
-        typeof input.filePath==="string"?input.filePath:"";
-      parts.push({
-        id:"tool_"+mid+"_"+parts.length,messageID:mid,sessionID:id,
-        type:"tool",callID:block.id,tool:block.name,
-        state:{status:receipt?(receipt.isError?"error":"completed"):"pending",
-          input:filePath?{filePath}:{},metadata:{}}
-      });
-    }
-    return [{info:{id:mid,sessionID:id,role:m.role==="assistant"?"assistant":
-      m.role==="user"?"user":"tool",time:{created:Date.now()},
+    return {info:{id:mid,sessionID:id,role:m.role==="assistant"?"assistant":m.role==="user"?"user":"tool",time:{created:Date.now()},
       ...(m.role==="assistant"&&(m.stopReason==="error"||m.errorMessage)
         ?{error:{name:"ProviderError",kind:piProviderFailure(m)}}:{})},
-      parts}];
+      parts:[{id:"part_"+mid,messageID:mid,sessionID:id,type:"text",text}]};
   });
 }
 
@@ -890,10 +793,6 @@ const server=http.createServer(async(req,res)=>{
     if(action==="message" && req.method==="GET") {
       const data=await a.command("get_messages");
       return json(res,200,mapped(data?.messages||[],a.id));
-    }
-    if(action==="todos" && req.method==="GET") {
-      const items=taskItems(s);
-      return json(res,200,{supported:a.tasksAvailable||items.length>0,items});
     }
     if(action==="prompt_async" && req.method==="POST") {
       const b=await body(req);
