@@ -46,6 +46,7 @@ function reserveExecution(agent) {
 function releaseExecution(agent) { executing.delete(agent); }
 const IDLE_MS = 10 * 60_000;
 const pool = new Map();
+const creating = new Map(); // coalesce concurrent SDK session initialization
 const CATALOG_DIRECTORY="/home/tahir/pi-test";
 const CATALOG_TTL_MS=60_000;
 const modelsSnapshots=new Map();
@@ -343,20 +344,28 @@ async function gatewayCredential(req,scope,provider){
 }
 async function agent(s) {
   const id=projectIdFor(s);
-  let a=pool.get(id);
-  if(a && !a.closed)return a;
-  // An idle Pi RPC worker can be closed without touching its native
-  // conversation files. Reopen it when that project is selected again.
-  if(pool.size>=MAX_PROCS){
+  const current=pool.get(id);
+  if(current&&!current.closed)return current;
+  const pending=creating.get(id);
+  if(pending)return pending;
+  // Include in-flight SDK initializations in the worker cap. Concurrent
+  // file/status/prompt requests must not spawn multiple sessions for a project.
+  if(pool.size+creating.size>=MAX_PROCS){
     const idle=[...pool.values()].filter(p=>!p.closed&&!p.active&&!p.busy&&!executing.has(p))
       .sort((a,b)=>a.last-b.last)[0];
     if(idle)idle.close();
   }
-  if(pool.size>=MAX_PROCS)
-    throw Object.assign(new Error("Every Pi worker is currently executing; retry shortly"),{status:503});
-  a=await SdkAgent.create(s);pool.set(id,a);
-  try { await a.command("get_state"); return a; }
-  catch(e) { a.close(); throw e; }
+  if(pool.size+creating.size>=MAX_PROCS)
+    throw Object.assign(new Error("Pi worker capacity reached"),{status:429});
+  const creatingSession=(async()=>{
+    const worker=await SdkAgent.create(s);
+    pool.set(id,worker);
+    try{await worker.command("get_state");return worker;}
+    catch(e){worker.close();throw e;}
+  })();
+  creating.set(id,creatingSession);
+  try{return await creatingSession;}
+  finally{if(creating.get(id)===creatingSession)creating.delete(id);}
 }
 async function body(req) {
   let s="";for await(const part of req){s+=part;if(s.length>12*1024*1024)throw Object.assign(new Error("Body too large"),{status:413});}
