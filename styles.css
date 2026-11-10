@@ -1455,3 +1455,54 @@ body:has(#workspacePage.active) .app-header{display:none!important}
   .provider-expand-hint{margin-inline-start:auto}
   .provider-model-choice{flex-wrap:wrap}
 }
+
+/* Shared model selection controls: customer and administrator use identical UI. */
+.provider-real-suggestions{
+  display:grid;gap:5px;max-height:230px;overflow-y:auto;
+  margin:5px 0;padding:6px;border:1px solid var(--line);
+  border-radius:12px;background:var(--panel);
+}
+.provider-real-suggestions[hidden]{display:none}
+.provider-real-option{
+  width:100%;display:flex;align-items:center;justify-content:space-between;
+  gap:10px;padding:12px 14px;text-align:start;border:0;
+  border-radius:9px;background:transparent;color:var(--text);font:inherit;
+  cursor:pointer;
+}
+.provider-real-option:hover,.provider-real-option:focus-visible{
+  background:var(--panel2);outline:2px solid var(--primary);outline-offset:-2px;
+}
+.provider-real-option small,.provider-picker-help{
+  color:var(--muted);font-size:12px;
+}
+.provider-model-toolbar,.provider-platform-controls{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:12px 0;padding:12px 14px;border:1px solid var(--line);
+  border-radius:12px;background:var(--panel2);
+}
+.provider-model-toolbar>small{margin-inline-end:auto;color:var(--muted);font-size:12px}
+.provider-model-toolbar button,.provider-platform-controls button{
+  min-height:38px;padding:7px 12px;border:1px solid var(--line);
+  border-radius:9px;background:var(--panel);color:var(--text);cursor:pointer;
+}
+.provider-model-toolbar button:hover,.provider-platform-controls button:hover{
+  border-color:var(--primary);
+}
+.provider-model-toolbar button:disabled,.provider-platform-controls button:disabled{
+  opacity:.55;cursor:not-allowed;
+}
+.provider-free-filter,.provider-platform-choice{
+  display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
+  font-size:12px;cursor:pointer;
+}
+.provider-platform-choice{
+  padding:6px 8px;border:1px solid var(--line);border-radius:10px;
+}
+.provider-platform-controls>p{width:100%;margin:0 0 3px;color:var(--muted)}
+.provider-model-help{font-size:13px;color:var(--muted)}
+.provider-locked-model{cursor:default;justify-content:space-between}
+.provider-admin-customer .provider-summary-info strong{font-size:15px}
+@media(max-width:650px){
+  .provider-model-toolbar>small{flex-basis:100%}
+  .provider-real-option{flex-direction:row;align-items:center}
+}
