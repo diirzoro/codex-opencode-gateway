@@ -747,163 +747,14 @@ window.renderGithubConfirmation=function(root,status,refresh){
   `;document.head.append(policyStyle);
   var policyVisibilityRevision=0;
   async function loadAdminPolicy() {
-    const owner=currentUser?.id,revision=++policyVisibilityRevision;
-    const t=(en,ar)=>lang==='ar'?ar:en;
-    const valid=()=>revision===policyVisibilityRevision&&currentUser?.id===owner&&
-      ['admin','owner'].includes(currentUser?.role);
-    const panel=document.querySelector('[data-admin-panel="policy"]');
-    if(!panel)return;
-    let host=document.getElementById('adminCatalogVisibility');
-    if(!host){
-      host=textElement('section','','manage-card native-policy-console');
-      host.id='adminCatalogVisibility';panel.append(host);
-    }
-    host.replaceChildren(textElement('p',t('Loading Pi Gateway defaults…','جارٍ تحميل نماذج Pi Gateway الافتراضية…')));
-    try{
-      const [policy,defaults,providers,myKeys]=await Promise.all([
-        api('/api/admin/policy'),
-        api('/api/admin/ai-defaults'),
-        // Names only; unlike the old Native console this NEVER downloads
-        // every model from every upstream provider.
-        api('/api/opencode/catalog/providers?connected_only=false'),
-        api('/api/opencode/connections')
-      ]);
-      if(!valid())return;
-      document.getElementById('policyProviders').value=(policy.allowed_providers||[]).join(', ');
-      document.getElementById('policyModels').value=(policy.allowed_models||[]).join(', ');
-      document.getElementById('policyTools').value=(policy.allowed_tools||[]).join(', ');
-      document.getElementById('policyApproval').checked=!!policy.require_tool_approval;
-      host.replaceChildren(textElement('h2',t('Default Pi Gateway services','خدمات Pi Gateway الافتراضية')),
-        textElement('p',t(
-          'Only providers and zero-priced models selected here appear automatically to customers. The platform API key stays encrypted and customers cannot remove or disable these models.',
-          'تظهر للعملاء تلقائيًا فقط المزوّدات والنماذج ذات السعر الصفري التي تختارها الإدارة. يبقى مفتاح المنصة مشفرًا ولا يستطيع العميل حذف هذه النماذج أو تعطيلها.')));
-      const status=textElement('p','','muted-small');status.setAttribute('role','status');
-      const current=textElement('div','','policy-provider-list');
-      const configured=()=>defaults.defaults||[];
-      function renderCurrent(){
-        current.replaceChildren(textElement('h3',t('Enabled platform providers','مزودو المنصة المفعّلون')));
-        if(!configured().length){
-          current.append(textElement('p',t('No platform providers configured.','لا يوجد مزوّد افتراضي مهيأ بعد.')));return;
-        }
-        for(const item of configured()){
-          const card=textElement('div','','policy-provider-row');
-          card.append(textElement('strong',item.provider_id),
-            textElement('small',String(item.models?.length||0)+' '+t('selected models','نماذج محددة')),
-            textElement('small',item.active?t('Active','نشط'):t('Key unavailable or owner not active','المفتاح غير متاح أو حساب المالك غير نشط')));
-          const remove=document.createElement('button');remove.type='button';remove.className='button ghost small';
-          remove.textContent=t('Remove platform default','إلغاء المزوّد الافتراضي');
-          remove.onclick=async()=>{
-            if(!await window.confirmAction(t('Remove these shared models from customer workspaces? Personal connections are preserved.','إزالة النماذج الافتراضية من مساحات العملاء؟ اتصالاتهم الشخصية تبقى محفوظة.')))return;
-            remove.disabled=true;
-            try{
-              await api('/api/admin/ai-defaults/'+encodeURIComponent(item.provider_id),
-                {method:'PUT',body:JSON.stringify({model_ids:[]})});
-              await loadAdminPolicy();
-            }catch(e){remove.disabled=false;status.textContent=e.message;}
-          };
-          card.append(remove);current.append(card);
-        }
-      }
-      renderCurrent();
-      const chooser=textElement('div','','manage-actions');
-      const pidSelect=document.createElement('select');pidSelect.className='provider-catalog-picker';
-      pidSelect.setAttribute('aria-label',t('Choose provider','اختر المزوّد'));
-      pidSelect.add(new Option(t('Select a provider…','اختر مزوّدًا…'),''));
-      for(const p of providers.all||[])pidSelect.add(new Option(p.name||p.id,p.id));
-      const custom=document.createElement('input');custom.type='text';custom.maxLength=120;
-      custom.placeholder=t('Or enter an installed Pi provider ID','أو اكتب معرّف مزوّد مثبت في Pi');
-      custom.setAttribute('aria-label',custom.placeholder);
-      custom.className='provider-model-search';
-      chooser.append(pidSelect,custom);
-      const secretForm=document.createElement('form');secretForm.className='manage-form';
-      const secret=document.createElement('input');secret.type='password';secret.autocomplete='off';
-      secret.required=true;secret.maxLength=8192;
-      secret.placeholder=t('Administrator API key (never displayed again)','مفتاح API للأدمن (لا يُعرض بعد الحفظ)');
-      const saveKey=document.createElement('button');saveKey.type='submit';saveKey.className='button ghost';
-      saveKey.textContent=t('Verify and save platform owner key','تحقق واحفظ مفتاح مسؤول المنصة');
-      const keyStatus=textElement('p','','muted-small');keyStatus.setAttribute('role','status');
-      secretForm.append(secret,saveKey,keyStatus);
-      const modelsHeader=textElement('h3',t('Choose free models','اختر النماذج المجانية'));
-      const modelsArea=textElement('div','','policy-model-list');
-      const refresh=document.createElement('button');refresh.type='button';refresh.className='button ghost';
-      refresh.textContent=t('Load only this provider’s models','حمّل نماذج هذا المزوّد فقط');
-      const save=document.createElement('button');save.type='button';save.className='button';
-      save.textContent=t('Enable selected models for every customer','تفعيل النماذج المختارة لكل العملاء');
-      const choices=new Map();
-      const currentId=()=>custom.value.trim()||pidSelect.value;
-      const myKeyFor=pid=>(myKeys||[]).some(x=>x.provider_id===pid&&x.verified===true);
-      function showKeyState(){
-        const pid=currentId();
-        keyStatus.textContent=pid&&myKeyFor(pid)?
-          t('A verified key is already stored in your administrator account.','هناك مفتاح موثق محفوظ بالفعل في حساب الأدمن.'):
-          t('Verify this provider key before enabling shared access.','تحقق من مفتاح هذا المزوّد قبل إتاحة الوصول المشترك.');
-      }
-      async function loadModels({refreshFromPi=false}={}){
-        const pid=currentId();choices.clear();modelsArea.replaceChildren();
-        if(!pid){modelsArea.textContent=t('Choose a provider first.','اختر مزوّدًا أولًا.');return;}
-        showKeyState();
-        status.textContent=t('Reading saved model information…','جارٍ قراءة معلومات النماذج المحفوظة…');
-        try{
-          if(refreshFromPi){
-            await api('/api/admin/ai-defaults/refresh/'+encodeURIComponent(pid),{method:'POST'});
-          }
-          const result=await api('/api/opencode/catalog/providers?provider_id='+encodeURIComponent(pid));
-          if(!valid()||pid!==currentId())return;
-          const provider=(result.all||[]).find(x=>x.id===pid);
-          const saved=(configured().find(x=>x.provider_id===pid)?.models)||[];
-          const all=Object.entries(provider?.models||{});
-          const free=all.filter(([id,m])=>m?.cost?.input===0&&m?.cost?.output===0&&
-            (pid!=='openrouter'||id.endsWith(':free')));
-          if(!all.length){
-            status.textContent=t('No saved models. Use “Load only this provider’s models”.','لا توجد نماذج محفوظة؛ اضغط «حمّل نماذج هذا المزوّد فقط».');
-          }else if(!free.length){
-            status.textContent=t('No verifiable zero-priced models in this provider catalog.','لا توجد نماذج ذات سعر صفري موثَّق في فهرس هذا المزوّد.');
-          }else{
-            status.textContent=t('Only zero-priced models are eligible; upstream rate limits still apply.','لا تُتاح افتراضيًا إلا النماذج ذات السعر الصفري، وتظل حدود الاستخدام لدى المزوّد سارية.');
-          }
-          for(const [id,m] of free.slice(0,500)){
-            const row=textElement('label','','policy-model-row'),check=document.createElement('input');
-            check.type='checkbox';check.checked=saved.includes(id);
-            const title=textElement('span',m?.name||id);
-            row.append(check,title,textElement('small',id));modelsArea.append(row);
-            choices.set(id,check);
-          }
-        }catch(e){if(valid())status.textContent=e.message;}
-      }
-      pidSelect.onchange=()=>{custom.value='';loadModels();};
-      custom.onchange=()=>{pidSelect.value='';loadModels();};
-      refresh.onclick=()=>loadModels({refreshFromPi:true});
-      secretForm.onsubmit=async event=>{
-        event.preventDefault();const pid=currentId(),value=secret.value;
-        if(!pid||!value)return;
-        saveKey.disabled=true;
-        try{
-          const replace=myKeyFor(pid);
-          await api('/api/opencode/connections'+(replace?'/'+encodeURIComponent(pid):''),{
-            method:replace?'PUT':'POST',body:JSON.stringify({provider_id:pid,api_key:value})
-          });
-          secret.value='';const entry=myKeys.find(x=>x.provider_id===pid);
-          if(entry){entry.verified=true;}else myKeys.push({provider_id:pid,verified:true});
-          showKeyState();await loadModels();
-        }catch(e){keyStatus.textContent=e.message;}
-        finally{saveKey.disabled=false;secret.value='';}
-      };
-      save.onclick=async()=>{
-        const pid=currentId();if(!pid)return;
-        const selected=[...choices].filter(([,c])=>c.checked).map(([id])=>id);
-        if(!selected.length){status.textContent=t('Select a free model before enabling this provider.','اختر نموذجًا مجانيًا قبل تفعيل المزوّد.');return;}
-        save.disabled=true;
-        try{
-          await api('/api/admin/ai-defaults/'+encodeURIComponent(pid),{
-            method:'PUT',body:JSON.stringify({model_ids:selected})
-          });
-          await loadAdminPolicy();
-        }catch(e){status.textContent=e.message;}
-        finally{save.disabled=false;}
-      };
-      host.append(current,chooser,secretForm,modelsHeader,refresh,modelsArea,save,status);
-      showKeyState();
-    }catch(error){host.replaceChildren(textElement('p',error.message,'api-message'));}
+    // Policy form remains intact. Provider linking and model selection live in
+    // ONE shared management component for admins and customers.
+    const policy=await api('/api/admin/policy');
+    document.getElementById('policyProviders').value=(policy.allowed_providers||[]).join(', ');
+    document.getElementById('policyModels').value=(policy.allowed_models||[]).join(', ');
+    document.getElementById('policyTools').value=(policy.allowed_tools||[]).join(', ');
+    document.getElementById('policyApproval').checked=!!policy.require_tool_approval;
+    document.getElementById('adminCatalogVisibility')?.remove();
   }
 
   var policyForm = document.getElementById('adminPolicyForm');
@@ -1970,7 +1821,15 @@ window.renderGithubConfirmation=function(root,status,refresh){
   const adminBillingLoader=ADMIN_LOADERS.billing;
   ADMIN_LOADERS.billing=async function(){await adminBillingLoader();await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="billing"]'),'adminBillingMethods'),'billing',true);};
   const nativePolicyLoader=ADMIN_LOADERS.policy;
-  ADMIN_LOADERS.policy=async function(){await nativePolicyLoader();if(!window.nativeSession||!await window.nativeSession.ready())return;await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="policy"]'),'adminNativeCatalogMaintenance'),'nativeCatalog',true);};
+  ADMIN_LOADERS.policy=async function(){
+    await nativePolicyLoader();
+    // Same provider form, accordion and model switches used by clients.
+    // Admin-only actions are supplied by role-aware server routes, not a
+    // second provider UI or a Pi session dependency.
+    await window.renderManagement(
+      managementHost(document.querySelector('[data-admin-panel="policy"]'),'adminNativeCatalogMaintenance'),
+      'providers',true);
+  };
   ADMIN_LOADERS.audit=function(){return window.renderManagement(document.querySelector('[data-admin-panel="audit"]'),'logs',true)};
   ADMIN_LOADERS.github=loadAdminGithubAdmin;
   ADMIN_LOADERS.settings=function(){return window.renderManagement(document.querySelector('[data-admin-panel="settings"]'),'locations',true)};
