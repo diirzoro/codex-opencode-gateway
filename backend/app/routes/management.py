@@ -622,6 +622,9 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                 "verified": bool(record or shared),
                 "personal_connected": bool(record),
                 "personal_status": owned[provider.id].auth_status if provider.id in owned else "not_connected",
+                # Only the requesting user's own short key fingerprint is
+                # surfaced. Never return secrets or another user's last4.
+                "connection_last4": owned[provider.id].last4 if provider.id in owned else None,
                 "platform": bool(shared),
                 "platform_locked": bool(shared),
                 "platform_models": sorted(shared["models"]) if shared else [],
