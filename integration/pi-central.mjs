@@ -208,7 +208,7 @@ async function agent(s) {
   // An idle Pi RPC worker can be closed without touching its native
   // conversation files. Reopen it when that project is selected again.
   if(pool.size>=MAX_PROCS){
-    const idle=[...pool.values()].filter(p=>!p.closed&&!p.active&&!p.busy)
+    const idle=[...pool.values()].filter(p=>!p.closed&&!p.active&&!p.busy&&!executing.has(p))
       .sort((a,b)=>a.last-b.last)[0];
     if(idle)idle.close();
   }
@@ -592,5 +592,5 @@ server.on("clientError",(_,s)=>s.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 mkdirSync(path.dirname(SOCK),{recursive:true,mode:0o700});
 if(existsSync(SOCK))unlinkSync(SOCK);
 server.listen(SOCK,()=>{chmodSync(SOCK,0o660);console.log("Pi TEST bridge on UNIX socket");});
-setInterval(()=>{for(const a of pool.values())if(!a.active&&!a.events.size&&Date.now()-a.last>IDLE_MS)a.close();},60000).unref();
+setInterval(()=>{for(const a of pool.values())if(!a.active&&!executing.has(a)&&!a.events.size&&Date.now()-a.last>IDLE_MS)a.close();},60000).unref();
 process.on("SIGTERM",()=>{server.close();for(const a of pool.values())a.close();});
