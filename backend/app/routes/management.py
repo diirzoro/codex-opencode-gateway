@@ -1016,6 +1016,30 @@ def ai_platform_set_provider(provider_id: str, data: AiPlatformDefaultIn,
                 raise HTTPException(422, "Only models listed at zero input/output cost can be enabled as platform defaults")
             if provider_id == "openrouter" and not mid.endswith(":free"):
                 raise HTTPException(422, "Only OpenRouter :free models are allowed as platform defaults")
+        if provider_id == "openrouter":
+            # One explicit setup-time check against OpenRouter's currently
+            # published free models. This does NOT run per prompt or workspace.
+            admin_key, _ = _ai_connection_secret_and_models(connection)
+            try:
+                with _ai_httpx.Client(timeout=15, follow_redirects=False, trust_env=False) as http:
+                    response = http.get("https://openrouter.ai/api/v1/models",
+                        params={"max_price": 0}, headers={
+                            "Authorization": "Bearer " + admin_key,
+                            "Accept": "application/json"})
+                    response.raise_for_status()
+                    published = response.json().get("data")
+            except (_ai_httpx.HTTPError, ValueError):
+                raise HTTPException(503, "Could not verify current OpenRouter free models") from None
+            if not isinstance(published, list):
+                raise HTTPException(503, "OpenRouter model availability is unverified")
+            confirmed = {entry["id"] for entry in published
+                         if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+                         and entry["id"].endswith(":free")
+                         and isinstance(entry.get("pricing"), dict)
+                         and str(entry["pricing"].get("prompt")) in {"0", "0.0", "0.000"}
+                         and str(entry["pricing"].get("completion")) in {"0", "0.0", "0.000"}}
+            if not ids.issubset(confirmed):
+                raise HTTPException(422, "A selected free model is no longer published by OpenRouter")
     # Lock the existing row so two administrators cannot overwrite selections.
     from ..models import PlatformPolicy
     _ai_get_policy(db)
