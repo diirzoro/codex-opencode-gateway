@@ -659,7 +659,8 @@ const server=http.createServer(async(req,res)=>{
       const authorizedKey=await gatewayCredential(req,s,b.model.providerID);
       reserveExecution(a);
       try {
-        await a.setCredential(b.model.providerID,authorizedKey);
+        try{await a.setCredential(b.model.providerID,authorizedKey);}
+        catch{throw Object.assign(new Error("Pi credential injection failed"),{status:502});}
         await a.command("set_model",{provider:b.model.providerID,modelId:b.model.modelID});
         // Keep the original Pi command/skill mechanism. Do not invent agents.
         let prompt=message;
