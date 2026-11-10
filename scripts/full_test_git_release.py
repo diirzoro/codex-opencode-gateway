@@ -124,6 +124,73 @@ def previous_revision():
     # Only for cleanup comparison; never delete untracked runtime data.
     return git("rev-parse", "HEAD").decode().strip()
 
+def ensure_test_pi_internal_token():
+    """Provision the SAME persistent secret in existing TEST environment files."""
+    source = r'''
+import os, pathlib, re, secrets, stat, subprocess, tempfile
+
+services = (
+    ("opencode-gateway-test.service", "/home/tahir/opencode-gateway-test/"),
+    ("pi-central.service", "/etc/opencode-gateway-test/"),
+)
+files = []
+for service, prefix in services:
+    raw = subprocess.check_output(
+        ["/usr/bin/systemctl", "show", service, "-p", "EnvironmentFiles", "--value"],
+        text=True).strip()
+    names = [part.split(" (ignore_errors=", 1)[0]
+             for part in raw.splitlines() if part.strip()]
+    if len(names) != 1:
+        raise RuntimeError("Expected one existing TEST environment file: " + service)
+    p = pathlib.Path(names[0])
+    if not str(p).startswith(prefix) or p.is_symlink() or not p.is_file():
+        raise RuntimeError("Unapproved TEST environment file: " + service)
+    files.append(p)
+
+contents = [p.read_text() for p in files]
+tokens = []
+for body in contents:
+    values = [line.split("=", 1)[1].strip().strip("'\"")
+              for line in body.splitlines()
+              if line.startswith("PI_GATEWAY_INTERNAL_TOKEN=")]
+    if len(values) > 1:
+        raise RuntimeError("Duplicate TEST Pi internal token")
+    tokens.append(values[0] if values else "")
+valid = [value for value in tokens if len(value) >= 32]
+if len(set(valid)) > 1:
+    raise RuntimeError("Conflicting TEST Pi tokens; refusing overwrite")
+token = valid[0] if valid else secrets.token_urlsafe(48)
+changed = False
+for p, body, current in zip(files, contents, tokens):
+    if current == token:
+        continue
+    updated = re.sub(r"^PI_GATEWAY_INTERNAL_TOKEN=.*(?:\n|$)", "",
+                     body, flags=re.MULTILINE).rstrip("\n")
+    updated += "\nPI_GATEWAY_INTERNAL_TOKEN=" + token + "\n"
+    old = p.stat()
+    fd, temporary = tempfile.mkstemp(prefix=".pi-token-", dir=str(p.parent))
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(updated)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(temporary, stat.S_IMODE(old.st_mode))
+        os.chown(temporary, old.st_uid, old.st_gid)
+        os.replace(temporary, p)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    changed = True
+print("TEST_PI_INTERNAL_AUTH_UPDATED" if changed else "TEST_PI_INTERNAL_AUTH_READY")
+'''
+    result = sudo("/usr/bin/python3", "-c", source)
+    status = result.decode().strip()
+    if status not in {"TEST_PI_INTERNAL_AUTH_UPDATED", "TEST_PI_INTERNAL_AUTH_READY"}:
+        raise RuntimeError("Unexpected TEST Pi internal token status")
+    print(status, flush=True)
+    return status == "TEST_PI_INTERNAL_AUTH_UPDATED"
+
+
 def deploy(revision):
     desired = paths(revision)
     if not {"backend/app/main.py", "integration/pi-central.mjs"} <= desired:
@@ -169,10 +236,11 @@ def deploy(revision):
     if migration_changed:
         sudo(GATE, "upgrade")
         print("TEST_MIGRATIONS_APPLIED", flush=True)
-    if gateway_changed:
+    token_changed = ensure_test_pi_internal_token()
+    if gateway_changed or token_changed:
         sudo("/usr/bin/systemctl", "restart", "opencode-gateway-test.service")
         print("TEST_GATEWAY_RESTARTED", flush=True)
-    if pi_changed:
+    if pi_changed or token_changed:
         sudo("/usr/bin/systemctl", "restart", "pi-central.service")
         print("PI_CENTRAL_RESTARTED", flush=True)
 
