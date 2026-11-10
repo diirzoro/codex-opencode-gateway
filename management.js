@@ -332,12 +332,14 @@
             const rowsBox=node('div','','provider-model-choice-list'),items=[];
             const defaultChoices=new Map();
             for(const m of response.models){
-              const label=node('label','','provider-model-choice'),toggle=node('input');
+              const label=node('div','','provider-model-choice'),toggle=node('input');
               toggle.type='checkbox';toggle.checked=m.enabled===true;
               toggle.disabled=m.platform_locked===true||m.admin_allowed===false;
               const title=node('span',m.name||m.id);
-              label.append(toggle,title,node('small',m.platform_locked?
+              const personalLabel=node('label','','provider-personal-model');
+              personalLabel.append(toggle,title,node('small',m.platform_locked?
                 tr('Platform default','افتراضي للمنصة'):m.id));
+              label.append(personalLabel);
               toggle.addEventListener('change',async()=>{
                 const enabled=toggle.checked;toggle.disabled=true;
                 try{
