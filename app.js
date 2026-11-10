@@ -469,7 +469,16 @@ document.addEventListener('click',event=>{
  // Includes late-added header/sidebar Login buttons.
  if(event.target.closest('[data-go="authPage"]'))$('[data-auth-tab="login"]')?.click();
 },true);
-$$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));
+$('[data-go]').forEach(el=>el.onclick=()=>page(el.dataset.go));
+$('[data-open-workspace]').forEach(el=>el.onclick=async()=>{
+  // Preserve the existing login form and project restore flow.
+  if(!currentUser){
+    await page('authPage');
+    $('[data-auth-tab="login"]')?.click();
+    return;
+  }
+  await openWorkspaceAfterLogin();
+});
 $$('[data-start]').forEach(el=>el.onclick=()=>{if(!currentUser)$('[data-auth-tab="register"]')?.click();page(currentUser?'onboarding':'authPage');});$$('[data-demo]').forEach(el=>el.onclick=()=>page('onboarding'));$$('[data-scroll]').forEach(el=>el.onclick=()=>$('#'+el.dataset.scroll).scrollIntoView({behavior:'smooth'}));
 $$('[data-auth-tab]').forEach(el=>el.onclick=()=>{authViewRevision++;socialSignupPending=false;setAuthIntent(el.dataset.authTab);$$('[data-auth-tab]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-auth-form]').forEach(f=>f.classList.toggle('active',f.dataset.authForm===el.dataset.authTab))});
 $('#registerCountry').onchange=async()=>{try{await fillSelect('registerRegion',value('registerCountry')?`/api/locations/countries/${value('registerCountry')}/regions`:null,'Optional');await fillSelect('registerCity',null,'Optional')}catch(error){toast(error.message)}};
@@ -1044,19 +1053,32 @@ async function restoreWorkspaceContext(){
 }
 const navigationReady=authReady.then(async()=>{
  await interfaceReady;if(window.passwordRecoveryActive)return;
- if(!currentUser){await page(location.hash.startsWith('#social=')?'authPage':'landing');return;}
- window.__navRestored=true;
- if(['admin','owner'].includes(currentUser.role)){await page('adminPage');if(new URLSearchParams(location.search).has('github'))await window.openGithubConnectionPanel?.();return;}
- // Existing Project is the customer's working home. Restore its one
- // persistent Native conversation rather than a saved projects landing page.
- // When there is no Project yet, openWorkspaceAfterLogin shows the projects home.
- await openWorkspaceAfterLogin();
- // Return the CUSTOMER to the GitHub connection panel after OAuth instead
- // of silently opening a different workspace. The server-side status remains
- // authoritative; the query flag alone never proves that linking succeeded.
+ const socialResult=new URLSearchParams(location.hash.slice(1)).get('social');
+ if(!currentUser){
+  await page(socialResult?'authPage':'landing');
+  return;
+ }
+ // A normal visit ALWAYS starts at Landing. Do not restore workspace on
+ // page load; project/session restoration happens only after sign-in or
+ // when the signed-in user explicitly opens a project.
+ await page('landing');
+ // OAuth callbacks are completions of an already initiated user action,
+ // not unsolicited cold-start navigation. Preserve their return targets.
+ if(socialResult==='success'){
+  await openWorkspaceAfterLogin();
+  return;
+ }
  const githubResult=new URLSearchParams(location.search).get('github');
- if(['connected','confirm','connect-required','session-mismatch','transaction-expired','account-conflict','denied','install-required','multiple-installations','configuration','error'].includes(githubResult)&&!['admin','owner'].includes(currentUser?.role))
-   await window.openConnections?.('github');
+ if(githubResult){
+  if(['admin','owner'].includes(currentUser.role)){
+   await page('adminPage');
+   await window.openGithubConnectionPanel?.();
+  }else{
+   await openWorkspaceAfterLogin();
+   if(['connected','confirm','connect-required','session-mismatch','transaction-expired','account-conflict','denied','install-required','multiple-installations','configuration','error'].includes(githubResult))
+    await window.openConnections?.('github');
+  }
+ }
 }).catch(error=>{document.documentElement.classList.remove('bootstrapping');toast(error.message)});
 // GitHub authorization/repository metadata loads only when its UI is opened.
 window.bootstrapGithubStatus=Promise.resolve(null);
