@@ -685,3 +685,12 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - **فحوص الحالة:** JavaScript V8 syntax **PASS**؛ اختبار معاملة PostgreSQL بمستخدمين واختبار صلاحيات HTTPS/Shell على VPS **NOT VERIFIED**. لا تغيير بـNginx أو Service أو LIVE أو جداول DB.
 - هذه إصلاحات source وليست اختبارات E2E ناجحة.
 
+
+
+### المرحلة 7 — عزل تحميل موارد Pi SDK
+
+- **السبب:** خيارات `noExtensions` و`noSkills` في الكود السابق وُضعت داخل `createAgentSession`، بينما مرجع SDK الموثق يضع التحكم الفعلي بالـExtensions/Skills/Prompts/Context في `DefaultResourceLoader`؛ وقد تُحمَّل إضافات وملفات من بيئة النظام المشتركة بخلاف المقصود.
+- **الإصلاح:** بناء `DefaultResourceLoader` داخل خدمة Pi القائمة، وتفعيله `resourceLoader.reload()` قبل الجلسة، مع `noExtensions/noSkills/noPromptTemplates/noContextFiles` للحسابات غير المالكة، و`noTools` كذلك. تستخدم جلسات العملاء العادية `agentDir` معزولًا عن `~/.pi/agent` الخاص بالمشغل، بينما وضع مالك TEST المسموح وحده يحتفظ بالاكتشاف والأدوات الأصلية. لا ملفات تطبيق أو خدمات جديدة.
+- الملف: `integration/pi-central.mjs`، Commit `7db951bfd74d60f3a0707dcfde8a368bb20fe6f2`.
+- فحص V8 parser **PASS**؛ اختبار تشغيل Extensions/Skills وسلوك عزل الملفات ونسخة Pi 1.5.0 **NOT VERIFIED**؛ لا تُعتبر هذه الطريقة بديلًا كاملًا لعزل OS عند تشغيل Shell متعدد العملاء.
+
