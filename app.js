@@ -129,7 +129,7 @@ window.nativeDirectTest=(()=>{
     if(!force&&catalogSnapshot)return catalogSnapshot;
     if(catalogPending)return catalogPending;
     const promise=(async()=>{
-      const response=await fetch('/api/opencode/catalog/providers?include_connected_models=true',
+      const response=await fetch('/api/opencode/catalog/providers?include_connected_models=true&connected_only=true',
         {credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(20000)});
       if(!response.ok)throw Error('Gateway model catalog HTTP '+response.status);
       return response.json();
