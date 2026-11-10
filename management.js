@@ -145,7 +145,8 @@
     if(activeWorkspace)picker.add(new Option(activeProject?.name||tr('Selected workspace','مساحة العمل المختارة'),activeWorkspace.id));
     picker.value=view.workspaceId;
     const box=section(body,tr('Connect verified providers','ربط المزوّدين الموثقين'));
-    // Only an explicit new-link action may refresh native provider metadata.
+    // Existing Gateway maintenance owns Pi metadata refresh every 14 days.
+    // Account and new-provider views read only saved PostgreSQL data.
     let catalogRequested=false,catalogLoading=false;
     box.append(node('p',tr('Gateway verifies each supported API key with the real provider before encrypting it for your account. A catalog entry is not a connection.','يتحقق Gateway من مفتاح API لدى المزوّد الحقيقي قبل حفظه مشفرًا لحسابك. ظهور المزوّد في الفهرس لا يعني اتصاله.')));
     const comboWrap=node('div','','provider-combo'),combo=node('input');combo.type='search';
@@ -167,8 +168,8 @@
     let searchRows=[],searchQuery='',searchTimer=null,searchAbort=null,searchSequence=0,optionsOpen=false;
     const searchState=node('p','','provider-search-status');searchState.setAttribute('role','status');comboWrap.after(searchState);
     searchState.hidden=true;
-    // Default view: saved PostgreSQL connections only. Native discovery and
-    // provider/model catalog refresh occur solely after "Connect new".
+    // Default view: saved PostgreSQL connections only. The new-link button
+    // reveals cached providers without invoking Pi.
     async function accountCatalogRows(){
       const result=await api('/api/opencode/catalog/providers?connected_only='+
         String(!catalogRequested));
@@ -343,8 +344,13 @@
         const selected=rows.find(p=>p.id===selectedProviderId);
         if(selected)renderSelected(selected);
         if(catalogRequested&&combo.value.trim().length>=2)scheduleSearch();
-        message(tr('Saved connections ready','الاتصالات المحفوظة جاهزة')+' · '+
-          rows.filter(p=>p.connected).length);
+        if(catalogRequested&&!rows.length){
+          message(tr('The Pi catalog has not been stored yet; TEST maintenance will retry automatically.',
+            'لم يُحفظ فهرس مزوّدي Pi بعد؛ ستعيد صيانة TEST المحاولة تلقائيًا.'),true);
+        }else{
+          message(tr('Saved connections ready','الاتصالات المحفوظة جاهزة')+' · '+
+            rows.filter(p=>p.connected).length);
+        }
       }catch(error){if(alive()){message(error.message,true);renderOptions();}}
     }
     const browse=button(tr('Connect a new provider','ربط مزوّد جديد'),async()=>{
@@ -354,10 +360,8 @@
       message(tr('Loading available providers and models…',
         'جارٍ تحميل المزوّدين ونماذجهم…'));
       try{
-        // Only the click requests native discovery; Gateway persists the
-        // 7-day snapshot and returns stored provider/model metadata.
-        await api('/api/opencode/catalog/providers?discover=true');
-        if(!alive())return;
+        // Display the already-saved PostgreSQL snapshot. No user-facing
+        // action causes Pi to fetch the multi-provider inventory.
         catalogRequested=true;
         comboWrap.hidden=false;catalogCount.hidden=false;
         catalogList.hidden=false;status.hidden=false;searchState.hidden=false;
@@ -366,8 +370,7 @@
       finally{catalogLoading=false;browse.disabled=false;}
     });
     box.insertBefore(browse,comboWrap);
-    // On an initial discovery failure, retry the explicit linking action,
-    // not a normal connected-only read that cannot populate the catalog.
+    // Retry a saved-database read only; automatic maintenance handles Pi.
     retry.onclick=()=>catalogRequested?refresh(true):browse.click();
     function invalidateOwnedWorkspaceProviders(){
       // Account connections are shared across all of this user's workspaces.
