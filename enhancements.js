@@ -591,10 +591,10 @@ window.renderGithubConfirmation=function(root,status,refresh){
   });
 
   loadAdminUsers = async function () { await setAdminView(adminView || 'overview'); };
-  window.restoreSavedAdminPanel=async function(){
+  window.restoreSavedAdminPanel=async function(saved){
     if(!admin()||!currentUser?.id)return;
-    let view='overview';
-    try{view=sessionStorage.getItem('og-current-admin-panel:'+currentUser.id)||'overview';}catch{}
+    let view=saved||'overview';
+    if(!saved)try{view=sessionStorage.getItem('og-current-admin-panel:'+currentUser.id)||'overview';}catch{}
     if(view!=='overview')await setAdminView(view);
   };
 
@@ -930,10 +930,10 @@ window.renderGithubConfirmation=function(root,status,refresh){
     var loader = CLIENT_LOADERS[name];
     if (loader) return loader();
   }
-  window.restoreSavedClientPanel=async function(){
+  window.restoreSavedClientPanel=async function(saved){
     if(!currentUser?.id)return;
-    let view='dashboard';
-    try{view=sessionStorage.getItem('og-current-client-panel:'+currentUser.id)||'dashboard';}catch{}
+    let view=saved||'dashboard';
+    if(!saved)try{view=sessionStorage.getItem('og-current-client-panel:'+currentUser.id)||'dashboard';}catch{}
     if(CLIENT_LOADERS[view])await setClientView(view);
   };
   document.querySelectorAll('#clientNav [data-client-view]').forEach(function (button) {
