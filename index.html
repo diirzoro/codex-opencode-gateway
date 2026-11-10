@@ -964,7 +964,7 @@ label.email-service-card{cursor:pointer}label.email-service-card:hover{border-co
     }
     function updateBack() { var b = byId('appBack'); if (b) b.hidden = history.length < 2; }
     function recordSnapshot() {
-      if (suppressHistory) return;
+      if (suppressHistory || document.documentElement.classList.contains('restoring-initial-view')) return;
       var snap = currentSnapshot();
       var last = history[history.length - 1];
       if (!last || last.page !== snap.page || last.view !== snap.view) history.push(snap);
@@ -1001,7 +1001,7 @@ label.email-service-card{cursor:pointer}label.email-service-card:hover{border-co
     // navigation continues to decide page, section and owned workspace.
     // No API calls or changes to the Pi session are involved.
     var refreshWasReload = performance.getEntriesByType('navigation')[0]?.type === 'reload';
-    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+    if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
     function pagePositionKey(userId) { return 'og-view-position:' + userId; }
     window.addEventListener('pagehide', function () {
       var accountId = currentUser?.id;
@@ -1034,6 +1034,10 @@ label.email-service-card{cursor:pointer}label.email-service-card:hover{border-co
         (snapshot.page !== 'workspacePage' ||
           snapshot.workspaceId === activeWorkspace?.id));
       requestAnimationFrame(function () {
+        // Reveal the correct page first within this animation frame so that
+        // its scroll containers can accept the saved offsets before paint.
+        document.documentElement.classList.remove('restoring-initial-view');
+        recordSnapshot();
         if (valid) {
           var main = byId('app-main');
           if (main) main.scrollTop = Number(snapshot.mainY) || 0;
@@ -1047,7 +1051,6 @@ label.email-service-card{cursor:pointer}label.email-service-card:hover{border-co
             }
           }
         }
-        document.documentElement.classList.remove('restoring-initial-view');
         // Some dashboard sections render after their page is selected. Replay
         // only the saved page scroll once, never the actual navigation.
         if (valid && snapshot.page !== 'workspacePage') {
