@@ -164,6 +164,7 @@
     catalogList.setAttribute('aria-label',tr('Choose a provider','اختر المزوّد'));
     box.append(catalogList);
     catalogList.hidden=true;catalogCount.hidden=true;
+    const platformBox=section(body,tr('Pi Gateway models · managed by administrator','نماذج Pi Gateway · تديرها الإدارة'));
     const connectedBox=section(body,tr('My verified provider connections','اتصالات مزوّداتي الموثقة'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
     let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
@@ -180,7 +181,9 @@
       return (result.all||[]).filter(p=>p&&typeof p.id==='string').map(p=>({
         id:p.id,name:p.name||p.id,
         model_count:p.model_count??Object.keys(p.models||{}).length,
-        connected:connected.has(p.id),credit_status:p.credit_status||'unknown',
+        connected:connected.has(p.id),personal_connected:p.personal_connected===true,
+        platform:p.platform===true,platform_models:p.platform_models||[],
+        credit_status:p.credit_status||'unknown',
         verified:p.verified===true,stale:p.stale===true,
          api_key_supported:p.api_key_supported===true,
         last_synced_at:p.last_synced_at||null,visible:true,allowed:true
@@ -248,6 +251,7 @@
       finally{providerMutation=false;}
     }
     function piStateLabel(p){
+      if(p.platform&&!p.personal_connected)return tr('Pi Gateway platform model · administrator-managed','نموذج منصة Pi Gateway · تديره الإدارة');
       if(!p.connected)return tr('Available in catalog · not connected','متاح في الفهرس · غير متصل')+
         (p.stale?' · '+tr('Catalog refresh overdue','تحديث الفهرس متأخر'):'');
       return tr('Verified for this account','موثق لهذا الحساب')+' · '+(p.credit_status||'unknown')+
@@ -258,7 +262,7 @@
         node('span',piStateLabel(p)+' · '+String(p.model_count??0)+' '+tr('models','نموذج')));
       if(!view.ready)return;
       const actions=node('div','','manage-actions');
-      if(p.connected){
+      if(p.personal_connected){
         actions.append(button(tr('Replace API key','استبدال مفتاح API'),()=>openGatewayLogin(p,true).catch(error=>message(error.message,true))));
         actions.append(button(tr('Delete connection','حذف الاتصال'),()=>disconnectGateway(p)));
       }else{
@@ -271,9 +275,27 @@
       }
       status.append(actions);
     }
+    function renderPlatform(){
+      platformBox.replaceChildren(node('h2',tr('Pi Gateway models · managed by administrator','نماذج Pi Gateway · تديرها الإدارة')));
+      const rows=(snapshot?.providers||[]).filter(p=>p.platform);
+      if(!rows.length){
+        platformBox.append(node('p',tr('No shared Pi models have been enabled yet.','لم تفعّل الإدارة نماذج Pi مشتركة بعد.')));
+        return;
+      }
+      platformBox.append(node('p',tr('These shared models are managed by the administrator. Customers cannot disable or remove them.','هذه النماذج تديرها الإدارة، ولا يستطيع العميل تعطيلها أو حذفها.')));
+      for(const p of rows){
+        const detail=node('details','','provider-connected-detail');
+        const summary=node('summary','','provider-connected-summary');
+        summary.append(node('strong',p.name||p.id),node('small',
+          String(p.platform_models?.length||0)+' '+tr('platform models · locked','نموذج منصة · ثابت')));
+        const list=node('div','','provider-connected-content');
+        for(const id of p.platform_models||[])list.append(node('p','✓ '+id));
+        detail.append(summary,list);platformBox.append(detail);
+      }
+    }
     function renderConnected(){
       connectedBox.replaceChildren(node('h2',tr('My verified provider connections','اتصالات مزوّداتي الموثقة')));
-      const rows=(snapshot?.providers||[]).filter(p=>p.connected);
+      const rows=(snapshot?.providers||[]).filter(p=>p.personal_connected);
       if(!rows.length){
         connectedBox.append(node('p',tr('No verified providers are connected to your account.','لا توجد مزوّدات موثقة مربوطة بحسابك.')));
         return;
@@ -350,7 +372,7 @@
       if(!catalogRequested){
         catalogList.replaceChildren();catalogCount.textContent='';return;
       }
-      const rows=(snapshot?.providers||[]).filter(p=>!p.connected&&
+      const rows=(snapshot?.providers||[]).filter(p=>!p.personal_connected&&
         (!query||p.id.toLowerCase().includes(query)||p.name.toLowerCase().includes(query)));
       const selected=selectedProviderId;
       catalogList.replaceChildren(new Option(tr('Select a provider…','اختر المزوّد…'),''),
@@ -387,7 +409,7 @@
         if(!alive()||!contextCurrent())return;
         snapshot={providers:rows};
         view.ready=true;
-        renderOptions();renderConnected();
+        renderOptions();renderConnected();renderPlatform();
         const selected=rows.find(p=>p.id===selectedProviderId);
         if(selected)renderSelected(selected);
         if(catalogRequested&&combo.value.trim().length>=2)scheduleSearch();
@@ -396,7 +418,7 @@
             'لم يُحفظ فهرس مزوّدي Pi بعد؛ ستعيد صيانة TEST المحاولة تلقائيًا.'),true);
         }else{
           message(tr('Saved connections ready','الاتصالات المحفوظة جاهزة')+' · '+
-            rows.filter(p=>p.connected).length);
+            rows.filter(p=>p.personal_connected).length);
         }
       }catch(error){if(alive()){message(error.message,true);renderOptions();}}
     }
