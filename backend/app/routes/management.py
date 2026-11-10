@@ -713,7 +713,10 @@ def ai_catalog_refresh():
                         m = AiProviderModel(provider_id=pid, model_id=model_id, name=model_id)
                         db.add(m)
                     m.name = str(data.get("name") or model_id)[:300]
-                    m.details_json = _ai_json.dumps(data, separators=(",", ":"))[:12000]
+                    metadata = _ai_json.dumps(data, separators=(",", ":"))
+                    if len(metadata) > 12000:
+                        metadata = _ai_json.dumps({"id": model_id, "name": m.name})
+                    m.details_json = metadata
                     m.active = True
                 for old in prior.values():
                     old.active = False
