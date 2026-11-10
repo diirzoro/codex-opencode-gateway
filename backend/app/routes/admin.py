@@ -486,14 +486,28 @@ def read_policy(_: User = Depends(require_admin), db: Session = Depends(get_db))
 @router.put("/policy")
 def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session = Depends(get_db)):
     row = get_policy(db)
+    # Preserve the Pi registry snapshot while concurrent 14-day maintenance
+    # may also update the existing provider-policy JSON.
+    row = db.scalar(select(PlatformPolicy).where(
+        PlatformPolicy.id == row.id).with_for_update()) or row
     previous=row.as_payload()
+    try:
+        existing_rules = json.loads(row.allowed_providers or "[]")
+    except (ValueError, TypeError):
+        existing_rules = {}
+    pi_registry = existing_rules.get("pi_registry") if isinstance(existing_rules, dict) else None
     hidden=data.hidden_providers if data.hidden_providers is not None else previous['hidden_providers']
     selection=data.hidden_models if data.hidden_models is not None else previous['hidden_models']
     if len(selection)>1000 or sum(len(v) for v in selection.values())>10000 or any(not key or len(key)>200 or any(not v or len(v)>300 for v in values) for key,values in selection.items()) or any(not p or len(p)>200 for p in hidden):
         raise HTTPException(422,'Invalid provider/model policy')
     # Preserve platform-wide defaults when editing unrelated provider visibility.
     # Those defaults are managed only through the verified-key admin endpoint.
-    row.allowed_providers = json.dumps({'allowed':sorted({p.strip() for p in data.allowed_providers if p.strip()}),'hidden':sorted(set(hidden)), 'platform_defaults':previous.get('platform_defaults') or {}})
+    provider_rules = {'allowed':sorted({p.strip() for p in data.allowed_providers if p.strip()}),
+                      'hidden':sorted(set(hidden)),
+                      'platform_defaults':previous.get('platform_defaults') or {}}
+    if isinstance(pi_registry, dict):
+        provider_rules['pi_registry'] = pi_registry
+    row.allowed_providers = json.dumps(provider_rules)
     row.allowed_models = json.dumps({'allowed':sorted({m.strip() for m in data.allowed_models if m.strip()}),'hidden':{key:sorted(set(values)) for key,values in selection.items()}})
     row.allowed_tools = json.dumps(sorted({t.strip() for t in data.allowed_tools if t.strip()}))
     row.require_tool_approval = data.require_tool_approval
