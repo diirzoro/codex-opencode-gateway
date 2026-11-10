@@ -1,7 +1,7 @@
 import json
 import uuid
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from ..database import Base
 
@@ -154,3 +154,41 @@ def get_policy(db) -> PlatformPolicy:
         db.add(row)
         db.commit()
     return row
+
+
+# Gateway-only AI discovery/catalog and verified customer BYOK records.
+# Applied manually to the existing TEST PostgreSQL database after reviewing
+# the SQL in Section 17 of docs/PI_CENTRAL_MIGRATION_AR.md; no DDL at import.
+class AiProviderCatalog(Base):
+    __tablename__ = "ai_provider_catalog"
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    model_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    models_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_error: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AiProviderModel(Base):
+    __tablename__ = "ai_provider_models"
+    # Provider ID + native model ID is the identity; names can repeat.
+    provider_id: Mapped[str] = mapped_column(ForeignKey("ai_provider_catalog.id", ondelete="CASCADE"), primary_key=True)
+    model_id: Mapped[str] = mapped_column(String(300), primary_key=True)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    details_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AiUserConnection(Base):
+    __tablename__ = "ai_user_connections"
+    __table_args__ = (UniqueConstraint("user_id", "provider_id", name="uq_ai_user_provider"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider_id: Mapped[str] = mapped_column(ForeignKey("ai_provider_catalog.id"), nullable=False)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    last4: Mapped[str] = mapped_column(String(4), nullable=False)
+    auth_status: Mapped[str] = mapped_column(String(40), nullable=False, default="verified")
+    credit_status: Mapped[str] = mapped_column(String(40), nullable=False, default="unknown")
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
