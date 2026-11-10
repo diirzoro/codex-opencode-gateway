@@ -366,6 +366,9 @@
       finally{catalogLoading=false;browse.disabled=false;}
     });
     box.insertBefore(browse,comboWrap);
+    // On an initial discovery failure, retry the explicit linking action,
+    // not a normal connected-only read that cannot populate the catalog.
+    retry.onclick=()=>catalogRequested?refresh(true):browse.click();
     function invalidateOwnedWorkspaceProviders(){
       // Account connections are shared across all of this user's workspaces.
       // Clear stale composer snapshots without changing active project/session.
