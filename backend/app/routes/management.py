@@ -420,6 +420,8 @@ _AI_VERIFY_URLS = {
     "openrouter": "https://openrouter.ai/api/v1/key",
     "deepseek": "https://api.deepseek.com/user/balance",
     "openai": "https://api.openai.com/v1/models",
+    "anthropic": "https://api.anthropic.com/v1/models",
+    "google": "https://generativelanguage.googleapis.com/v1beta/models",
     "groq": "https://api.groq.com/openai/v1/models",
     "mistral": "https://api.mistral.ai/v1/models",
     "xai": "https://api.x.ai/v1/models",
@@ -559,6 +561,7 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                 "connected": bool(record and record.auth_status == "verified"),
                 "verified": bool(record and record.auth_status == "verified"),
                 "credential_stored": False, "credential_source": "gateway" if record else "none",
+                "api_key_supported": provider.id in _AI_VERIFY_URLS,
                 "auth_status": record.auth_status if record else "not_connected",
                 "credit_status": record.credit_status if record else "unknown",
                 "last_synced_at": provider.models_synced_at, "stale": stale}
@@ -612,8 +615,15 @@ def _ai_verify(provider_id, key):
     # Only fixed trusted HTTPS endpoints; no user-supplied URLs or SSRF.
     try:
         with _ai_httpx.Client(timeout=12, follow_redirects=False, trust_env=False) as client:
-            response = client.get(url, headers={"Authorization": "Bearer " + key,
-                                                   "Accept": "application/json"})
+            headers = {"Accept": "application/json"}
+            if provider_id == "google":
+                headers["x-goog-api-key"] = key
+            elif provider_id == "anthropic":
+                headers["x-api-key"] = key
+                headers["anthropic-version"] = "2026-10-21"
+            else:
+                headers["Authorization"] = "Bearer " + key
+            response = client.get(url, headers=headers)
     except _ai_httpx.RequestError:
         raise HTTPException(503, "Provider verification unavailable; key was not stored") from None
     status = response.status_code
@@ -637,7 +647,10 @@ def _ai_verify(provider_id, key):
         raise HTTPException(503, "OpenRouter did not return authenticated key details")
     if provider_id == "deepseek" and "is_available" not in document and "balance_infos" not in document:
         raise HTTPException(503, "DeepSeek did not return authenticated balance details")
-    if provider_id not in ("openrouter", "deepseek") and not isinstance(document.get("data"), (list, dict)):
+    if provider_id == "google":
+        if not isinstance(document.get("models"), list):
+            raise HTTPException(503, "Google Gemini model verification was inconclusive")
+    elif provider_id not in ("openrouter", "deepseek") and not isinstance(document.get("data"), (list, dict)):
         raise HTTPException(503, "Model-provider verification was inconclusive")
     credit = "unknown"
     if provider_id == "deepseek":
