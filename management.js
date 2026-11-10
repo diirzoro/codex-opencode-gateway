@@ -232,7 +232,24 @@
         const source=p.connection_last4
           ?state+' · '+tr('Saved key ending ','مفتاح محفوظ ينتهي بـ ')+'••••'+p.connection_last4
           :state;
-        summary.append(node('strong',p.name||p.id),node('small',source));
+        // Native <details> remains keyboard-accessible. The whole header
+        // opens the model list; show an explicit arrow and action hint so
+        // users cannot mistake this for a static provider label.
+        const summaryInfo=node('div','','provider-summary-info');
+        const summaryName=node('strong',p.name||p.id);
+        const summaryMeta=node('small',source);
+        summaryInfo.append(summaryName,summaryMeta);
+        const summaryAction=node('span','','provider-summary-action');
+        const count=p.personal_connected?Number(p.model_count||0):
+          (p.platform_models||[]).length;
+        const countLabel=node('small',count>0?
+          count+' '+tr('models','نموذج'):
+          tr('Models available on expand','النماذج تظهر عند الفتح'));
+        const openHint=node('span',tr('Show models','عرض النماذج'),'provider-expand-hint');
+        const chevron=node('span','⌄','provider-expand-chevron');
+        chevron.setAttribute('aria-hidden','true');
+        summaryAction.append(countLabel,openHint,chevron);
+        summary.append(summaryInfo,summaryAction);
         const content=node('div','','provider-connected-content');
         const actions=node('div','','manage-actions');
         if(p.personal_connected){
@@ -247,6 +264,13 @@
         const models=node('div','','provider-connected-models');
         content.append(models);
         details.append(summary,content);connectedBox.append(details);
+        const updateExpandLabel=()=>{
+          openHint.textContent=details.open?
+            tr('Hide models','إخفاء النماذج'):
+            tr('Show models','عرض النماذج');
+          summary.setAttribute('aria-label',(p.name||p.id)+' · '+openHint.textContent);
+        };
+        details.addEventListener('toggle',updateExpandLabel);
         details.addEventListener('toggle',async()=>{
           if(!details.open||details.dataset.modelsLoaded||!alive())return;
           details.dataset.modelsLoaded='loading';
@@ -264,11 +288,12 @@
             if(!alive()||!details.isConnected)return;
             details.dataset.modelsLoaded='yes';models.replaceChildren();
             if(!response.models?.length){
-              models.append(node('p',tr('No models saved yet.','لا توجد نماذج محفوظة بعد.')));
+              models.append(node('p',tr('No models are available for this provider yet.','لا توجد نماذج متاحة لهذا المزوّد حتى الآن.')));
               return;
             }
+            countLabel.textContent=response.models.length+' '+tr('models','نموذج');
             const modelSearch=node('input','','provider-model-search');modelSearch.type='search';
-            modelSearch.placeholder=tr('Search this provider’s models','ابحث في نماذج هذا المزوّد');
+            modelSearch.placeholder=tr('Find a model in this provider…','ابحث داخل نماذج هذا المزوّد…');
             const rowsBox=node('div','','provider-model-choice-list'),items=[];
             const defaultChoices=new Map();
             for(const m of response.models){
@@ -277,8 +302,15 @@
               toggle.disabled=m.platform_locked===true||m.admin_allowed===false;
               const title=node('span',m.name||m.id);
               const personalLabel=node('label','','provider-personal-model');
-              personalLabel.append(toggle,title,node('small',m.platform_locked?
-                tr('Platform default','افتراضي للمنصة'):m.id));
+              const detailsText=node('div','','provider-model-label');
+              detailsText.append(title,node('small',m.id));
+              const modelState=m.platform_locked?
+                node('span',tr('Platform default','منصة'),'provider-model-tag locked'):
+                node('span',m.price_type==='free'?tr('Free','مجاني'):
+                  m.price_type==='paid'?tr('Paid','مدفوع'):
+                  tr('Pricing unknown','السعر غير محدد'),
+                  'provider-model-tag '+(m.price_type||'unknown'));
+              personalLabel.append(toggle,detailsText,modelState);
               label.append(personalLabel);
               toggle.addEventListener('change',async()=>{
                 const enabled=toggle.checked;toggle.disabled=true;
@@ -321,9 +353,21 @@
             }
           }catch(error){
             delete details.dataset.modelsLoaded;
-            if(details.isConnected)models.textContent=error.message||String(error);
+            if(details.isConnected){
+              const err=node('p',error.message||String(error),'connection-error');
+              const retry=button(tr('Retry loading models','إعادة محاولة عرض النماذج'),()=>{
+                delete details.dataset.modelsLoaded;
+                details.open=false;
+                details.open=true;
+              });
+              models.replaceChildren(err,retry);
+            }
           }
         });
+        // First connected provider is expanded automatically; the rest can
+        // be opened by pressing anywhere on their header.
+        if(p===rows[0])details.open=true;
+        updateExpandLabel();
       }
       if(platform&&admin()){
         const overview=node('div','','provider-admin-overview');
