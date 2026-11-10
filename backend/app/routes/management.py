@@ -798,14 +798,17 @@ def ai_my_connection_models(provider_id: str, user: User = Depends(require_user)
     if record is None:
         raise HTTPException(404, "Verified account connection not found")
     disabled = _ai_connection_secret_and_models(record)[1]
+    shared = _ai_active_platform_defaults(db).get(provider_id)
+    locked = shared["models"] if shared else set()
     rules = _ai_policy(db)
     models = list(db.scalars(select(AiProviderModel).where(
         AiProviderModel.provider_id == provider_id, AiProviderModel.active.is_(True))
         .order_by(AiProviderModel.name).limit(2000)))
     return {"provider_id": provider_id,
             "models": [{"id": m.model_id, "name": m.name,
-                        "enabled": m.model_id not in disabled and
+                        "enabled": (m.model_id in locked or m.model_id not in disabled) and
                         _ai_allowed(db, provider_id, m.model_id, rules=rules),
+                        "platform_locked": m.model_id in locked,
                         "admin_allowed": _ai_allowed(db, provider_id, m.model_id, rules=rules)}
                        for m in models]}
 
@@ -826,6 +829,9 @@ def ai_set_connection_model(provider_id: str, data: AiModelPreference,
         raise HTTPException(404, "Pi model is not in the saved provider catalog")
     if data.enabled and not _ai_allowed(db, provider_id, data.model_id):
         raise HTTPException(403, "The administrator disabled this model")
+    shared = _ai_active_platform_defaults(db).get(provider_id)
+    if not data.enabled and shared and data.model_id in shared["models"]:
+        raise HTTPException(403, "An administrator's platform model cannot be disabled by a customer")
     key, disabled = _ai_connection_secret_and_models(record)
     if data.enabled:
         disabled.discard(data.model_id)
@@ -1126,10 +1132,16 @@ def _ai_catalog_refresh_if_due():
                         metadata = json.dumps({"id": model_id, "name": model.name})
                     model.details_json = metadata
                     model.active = True
-                for model_id, previous in old_models.items():
-                    if model_id not in seen:
-                        previous.active = False
-                row.model_count = len(seen)
+                # Periodic discovery intentionally returns only OpenRouter
+                # :free models. Preserve other models that customers had
+                # explicitly linked previously; never deactivate a paid
+                # model from an intentionally incomplete free-only snapshot.
+                if pid != "openrouter":
+                    for model_id, previous in old_models.items():
+                        if model_id not in seen:
+                            previous.active = False
+                row.model_count = (len(old_models | {mid: None for mid in seen})
+                                   if pid == "openrouter" else len(seen))
                 row.models_synced_at = stamped
                 row.last_sync_error = None
             db.commit()
