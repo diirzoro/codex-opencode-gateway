@@ -876,6 +876,160 @@ def ai_internal_credential(provider_id: str, request: Request, workspace_id: uui
             "key": key}
 
 
+def _ai_refresh_selected_provider(db, provider_id):
+    """Explicit admin/customer connection setup ONLY; never a chat-time call.
+
+    Reads one Pi provider's metadata over the existing local UNIX socket and
+    saves it to the existing PostgreSQL tables without touching other entries.
+    """
+    _ai_schema(db)
+    if not isinstance(provider_id, str) or not provider_id or len(provider_id) > 120:
+        raise HTTPException(422, "Invalid provider")
+    lock = db.execute(_ai_text("SELECT pg_try_advisory_xact_lock(732062611)")).scalar_one()
+    if not lock:
+        raise HTTPException(503, "Pi catalog maintenance is active; retry setup")
+    token = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
+    headers = {"x-pi-gateway-token": token} if len(token) >= 32 else {}
+    try:
+        with _ai_httpx.Client(
+            transport=_ai_httpx.HTTPTransport(uds=os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")),
+            timeout=30, trust_env=False) as client:
+            response = client.get("http://pi/provider", params={
+                "directory": os.getenv("PI_CATALOG_DIRECTORY", "/home/tahir/pi-test"),
+                "models": "provider", "providerID": provider_id
+            }, headers=headers)
+            response.raise_for_status()
+            document = response.json()
+    except (_ai_httpx.HTTPError, ValueError, OSError) as exc:
+        raise HTTPException(503, "Pi model metadata is temporarily unavailable") from None
+    item = next((p for p in document.get("all", []) if
+                 isinstance(p, dict) and p.get("id") == provider_id), None)
+    if item is None or not isinstance(item.get("models"), dict):
+        raise HTTPException(404, "Provider not found in installed Pi")
+    incoming = item["models"]
+    if not incoming:
+        raise HTTPException(503, "Pi returned no models for this provider")
+    row = db.get(AiProviderCatalog, provider_id)
+    if row is None:
+        row = AiProviderCatalog(id=provider_id, name=str(item.get("name") or provider_id)[:200])
+        db.add(row)
+        db.flush()
+    existing = {m.model_id: m for m in db.scalars(select(AiProviderModel).where(
+        AiProviderModel.provider_id == provider_id))}
+    seen = set()
+    for mid, info in incoming.items():
+        if not isinstance(mid, str) or not 0 < len(mid) <= 300 or not isinstance(info, dict):
+            continue
+        model = existing.get(mid)
+        if model is None:
+            model = AiProviderModel(provider_id=provider_id, model_id=mid, name=mid)
+            db.add(model)
+        model.name = str(info.get("name") or mid)[:300]
+        details = json.dumps(info, separators=(",", ":"))
+        model.details_json = details if len(details) <= 12000 else json.dumps({
+            "id": mid, "name": model.name})
+        model.active = True
+        seen.add(mid)
+    if not seen:
+        raise HTTPException(503, "Pi provider had no usable models")
+    for mid, model in existing.items():
+        if mid not in seen:
+            model.active = False
+    row.name = str(item.get("name") or provider_id)[:200]
+    row.model_count = len(seen)
+    row.models_synced_at = now()
+    row.last_sync_error = None
+    db.commit()
+    return len(seen)
+
+
+class AiPlatformDefaultIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+@router.get("/admin/ai-defaults")
+def ai_platform_default_status(_: User = Depends(require_admin),
+                               db: Session = Depends(get_db)):
+    _ai_schema(db)
+    active = _ai_active_platform_defaults(db)
+    return {"defaults": [{
+        "provider_id": pid, "models": list(item["models"]),
+        "active": pid in active,
+        "owner_is_current": item["owner_id"] == str(_.id),
+    } for pid, item in sorted(_ai_platform_defaults(db).items())]}
+
+
+@router.post("/admin/ai-defaults/refresh/{provider_id}")
+def ai_platform_refresh_provider(provider_id: str, _: User = Depends(require_admin),
+                                 db: Session = Depends(get_db)):
+    if not provider_id or len(provider_id) > 120 or not provider_id.replace("-", "").replace("_", "").replace(".", "").isalnum():
+        raise HTTPException(422, "Invalid provider")
+    return {"provider_id": provider_id,
+            "models": _ai_refresh_selected_provider(db, provider_id)}
+
+
+@router.put("/admin/ai-defaults/{provider_id}")
+def ai_platform_set_provider(provider_id: str, data: AiPlatformDefaultIn,
+                             user: User = Depends(require_admin),
+                             db: Session = Depends(get_db)):
+    _ai_schema(db)
+    if not provider_id or len(provider_id) > 120 or not provider_id.replace("-", "").replace("_", "").replace(".", "").isalnum():
+        raise HTTPException(422, "Invalid provider")
+    ids = set(data.model_ids)
+    if len(ids) != len(data.model_ids):
+        raise HTTPException(422, "Duplicate model selection")
+    if ids:
+        connection = db.scalar(select(AiUserConnection).where(
+            AiUserConnection.user_id == user.id,
+            AiUserConnection.provider_id == provider_id,
+            AiUserConnection.auth_status == "verified"))
+        if connection is None:
+            raise HTTPException(403, "Verify your administrator provider API key before enabling platform models")
+        if not credentials.available():
+            raise HTTPException(503, "Encrypted credential storage unavailable")
+        available = {m.model_id: m for m in db.scalars(select(AiProviderModel).where(
+            AiProviderModel.provider_id == provider_id,
+            AiProviderModel.model_id.in_(ids), AiProviderModel.active.is_(True)))}
+        if set(available) != ids:
+            raise HTTPException(422, "Selected Pi models are not in the saved provider catalog")
+        for mid, model in available.items():
+            if not _ai_allowed(db, provider_id, mid):
+                raise HTTPException(403, "Model is disabled by administrator access policy")
+            try:
+                cost = json.loads(model.details_json or "{}").get("cost", {})
+            except ValueError:
+                cost = {}
+            if not isinstance(cost, dict) or cost.get("input") != 0 or cost.get("output") != 0:
+                raise HTTPException(422, "Only models listed at zero input/output cost can be enabled as platform defaults")
+            if provider_id == "openrouter" and not mid.endswith(":free"):
+                raise HTTPException(422, "Only OpenRouter :free models are allowed as platform defaults")
+    # Lock the existing row so two administrators cannot overwrite selections.
+    from ..models import PlatformPolicy
+    _ai_get_policy(db)
+    policy = db.scalar(select(PlatformPolicy).where(
+        PlatformPolicy.id == 1).with_for_update())
+    try:
+        raw = json.loads(policy.allowed_providers or "[]")
+    except ValueError:
+        raw = []
+    if isinstance(raw, list):
+        raw = {"allowed": raw, "hidden": []}
+    if not isinstance(raw, dict):
+        raise HTTPException(503, "Invalid platform policy")
+    platform = raw.get("platform_defaults") or {}
+    if not isinstance(platform, dict):
+        platform = {}
+    if ids:
+        platform[provider_id] = {"owner_id": str(user.id), "models": sorted(ids)}
+    else:
+        platform.pop(provider_id, None)
+    raw["platform_defaults"] = platform
+    policy.allowed_providers = json.dumps(raw, separators=(",", ":"))
+    db.commit()
+    return {"provider_id": provider_id, "models": sorted(ids), "active": bool(ids)}
+
+
 def _ai_catalog_refresh_if_due():
     """Refresh missing or 14-day-old Pi metadata in existing TEST PostgreSQL.
 
