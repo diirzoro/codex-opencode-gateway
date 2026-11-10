@@ -242,14 +242,14 @@ class SdkAgent {
     this.scope=scope;this.id=projectIdFor(scope);this.title=scope.projectId;
     this.session=session;this.runtime=runtime;
     this.events=new Set();this.busy=false;this.active=false;this.closed=false;
-    this.last=Date.now();this.running=null;
+    this.last=Date.now();this.running=null;this.credentialProvider=null;this.settledObserved=false;
     this.unsub=session.subscribe(event=>this.consume(event));
   }
   consume(event){
     if(this.closed)return;
     this.last=Date.now();
     if(event.type==="agent_start")this.active=true;
-    if(event.type==="agent_settled"){this.active=false;releaseExecution(this);}
+    if(event.type==="agent_settled"){this.active=false;this.settledObserved=true;}
     const serialized=JSON.stringify({type:"pi."+event.type,properties:event});
     for(const res of this.events)try{res.write("data: "+serialized+"\n\n");}catch{this.events.delete(res);}
     if(event.type==="agent_settled"){
@@ -265,7 +265,15 @@ class SdkAgent {
   }
   async setCredential(provider,key){
     if(this.closed)throw Object.assign(new Error("Pi session ended"),{status:503});
+    if(this.credentialProvider && this.credentialProvider!==provider)
+      await this.runtime.removeRuntimeApiKey(this.credentialProvider);
     await this.runtime.setRuntimeApiKey(provider,key);
+    this.credentialProvider=provider;
+  }
+  async clearCredential(){
+    const provider=this.credentialProvider;
+    this.credentialProvider=null;
+    if(provider)await this.runtime.removeRuntimeApiKey(provider);
   }
   async command(type,fields={}){
     if(this.closed)throw Object.assign(new Error("Pi session ended"),{status:503});
@@ -286,6 +294,7 @@ class SdkAgent {
     // Pi SDK prompt() resolves on completion, not dispatch. Return the
     // existing HTTP 204 after admission, never wait for model execution.
     const images=Array.isArray(fields.images)?fields.images:[];
+    this.settledObserved=false;
     const run=Promise.resolve().then(()=>this.session.prompt(fields.message,
       images.length?{images}:undefined));
     this.running=run;
@@ -294,11 +303,14 @@ class SdkAgent {
       for(const res of this.events)try{res.write("data: "+JSON.stringify({
         type:"pi.error",properties:{message:"Pi execution failed"}
       })+"\n\n");}catch{this.events.delete(res);}
-    }).finally(()=>{
+    }).finally(async()=>{
+      // Once Pi settles, promptly erase the customer's runtime API override.
+      // Capacity stays reserved until the removal completes.
+      try{await this.clearCredential();}
+      catch{this.close();}
       this.running=null;this.active=false;releaseExecution(this);
-      // SDK normally emits agent_settled; also handle errors before start.
-      this.consume({type:"agent_settled"});
-    });
+      if(!this.closed&&!this.settledObserved)this.consume({type:"agent_settled"});
+    }).catch(()=>{});
     return {accepted:true};
   }
   close(){
