@@ -374,7 +374,8 @@
     // Optional OpenCode compatibility routes are not native Pi session
     // operations. Do not call them and produce 501 on every workspace open.
     // Workspace git/status remains the authoritative file-change source.
-    if(tail==='todos')return {value:{supported:false,items:[]}};
+    if(tail==='todos'&&method==='GET')
+      return {value:await sessionRequest(id,'todos')};
     if(tail==='diff')return {value:[]};
     if(tail==='stop')return {value:await forceStop(id)};
     if(tail==='questions')return {value:{requests:await requests('question',id)}};
@@ -479,6 +480,25 @@
         const line=document.getElementById("runtimeStatus");if(line)line.textContent=readable;
         statuses.set(id,"failed");if(activeSession?.id===id)activeSession.execution_status="failed";
         toast(readable);return;
+      }
+      if(/^pi\.tool_execution_(?:start|update|end)$/.test(e.type)){
+        // Only real SDK tool execution events (not text resembling <tool_call>)
+        // may create a tool activity entry or update the Pi task panel.
+        const tool=String(p.toolName||"");
+        const status=e.type.endsWith("_start")?"running":
+          e.type.endsWith("_end")?(p.isError?"error":"completed"):"running";
+        if(tool==="todo_write"&&e.type.endsWith("_end")){
+          void Promise.resolve().then(()=>window.refreshWorkspaceTodos?.(true)).catch(()=>{});
+        }else if(tool&&e.type.endsWith("_start")||tool&&e.type.endsWith("_end")){
+          window.renderWorkspaceEventLine?.("activity",{
+            native:true,workspace_id:row.workspace_id,
+            id:String(p.toolCallId||p.toolCallID||tool),
+            tool,status,stage:"tool_activity",files:[]
+          });
+          if(e.type.endsWith("_end")&&!p.isError&&["write","edit"].includes(tool))
+            filesChanged();
+        }
+        return;
       }
       if(e.type==="pi.message_end"){
         const m=p.message;

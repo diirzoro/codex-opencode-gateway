@@ -1112,3 +1112,12 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - تعرض text_delta وtext_end مباشرة من Pi SDK، وتقرأ التاريخ النهائي بعد agent_settled مرة واحدة بدل القراءة لكل Token.
 - Pi وحده يصنف أخطاء المزوّد، ومنها insufficient_balance وrate_limited وinvalid_key وmodel_unavailable؛ لا يتم تفسير 429 وحده بأنه نفاد رصيد.
 - تحديث إصدار ملفات المتصفح في index.html. لم يحدث نشر TEST أو تجربة حيّة، ولا تعديل LIVE أو master أو Workflow.
+
+
+## 37. مهام Pi الأصلية وتتبّع الأدوات — 10 نوفمبر 2026 — SOURCE ONLY
+
+- أضيفت أداة Pi SDK باسم `todo_write` بمخطط TypeBox موثق من SDK؛ عند توفر واجهة `defineTool` وحزمة `typebox` في إصدار Pi المثبت، تُحفظ المهام داخل مجلد جلسة المشروع `pi-tasks.json`، وليس في Python أو قاعدة بيانات جديدة. الملفات تُكتب ذريًا وصلاحيتها 0600. إذا لم تدعم النسخة المثبتة الأداة، تبقى المحادثة السابقة تعمل ولا يُعرض ادعاء بوجود قائمة مهام فعّالة.
+- `GET /session/{id}/todos` من Pi يقرأ حالة المهام الفعلية، و`native-session-client.js` يربط المسار السابق `/api/sessions/{id}/todos` مباشرة بـPi بدل إرجاع `supported:false` ثابتة. تصبح لوحة المهام الموجودة أصلًا فوق Composer ظاهرة عند إنشاء المهام وتبقى قابلة للطي.
+- تتلقى واجهة TEST أحداث `pi.tool_execution_start/update/end` من Pi SDK وتعرض نشاط الأداة الفعلي؛ حدث `todo_write` المكتمل يحدث القائمة مباشرة، وأحداث `write/edit` المنتهية تطلب تحديث مستعرض الملفات. لا يُستخرج تنفيذ أداة من نص النموذج المكتوب.
+- بقيت قواعد إتاحة `bash/read/edit/write` والمهارات والإضافات الحالية دون تغيير في هذا Commit. فالخدمة ما زالت تشغّل SDK داخل عملية Node مشتركة، وتحتاج الأدوات الواسعة إلى عزل حقيقي لحسابات العملاء قبل تمكينها للجميع.
+- **الحالة:** تعديل SOURCE على `updates` فقط. لم يُختبر توفر `typebox` في TEST، ولم يُنفذ Prompt حقيقي يستخدم `todo_write` أو `write`. لا تعديل LIVE/master/Workflow/Nginx.
