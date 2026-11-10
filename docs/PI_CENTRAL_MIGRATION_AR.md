@@ -975,3 +975,5 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - **SOURCE:** تم فحص parsing لـ`management.js` بعد تعديلات الواجهة وعمليات التحديد الجماعي. لم تُجرَ اختبارات قاعدة بيانات أو الاتصال المباشر بالمزوّد أو تنفيذ نموذج في خادم TEST.
 - **NOT VERIFIED:** صحة الربط الحقيقي باستخدام API key سليم، تحميل نماذج DeepSeek/OpenRouter بعد الربط، ظهور النماذج بين حسابات العميل والأدمن، تجربة Bulk من متصفح حقيقي، طلبات Pi/SDK، وعدم ظهور 404 بعد إعادة تشغيل TEST.
 - **لا تغيير:** لا تعديل `master`/LIVE، ولا تشغيل/تحرير Workflow، ولا خدمات أو ملفات أو مخططات PostgreSQL جديدة. جميع التغييرات على الملفات الحالية في `updates` فقط.
+
+- **فحص نهائي للمصدر:** ملفات JavaScript الستة `management.js`, `app.js`, `dashboards.js`, `native-session-client.js`, `enhancements.js`, `integration/pi-central.mjs` اجتازت فحص Syntax؛ وتم تعديل `native-session-client.js` لحفظ علم `allowed` القادم من Backend وعدم استبداله دائمًا بـ`true` (Commit `224bda65`). تم التحقق من وجود مسارات bulk وقراءة نماذج العملاء وحذف اتصالاتهم وتطبيق قيود المنصة في المصدر؛ **هذه ليست بديلًا عن E2E TEST**.
