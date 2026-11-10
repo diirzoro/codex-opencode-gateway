@@ -675,3 +675,13 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - Commit: `54b908fa882319ccdc885d4565052e0af14c5f1e`، فحص V8 parser **PASS**.
 - **لم تُختبر** نسخة Pi 1.5.0 الموجودة على VPS أو مرفقات حقيقية أو الطلبات المدفوعة، ولا يُسمح بادعاء E2E قبل الاختبار. استمر العمل دون ملفات/خدمات/مسارات جديدة.
 
+
+
+### المرحلة 6 — ضبط التحقق المتزامن وصلاحيات أدوات TEST
+
+- **اتصال PostgreSQL في حالة تنافس:** أضيف التعامل الصريح مع `IntegrityError` وقت حفظ اتصال مستخدمين/طلبين متزامنين لنفس المزوّد؛ يسجل `409` ويجري `rollback` بدل خطأ 500 غير مفيد. الملف القائم: `backend/app/routes/management.py`، Commit `bcf88f743d6ce5b99472df5edf3d6653eda749a6`.
+- **الأدوات عالية الخطورة:** متغير `PI_TEST_SINGLE_OWNER_TOOLS=1` لم يعد يمنح الصلاحية لكل العملاء؛ يتم التحقق من جلسة `/api/auth/me` ودور `owner` وملكية الحساب قبل إنشاء SDK Session بأدوات Shell/Write/Skills. أي تبدل في صلاحية المشروع يعيد إنشاء جلسة العامل الآمن إذا كان خاملًا، دون حذف ملف محادثة Pi. Commits `412e456cf1abe5fc861de1534dd84d204c0585f3` و`f44fa85ef0b503d0b3e5dcd6ade78959e11beec6`.
+- استدعاء Skill غير مأذون يرفض **قبل** استرجاع مفتاح Gateway أو حجز العامل. عميل غير مالك يمكنه الاتصال وقراءة قائمة النماذج التي يسمح بها Gateway، لكن Shell/Extensions متعددة العملاء **BLOCKED** حتى يتوفر عزل OS حقيقي.
+- **فحوص الحالة:** JavaScript V8 syntax **PASS**؛ اختبار معاملة PostgreSQL بمستخدمين واختبار صلاحيات HTTPS/Shell على VPS **NOT VERIFIED**. لا تغيير بـNginx أو Service أو LIVE أو جداول DB.
+- هذه إصلاحات source وليست اختبارات E2E ناجحة.
+
