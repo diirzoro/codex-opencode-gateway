@@ -159,7 +159,10 @@
     // The provider catalog remains hidden until "Connect a new provider".
     // Existing connections always load from Gateway PostgreSQL.
     const catalogCount=node('p','','provider-catalog-count');box.append(catalogCount);
-    const catalogList=node('div','','provider-catalog-grid');box.append(catalogList);
+    // One compact native select, not dozens of provider tiles.
+    const catalogList=node('select','','provider-catalog-picker');
+    catalogList.setAttribute('aria-label',tr('Choose a provider','اختر المزوّد'));
+    box.append(catalogList);
     catalogList.hidden=true;catalogCount.hidden=true;
     const connectedBox=section(body,tr('My verified provider connections','اتصالات مزوّداتي الموثقة'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
@@ -270,52 +273,90 @@
         return;
       }
       for(const p of rows){
-        const item=node('div','','manage-actions');
-        item.append(node('strong',p.name||p.id),node('span',piStateLabel(p)));
-        item.append(button(tr('Replace key','استبدال المفتاح'),()=>openGatewayLogin(p,true).catch(error=>message(error.message,true))));
-        item.append(button(tr('Disconnect','حذف الاتصال'),()=>disconnectGateway(p)));
-        connectedBox.append(item);
+        const details=node('details','','provider-connected-detail');
+        const summary=node('summary','','provider-connected-summary');
+        summary.append(node('strong',p.name||p.id),node('small',
+          String(p.model_count||0)+' '+tr('models · click to manage','نموذج · اضغط لإدارة النماذج')));
+        const content=node('div','','provider-connected-content');
+        const actions=node('div','','manage-actions');
+        actions.append(button(tr('Replace API key','استبدال مفتاح API'),
+          ()=>openGatewayLogin(p,true).catch(error=>message(error.message,true))));
+        actions.append(button(tr('Disconnect','حذف الاتصال'),()=>disconnectGateway(p)));
+        const models=node('div','','provider-connected-models');
+        content.append(actions,models);
+        details.append(summary,content);connectedBox.append(details);
+        details.addEventListener('toggle',async()=>{
+          if(!details.open||details.dataset.modelsLoaded||!alive())return;
+          details.dataset.modelsLoaded='loading';
+          models.textContent=tr('Loading saved provider models…','جارٍ تحميل النماذج المحفوظة…');
+          try{
+            const response=await api('/api/opencode/connections/'+encodeURIComponent(p.id)+'/models');
+            if(!alive()||!details.isConnected)return;
+            details.dataset.modelsLoaded='yes';models.replaceChildren();
+            if(!response.models?.length){
+              models.append(node('p',tr('No models are available for this provider.','لا توجد نماذج متاحة لهذا المزوّد.')));
+              return;
+            }
+            const modelSearch=node('input','','provider-model-search');modelSearch.type='search';
+            modelSearch.placeholder=tr('Filter this provider’s models…','ابحث في نماذج هذا المزوّد…');
+            const rowsBox=node('div','','provider-model-choice-list');
+            const items=response.models.map(m=>{
+              const label=node('label','','provider-model-choice'),toggle=node('input');
+              toggle.type='checkbox';toggle.checked=m.enabled===true;
+              toggle.disabled=m.admin_allowed===false;
+              const title=node('span',m.name||m.id);
+              const hint=m.admin_allowed===false
+                ?node('small',tr('Restricted by administrator','معطّل من الإدارة'))
+                :node('small',m.id);
+              label.append(toggle,title,hint);
+              toggle.addEventListener('change',async()=>{
+                const intended=toggle.checked;toggle.disabled=true;
+                try{
+                  await api('/api/opencode/connections/'+encodeURIComponent(p.id)+'/models',{
+                    method:'POST',body:JSON.stringify({model_id:m.id,enabled:intended})
+                  });
+                  window.nativeDirectTest?.forget({keepSession:true});
+                  invalidateOwnedWorkspaceProviders();
+                  if(window.refreshWorkspaceChoices)
+                    window.refreshWorkspaceChoices('',false).catch(()=>{});
+                }catch(error){toggle.checked=!intended;toast(error.message);}
+                finally{toggle.disabled=m.admin_allowed===false;}
+              });
+              rowsBox.append(label);return {label,model:m};
+            });
+            modelSearch.addEventListener('input',()=>{
+              const term=modelSearch.value.trim().toLowerCase();
+              for(const {label,model} of items)
+                label.hidden=!!term&&!String(model.name||model.id).toLowerCase().includes(term)
+                  &&!model.id.toLowerCase().includes(term);
+            });
+            models.append(node('p',tr('Enable only the models you want in your Workspace.','فعّل النماذج التي تريد ظهورها في مساحة عملك فقط.')),
+              modelSearch,rowsBox);
+          }catch(error){
+            delete details.dataset.modelsLoaded;
+            if(details.isConnected)models.textContent=error.message||String(error);
+          }
+        });
       }
     }
     const renderOptions=()=>{
+      const query=(combo.value||'').trim().toLowerCase();
       if(!catalogRequested){
-        options.replaceChildren();catalogList.replaceChildren();
-        catalogCount.textContent='';return;
+        catalogList.replaceChildren();catalogCount.textContent='';return;
       }
-      const renderStarted=performance.now();
-      const query=(combo.value||'').trim().toLowerCase();const previous=new Map([...options.children].map(n=>[n.dataset.providerId,n]));
-      const available=[...(snapshot?.providers||[]),...(searchQuery===query?searchRows:[])];
-      // New-provider picker does not duplicate the already-configured list.
-      const rows=[...new Map(available.map(p=>[p.id,p])).values()]
-        .filter(p=>!p.connected&&(!query||(p.name||'').toLowerCase().includes(query)||(p.id||'').toLowerCase().includes(query)));
-      for(const p of rows){
-        const state=tr('Provider catalog · connection unverified','فهرس المزوّدين · الاتصال غير موثق');
-        const restriction=p.allowed===false?' · '+tr('Restricted','مقيّد'):'';
-        const o=previous.get(p.id)||node('button','','provider-combo-option');previous.delete(p.id);o.dataset.providerId=p.id;o.textContent=(p.name||p.id)+' · '+state+restriction;o.type='button';
-        o.onclick=()=>{
-          if(!alive()||!contextCurrent())return;
-          combo.value='';body.dataset.providerQuery='';optionsOpen=false;options.hidden=true;combo.setAttribute('aria-expanded','false');
-          stopSearch();
-          selectedProviderId=p.id;renderSelected(p);
-        };
-        options.append(o);
-      }
-      for(const old of previous.values())old.remove();
-      // Display saved PostgreSQL provider names only after explicit discovery.
-      if(!query){
-        const tiles=rows.map(p=>{
-          const tile=node('button','','provider-catalog-tile');
-          tile.type='button';tile.textContent=p.name||p.id;
-          tile.title=tr('Available for verified connection','متاح للربط الموثق')+' · '+(p.name||p.id);
-          tile.onclick=()=>{selectedProviderId=p.id;renderSelected(p);};
-          return tile;
-        });
-        catalogList.replaceChildren(...tiles);
-        catalogCount.textContent=tr('Providers available for discovery: ','المزوّدون المتاحون للبحث: ')+rows.length;
-      }
-      options.hidden=!optionsOpen||!rows.length;combo.setAttribute('aria-expanded',String(!options.hidden));
-      window.gatewayProviderTimings={...window.gatewayProviderTimings,render_sync_ms:performance.now()-renderStarted,rendered_options:rows.length};
+      const rows=(snapshot?.providers||[]).filter(p=>!p.connected&&
+        (!query||p.id.toLowerCase().includes(query)||p.name.toLowerCase().includes(query)));
+      const selected=selectedProviderId;
+      catalogList.replaceChildren(new Option(tr('Select a provider…','اختر المزوّد…'),''),
+        ...rows.map(p=>new Option(p.name||p.id,p.id)));
+      if(rows.some(p=>p.id===selected))catalogList.value=selected;
+      catalogCount.textContent=tr('Providers available: ','المزوّدون المتاحون: ')+rows.length;
+      options.hidden=true;combo.setAttribute('aria-expanded','false');
     };
+    catalogList.addEventListener('change',()=>{
+      const p=(snapshot?.providers||[]).find(row=>row.id===catalogList.value);
+      if(p){selectedProviderId=p.id;renderSelected(p);}
+    });
     function stopSearch(){searchSequence++;clearTimeout(searchTimer);searchAbort?.abort();searchRows=[];searchQuery='';searchState.textContent='';}
     function scheduleSearch(){
       if(!catalogRequested)return;
@@ -364,7 +405,7 @@
         // action causes Pi to fetch the multi-provider inventory.
         catalogRequested=true;
         comboWrap.hidden=false;catalogCount.hidden=false;
-        catalogList.hidden=false;status.hidden=false;searchState.hidden=false;
+        catalogList.hidden=false;status.hidden=false;searchState.hidden=true;
         await refresh(true);
       }catch(error){if(alive())message(error.message,true);}
       finally{catalogLoading=false;browse.disabled=false;}
@@ -386,7 +427,7 @@
     }
     view.refresh=refresh;
     combo.addEventListener('input',()=>{body.dataset.providerQuery=combo.value;optionsOpen=true;scheduleSearch();});
-    combo.addEventListener('focus',()=>{optionsOpen=true;scheduleSearch();});
+    combo.addEventListener('focus',()=>{optionsOpen=false;renderOptions();});
     combo.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}});
     document.addEventListener('click',event=>{if(!comboWrap.contains(event.target)){optionsOpen=false;stopSearch();options.hidden=true;combo.setAttribute('aria-expanded','false');}},{signal:controller.signal});
     box.append(button(tr('Refresh saved connections','تحديث الاتصالات المحفوظة'),()=>refresh(true)));
