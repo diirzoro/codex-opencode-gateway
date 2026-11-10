@@ -461,7 +461,7 @@ window.authSession=(()=>{
  document.addEventListener('visibilitychange',()=>{tick();if(!document.hidden&&dirty)flush();});
  return {observe,stop,workspaceOpened(){if(dirty){clearTimeout(flushTimer);flush();}},start(){stopped=false;if(!timer)timer=setInterval(tick,1000);tick();}};
 })();
-function showPage(id){navigationRevision++;document.documentElement.classList.remove('bootstrapping');if(['admin','owner'].includes(currentUser?.role)&&['workspaceHomePage','connectionsPage','workspacePage','onboarding','clientPage','accountPage','billingPage'].includes(id))id='adminPage';$('#welcomeSidebar').classList.remove('visible');$('#sessionSidebar').classList.remove('open');overlay(false);$$('.page').forEach(p=>p.classList.toggle('active',p.id===id||(id==='authPage'&&p.id==='landing')));$('#siteHeader').style.display=id==='landing'?'flex':'none';window.scrollTo(0,0);syncPermissionPolling()}
+function showPage(id){navigationRevision++;document.documentElement.classList.remove('bootstrapping');if(['admin','owner'].includes(currentUser?.role)&&['workspaceHomePage','connectionsPage','workspacePage','onboarding','clientPage','accountPage','billingPage'].includes(id))id='adminPage';if(currentUser?.id&&['adminPage','workspaceHomePage','workspacePage','connectionsPage','clientPage','onboarding','accountPage','billingPage'].includes(id)){try{sessionStorage.setItem('og-current-page:'+currentUser.id,id);}catch{}}$('#welcomeSidebar').classList.remove('visible');$('#sessionSidebar').classList.remove('open');overlay(false);$$('.page').forEach(p=>p.classList.toggle('active',p.id===id||(id==='authPage'&&p.id==='landing')));$('#siteHeader').style.display=id==='landing'?'flex':'none';window.scrollTo(0,0);syncPermissionPolling()}
 async function page(id){await authReady;await interfaceReady;if(protectedPages.has(id)&&!currentUser){showPage('authPage');window.loadManagement().catch(error=>toast(error.message));return}if(id==='adminPage'&&!['admin','owner'].includes(currentUser?.role)){toast('Administrator access required');return}showPage(id);if(['authPage','landing'].includes(id))window.loadManagement().catch(error=>toast(error.message));try{if(id==='accountPage'){renderProfile(await api('/api/profile'));await loadProjects()}if(id==='adminPage')await loadAdminUsers();if(id==='workspacePage'&&!activeWorkspace&&!window.workspaceRestoring){showPage('onboarding')}}catch(error){if(currentUser)toast(error.message)}}
 function updateNavigation(){$$('[data-go="adminPage"]').forEach(el=>el.hidden=!['admin','owner'].includes(currentUser?.role))}
 function stopEvents(){window.nativeSession?.stop();eventStream?.close();eventStream=null;if(permissionTimer)clearInterval(permissionTimer);permissionTimer=null}
@@ -1086,10 +1086,30 @@ const navigationReady=authReady.then(async()=>{
   await page(socialResult?'authPage':'landing');
   return;
  }
- // A normal visit ALWAYS starts at Landing. Do not restore workspace on
- // page load; project/session restoration happens only after sign-in or
- // when the signed-in user explicitly opens a project.
- await page('landing');
+ // Return a signed-in user to the page they were actually viewing
+ // before a refresh, rather than sending them to the public Landing page.
+ // The per-account page identifier contains no sensitive data or credentials.
+ // Project restoration still revalidates ownership through Gateway.
+ let savedPage='';
+ try{savedPage=sessionStorage.getItem('og-current-page:'+currentUser.id)||'';}catch{}
+ const oauthReturn=Boolean(new URLSearchParams(location.search).get('github'))||
+                   socialResult==='success';
+ if(!oauthReturn){
+   if(['admin','owner'].includes(currentUser.role)){
+     await page('adminPage');
+     await window.restoreSavedAdminPanel?.();
+   }else if(savedPage==='workspacePage'){
+     await openWorkspaceAfterLogin();
+   }else if(['connectionsPage','workspaceHomePage','onboarding'].includes(savedPage)){
+     await page(savedPage);
+   }else if(['clientPage','accountPage','billingPage'].includes(savedPage)){
+     await page('clientPage');
+     await window.restoreSavedClientPanel?.();
+   }else{
+     await page('workspaceHomePage');
+   }
+   return;
+ }
  // OAuth callbacks are completions of an already initiated user action,
  // not unsolicited cold-start navigation. Preserve their return targets.
  if(socialResult==='success'){
