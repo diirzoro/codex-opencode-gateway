@@ -604,7 +604,10 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
     checked_at = now()
     result = []
     for provider in rows:
-        if not _ai_allowed(db, provider.id, rules=rules):
+        allowed = _ai_allowed(db, provider.id, rules=rules)
+        # Never hide the customer's own verified/suspended account connection
+        # merely because it cannot currently execute under admin policy.
+        if not allowed and provider.id not in owned and provider.id not in platform:
             continue
         record = connected.get(provider.id)
         shared = platform.get(provider.id)
@@ -626,6 +629,7 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                 # surfaced. Never return secrets or another user's last4.
                 "connection_last4": owned[provider.id].last4 if provider.id in owned else None,
                 "platform": bool(shared),
+                "allowed": allowed,
                 "platform_locked": bool(shared),
                 "platform_models": sorted(shared["models"]) if shared else [],
                 "credential_stored": False,
@@ -664,7 +668,7 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
     connectable = [{"id": pid,
                     "name": next((p["name"] for p in rows if p["id"] == pid),
                                  pid.replace("-", " ").title())}
-                   for pid in sorted(_AI_VERIFY_URLS) if _ai_allowed(db, pid)]
+                   for pid in sorted(_AI_VERIFY_URLS)]
     return {"all": rows, "connected": [p["id"] for p in rows if p["connected"]],
             "connectable": connectable,
             "default": {}, "source": "gateway", "refresh_days": _AI_REFRESH_DAYS,
@@ -719,6 +723,26 @@ def ai_admin_connection_state(customer_id: uuid.UUID, provider_id: str,
     db.commit()
     return {"user_id": str(customer_id), "provider_id": provider_id,
             "enabled": data.enabled, "auth_status": record.auth_status}
+
+
+@router.delete("/admin/ai-connections/{customer_id}/{provider_id}", status_code=204)
+def ai_admin_delete_connection(customer_id: uuid.UUID, provider_id: str,
+                               actor: User = Depends(require_admin),
+                               db: Session = Depends(get_db)):
+    """Owner/admin removal of a CUSTOMER's link; never exposes the saved key."""
+    _ai_schema(db)
+    customer = db.get(User, customer_id)
+    if customer is None or customer.role in {"admin", "owner"}:
+        raise HTTPException(404, "Customer not found")
+    record = db.scalar(select(AiUserConnection).where(
+        AiUserConnection.user_id == customer_id,
+        AiUserConnection.provider_id == provider_id).with_for_update())
+    if record is None:
+        raise HTTPException(404, "Customer provider connection not found")
+    db.delete(record)
+    audit(db, actor, "ai.connection.deleted_by_admin", subject=customer_id)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/opencode/connections")
@@ -787,8 +811,11 @@ def _ai_verify(provider_id, key):
 
 def _ai_save(data, user, db, replace=False):
     _ai_schema(db)
-    if not _ai_allowed(db, data.provider_id) or data.provider_id not in _AI_VERIFY_URLS:
-        raise HTTPException(422, "Provider is not enabled for verified API-key linking")
+    # An account-owned API key is independent from the platform's default
+    # provider whitelist. Admin policy still governs *execution*, but must
+    # not prevent a real upstream verification or a personal connection.
+    if data.provider_id not in _AI_VERIFY_URLS:
+        raise HTTPException(422, "This provider does not have a supported verification endpoint")
     if not credentials.available():
         raise HTTPException(503, "Encrypted credential storage is not configured")
     existing = db.scalar(select(AiUserConnection).where(
