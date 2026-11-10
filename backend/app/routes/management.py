@@ -428,6 +428,13 @@ _AI_VERIFY_URLS = {
     "together": "https://api.together.xyz/v1/models",
     "cerebras": "https://api.cerebras.ai/v1/models",
 }
+_AI_PROVIDER_DISPLAY_NAMES = {
+    "openrouter": "OpenRouter", "deepseek": "DeepSeek",
+    "openai": "OpenAI", "anthropic": "Anthropic",
+    "google": "Google Gemini", "groq": "Groq",
+    "mistral": "Mistral AI", "xai": "xAI",
+    "together": "Together AI", "cerebras": "Cerebras",
+}
 _AI_REFRESH_DAYS = 14
 _AI_STALE_DAYS = 14
 _AI_SCHEMA_OK_UNTIL = 0.0
@@ -665,9 +672,8 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
     # A small on-demand list of *verifiable* providers is independent of
     # automatic Pi model discovery. This keeps the manual connection form
     # usable even when the database starts with zero provider catalog rows.
-    connectable = [{"id": pid,
-                    "name": next((p["name"] for p in rows if p["id"] == pid),
-                                 pid.replace("-", " ").title())}
+    connectable = [{"id": pid, "name": _AI_PROVIDER_DISPLAY_NAMES.get(
+        pid, pid.replace("-", " ").title())}
                    for pid in sorted(_AI_VERIFY_URLS)]
     return {"all": rows, "connected": [p["id"] for p in rows if p["connected"]],
             "connectable": connectable,
@@ -913,6 +919,24 @@ def _ai_model_zero_price(row):
             (row.provider_id != "openrouter" or row.model_id.endswith(":free")))
 
 
+def _ai_model_display_info(row):
+    try:
+        data = json.loads(row.details_json or "{}")
+    except (ValueError, TypeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    cost = data.get("cost") if isinstance(data.get("cost"), dict) else {}
+    free = _ai_model_zero_price(row)
+    paid = any(type(cost.get(k)) in (int, float) and cost[k] > 0
+               for k in ("input", "output"))
+    return {"price_type": "free" if free else "paid" if paid else "unknown",
+            "cost": {k: cost.get(k) for k in ("input", "output")
+                     if type(cost.get(k)) in (int, float)},
+            "context_window": data.get("context") or data.get("contextWindow"),
+            "reasoning": bool(data.get("reasoning"))}
+
+
 @router.get("/opencode/connections/{provider_id}/models")
 def ai_my_connection_models(provider_id: str, user: User = Depends(require_user),
                             db: Session = Depends(get_db)):
@@ -953,6 +977,7 @@ def ai_my_connection_models(provider_id: str, user: User = Depends(require_user)
     return {"provider_id": provider_id,
             "models": [{"id": m.model_id, "name": m.name,
                         "free_eligible": _ai_model_zero_price(m),
+                        **_ai_model_display_info(m),
                         "enabled": (m.model_id in locked or m.model_id not in disabled) and
                         _ai_allowed(db, provider_id, m.model_id, rules=rules),
                         "platform_locked": m.model_id in locked,
