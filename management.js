@@ -168,7 +168,7 @@
       if(!alive()||providerMutation)return;
       const host=node('div'),f=node('form','','manage-form');
       const providerField=replaceExisting?null:input(f,tr('Find a supported provider','ابحث عن اسم المزوّد'),'provider_id');
-      let approvedProviders=[],suggestions=null,providerHint=null;
+      let approvedProviders=[],suggestions=null,providerHint=null,searchProviderButton=null;
       const selectedProvider=()=>{
         const text=providerField?.value.trim().toLowerCase()||'';
         return approvedProviders.find(p=>p.id.toLowerCase()===text||
@@ -180,6 +180,19 @@
           'اكتب DeepSeek أو OpenRouter أو Google…');
         providerField.setAttribute('role','combobox');
         providerField.setAttribute('aria-autocomplete','list');
+        // Keep the existing labelled field and form: place one explicit
+        // provider-search button right beside the field, not on a new page.
+        const nameLabel=providerField.closest('label');
+        providerField.id='provider-lookup-'+Math.random().toString(36).slice(2);
+        nameLabel.htmlFor=providerField.id;
+        const nameRow=node('div','','provider-search-inline');
+        nameLabel.after(nameRow);
+        nameRow.append(providerField);
+        searchProviderButton=node('button','🔍 '+tr('Search provider','بحث عن المزوّد'),
+          'button ghost provider-search-button');
+        searchProviderButton.type='button';
+        searchProviderButton.disabled=true;
+        nameRow.append(searchProviderButton);
         suggestions=node('div','','provider-real-suggestions');
         suggestions.hidden=true;
         suggestions.id='verified-providers-'+Math.random().toString(36).slice(2);
@@ -228,6 +241,14 @@
             tr('Choose one of these verified providers.','اختر مزوّدًا صحيحًا من الخيارات المدعومة.');
           submit.disabled=!matched;
         };
+        // Clicking Search explicitly opens real, backend-supported names.
+        // Typing continues to filter the same list; neither action contacts
+        // upstream APIs or sends the customer's key.
+        searchProviderButton.onclick=()=>{
+          if(!approvedProviders.length)return;
+          showMatches();
+          providerField.focus();
+        };
         providerField.addEventListener('input',showMatches);
         providerField.addEventListener('focus',showMatches);
         providerField.addEventListener('keydown',event=>{
@@ -248,9 +269,11 @@
           if(!approvedProviders.length)throw Error(tr(
             'No verifiable API provider is currently configured.',
             'لا يوجد مزوّد مدعوم للتحقق من مفتاح API حاليًا.'));
-          providerHint.textContent=tr('Type a provider name to see matching real services.',
-            'اكتب اسم المزوّد لتظهر لك الخدمات الحقيقية المطابقة.');
-          if(dialog.open)showMatches();
+          searchProviderButton.disabled=false;
+          providerHint.textContent=tr(
+            'Click Search provider or type a name to choose a real supported service.',
+            'اضغط «بحث عن المزوّد» أو اكتب اسمه لاختيار مزوّد حقيقي مدعوم.');
+          if(dialog.open&&providerField.value.trim())showMatches();
         }).catch(error=>{
           if(host.isConnected){providerHint.textContent=error.message;submit.disabled=true;}
         });
