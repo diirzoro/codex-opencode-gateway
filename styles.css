@@ -1506,3 +1506,22 @@ body:has(#workspacePage.active) .app-header{display:none!important}
   .provider-model-toolbar>small{flex-basis:100%}
   .provider-real-option{flex-direction:row;align-items:center}
 }
+
+/* One-click lookup beside the existing provider ID field in the shared API dialog. */
+.provider-search-inline{
+  display:flex;align-items:stretch;gap:9px;margin:8px 0 12px;
+  max-width:100%;min-width:0;
+}
+.provider-search-inline input{
+  flex:1 1 auto;min-width:0;margin:0;
+}
+.provider-search-button{
+  flex:0 0 auto;min-height:44px;padding:9px 14px;
+  white-space:nowrap;font-weight:650;
+}
+.provider-search-button:disabled{opacity:.55;cursor:not-allowed}
+@media(max-width:520px){
+  .provider-search-inline{flex-wrap:wrap}
+  .provider-search-inline input{flex-basis:100%}
+  .provider-search-button{width:100%}
+}
