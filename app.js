@@ -210,6 +210,32 @@ window.nativeDirectTest=(()=>{
     workspacePending=job;
     try{return await job;}finally{if(workspacePending===job)workspacePending=null;}
   }
+  // Restore the original provider-error classification for the existing Pi UI.
+  // This classifies execution errors; it does not revalidate keys or call Python.
+  function nativeFailure(value){
+    const raw=[value?.name,value?.message,value?.data?.message,value?.data?.statusCode,
+      value?.data?.code,value?.status,value?.error?.message]
+      .filter(v=>v!==undefined&&v!==null).join(' ').slice(0,3000);
+    // Surface the human-readable Native/provider message so the user sees the
+    // same reason Pi shows. Only the readable message text is used; raw
+    // exception bodies (which may embed keys) are never echoed.
+    const safeDetail=[value?.message,value?.error?.message,value?.data?.message]
+      .filter(v=>typeof v==='string'&&v.trim()&&!/^(error|failed|retryerror|provider.?error)$/i.test(v.trim()))
+      .map(v=>v.trim())[0]||'';
+    const detail=safeDetail?safeDetail.slice(0,400):'';
+    const withDetail=(m)=>detail&&!m.includes(detail)?m+' '+detail:m;
+    if(/(?:401|unauthoriz|invalid.{0,40}(?:api.?key|token|credential)|incorrect.{0,30}key|authentication.?error|api.?key.{0,30}(?:invalid|incorrect|missing))/i.test(raw))
+      return {kind:'invalid_key',message:withDetail('رفض المزود مفتاح API (401 أو بيانات اعتماد غير صحيحة).')};
+    if(/(?:403|forbidden|access.denied|permission.denied)/i.test(raw))
+      return {kind:'access_denied',message:withDetail('رفض المزود صلاحية هذا المفتاح (403).')};
+    if(/(?:429|quota|rate.limit|free usage exceeded|insufficient|billing|credits|balance)/i.test(raw))
+      return {kind:'quota',message:withDetail('طلب Pi رُفض بسبب الرصيد أو حدود استخدام المزود.')};
+    if(/(?:model.{0,40}(?:not.found|unavailable|not supported)|invalid.model|(?:404).{0,30}model)/i.test(raw))
+      return {kind:'model_unavailable',message:withDetail('الموديل المختار غير متاح لدى المزود.')};
+    if(/(?:timeout|timed.out|network|connect|econn|enotfound|fetch.failed)/i.test(raw))
+      return {kind:'network',message:withDetail('تعذر اتصال Pi بمزود النموذج.')};
+    return {kind:'provider_error',message:withDetail('أعاد Pi خطأ من المزود.')};
+  }
   const matches=(path)=>{
     // Preserve existing compatibility paths. They are now implemented in
     // authenticated Gateway routes instead of the obsolete Native adapter.
