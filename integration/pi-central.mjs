@@ -303,15 +303,28 @@ class SdkAgent {
     if(type!=="prompt")throw Object.assign(new Error("Unsupported Pi SDK command"),{status:501});
     if(this.active||this.running)
       throw Object.assign(new Error("Project already has an active Pi run"),{status:409});
-    // Pi SDK prompt() resolves on completion, not dispatch. Return the
-    // existing HTTP 204 after admission, never wait for model execution.
+    // Pi SDK prompt() resolves when the full run finishes. Its documented
+    // preflightResult(true) confirms prompt acceptance BEFORE model completion.
     const images=Array.isArray(fields.images)?fields.images:[];
     this.settledObserved=false;
-    const run=Promise.resolve().then(()=>this.session.prompt(fields.message,
-      images.length?{images}:undefined));
+    let admissionResolve,admissionReject,admitted=false;
+    const admission=new Promise((resolve,reject)=>{
+      admissionResolve=resolve;admissionReject=reject;
+    });
+    const completeAdmission=(accepted)=>{
+      if(admitted)return;
+      admitted=true;
+      if(accepted)admissionResolve();
+      else admissionReject(Object.assign(
+        new Error("Pi did not accept the prompt"),{status:422}));
+    };
+    const run=Promise.resolve().then(()=>this.session.prompt(fields.message,{
+      ...(images.length?{images}:{}),
+      preflightResult:completeAdmission
+    }));
     this.running=run;
-    // Register observers before sending admission acknowledgement.
-    run.catch(()=>{
+    run.then(()=>completeAdmission(true)).catch(()=>{
+      completeAdmission(false);
       for(const res of this.events)try{res.write("data: "+JSON.stringify({
         type:"pi.error",properties:{message:"Pi execution failed"}
       })+"\n\n");}catch{this.events.delete(res);}
@@ -323,6 +336,7 @@ class SdkAgent {
       this.running=null;this.active=false;releaseExecution(this);
       if(!this.closed&&!this.settledObserved)this.consume({type:"agent_settled"});
     }).catch(()=>{});
+    await admission;
     return {accepted:true};
   }
   close(){
@@ -418,7 +432,7 @@ function piPromptParts(rawParts, scope, sessionId) {
     if(data.length>8*1024*1024)
       throw Object.assign(new Error("Attachment exceeds 8 MB"),{status:413});
     if(["image/png","image/jpeg","image/webp"].includes(mime)){
-      images.push({type:"image",data:match[2],mimeType:mime});
+      images.push({type:"image",source:{type:"base64",mediaType:mime,data:match[2]}});
       messages.push("Attached image: "+filename);
       continue;
     }
