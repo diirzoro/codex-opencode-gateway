@@ -431,6 +431,7 @@ _AI_VERIFY_URLS = {
 _AI_REFRESH_DAYS = 14
 _AI_STALE_DAYS = 14
 _AI_SCHEMA_OK_UNTIL = 0.0
+_AI_MODEL_FIRST_LOAD_ATTEMPT = {}
 
 
 def _ai_schema(db):
@@ -896,9 +897,29 @@ def ai_my_connection_models(provider_id: str, user: User = Depends(require_user)
     shared = _ai_active_platform_defaults(db).get(provider_id)
     locked = shared["models"] if shared else set()
     rules = _ai_policy(db)
-    models = list(db.scalars(select(AiProviderModel).where(
-        AiProviderModel.provider_id == provider_id, AiProviderModel.active.is_(True))
-        .order_by(AiProviderModel.name).limit(2000)))
+    def saved_models():
+        return list(db.scalars(select(AiProviderModel).where(
+            AiProviderModel.provider_id == provider_id, AiProviderModel.active.is_(True))
+            .order_by(AiProviderModel.name).limit(2000)))
+    models = saved_models()
+    if not models:
+        # One scoped first-load for a legacy VERIFIED connection with no saved
+        # model metadata. This is not a provider-catalog refresh UI and never
+        # downloads unrelated providers. Throttle retries after a failed Pi
+        # socket call instead of retrying on every accordion expansion.
+        import time
+        current = time.monotonic()
+        key = provider_id
+        if current - _AI_MODEL_FIRST_LOAD_ATTEMPT.get(key, -1000) >= 900:
+            _AI_MODEL_FIRST_LOAD_ATTEMPT[key] = current
+            try:
+                _ai_refresh_selected_provider(db, provider_id)
+                models = saved_models()
+            except (HTTPException, _AiSqlError, _ai_httpx.HTTPError, ValueError, RuntimeError):
+                db.rollback()
+        if not models:
+            raise HTTPException(503,
+                "This provider's models are not yet available from Pi; no connection was changed")
     return {"provider_id": provider_id,
             "models": [{"id": m.model_id, "name": m.name,
                         "free_eligible": _ai_model_zero_price(m),
