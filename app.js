@@ -26,6 +26,12 @@ if(new URLSearchParams(location.hash.slice(1)).has('reset-password')){
 }
 const protectedPages=new Set(['clientPage','accountPage','onboarding','workspacePage','billingPage','adminPage']);
 function invalidateProviderMutation(path,method='GET'){
+  if(/^\/api\/opencode\/connections(?:\/[^/?]+)?$/.test(path)&&
+      ['POST','PUT','DELETE'].includes((method||'GET').toUpperCase())){
+    window.nativeDirectTest?.forget({keepSession:true});
+    try{localStorage.setItem('og-gateway-provider-revision:'+currentUser?.id,String(Date.now()));}catch{}
+    window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser?.id}}));
+  }
  if(/^\/api\/github\/(?:connect|confirm|disconnect)$/.test(path)&&method.toUpperCase()==='POST'){
   try{localStorage.setItem('og-github-revision:'+currentUser?.id,String(Date.now()));}catch{}
   window.dispatchEvent(new CustomEvent('gateway-github-changed',{detail:{owner:currentUser?.id}}));
@@ -34,8 +40,8 @@ function invalidateProviderMutation(path,method='GET'){
 
 window.addEventListener('storage',event=>{
  if(!currentUser)return;
- if(event.key==='og-native-provider-revision:'+currentUser.id){
-   window.nativeDirectTest?.forget();
+ if(event.key==='og-gateway-provider-revision:'+currentUser.id){
+   window.nativeDirectTest?.forget({keepSession:true});
    window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser.id}}));
  }
 });
@@ -52,13 +58,6 @@ window.nativeDirectTest=(()=>{
   let presentationRevision=0;
   // Invalidate presentation snapshots only. Native owns authentication state;
   // Gateway must not invent a saved, verified or deleted provider registry.
-  function acknowledgeNativeCredential(){
-    forget();
-    try{localStorage.setItem('og-native-provider-revision:'+currentUser?.id,String(Date.now()));}catch{}
-    window.dispatchEvent(new CustomEvent('account-provider-changed',{
-      detail:{owner:currentUser?.id}
-    }));
-  }
   const url=(path,directory=defaultDirectory())=>{
     const resource=new URL(base+path.replace(/^\/+/,''),location.origin);
     resource.searchParams.set('directory',directory);
@@ -117,11 +116,11 @@ window.nativeDirectTest=(()=>{
     }
     return user;
   }
-  function forget({fresh=false}={}){
+  function forget({fresh=false,keepSession=false}={}){
     presentationRevision++;
     catalogSnapshot=agentsSnapshot=workspaceSnapshot=configuredSnapshot=null;
     catalogPending=agentsPending=workspacePending=configuredPending=null;
-    window.nativeSession?.invalidate();window.workspaceRuntime?.clear();
+    if(!keepSession){window.nativeSession?.invalidate();window.workspaceRuntime?.clear();}
   }
   async function catalog({force=false}={}){
     const user=ownerScope(),revision=presentationRevision;
@@ -145,11 +144,6 @@ window.nativeDirectTest=(()=>{
     catalogPending=promise;
     try{return await promise;}finally{if(catalogPending===promise)catalogPending=null;}
   }
-  // Pi's own public/free provider is usable without a user API key.
-  // This is determined only from Native model metadata, never hardcoded model IDs.
-  function publicFree(p){
-    return false;
-  }
   function nativeConnections(data){
     // Runtime availability only, NOT credential validity or account ownership.
     return data.connected.filter(id=>data.all.some(p=>p?.id===id));
@@ -172,8 +166,7 @@ window.nativeDirectTest=(()=>{
     agentsPending=promise;
     try{return await promise;}finally{if(agentsPending===promise)agentsPending=null;}
   }
-  // Both existing Dashboard and Workspace consume the Pi-owned data.
-  // No Python provider/model presentation policy is involved.
+  // Gateway owns client provider/model metadata; Pi only owns native agent discovery.
   async function registry({force=false}={}){
     const [data,agentRows]=await Promise.all([catalog({force}),agents({force})]);
     return {data,agents:agentRows};
@@ -183,20 +176,17 @@ window.nativeDirectTest=(()=>{
     if(!force&&configuredSnapshot)return configuredSnapshot;
     if(configuredPending)return configuredPending;
     const job=(async()=>{
-      // This Pi installation exposes /provider, not /config/providers.
-      // Reuse the running Native server's own provider/model catalog.  Both
-      // Workspace and Dashboard share one in-memory request; no Python or
-      // additional catalog/cache/database participates.
+      // Account-scoped verified connections are read from Gateway PostgreSQL.
       const value=await catalog({force});
       if(ownerScope()!==user)throw Error('Account changed during Native provider loading');
       if(revision!==presentationRevision)throw Error('Native provider state changed; retry discovery');
       const all=value.all.filter(p=>p&&typeof p.id==='string');
-      const available=new Set([...all.filter(publicFree).map(p=>p.id),...nativeConnections(value)]);
+      const available=new Set(nativeConnections(value));
       const result={
         all,
         connected:all.filter(p=>available.has(p.id)).map(p=>p.id),
         default:value.default&&typeof value.default==='object'?value.default:{},
-        public_free:all.filter(publicFree).map(p=>p.id)
+        public_free:[]
       };
       configuredSnapshot=result;
       return result;
@@ -239,7 +229,7 @@ window.nativeDirectTest=(()=>{
     }
     return response.json();
   }
-  return {active,testHost,url,direct,catalog,configuredProviders,agents,registry,workspaceRegistry,forget,acknowledgeNativeCredential,matches,route,
+  return {active,testHost,url,direct,catalog,configuredProviders,agents,registry,workspaceRegistry,forget,matches,route,
     classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 
