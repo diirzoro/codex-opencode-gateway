@@ -579,7 +579,14 @@ function providerCatalog(models,providerDefinitions=[],mode="full",selectedProvi
   const all=[...grouped.values()].map(row=>{
     const count=Object.keys(row.models).length;
     const show=mode==="full"||(mode==="provider"&&selectedProviderId===row.id);
-    return {...row,model_count:count,models:show?row.models:{}};
+    // Minimal periodic seed: only the explicitly free OpenRouter subset is
+    // transmitted. Other provider models load once when an admin or customer
+    // explicitly links that provider, never during a normal workspace visit.
+    const free=mode==="free"&&row.id===selectedProviderId
+      ?Object.fromEntries(Object.entries(row.models).filter(([id,m])=>
+        id.endsWith(":free")&&m.cost?.input===0&&m.cost?.output===0))
+      :{};
+    return {...row,model_count:count,models:show?row.models:free};
   });
   return {all,connected:[],default:{}};
 }
@@ -648,8 +655,8 @@ const server=http.createServer(async(req,res)=>{
         // The same /provider endpoint supports compact catalog reads.
         // No extra HTTP route or additional model-registry service.
         const mode=query.get("models");
-        const view=["connected","provider"].includes(mode)?mode:"full";
-        const selected=view==="provider"?(query.get("providerID")||""):"";
+        const view=["connected","provider","free"].includes(mode)?mode:"full";
+        const selected=["provider","free"].includes(view)?(query.get("providerID")||""):"";
         return json(res,200,providerCatalog(native.models,native.providers,view,selected));
       }
       // Pi's registered extension/skill/prompt commands are its discoverable
