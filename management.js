@@ -164,7 +164,6 @@
     catalogList.setAttribute('aria-label',tr('Choose a provider','اختر المزوّد'));
     box.append(catalogList);
     catalogList.hidden=true;catalogCount.hidden=true;
-    const platformBox=section(body,tr('Pi Gateway models · managed by administrator','نماذج Pi Gateway · تديرها الإدارة'));
     const connectedBox=section(body,tr('My verified provider connections','اتصالات مزوّداتي الموثقة'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
     let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
@@ -262,7 +261,9 @@
         node('span',piStateLabel(p)+' · '+String(p.model_count??0)+' '+tr('models','نموذج')));
       if(!view.ready)return;
       const actions=node('div','','manage-actions');
-      if(p.personal_connected){
+      if(p.personal_status==='admin_disabled'){
+        actions.append(node('p',tr('Connection suspended by administrator.','الاتصال موقوف من الإدارة.')));
+      }else if(p.personal_connected){
         actions.append(button(tr('Replace API key','استبدال مفتاح API'),()=>openGatewayLogin(p,true).catch(error=>message(error.message,true))));
         actions.append(button(tr('Delete connection','حذف الاتصال'),()=>disconnectGateway(p)));
       }else{
@@ -275,98 +276,142 @@
       }
       status.append(actions);
     }
-    function renderPlatform(){
-      platformBox.replaceChildren(node('h2',tr('Pi Gateway models · managed by administrator','نماذج Pi Gateway · تديرها الإدارة')));
-      const rows=(snapshot?.providers||[]).filter(p=>p.platform);
-      if(!rows.length){
-        platformBox.append(node('p',tr('No shared Pi models have been enabled yet.','لم تفعّل الإدارة نماذج Pi مشتركة بعد.')));
-        return;
-      }
-      platformBox.append(node('p',tr('These shared models are managed by the administrator. Customers cannot disable or remove them.','هذه النماذج تديرها الإدارة، ولا يستطيع العميل تعطيلها أو حذفها.')));
-      for(const p of rows){
-        const detail=node('details','','provider-connected-detail');
-        const summary=node('summary','','provider-connected-summary');
-        summary.append(node('strong',p.name||p.id),node('small',
-          String(p.platform_models?.length||0)+' '+tr('platform models · locked','نموذج منصة · ثابت')));
-        const list=node('div','','provider-connected-content');
-        for(const id of p.platform_models||[])list.append(node('p','✓ '+id));
-        detail.append(summary,list);platformBox.append(detail);
-      }
-    }
+    // ONE reusable list for shared and personal models. Administrative
+    // actions are added by role, never by creating another provider screen.
     function renderConnected(){
-      connectedBox.replaceChildren(node('h2',tr('My verified provider connections','اتصالات مزوّداتي الموثقة')));
-      const rows=(snapshot?.providers||[]).filter(p=>p.personal_connected);
-      if(!rows.length){
-        connectedBox.append(node('p',tr('No verified providers are connected to your account.','لا توجد مزوّدات موثقة مربوطة بحسابك.')));
-        return;
-      }
+      connectedBox.replaceChildren(node('h2',tr('Connected providers and models','المزوّدون المربوطون والنماذج')));
+      const rows=(snapshot?.providers||[]).filter(p=>p.platform||p.personal_connected||
+        p.personal_status==='admin_disabled');
+      if(!rows.length)
+        connectedBox.append(node('p',tr('No providers are connected yet.','لا توجد مزوّدات مربوطة بعد.')));
       for(const p of rows){
         const details=node('details','','provider-connected-detail');
         const summary=node('summary','','provider-connected-summary');
-        summary.append(node('strong',p.name||p.id),node('small',
-          String(p.model_count||0)+' '+tr('models · click to manage','نموذج · اضغط لإدارة النماذج')));
+        const state=p.platform?tr('Gateway default · locked','افتراضي للمنصة · ثابت'):
+          p.personal_status==='admin_disabled'?tr('Suspended by administrator','موقوف من الإدارة'):
+          tr('My connection','اتصالي الشخصي');
+        summary.append(node('strong',p.name||p.id),node('small',state));
         const content=node('div','','provider-connected-content');
         const actions=node('div','','manage-actions');
-        actions.append(button(tr('Replace API key','استبدال مفتاح API'),
-          ()=>openGatewayLogin(p,true).catch(error=>message(error.message,true))));
-        actions.append(button(tr('Disconnect','حذف الاتصال'),()=>disconnectGateway(p)));
+        if(p.personal_connected){
+          actions.append(button(tr('Replace my API key','استبدال مفتاحي'),
+            ()=>openGatewayLogin(p,true).catch(error=>message(error.message,true))));
+          if(!p.platform||!platform||!admin())
+            actions.append(button(tr('Disconnect my key','فصل مفتاحي'),()=>disconnectGateway(p)));
+        }else if(p.personal_status==='admin_disabled'){
+          actions.append(node('p',tr('This personal connection is suspended by the administrator.','أوقف الأدمن هذا الاتصال الشخصي.')));
+        }
+        content.append(actions);
         const models=node('div','','provider-connected-models');
-        content.append(actions,models);
+        content.append(models);
         details.append(summary,content);connectedBox.append(details);
         details.addEventListener('toggle',async()=>{
           if(!details.open||details.dataset.modelsLoaded||!alive())return;
           details.dataset.modelsLoaded='loading';
-          models.textContent=tr('Loading saved provider models…','جارٍ تحميل النماذج المحفوظة…');
+          models.textContent=tr('Loading saved models…','جارٍ تحميل النماذج المحفوظة…');
           try{
+            if(!p.personal_connected){
+              models.replaceChildren();
+              for(const id of p.platform_models||[])
+                models.append(node('p','✓ '+id+' · '+tr('platform controlled','تديره المنصة')));
+              if(!p.platform_models?.length)
+                models.append(node('p',tr('No active models for this connection.','لا توجد نماذج نشطة لهذا الاتصال.')));
+              details.dataset.modelsLoaded='yes';return;
+            }
             const response=await api('/api/opencode/connections/'+encodeURIComponent(p.id)+'/models');
             if(!alive()||!details.isConnected)return;
             details.dataset.modelsLoaded='yes';models.replaceChildren();
             if(!response.models?.length){
-              models.append(node('p',tr('No models are available for this provider.','لا توجد نماذج متاحة لهذا المزوّد.')));
+              models.append(node('p',tr('No models saved yet.','لا توجد نماذج محفوظة بعد.')));
+              if(platform&&admin())models.append(button(tr('Refresh this provider’s models','تحديث نماذج هذا المزوّد'),
+                async()=>{await api('/api/admin/ai-defaults/refresh/'+encodeURIComponent(p.id),{method:'POST'});await reload();}));
               return;
             }
             const modelSearch=node('input','','provider-model-search');modelSearch.type='search';
-            modelSearch.placeholder=tr('Filter this provider’s models…','ابحث في نماذج هذا المزوّد…');
-            const rowsBox=node('div','','provider-model-choice-list');
-            const items=response.models.map(m=>{
+            modelSearch.placeholder=tr('Search this provider’s models','ابحث في نماذج هذا المزوّد');
+            const rowsBox=node('div','','provider-model-choice-list'),items=[];
+            const defaultChoices=new Map();
+            for(const m of response.models){
               const label=node('label','','provider-model-choice'),toggle=node('input');
               toggle.type='checkbox';toggle.checked=m.enabled===true;
-              toggle.disabled=m.admin_allowed===false||m.platform_locked===true;
+              toggle.disabled=m.platform_locked===true||m.admin_allowed===false;
               const title=node('span',m.name||m.id);
-              const hint=m.platform_locked===true
-                ?node('small',tr('Gateway default · locked','افتراضي للمنصة · ثابت'))
-                :m.admin_allowed===false
-                  ?node('small',tr('Restricted by administrator','معطّل من الإدارة'))
-                  :node('small',m.id);
-              label.append(toggle,title,hint);
+              label.append(toggle,title,node('small',m.platform_locked?
+                tr('Platform default','افتراضي للمنصة'):m.id));
               toggle.addEventListener('change',async()=>{
-                const intended=toggle.checked;toggle.disabled=true;
+                const enabled=toggle.checked;toggle.disabled=true;
                 try{
                   await api('/api/opencode/connections/'+encodeURIComponent(p.id)+'/models',{
-                    method:'POST',body:JSON.stringify({model_id:m.id,enabled:intended})
+                    method:'POST',body:JSON.stringify({model_id:m.id,enabled})
                   });
-                  window.nativeDirectTest?.forget({keepSession:true});
                   invalidateOwnedWorkspaceProviders();
-                  if(window.refreshWorkspaceChoices)
-                    window.refreshWorkspaceChoices('',false).catch(()=>{});
-                }catch(error){toggle.checked=!intended;toast(error.message);}
-                finally{toggle.disabled=m.admin_allowed===false||m.platform_locked===true;}
+                  window.nativeDirectTest?.forget({keepSession:true});
+                  window.refreshWorkspaceChoices?.('',false).catch(()=>{});
+                }catch(error){toggle.checked=!enabled;toast(error.message);}
+                finally{toggle.disabled=m.platform_locked===true||m.admin_allowed===false;}
               });
-              rowsBox.append(label);return {label,model:m};
-            });
+              if(platform&&admin()&&m.free_eligible&&m.admin_allowed!==false){
+                const adminLabel=node('label',tr('Platform','للمنصة')),check=node('input');
+                check.type='checkbox';check.checked=Boolean(m.platform_locked);
+                adminLabel.prepend(check);label.append(adminLabel);
+                defaultChoices.set(m.id,check);
+              }
+              rowsBox.append(label);items.push({label,model:m});
+            }
             modelSearch.addEventListener('input',()=>{
               const term=modelSearch.value.trim().toLowerCase();
-              for(const {label,model} of items)
-                label.hidden=!!term&&!String(model.name||model.id).toLowerCase().includes(term)
-                  &&!model.id.toLowerCase().includes(term);
+              for(const item of items)
+                item.label.hidden=!!term&&!String(item.model.name||item.model.id).toLowerCase().includes(term)
+                  &&!item.model.id.toLowerCase().includes(term);
             });
-            models.append(node('p',tr('Enable only the models you want in your Workspace.','فعّل النماذج التي تريد ظهورها في مساحة عملك فقط.')),
-              modelSearch,rowsBox);
+            models.append(modelSearch,rowsBox);
+            if(platform&&admin()){
+              const controls=node('div','','manage-actions');
+              controls.append(button(tr('Save platform defaults','حفظ النماذج الافتراضية'),async()=>{
+                const ids=[...defaultChoices].filter(([,check])=>check.checked).map(([id])=>id);
+                await api('/api/admin/ai-defaults/'+encodeURIComponent(p.id),{
+                  method:'PUT',body:JSON.stringify({model_ids:ids})
+                });
+                await reload();
+              }));
+              controls.append(button(tr('Refresh this provider’s models','تحديث نماذج هذا المزوّد'),async()=>{
+                await api('/api/admin/ai-defaults/refresh/'+encodeURIComponent(p.id),{method:'POST'});
+                await reload();
+              }));
+              models.append(controls);
+            }
           }catch(error){
             delete details.dataset.modelsLoaded;
             if(details.isConnected)models.textContent=error.message||String(error);
           }
         });
+      }
+      if(platform&&admin()){
+        const overview=node('div','','provider-admin-overview');
+        connectedBox.append(overview);
+        overview.append(node('h3',tr('Customer connections · metadata only','اتصالات العملاء · معلومات دون مفاتيح')));
+        api('/api/admin/ai-connections').then(result=>{
+          if(!alive()||!overview.isConnected)return;
+          const records=result.connections||[];
+          if(!records.length){
+            overview.append(node('p',tr('No customer connections.','لا توجد اتصالات للعملاء.')));return;
+          }
+          for(const entry of records){
+            const line=node('div','','policy-provider-row');
+            line.append(node('strong',entry.username||entry.user_id),
+              node('span',entry.provider_id),
+              node('small',entry.enabled?tr('Enabled','مفعّل'):tr('Suspended','موقوف')));
+            const toggle=button(entry.enabled?
+              tr('Suspend','إيقاف'):tr('Restore','إعادة التفعيل'),async()=>{
+              if(!await window.confirmAction(tr('Change this customer connection status?','تغيير حالة اتصال هذا العميل؟')))return;
+              await api('/api/admin/ai-connections/'+encodeURIComponent(entry.user_id)+'/'+encodeURIComponent(entry.provider_id),{
+                method:'PATCH',body:JSON.stringify({enabled:!entry.enabled})
+              });
+              await reload();
+            });
+            line.append(toggle);overview.append(line);
+          }
+        }).catch(error=>{if(alive()&&overview.isConnected)overview.append(node('p',error.message));});
       }
     }
     const renderOptions=()=>{
@@ -374,7 +419,7 @@
       if(!catalogRequested){
         catalogList.replaceChildren();catalogCount.textContent='';return;
       }
-      const rows=(snapshot?.providers||[]).filter(p=>!p.personal_connected&&
+      const rows=(snapshot?.providers||[]).filter(p=>!p.personal_connected&&p.personal_status!=='admin_disabled'&&
         (!query||p.id.toLowerCase().includes(query)||p.name.toLowerCase().includes(query)));
       const selected=selectedProviderId;
       catalogList.replaceChildren(new Option(tr('Select a provider…','اختر المزوّد…'),''),
@@ -411,7 +456,7 @@
         if(!alive()||!contextCurrent())return;
         snapshot={providers:rows};
         view.ready=true;
-        renderOptions();renderConnected();renderPlatform();
+        renderOptions();renderConnected();
         const selected=rows.find(p=>p.id===selectedProviderId);
         if(selected)renderSelected(selected);
         if(catalogRequested&&combo.value.trim().length>=2)scheduleSearch();
