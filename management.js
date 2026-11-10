@@ -346,7 +346,8 @@
                   });
                   invalidateOwnedWorkspaceProviders();
                   window.nativeDirectTest?.forget({keepSession:true});
-                  window.refreshWorkspaceChoices?.('',false).catch(()=>{});
+                  if(window.refreshWorkspaceChoices)
+                    window.refreshWorkspaceChoices('',false).catch(()=>{});
                 }catch(error){toggle.checked=!enabled;toast(error.message);}
                 finally{toggle.disabled=m.platform_locked===true||m.admin_allowed===false;}
               });
@@ -496,6 +497,8 @@
       }
     }
     async function reload(){
+      // Invalidate only account catalog presentation; keep active Pi session.
+      window.nativeDirectTest?.forget({keepSession:true});
       invalidateOwnedWorkspaceProviders();
       if(window.refreshWorkspaceChoices)window.refreshWorkspaceChoices('',false).catch(()=>{});
       return refresh(true);
