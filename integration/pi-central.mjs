@@ -1,7 +1,8 @@
 /**
  * Pi Central ↔ existing OpenCode-shaped TEST browser transport.
  * TEST ONLY. Pi is the only coding/provider engine; platform lookups only protect project files.
- * Existing bridge only; native Pi owns the shared provider configuration.
+ * Existing bridge/socket only. Gateway owns customer provider connections;
+ * Pi SDK executes using per-project in-memory credentials.
  * Workspace execution tools require project process isolation before activation.
  *
  * Run under systemd, same UID as installed Pi. Do not expose on TCP.
