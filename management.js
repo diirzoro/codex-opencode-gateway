@@ -331,11 +331,13 @@
             const items=response.models.map(m=>{
               const label=node('label','','provider-model-choice'),toggle=node('input');
               toggle.type='checkbox';toggle.checked=m.enabled===true;
-              toggle.disabled=m.admin_allowed===false;
+              toggle.disabled=m.admin_allowed===false||m.platform_locked===true;
               const title=node('span',m.name||m.id);
-              const hint=m.admin_allowed===false
-                ?node('small',tr('Restricted by administrator','معطّل من الإدارة'))
-                :node('small',m.id);
+              const hint=m.platform_locked===true
+                ?node('small',tr('Gateway default · locked','افتراضي للمنصة · ثابت'))
+                :m.admin_allowed===false
+                  ?node('small',tr('Restricted by administrator','معطّل من الإدارة'))
+                  :node('small',m.id);
               label.append(toggle,title,hint);
               toggle.addEventListener('change',async()=>{
                 const intended=toggle.checked;toggle.disabled=true;
@@ -348,7 +350,7 @@
                   if(window.refreshWorkspaceChoices)
                     window.refreshWorkspaceChoices('',false).catch(()=>{});
                 }catch(error){toggle.checked=!intended;toast(error.message);}
-                finally{toggle.disabled=m.admin_allowed===false;}
+                finally{toggle.disabled=m.admin_allowed===false||m.platform_locked===true;}
               });
               rowsBox.append(label);return {label,model:m};
             });
