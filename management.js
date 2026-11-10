@@ -606,9 +606,8 @@
             }
           }
         });
-        // First connected provider is expanded automatically; the rest can
-        // be opened by pressing anywhere on their header.
-        if(p===rows[0])details.open=true;
+        // Keep each provider collapsed until its heading is opened explicitly.
+        // The existing toggle handler loads the list only when requested.
         updateExpandLabel();
       }
       if(platform&&admin()){

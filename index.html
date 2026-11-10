@@ -3,15 +3,14 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <script>
-    // Always present the landing page first. Restore the saved project only
-    // after an explicit sign-in/continue action, not during initial painting.
+    // Keep all pages hidden while the existing authentication check restores
+    // the saved view. Never paint Landing temporarily for signed-in users.
     document.documentElement.classList.add('bootstrapping');
   </script>
   <meta name="theme-color" content="#ffffff"><meta name="description" content="Your projects, conversations, and reviewed code changes in one Pi workspace."><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 20'%3E%3Cpath fill='%2324272d' d='M12 4H4V16H12V4ZM16 20H0V0H16V20Z'/%3E%3C/svg%3E"><title>Pi Gateway — Hosted Pi</title>
   <link rel="stylesheet" href="styles.css?v=20261110-compact-model-grid-v1">
   <style>
     html.bootstrapping .page { display:none!important }
-    html.bootstrapping .page.active { display:block!important }
     html.bootstrapping #welcomeSidebar,html.bootstrapping [data-header-guest] { display:none!important }
     .pricing{padding:2.5rem 0;border-top:1px solid var(--border,#e6e6e6);background:var(--panel2)}
     .pricing-head{text-align:center;margin-bottom:1.25rem}
@@ -822,16 +821,6 @@ dialog.grid-modal .grid-modal-foot{border:0;padding:0 24px 24px}
     shell.appendChild(header);
     shell.appendChild(frame);
     body.appendChild(shell);
-    // Existing landing page is the initial view; do not paint a fake
-    // workspace or connection picker while the login cookie is checked.
-    window.showBootstrapFrame=function(){
-      if(!document.documentElement.classList.contains('bootstrapping'))return;
-      var landing=document.getElementById('landing');
-      main.querySelectorAll('.page').forEach(function(page){
-        page.classList.toggle('active',page===landing);
-      });
-    };
-    window.showBootstrapFrame();
   })();
   </script>
   <style>
