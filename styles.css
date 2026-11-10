@@ -1445,6 +1445,10 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 .provider-model-choice small{font-size:11px;color:var(--muted);max-width:46%;overflow-wrap:anywhere}
 .provider-model-choice input{width:17px;height:17px;flex:0 0 auto;accent-color:var(--primary)}
 .provider-personal-model{display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer}
+.provider-personal-model input[type="checkbox"]{cursor:pointer;min-height:18px;min-width:18px}
+.provider-personal-model input[type="checkbox"]:disabled{cursor:not-allowed}
+.provider-personal-model:has(input[type="checkbox"]:focus-visible){outline:2px solid var(--primary);outline-offset:3px;border-radius:8px}
+.provider-model-restriction{display:block;color:var(--muted);font-weight:600;line-height:1.5;max-width:100%!important}
 .provider-personal-model span{flex:1;min-width:0;overflow-wrap:anywhere}
 .provider-model-choice>label:not(.provider-personal-model){display:flex;align-items:center;gap:5px;white-space:nowrap;cursor:pointer}
 .provider-model-choice[hidden]{display:none}
