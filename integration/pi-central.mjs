@@ -687,7 +687,7 @@ const server=http.createServer(async(req,res)=>{
       return json(res,200,nativeCommands(native?.commands||[]));
     }
     if(pathname==="/session" && req.method==="GET")return json(res,200,[{id:a.id,directory:s.directory,title:a.title}]);
-    if(pathname==="/session" && req.method==="POST")return json(res,200,{id:a.id,directory:s.directory,title:s.projectId});
+    if(pathname==="/session" && req.method==="POST")return json(res,200,{id:a.id,directory:s.directory,title:a.title});
     if(pathname==="/session/status")return json(res,200,{[a.id]:{type:a.active?"busy":"idle"}});
     if(pathname==="/event") {
       res.writeHead(200,{"content-type":"text/event-stream","cache-control":"no-cache, no-store",
@@ -700,7 +700,20 @@ const server=http.createServer(async(req,res)=>{
     const m=pathname.match(/^\/session\/([A-Za-z0-9_-]+)(?:\/(.*))?$/);
     if(!m || m[1]!==a.id)return error(res,404,"Session not found");
     const action=m[2]||"";
-    if(action==="" && req.method==="GET")return json(res,200,{id:a.id,directory:s.directory,title:s.projectId});
+    if(action==="" && req.method==="GET")return json(res,200,{id:a.id,directory:s.directory,title:a.title});
+    // The existing Project rename/restore client uses PATCH on the owned
+    // Native session. Pi does not have a second conversation title store:
+    // Gateway's Project title remains authoritative. Keep this metadata
+    // update in memory; no new session, file or project is created.
+    if(action==="" && req.method==="PATCH"){
+      const payload=await body(req);
+      const title=payload?.title;
+      if(typeof title!=="string"||!title.trim()||title.length>200)
+        return error(res,422,"Valid Project title required");
+      if(a.active||a.running)return error(res,409,"Cannot rename a running Pi conversation");
+      a.title=title.trim();
+      return json(res,200,{id:a.id,directory:s.directory,title:a.title});
+    }
     if(action==="message" && req.method==="GET") {
       const data=await a.command("get_messages");
       return json(res,200,mapped(data?.messages||[],a.id));
