@@ -369,8 +369,11 @@
       return {value:{...fresh,status:statuses.get(id)||'idle',execution_status:statuses.get(id)||'idle'}};
     }
     if(tail==='messages'&&method==='GET')return {value:display(await history(id),row)};
-    if(tail==='todos')return {value:{supported:true,items:await coalesce('todos:'+id,()=>sessionRequest(id,'todo'))}};
-    if(tail==='diff')return {value:await sessionRequest(id,'diff')};
+    // Optional OpenCode compatibility routes are not native Pi session
+    // operations. Do not call them and produce 501 on every workspace open.
+    // Workspace git/status remains the authoritative file-change source.
+    if(tail==='todos')return {value:{supported:false,items:[]}};
+    if(tail==='diff')return {value:[]};
     if(tail==='stop')return {value:await forceStop(id)};
     if(tail==='questions')return {value:{requests:await requests('question',id)}};
     if(tail==='permissions')return {value:await requests('permission',id)};
