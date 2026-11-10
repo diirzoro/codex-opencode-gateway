@@ -5,12 +5,12 @@
   <script>
     // Keep all pages hidden while the existing authentication check restores
     // the saved view. Never paint Landing temporarily for signed-in users.
-    document.documentElement.classList.add('bootstrapping');
+    document.documentElement.classList.add('bootstrapping','restoring-initial-view');
   </script>
   <meta name="theme-color" content="#ffffff"><meta name="description" content="Your projects, conversations, and reviewed code changes in one Pi workspace."><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 20'%3E%3Cpath fill='%2324272d' d='M12 4H4V16H12V4ZM16 20H0V0H16V20Z'/%3E%3C/svg%3E"><title>Pi Gateway — Hosted Pi</title>
-  <link rel="stylesheet" href="styles.css?v=20261110-compact-model-grid-v1">
+  <link rel="stylesheet" href="styles.css?v=20261110-collapsed-provider-and-refresh-v2">
   <style>
-    html.bootstrapping .page { display:none!important }
+    html.bootstrapping .page,html.restoring-initial-view .page { display:none!important }
     html.bootstrapping #welcomeSidebar,html.bootstrapping [data-header-guest] { display:none!important }
     .pricing{padding:2.5rem 0;border-top:1px solid var(--border,#e6e6e6);background:var(--panel2)}
     .pricing-head{text-align:center;margin-bottom:1.25rem}
@@ -890,7 +890,7 @@ label.email-service-card{cursor:pointer}label.email-service-card:hover{border-co
   <script defer src="app.js?v=20261110-pi-direct-stream-v3"></script>
   <script defer src="enhancements.js?v=20261110-pi-workspace-provider-fixes"></script>
   <script defer src="native-session-client.js?v=20261110-pi-direct-stream-v3"></script>
-  <script type="application/json" id="managementAsset" data-src="management.js?v=20261110-compact-model-grid-v1"></script>
+  <script type="application/json" id="managementAsset" data-src="management.js?v=20261110-collapsed-provider-and-refresh-v2"></script>
   <script defer src="runtime-client.js?v=20261110-pi-workspace-provider-fixes"></script>
   <script defer src="dashboards.js?v=20261110-pi-direct-stream-v3"></script>
   <!-- Dynamic admin payment-provider editor uses the existing enhancements.js asset. Legacy payment processing and stored settings are unchanged. -->
@@ -996,6 +996,72 @@ label.email-service-card{cursor:pointer}label.email-service-card:hover{border-co
       goToSnapshot(history[history.length - 1]);
     };
     recordSnapshot();
+
+    // Persist only view position on browser refresh; the existing authenticated
+    // navigation continues to decide page, section and owned workspace.
+    // No API calls or changes to the Pi session are involved.
+    var refreshWasReload = performance.getEntriesByType('navigation')[0]?.type === 'reload';
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+    function pagePositionKey(userId) { return 'og-view-position:' + userId; }
+    window.addEventListener('pagehide', function () {
+      var accountId = currentUser?.id;
+      var activePage = document.querySelector('.page.active');
+      if (!accountId || !activePage ||
+          document.documentElement.classList.contains('restoring-initial-view')) return;
+      try {
+        sessionStorage.setItem(pagePositionKey(accountId), JSON.stringify({
+          page: activePage.id,
+          workspaceId: activePage.id === 'workspacePage' ? activeWorkspace?.id : null,
+          mainY: byId('app-main')?.scrollTop || 0,
+          windowX: window.scrollX,
+          windowY: window.scrollY,
+          feedY: activePage.id === 'workspacePage' ? byId('agentFeed')?.scrollTop || 0 : null,
+          timestamp: Date.now()
+        }));
+      } catch (ignored) {}
+    });
+    // Keep the original screen hidden only until restoration has selected it.
+    // This prevents Landing from being displayed between login and the saved page.
+    navigationReady.then(function () {
+      var snapshot;
+      try {
+        snapshot = currentUser?.id ?
+          JSON.parse(sessionStorage.getItem(pagePositionKey(currentUser.id)) || 'null') : null;
+      } catch (ignored) { snapshot = null; }
+      var valid = Boolean(refreshWasReload && snapshot && currentUser?.id &&
+        Date.now() - snapshot.timestamp < 120000 &&
+        document.querySelector('.page.active')?.id === snapshot.page &&
+        (snapshot.page !== 'workspacePage' ||
+          snapshot.workspaceId === activeWorkspace?.id));
+      requestAnimationFrame(function () {
+        if (valid) {
+          var main = byId('app-main');
+          if (main) main.scrollTop = Number(snapshot.mainY) || 0;
+          window.scrollTo(Number(snapshot.windowX) || 0, Number(snapshot.windowY) || 0);
+          var feed = snapshot.page === 'workspacePage' ? byId('agentFeed') : null;
+          if (feed && Number.isFinite(snapshot.feedY)) {
+            feed.scrollTop = snapshot.feedY;
+            if (feed.workspaceFollow && snapshot.feedY > 0) {
+              feed.workspaceFollow.following = false;
+              feed.workspaceFollow.lastTop = feed.scrollTop;
+            }
+          }
+        }
+        document.documentElement.classList.remove('restoring-initial-view');
+        // Some dashboard sections render after their page is selected. Replay
+        // only the saved page scroll once, never the actual navigation.
+        if (valid && snapshot.page !== 'workspacePage') {
+          requestAnimationFrame(function () {
+            var main = byId('app-main');
+            if (main && main.scrollTop === 0 && snapshot.mainY > 0)
+              main.scrollTop = snapshot.mainY;
+          });
+        }
+      });
+    }).catch(function () {
+      // Existing app.js already surfaces the navigation failure.
+      document.documentElement.classList.remove('restoring-initial-view');
+    });
 
     // Profile shortcut for signed-in users.
     var profileBtn = byId('appProfile');

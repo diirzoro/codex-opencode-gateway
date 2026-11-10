@@ -541,6 +541,8 @@
         connectedBox.append(node('p',tr('No providers are connected yet.','لا توجد مزوّدات مربوطة بعد.')));
       for(const p of rows){
         const details=node('details','','provider-connected-detail');
+        // Always start collapsed. Only the customer's click may expand this list.
+        details.open=false;
         const summary=node('summary','','provider-connected-summary');
         const state=p.platform&&p.personal_connected
           ?tr('Platform models + my personal connection','نماذج المنصة + اتصالي الشخصي')

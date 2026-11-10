@@ -1687,3 +1687,9 @@ body:has(#workspacePage.active) .app-header{display:none!important}
     margin-inline-start:28px;
   }
 }
+
+/* Closed provider cards must never expose their models before a user expands
+   the native <details> control; this does not affect its toggle handler. */
+.provider-connected-detail:not([open]) > .provider-connected-content{
+  display:none!important;
+}
