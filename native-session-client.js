@@ -723,7 +723,7 @@
       default_agent:null,generation:'pi-native',revision:'pi-catalog',
       policy_revision:'pi-native',
       providers:first.map(p=>({
-        ...p,connected:connected.has(p.id),allowed:true,visible:true,
+        ...p,connected:connected.has(p.id),allowed:p.allowed!==false,visible:true,
         default_model:providers.default?.[p.id],
         models:Object.entries(p.models||{}).filter(([,m])=>m?.enabled!==false)
           .map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
