@@ -21,7 +21,19 @@ const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || "/home/tahir/.pi/agent";
 const GATEWAY = process.env.PI_TEST_GATEWAY || "http://127.0.0.1:8001";
 const HOST = "test.opencode-gateway.codes";
 // A bounded pool reuses idle Pi workers rather than rejecting the next workspace.
-const MAX_PROCS = Math.max(2,Math.min(32,Number(process.env.PI_MAX_WORKERS)||6));
+// Keep the default pool small on the shared 1-vCPU/4-GB TEST VPS.
+const MAX_PROCS = Math.max(1,Math.min(32,Number(process.env.PI_MAX_WORKERS)||2));
+const MAX_ACTIVE_EXECUTIONS = Math.max(1,Math.min(MAX_PROCS,Number(process.env.PI_MAX_ACTIVE_EXECUTIONS)||1));
+const executing = new Set();
+function reserveExecution(agent) {
+  // Reserve before set_model/prompt to close the admission race.
+  if(agent.active||executing.has(agent))
+    throw Object.assign(new Error("This project is already running a Pi request"),{status:409});
+  if(executing.size>=MAX_ACTIVE_EXECUTIONS)
+    throw Object.assign(new Error("Pi coding capacity reached; retry after the running task settles"),{status:429});
+  executing.add(agent);
+}
+function releaseExecution(agent) { executing.delete(agent); }
 const IDLE_MS = 10 * 60_000;
 const pool = new Map();
 const CATALOG_DIRECTORY="/home/tahir/pi-test";
@@ -144,7 +156,7 @@ class Agent {
         }
       } else if(x.type!=="response") {
         if(x.type==="agent_start")this.active=true;
-        if(x.type==="agent_settled")this.active=false;
+        if(x.type==="agent_settled"){this.active=false;releaseExecution(this);}
         for(const res of this.events) {
           // Native Pi events are sent without invented OpenCode success states.
           try{res.write("data: "+JSON.stringify({type:"pi."+x.type,properties:x})+"\n\n");}catch{this.events.delete(res);}
@@ -186,7 +198,7 @@ class Agent {
     this.requests=[];
     for(const res of this.events)try{res.end();}catch{}
     this.events.clear();
-    this.child.kill("SIGTERM");pool.delete(this.id);
+    this.child.kill("SIGTERM");releaseExecution(this);pool.delete(this.id);
   }
 }
 async function agent(s) {
@@ -436,7 +448,7 @@ function nativeCommands(commands) {
 const server=http.createServer(async(req,res)=>{
   try{
     const {pathname,query}=cleanPath(req.url||"/");
-    if(pathname==="/health" && req.method==="GET")return json(res,200,{service:"pi-central",status:"ready",activeWorkers:pool.size});
+    if(pathname==="/health" && req.method==="GET")return json(res,200,{service:"pi-central",status:"ready",activeWorkers:pool.size,maxWorkers:MAX_PROCS,activeExecutions:executing.size,maxActiveExecutions:MAX_ACTIVE_EXECUTIONS});
     if(!["GET","POST","PATCH","PUT","DELETE"].includes(req.method))return error(res,405,"Method not allowed");
     const s=await scope(req,query);
     if(s.catalog){
@@ -545,20 +557,32 @@ const server=http.createServer(async(req,res)=>{
       const {message,images}=piPromptParts(b.parts,s,a.id);
       if((!message.trim()&&!images.length)||message.length>100000)
         return error(res,422,"Prompt required");
-      if(b.model?.providerID&&b.model?.modelID)
-        await a.command("set_model",{provider:b.model.providerID,modelId:b.model.modelID});
-      // A selected capability is a real Pi slash command, not a custom
-      // Gateway agent. Pi itself expands skills/templates or invokes an
-      // extension command. The default blank selection uses Pi's core agent.
-      let prompt=message;
-      if(b.agent) {
-        const commands=await a.command("get_commands");
-        const command=(commands?.commands||[]).find(c=>c?.name===b.agent);
-        if(!command) return error(res,422,"Selected Pi capability is no longer installed");
-        prompt="/"+command.name+(message.trim()?" "+message:"");
+      reserveExecution(a);
+      try {
+        if(b.model?.providerID&&b.model?.modelID)
+          await a.command("set_model",{provider:b.model.providerID,modelId:b.model.modelID});
+        // Keep the original Pi command/skill mechanism. Do not invent agents.
+        let prompt=message;
+        if(b.agent) {
+          const commands=await a.command("get_commands");
+          const command=(commands?.commands||[]).find(c=>c?.name===b.agent);
+          if(!command) {
+            releaseExecution(a);
+            return error(res,422,"Selected Pi capability is no longer installed");
+          }
+          prompt="/"+command.name+(message.trim()?" "+message:"");
+        }
+        const accepted=await a.command("prompt",{message:prompt,...(images.length?{images}:{})});
+        // Pi can consume an extension command without starting a model run.
+        // A started/queued prompt stays reserved until agent_settled or exit.
+        if(accepted?.disposition==="handled")releaseExecution(a);
+        res.writeHead(204,{"cache-control":"no-store"});res.end();return;
+      } catch(e) {
+        // Never release an actively running request just because its RPC ack
+        // was lost; agent_settled/exit owns that release.
+        if(!a.active)releaseExecution(a);
+        throw e;
       }
-      await a.command("prompt",{message:prompt,...(images.length?{images}:{})});
-      res.writeHead(204,{"cache-control":"no-store"});res.end();return;
     }
     if(action==="abort" && req.method==="POST"){await a.command("abort",{},30000);return json(res,200,true);}
     return error(res,501,"Pi operation not implemented");
