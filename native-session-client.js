@@ -561,6 +561,17 @@
          owner()===user&&epoch===sendEpoch)
         throw Error(label('Submission interrupted by Stop. The session can resume after Native confirms idle.',
                           'قوطع إرسال المرفق بالإلغاء. يمكن متابعة المحادثة بعد أن يؤكد Pi التوقف.'));
+      // A Pi bridge rejection tagged not_submitted is authoritative: the
+      // prompt handler never called Pi's prompt() method. Keep the composer
+      // draft intact, but do not lock the session in a false uncertainty
+      // state. A network timeout or failure AFTER dispatch is different.
+      if(error.receipt==='not_submitted'){
+        if(owner()===user&&epoch===sendEpoch){
+          uncertain.delete(id);
+          try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
+        }
+        throw error;
+      }
       // The HTTP response can fail after Native accepted an async prompt.
       // Resolve the exact Native message ID against authoritative history
       // before reporting uncertainty. Never send the prompt a second time.
@@ -577,7 +588,9 @@
       if((sendGenerations.get(id)||0)!==sendGeneration)throw Error(label('Submission interrupted by Stop. Review history before sending again.','قوطع الطلب بالإيقاف. راجع السجل قبل الإرسال مجددًا.'));
       if(!confirmed){
         if(owner()===user&&(!error.status||error.status===408||error.status>=500))
-          error.message=label('Pi receipt could not be confirmed. Your draft is saved; check session status.','تعذر تأكيد استلام Pi للطلب. المسودة محفوظة؛ تحقق من حالة الجلسة.')+(error.status?' (HTTP '+error.status+')':'');
+          error.message=label('Pi receipt could not be confirmed. Draft preserved; recover the session before trying again.','تعذر تأكيد استلام Pi للطلب. المسودة محفوظة؛ استعد الجلسة قبل المحاولة مجددًا.')+
+            (error.status?' (HTTP '+error.status+')':'')+
+            (error.message?': '+String(error.message).slice(0,240):'');
         else if(owner()===user){uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}}
         throw error;
       }
