@@ -182,6 +182,7 @@
         model_count:p.model_count??Object.keys(p.models||{}).length,
         connected:connected.has(p.id),credit_status:p.credit_status||'unknown',
         verified:p.verified===true,stale:p.stale===true,
+         api_key_supported:p.api_key_supported===true,
         last_synced_at:p.last_synced_at||null,visible:true,allowed:true
       })).sort((a,b)=>Number(b.connected)-Number(a.connected)||
         a.name.localeCompare(b.name));
@@ -261,7 +262,12 @@
         actions.append(button(tr('Replace API key','استبدال مفتاح API'),()=>openGatewayLogin(p,true).catch(error=>message(error.message,true))));
         actions.append(button(tr('Delete connection','حذف الاتصال'),()=>disconnectGateway(p)));
       }else{
-        actions.append(button(tr('Connect API key','ربط مفتاح API'),()=>openGatewayLogin(p).catch(error=>message(error.message,true))));
+        if(p.api_key_supported){
+           actions.append(button(tr('Connect personal API key','ربط مفتاح API شخصي'),
+             ()=>openGatewayLogin(p).catch(error=>message(error.message,true))));
+         }else{
+           actions.append(node('p',tr('Verified API-key linking is not yet supported for this Pi provider.','التحقق من مفتاح API الشخصي غير مدعوم لهذا المزوّد حاليًا.')));
+         }
       }
       status.append(actions);
     }
