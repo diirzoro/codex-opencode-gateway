@@ -540,6 +540,12 @@ def _ai_active_platform_defaults(db):
         models = {m for m in item["models"] if isinstance(m, str)
                   and _ai_allowed(db, pid, m, rules=rules)}
         if models:
+            active_models = set(db.scalars(select(AiProviderModel.model_id).where(
+                AiProviderModel.provider_id == pid,
+                AiProviderModel.model_id.in_(models),
+                AiProviderModel.active.is_(True))))
+            models &= active_models
+        if models:
             result[pid] = {"owner_id": owner, "models": models, "connection": record}
     return result
 
@@ -868,22 +874,25 @@ def ai_internal_credential(provider_id: str, request: Request, workspace_id: uui
     model = db.get(AiProviderModel, (provider_id, model_id))
     if model is None or not model.active or not _ai_allowed(db, provider_id, model_id):
         raise HTTPException(403, "Model not available under administrator policy")
-    # Shared administrator models are immutable for customers. Their encrypted
-    # API key is only released to the existing localhost/token-protected Pi
-    # bridge for one explicitly selected, administrator-approved model.
-    shared = _ai_active_platform_defaults(db).get(provider_id)
-    if shared and model_id in shared["models"]:
-        record = shared["connection"]
-        key, _ = _ai_connection_secret_and_models(record)
-    else:
-        record = db.scalar(select(AiUserConnection).where(
-            AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
-            AiUserConnection.auth_status == "verified"))
-        if record is None:
-            raise HTTPException(403, "A verified personal provider connection is required")
-        key, disabled = _ai_connection_secret_and_models(record)
-        if model_id in disabled:
-            raise HTTPException(403, "Personal model is disabled")
+    # Prefer the customer's own verified key for models they have enabled.
+    # The administrator's shared key is only used as a fallback for explicitly
+    # approved default models; neither key is ever returned to the browser.
+    personal = db.scalar(select(AiUserConnection).where(
+        AiUserConnection.user_id == user.id, AiUserConnection.provider_id == provider_id,
+        AiUserConnection.auth_status == "verified"))
+    record = None
+    key = None
+    if personal:
+        personal_key, disabled = _ai_connection_secret_and_models(personal)
+        if model_id not in disabled:
+            record, key = personal, personal_key
+    if record is None:
+        shared = _ai_active_platform_defaults(db).get(provider_id)
+        if shared and model_id in shared["models"]:
+            record = shared["connection"]
+            key, _ = _ai_connection_secret_and_models(record)
+    if record is None or not key:
+        raise HTTPException(403, "No verified personal or administrator-approved model connection")
     return {"provider_id": provider_id, "connection_id": str(record.id),
             "key": key}
 
@@ -1160,10 +1169,10 @@ def _ai_catalog_refresh_if_due():
                 # :free models. Preserve other models that customers had
                 # explicitly linked previously; never deactivate a paid
                 # model from an intentionally incomplete free-only snapshot.
-                if pid != "openrouter":
-                    for model_id, previous in old_models.items():
-                        if model_id not in seen:
-                            previous.active = False
+                for model_id, previous in old_models.items():
+                    if model_id not in seen and (pid != "openrouter" or
+                                                 model_id.endswith(":free")):
+                        previous.active = False
                 row.model_count = (len(old_models | {mid: None for mid in seen})
                                    if pid == "openrouter" else len(seen))
                 row.models_synced_at = stamped
