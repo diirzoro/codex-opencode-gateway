@@ -467,6 +467,8 @@ const server=http.createServer(async(req,res)=>{
       // and did not validate upstream keys before saving them.
       // Keep account credentials out of Pi until Gateway-owned storage
       // and account-isolated SDK runtime have been safely implemented.
+      if(pathname==="/provider/auth" || /^\/auth\//.test(pathname))
+        return error(res,410,"Shared Pi credential endpoints retired. Verified account-owned connections must be managed by Gateway.");
       return error(res,404,"Pi account endpoint not found");
     }
     // File tree reads should not consume an agent process or compete with a
