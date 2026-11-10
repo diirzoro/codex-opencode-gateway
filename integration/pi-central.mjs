@@ -101,21 +101,19 @@ async function scope(req, query) {
     throw Object.assign(new Error("Workspace not owned"),{status:403});
   return {directory,workspaceId:match[2],projectId:String(detail.project_id),userId:match[1]};
 }
-// The installed Pi SDK owns provider login, logout, and credential storage.
-// No custom auth.json reader/writer or Gateway provider ledger exists here.
+// Read only public model definitions. Provider metadata must NEVER open the
+// shared auth.json or inspect credentials belonging to the VPS operator.
 async function piModels() {
   const {ModelRuntime}=await import("@earendil-works/pi-coding-agent");
-  if(!ModelRuntime?.create)
-    throw Object.assign(new Error("Installed Pi ModelRuntime API is unavailable"),{status:502});
+  const {InMemoryCredentialStore}=await import("@earendil-works/pi-ai");
+  if(!ModelRuntime?.create||!InMemoryCredentialStore)
+    throw Object.assign(new Error("Installed Pi catalog API is unavailable"),{status:502});
   return ModelRuntime.create({
-    authPath:path.join(PI_AGENT_DIR,"auth.json"),
+    credentials:new InMemoryCredentialStore(),
     modelsPath:path.join(PI_AGENT_DIR,"models.json"),
     allowModelNetwork:false
   });
 }
-// A successful Pi login means Pi saved/configured the credential. It does
-// NOT mean the upstream API key passed a real inference request. No duplicate
-// credential store, test prompt, custom validator, or provider account ledger.
 function projectIdFor(s) {
   return "pi_"+createHash("sha256").update(HOST+"\0"+s.userId+"\0"+s.workspaceId+"\0"+s.projectId).digest("hex").slice(0,32);
 }
@@ -553,20 +551,10 @@ async function nativeDiscovery(userId) {
     }));
     if(!Array.isArray(models)||!Array.isArray(providers)||!providers.length)
       throw Object.assign(new Error("Installed Pi provider registry is unavailable"),{status:502});
-    const credentials=await runtime.listCredentials();
-    const stored=new Set(credentials.map(row=>row.providerId));
-    const providerStates=Object.fromEntries(providers.map(p=>{
-      const status=runtime.getProviderAuthStatus(p.id);
-      return [p.id,{configured:status.configured===true,
-        stored:stored.has(p.id),source:status.source||"none"}];
-    }));
-    const availableProviders=providers.filter(p=>providerStates[p.id].configured).map(p=>p.id);
-    // Pi's "available" means credentials/model access as reported by Pi,
-    // never verified account credits or a successful completion.
-    const piAvailableModels=runtime.getAvailableSnapshot()
-      .filter(m=>m?.provider&&m?.id).map(m=>m.provider+"\0"+m.id);
-    const value={models,availableProviders,providers,providerStates,
-      piAvailableModels,time:Date.now()};
+    // Metadata only. No listCredentials(), stored auth state, or shared
+    // runtime fallback is required to populate Gateway's model catalog.
+    const value={models,availableProviders:[],providers,providerStates:{},
+      piAvailableModels:[],time:Date.now()};
     modelsSnapshots.set(userId,value);
     return value;
   })();
