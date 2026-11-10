@@ -11,7 +11,7 @@
 import http from "node:http";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, readdirSync, lstatSync, realpathSync } from "node:fs";
+import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, readdirSync, lstatSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 
@@ -688,6 +688,31 @@ const server=http.createServer(async(req,res)=>{
     // affirmative permission replies or claim a prompt was approved.
     if(req.method==="GET"&&["/question","/permission"].includes(pathname))
       return json(res,200,[]);
+    // A Project deletion must NOT instantiate a new Pi session just to
+    // remove it. Both GET-after-delete and DELETE are checked against the
+    // exact owned workspace before creating any SDK worker.
+    const sessionMatch=pathname.match(/^\/session\/(pi_[0-9a-f]{32})$/);
+    if(sessionMatch&&(req.method==="GET"||req.method==="DELETE")){
+      if(sessionMatch[1]!==projectIdFor(s))return error(res,404,"Session not found");
+      const dir=path.resolve(ROOT,"projects",s.userId,s.workspaceId);
+      const root=path.resolve(ROOT);
+      if(!dir.startsWith(root+path.sep))return error(res,403,"Unsafe session directory");
+      if(!existsSync(dir))return error(res,404,"Session not found");
+      const rootReal=realpathSync(root),dirReal=realpathSync(dir);
+      if(!dirReal.startsWith(rootReal+path.sep)||lstatSync(dir).isSymbolicLink())
+        return error(res,403,"Unsafe Pi session path");
+      if(req.method==="DELETE"){
+        const id=sessionMatch[1],current=pool.get(id);
+        if(creating.has(id)||current?.active||current?.running||current?.busy||executing.has(current))
+          return error(res,409,"Pi session is busy; stop it before deleting the project");
+        if(current)current.close();
+        // Only Pi's owned conversation directory is removed here.
+        // Gateway's existing DELETE /projects/{id} separately validates
+        // ownership and removes the project/worktree/metadata.
+        rmSync(dir,{recursive:true,force:false,maxRetries:2,retryDelay:100});
+        return json(res,200,{deleted:true,id});
+      }
+    }
     // File tree reads should not consume an agent process or compete with a
     // running Pi conversation for RPC worker slots.
     if(req.method==="GET"&&["/file","/file/content","/file/status","/vcs"].includes(pathname))
