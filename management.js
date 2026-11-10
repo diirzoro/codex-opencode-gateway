@@ -144,8 +144,8 @@
     picker.disabled=true;
     if(activeWorkspace)picker.add(new Option(activeProject?.name||tr('Selected workspace','مساحة العمل المختارة'),activeWorkspace.id));
     picker.value=view.workspaceId;
-    const box=section(body,tr('Available AI provider catalog','فهرس مزوّدي الذكاء الاصطناعي'));
-    box.append(node('p',tr('Provider discovery is read-only while verified, per-account Gateway credential storage is being integrated. Shared Pi key saving has been disabled to prevent invalid keys and cross-account changes.','عرض المزوّدين متاح للقراءة فقط حتى اكتمال التحقق الحقيقي وحفظ مفاتيح كل عميل في Gateway. تم إيقاف الحفظ المشترك داخل Pi لمنع المفاتيح الوهمية والتأثير على حسابات أخرى.')));
+    const box=section(body,tr('Connect verified providers','ربط المزوّدين الموثقين'));
+    box.append(node('p',tr('Gateway verifies each supported API key with the real provider before encrypting it for your account. A catalog entry is not a connection.','يتحقق Gateway من مفتاح API لدى المزوّد الحقيقي قبل حفظه مشفرًا لحسابك. ظهور المزوّد في الفهرس لا يعني اتصاله.')));
     const comboWrap=node('div','','provider-combo'),combo=node('input');combo.type='search';
     combo.value=body.dataset.providerQuery||'';combo.placeholder=tr('Search providers…','ابحث عن المزوّدات…');combo.setAttribute('role','combobox');combo.setAttribute('aria-expanded','false');combo.autocomplete='off';combo.setAttribute('aria-label',combo.placeholder);
     const options=node('div','','provider-combo-options');options.hidden=true;comboWrap.append(combo,options);box.append(comboWrap);
@@ -155,7 +155,7 @@
     // These names come exclusively from the existing Native provider inventory.
     const catalogCount=node('p','','provider-catalog-count');box.append(catalogCount);
     const catalogList=node('div','','provider-catalog-grid');box.append(catalogList);
-    const connectedBox=section(body,tr('Pi runtime availability (not account connections)','المزوّدات المتاحة في تشغيل Pi (ليست اتصالات الحساب)'));
+    const connectedBox=section(body,tr('My verified provider connections','اتصالات مزوّداتي الموثقة'));
     const contextCurrent=()=>!workspaceId||activeWorkspace?.id===workspaceId;
     let workspaceId=view.workspaceId,base='/api/workspaces/'+workspaceId+'/providers/';
     let snapshot=workspaceId?window.workspaceRuntime.peek(workspaceId):null,metadataReady=false,workspaces=[],projects=[],selectedProviderId='';
@@ -163,9 +163,8 @@
     const searchState=node('p','','provider-search-status');searchState.setAttribute('role','status');comboWrap.after(searchState);
     // The existing Connections form displays every provider Pi returns.
     // Search only changes presentation, never truncates Pi's native inventory.
-    const sameCatalog=data=>data.workspace_id===workspaceId&&data.generation===snapshot?.generation&&data.revision===snapshot?.revision&&data.policy_revision===snapshot?.policy_revision;
-    // Dashboard reads the existing persistent Pi process directly.
-    // Native owns and caches the model catalog; no second provider picker store.
+    // Database-backed catalog revisions do not reuse the old Native workspace generation.
+    // Both Dashboard and Workspace use the same authenticated Gateway catalog.
     async function accountCatalogRows(){
       if(!window.nativeDirectTest?.active())throw Error('Pi Native is unavailable');
       // Read the already-running Pi Native server once. This
@@ -181,7 +180,7 @@
         credential_stored:p.credential_stored===true,
         credential_source:p.credential_source||'none',
         pi_available_models:p.pi_available_models||[],
-        credit_status:'unknown',verified:false,
+        credit_status:p.credit_status||'unknown',verified:p.verified===true,
         visible:true,allowed:true,
         default_model:native.default?.[p.id]
       })).sort((a,b)=>Number(b.connected)-Number(a.connected)
@@ -204,43 +203,85 @@
       }
       const data=await api(base+kind+'?'+(kind==='search'?'query':'name')+'='+encodeURIComponent(value),{signal});
       if(!alive()||!contextCurrent())throw new DOMException('Workspace changed','AbortError');
-      if(!data.native&&!sameCatalog(data)){
-        view.ready=false;window.workspaceRuntime.invalidate(workspaceId);
-        message(tr('Pi state changed. Refresh before connecting.','تغيّرت حالة Pi. حدّث الحالة قبل الربط.'),true);
-        throw new Error(tr('Pi state changed. Close this dialog and refresh before connecting.','تغيّرت حالة Pi. أغلق النافذة وحدّث الحالة قبل الربط.'));
-      }
       return data.providers;
     }
     const retry=button(tr('Retry','إعادة المحاولة'),()=>metadataReady?refresh(true):initialize());retry.hidden=true;box.append(retry);
     const message=(text,error=false)=>{progress.textContent=text;progress.classList.toggle('connection-error',error);retry.hidden=!error;};
-    // Shared Pi auth.json cannot be used for customer API-key management.
-    // Do not render a form that could save an unchecked key under another account.
+    // Account-owned Gateway credential actions. No Pi auth.json mutations.
+    let providerMutation=false;
+    async function openGatewayLogin(p,replaceExisting=false){
+      if(!alive()||providerMutation)return;
+      const host=node('div'),f=node('form','','manage-form');
+      const key=input(f,tr('API key for ','مفتاح API للمزوّد ')+(p.name||p.id),'api_key');
+      key.type='password';key.required=true;key.autocomplete='off';key.maxLength=8192;
+      f.append(node('p',tr('The key is verified with the provider before encrypted storage. It is never returned to your browser.','يتم التحقق من المفتاح لدى المزوّد قبل حفظه مشفرًا، ولا يُعاد إلى المتصفح.')));
+      const feedback=node('p','','provider-feedback');feedback.setAttribute('role','status');f.append(feedback);
+      const submit=node('button',replaceExisting?tr('Verify and replace','تحقق واستبدل'):tr('Verify and connect','تحقق واربط'),'button');
+      submit.type='submit';f.append(submit);
+      host.append(f);document.body.append(host);
+      const dialog=window.mountFormDialog(host,f,replaceExisting?tr('Replace provider key','استبدال مفتاح المزوّد'):tr('Connect provider','ربط المزوّد'));
+      f.dialogTrigger.hidden=true;
+      f.onsubmit=async event=>{
+        event.preventDefault();
+        if(providerMutation||!alive()||!dialog.open||!f.reportValidity())return;
+        providerMutation=true;submit.disabled=true;
+        feedback.textContent=tr('Checking the provider…','جارٍ التحقق من المزوّد…');
+        const value=key.value;key.value='';
+        try{
+          const result=await api('/api/opencode/connections'+(replaceExisting?'/'+encodeURIComponent(p.id):''),{
+            method:replaceExisting?'PUT':'POST',body:JSON.stringify({provider_id:p.id,api_key:value})});
+          if(result?.provider_id!==p.id||result.auth_status!=='verified')
+            throw Error(tr('Provider did not confirm authentication','لم يؤكد المزوّد صلاحية المفتاح'));
+          dialog.close();await reload();
+          message(tr('Verified and saved for your account','تم التحقق والحفظ لحسابك فقط'));
+          window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser?.id}}));
+        }catch(error){if(dialog.open)feedback.textContent=error.message||String(error);}
+        finally{providerMutation=false;submit.disabled=false;}
+      };
+      dialog.addEventListener('close',()=>{key.value='';host.remove()},{once:true});
+      f.openDialog();
+    }
+    async function disconnectGateway(p){
+      if(providerMutation||!p.connected||!alive())return;
+      if(!await window.confirmAction(tr('Delete your saved '+(p.name||p.id)+' key? Pi will reject further requests using this connection.','حذف مفتاح '+(p.name||p.id)+' المحفوظ لحسابك؟ لن يقبل Pi استخدام هذا الاتصال بعد الحذف.')))return;
+      providerMutation=true;
+      try{
+        await api('/api/opencode/connections/'+encodeURIComponent(p.id),{method:'DELETE'});
+        await reload();
+        message(tr('Connection deleted from your account','تم حذف الاتصال من حسابك'));
+        window.dispatchEvent(new CustomEvent('account-provider-changed',{detail:{owner:currentUser?.id}}));
+      }catch(error){message(error.message||String(error),true);}
+      finally{providerMutation=false;}
+    }
     function piStateLabel(p){
-      if(!p.connected)return tr('Catalog only · not an account connection','فهرس فقط · ليس اتصال حساب');
-      const source=p.credential_stored
-        ?tr('Pi saved credential','اعتماد محفوظ داخل Pi')
-        :tr('Pi configuration / environment','إعدادات Pi أو البيئة');
-      return source+' · '+tr('Shared runtime, not an owned connection · credit unknown','إعدادات تشغيل مشتركة، ليست اتصالًا مملوكًا · الرصيد غير معلوم');
+      if(!p.connected)return tr('Available in catalog · not connected','متاح في الفهرس · غير متصل');
+      return tr('Verified for this account','موثق لهذا الحساب')+' · '+(p.credit_status||'unknown');
     }
     function renderSelected(p){
       status.replaceChildren(node('strong',p.name||p.id),
-        node('span',piStateLabel(p)+' · '+
-          String(p.model_count??p.models?.length??0)+' '+tr('models','نموذج')));
-      if(view.ready)status.append(node('span',
-        tr(' · Read-only catalog; account connection management is pending secure Gateway storage.',
-           ' · فهرس للعرض فقط؛ ربط الحساب ينتظر التخزين الآمن في Gateway.')));
+        node('span',piStateLabel(p)+' · '+String(p.model_count??0)+' '+tr('models','نموذج')));
+      if(!view.ready)return;
+      const actions=node('div','','manage-actions');
+      if(p.connected){
+        actions.append(button(tr('Replace API key','استبدال مفتاح API'),()=>openGatewayLogin(p,true).catch(error=>message(error.message,true))));
+        actions.append(button(tr('Delete connection','حذف الاتصال'),()=>disconnectGateway(p)));
+      }else{
+        actions.append(button(tr('Connect API key','ربط مفتاح API'),()=>openGatewayLogin(p).catch(error=>message(error.message,true))));
+      }
+      status.append(actions);
     }
     function renderConnected(){
-      connectedBox.replaceChildren(node('h2',tr('Pi runtime availability — not customer connections','توفر تشغيل Pi — ليس اتصالات العملاء')));
-      connectedBox.append(node('p',tr('These are shared Pi runtime configuration signals, not verified customer-owned provider connections. No key can be changed here.','هذه بيانات إعدادات تشغيل Pi المشتركة وليست اتصالات عميل موثقة. لا يمكن تعديل أي مفتاح من هنا.')));
+      connectedBox.replaceChildren(node('h2',tr('My verified provider connections','اتصالات مزوّداتي الموثقة')));
       const rows=(snapshot?.providers||[]).filter(p=>p.connected);
       if(!rows.length){
-        connectedBox.append(node('p',tr('No providers configured in Pi.','لا توجد مزوّدات مهيأة في Pi.')));
+        connectedBox.append(node('p',tr('No verified providers are connected to your account.','لا توجد مزوّدات موثقة مربوطة بحسابك.')));
         return;
       }
       for(const p of rows){
         const item=node('div','','manage-actions');
         item.append(node('strong',p.name||p.id),node('span',piStateLabel(p)));
+        item.append(button(tr('Replace key','استبدال المفتاح'),()=>openGatewayLogin(p,true).catch(error=>message(error.message,true))));
+        item.append(button(tr('Disconnect','حذف الاتصال'),()=>disconnectGateway(p)));
         connectedBox.append(item);
       }
     }
@@ -269,7 +310,7 @@
         const tiles=rows.map(p=>{
           const tile=node('button','','provider-catalog-tile');
           tile.type='button';tile.textContent=p.name||p.id;
-          tile.title=tr('Read-only provider catalog · not an account connection','فهرس للعرض فقط · ليس اتصال حساب')+' · '+(p.name||p.id);
+          tile.title=tr('Available for verified connection','متاح للربط الموثق')+' · '+(p.name||p.id);
           tile.onclick=()=>{selectedProviderId=p.id;renderSelected(p);};
           return tile;
         });
