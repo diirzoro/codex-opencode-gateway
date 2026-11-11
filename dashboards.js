@@ -2201,6 +2201,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           variant:nativeVariant.value||undefined,files:nativeFiles
         });
         sentAttachments({attachments:nativeFiles});draft.confirm();
+        if(receipt?.handled){
+          clearSendingPreview();
+          submissionStatus.textContent=tr(
+            'The selected Pi command processed the message without starting a model response. Use the normal Pi chat mode for an answer, or inspect command activity.',
+            'عالج أمر Pi المحدد الرسالة دون بدء رد من النموذج. استخدم وضع المحادثة العادية مع Pi للحصول على إجابة، أو راجع نشاط الأمر.');
+          return {accepted:true,handled:true,queued:false};
+        }
         if(receipt?.queued){
           submissionStatus.textContent=tr('Added to Pi queue ('+receipt.pending+' pending).',
             'أُضيفت الرسالة إلى طابور Pi ('+receipt.pending+' منتظرة).');
