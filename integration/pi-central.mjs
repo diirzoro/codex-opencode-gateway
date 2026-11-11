@@ -1248,7 +1248,7 @@ const server=http.createServer(async(req,res)=>{
         throw e;
       }
     }
-    if(action==="abort" && req.method==="POST"){await a.command("abort",{},30000);return json(res,200,true);}
+    if(action==="abort" && req.method==="POST")return json(res,200,await a.command("abort",{},30000));
     return error(res,501,"Pi operation not implemented");
   }catch(e){
     const isPrompt=(req.method==="POST"&&
