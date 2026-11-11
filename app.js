@@ -1178,7 +1178,16 @@ function renderPiOptionCards(host,answer,messageId){
   customText.disabled=true;cancelButton.disabled=true;continueButton.disabled=true;
   status.textContent=lang==='ar'?'تم طلب المتابعة باستخدام هذا الاختيار.':'Continuation was requested with this choice.';
  }else update();
- host.append(panel);
+ if(structured&&host.firstChild){
+   // Avoid repeating Pi's long comparison prose above the compact table.
+   // Keep all original words accessible without modifying the saved message.
+   const full=document.createElement('details');full.className='pi-choice-explanation';
+   const summary=document.createElement('summary');
+   summary.textContent=lang==='ar'?'عرض شرح Pi الكامل':'Show full Pi explanation';
+   full.append(summary);
+   while(host.firstChild)full.append(host.firstChild);
+   host.append(panel,full);
+ }else host.append(panel);
 }
 // A deliberately small, text-only Markdown subset. Never interpret Agent HTML.
 function renderAgentText(host,value,messageId){
