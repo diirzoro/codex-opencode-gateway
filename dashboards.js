@@ -1727,6 +1727,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     // runtime needs a verified session-scoped stop to unblock the saved draft.
     q('stopAgent').disabled=(!busy&&!sending&&!pendingSubmission&&!nativeBusy)||Boolean(cancelRequested);
   }
+  // A rejected model-switch request can reveal a prior Pi run that is
+  // genuinely still active. Show the Stop control after Native reconciliation
+  // without killing the queue or resending the rejected prompt.
+  window.addEventListener('workspace-native-execution-changed',event=>{
+    if(activeSession?.id===event.detail?.sessionId)updateSend();
+  });
   // Existing entitlement rendering also updates workspace buttons. Reapply the
   // session/submission guards without changing subscription or billing logic.
   const renderAccess=renderEntitlement;renderEntitlement=function(){renderAccess();updateSend();};
