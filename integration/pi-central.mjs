@@ -361,8 +361,8 @@ class SdkAgent {
         "machine-readable fenced block tagged pi_choices, formatted as JSON: "+
         "Use a JSON object with question and options; each option must include "+
         "title, description, value, and a boolean recommended flag. "+
-        "The browser renders this as selectable cards beside the message "+
-        "composer. Recommend only a reasoned choice. Do not invent fixed "+
+        "The browser renders valid choice blocks as selectable cards inside "+
+        "your reply in the conversation. Recommend only a reasoned choice. Do not invent fixed "+
         "options or ask this question for every task; follow direct instructions "+
         "when the user has already chosen. Never fabricate tool calls."
       ],
