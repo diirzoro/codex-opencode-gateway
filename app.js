@@ -982,6 +982,61 @@ async function refreshWorkspaceTodos(force=false){
  }catch(error){/* Keep the composer responsive when optional task discovery fails. */}
  finally{if(todoRequest===token)todoRequest=null;}
 }
+function renderPiOptionCards(host,answer){
+ const text=String(answer||"");
+ if(text.length>24000)return;
+ const lines=text.split(/\r?\n/),topics=[];
+ for(let i=0;i<lines.length;i++){
+  const m=lines[i].match(/^\s*#{2,6}\s+(\d+)[.)]\s+(.+?)\s*$/);
+  if(m&&topics.length<10)topics.push({start:i,title:m[2].replace(/\*\*/g,"").trim().slice(0,110)});
+ }
+ if(topics.length<2||topics.length>8||
+   !/(languages|frameworks|technologies|best for|recommended|لغات|تقنيات|خيارات|الأفضل)/i.test(text.slice(0,1000)))return;
+ const options=topics.map((item,index)=>{
+  const body=lines.slice(item.start+1,topics[index+1]?.start||lines.length).join("\n");
+  const suitable=body.match(/(?:\*\*)?(?:Best for|الأفضل لـ|مناسب لـ)\s*:?\s*(?:\*\*)?\s*([^\n]+)/i)?.[1]?.replace(/\*\*/g,"").trim();
+  const advantages=body.split("\n").filter(x=>/^\s*[-*•]\s+/.test(x))
+   .map(x=>x.replace(/^\s*[-*•]\s+/,"").replace(/\*\*/g,"").trim())
+   .filter(Boolean).slice(0,2);
+  return {...item,description:(suitable||advantages[0]||"").slice(0,180),advantages};
+ });
+ const container=document.createElement("section");
+ container.className="pi-option-choices";
+ const heading=document.createElement("div");heading.className="pi-option-header";
+ const title=document.createElement("strong");
+ title.textContent=lang==='ar'?"اختر التقنية الأنسب":"Choose the best approach";
+ const help=document.createElement("small");
+ help.textContent=lang==='ar'?"خيارات من توصيات Pi — لا يبدأ التنفيذ حتى ترسل طلبك":
+  "From Pi's recommendations — no action runs until you submit";
+ heading.append(title,help);container.append(heading);
+ const grid=document.createElement("div");grid.className="pi-option-grid";
+ for(const choice of options){
+  const card=document.createElement("article");card.className="pi-option-card";
+  const name=document.createElement("strong");name.textContent=choice.title;
+  const why=document.createElement("p");why.textContent=choice.description;
+  const perks=document.createElement("div");perks.className="pi-option-tags";
+  for(const value of choice.advantages){const tag=document.createElement("span");tag.textContent=value;perks.append(tag);}
+  const select=document.createElement("button");select.type="button";select.className="button small";
+  select.textContent=lang==='ar'?"استخدم هذا الخيار":"Use this option";
+  select.onclick=()=>{
+   const input=document.getElementById("promptInput");if(!input)return;
+   const sentence=lang==='ar'?"أريد استخدام "+choice.title+" في المشروع الحالي.":
+    "Use "+choice.title+" for the current project.";
+   input.value=(input.value.trimEnd()?input.value.trimEnd()+"\n":"")+sentence;
+   input.dispatchEvent(new Event("input",{bubbles:true}));
+   window.resizeWorkspaceComposer?.();input.focus();
+   for(const node of grid.children)node.classList.toggle("selected",node===card);
+  };
+  card.append(name,why,perks,select);grid.append(card);
+ }
+ container.append(grid);
+ const original=document.createElement("details");original.className="pi-option-full";
+ const summary=document.createElement("summary");
+ summary.textContent=lang==='ar'?"عرض الشرح الكامل":"Read full comparison";
+ original.append(summary);
+ while(host.firstChild)original.append(host.firstChild);
+ host.append(container,original);
+}
 // A deliberately small, text-only Markdown subset. Never interpret Agent HTML.
 function renderAgentText(host,value){
  host.replaceChildren();host.classList.add('message-rich');host.dir='auto';
@@ -1038,6 +1093,7 @@ function renderAgentText(host,value){
   else{if(list)flush();paragraph.push(lines[i]);}
  }
  flush();
+ renderPiOptionCards(host,value);
 }
 function workspaceMessagePresentation(row,latest,status){
  const hasText=Boolean(row.text?.trim()),activity=(row.activity||[]).filter(item=>!['todowrite','todoread'].includes(item.tool));
