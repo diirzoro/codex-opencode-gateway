@@ -11,7 +11,7 @@
 import http from "node:http";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, readdirSync, lstatSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 
@@ -1084,6 +1084,46 @@ const server=http.createServer(async(req,res)=>{
       return json(res,200,piNativeTodos((await a.command("get_messages"))?.messages||[]));
     if(action==="queue"&&req.method==="GET")
       return json(res,200,await a.command("get_queue"));
+    if(action==="reset_context"&&req.method==="POST"){
+      const bodyData=await body(req);
+      if(bodyData?.confirm!=="RESET_PROJECT_CONTEXT")
+        return error(res,422,"Explicit confirmation required");
+      if(a.active||a.running||a.busy||executing.has(a)||
+         Number(a.session.pendingMessageCount)>0)
+        return error(res,409,"أوقف المهمة وانتظر اكتمالها قبل تنظيف سياق المشروع.");
+      const id=a.id;
+      if(creating.has(id))return error(res,409,"Pi project session is being initialized");
+      // Archive the previous native JSONL, not the project's source files.
+      // A new Pi session context keeps the SAME external project conversation id.
+      const job=(async()=>{
+        const dir=path.resolve(ROOT,"projects",s.userId,s.workspaceId);
+        const filename=a.session.sessionManager.getSessionFile();
+        if(filename&&path.dirname(path.resolve(filename))!==dir)
+          throw Object.assign(new Error("Unsafe Pi conversation file"),{status:403});
+        const oldFile=filename&&existsSync(filename)?filename:null;
+        const archive=path.join(dir,"history-archive");
+        const saved=oldFile?path.join(archive,Date.now()+"-"+randomUUID()+".jsonl"):null;
+        a.close();
+        if(saved){
+          mkdirSync(archive,{recursive:true,mode:0o700});
+          if(lstatSync(oldFile).isSymbolicLink())
+            throw Object.assign(new Error("Unsafe Pi history link"),{status:403});
+          renameSync(oldFile,saved);
+        }
+        try{
+          const next=await SdkAgent.create(s);
+          pool.set(next.id,next);
+          return {reset:true,archived:!!saved,session_id:next.id};
+        }catch(e){
+          if(saved&&existsSync(saved)&&!existsSync(oldFile))
+            renameSync(saved,oldFile);
+          throw e;
+        }
+      })();
+      creating.set(id,job);
+      try{return json(res,200,await job);}
+      finally{if(creating.get(id)===job)creating.delete(id);}
+    }
     if(action==="prompt_async" && req.method==="POST") {
       const b=await body(req);
       const {message,images}=piPromptParts(b.parts,s,a.id);
