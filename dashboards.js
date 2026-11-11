@@ -949,7 +949,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   nativeVariant.onchange=saveNativeSelection;
   q('providerSelect').setAttribute('aria-label','Provider');q('modelSelect').setAttribute('aria-label','Model');
-  const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Attach a file to this workspace','أرفق ملفًا في مساحة العمل');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);
+  const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Pi supports PNG/JPEG/WebP, PDF, TXT and MD up to 8 MB. PDF requires native Pi tools.','Pi يدعم PNG وJPEG وWebP وPDF وTXT وMD حتى 8 ميجابايت. قراءة PDF تتطلب أدوات Pi.');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);
   const attachmentList=textElement('div','','composer-attachments');attachmentList.id='composerAttachments';attachmentList.setAttribute('aria-live','polite');q('promptInput').before(attachmentList);
   let attachments=[];let attachmentRevision=0;
   const releasePreview=item=>{if(item.preview){URL.revokeObjectURL(item.preview);item.preview=null;}};
@@ -991,20 +991,37 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(!activeWorkspace||window.workspaceSubmissionBlocked?.())return;
     if(!window.nativeSession?.active()){toast(tr('Pi Native is unavailable; no file was sent.','اتصال Pi Native غير متاح؛ لم يُرسل أي ملف.'));return;}
     if(!activeSession)await createSession();
-    const picker=document.createElement('input');picker.type='file';picker.multiple=true;picker.hidden=true;
+    const picker=document.createElement('input');picker.type='file';picker.multiple=true;picker.hidden=true;picker.accept='.png,.jpg,.jpeg,.webp,.pdf,.txt,.md';
     picker.oncancel=()=>picker.remove();picker.onchange=async()=>{
       const files=[...(picker.files||[])],workspaceId=activeWorkspace.id,sessionId=activeSession?.id,owner=currentUser?.id,revision=attachmentRevision;picker.remove();
       if(files.length+attachments.length>10){toast(tr('Attach up to 10 files per message.','أرفق حتى 10 ملفات لكل رسالة.'));return;}
       for(const file of files){
         if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)break;
         const temporary=true;
-        // File capability and size acceptance are decided by the installed Pi Native and selected model.
-        const item={name:file.name,size:file.size,type:file.type||'application/octet-stream',temporary,owner,workspaceId,state:'uploading',preview:['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)?URL.createObjectURL(file):null};attachments.push(item);renderAttachments();
+        const extension=file.name.split('.').at(-1)?.toLowerCase();
+        if(!new Set(['png','jpg','jpeg','webp','pdf','txt','md']).has(extension)||!file.size||file.size>8*1024*1024){
+          toast(tr('Pi supports PNG, JPEG, WebP, PDF, TXT, and MD files up to 8 MB only.',
+            'Pi يدعم PNG وJPEG وWebP وPDF وTXT وMD فقط حتى 8 ميجابايت.'));continue;
+        }
+        const item={name:file.name,size:file.size,type:file.type||'application/octet-stream',
+          temporary,owner,workspaceId,state:'uploading',
+          preview:['image/png','image/jpeg','image/webp'].includes(file.type)?URL.createObjectURL(file):null};
+        attachments.push(item);renderAttachments();
         const valid=()=>revision===attachmentRevision&&workspaceId===activeWorkspace?.id&&sessionId===activeSession?.id&&owner===currentUser?.id&&!item.cancelled;
         let timer;
         try{
           let data;
-          // Native message parts include the browser file bytes directly.
+          // Gateway checks file security and ownership ONLY before Pi receives
+          // the bytes; it never evaluates the user's prompt or Pi's response.
+          const form=new FormData();form.append('file',file,file.name);
+          const checked=await api('/api/workspaces/'+encodeURIComponent(workspaceId)+
+            '/attachments/pi-preflight',{method:'POST',body:form});
+          if(!valid())continue;
+          if(!checked?.accepted||!checked.mime)throw Error('Pi attachment preflight was not confirmed');
+          if(checked.antivirus==='not_installed')submissionStatus.textContent=tr(
+            'Basic structural screening passed, but antivirus scanning is unavailable. Malware-free status is NOT guaranteed.',
+            'نجح الفحص الأساسي للملف لكن فحص الفيروسات غير متاح؛ لا يمكن ضمان خلوه من البرامج الخبيثة.');
+          // The validated bytes are then sent directly to Pi Native.
           const dataUrl=await new Promise((resolve,reject)=>{
             const reader=new FileReader();
             reader.onload=()=>resolve(reader.result);
@@ -1013,9 +1030,15 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           });
           if(!valid())continue;
           data={path:'__native_inline__/'+crypto.randomUUID()+'/'+file.name,
-            url:dataUrl,size:file.size,mime:item.type,name:file.name};
+            url:dataUrl,size:file.size,mime:checked.mime,name:file.name};
           item.nativeInline=true;
           if(!valid())continue;item.path=data.path;item.url=data.url;item.size=data.size;item.type=data.mime||item.type;item.state='ready';
+          if(data.mime==='application/pdf')submissionStatus.textContent=tr(
+            'PDF attached. Pi must read its actual content using tools; if unable, it must say so clearly.',
+            'تم إرفاق PDF. يجب على Pi قراءة المحتوى بأدواته؛ وإن تعذرت القراءة يوضح السبب.');
+          else if(data.mime.startsWith('image/'))submissionStatus.textContent=tr(
+            'Image attached. The selected Pi model must support image input.',
+            'تم إرفاق صورة. يجب أن يدعم نموذج Pi المختار إدخال الصور.');
         }catch(error){
           if(valid()){
             item.state='failed';
