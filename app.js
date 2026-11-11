@@ -987,7 +987,7 @@ function renderPiOptionCards(host,answer){
  if(text.length>24000)return;
  const lines=text.split(/\r?\n/),topics=[];
  for(let i=0;i<lines.length;i++){
-  const m=lines[i].match(/^\s*#{2,6}\s+(\d+)[.)]\s+(.+?)\s*$/);
+  const m=lines[i].match(/^\s*#{2,6}\s+(?:\*\*)?(\d+)[.)]\s+(.+?)\s*$/);
   if(m&&topics.length<10)topics.push({start:i,title:m[2].replace(/\*\*/g,"").trim().slice(0,110)});
  }
  if(topics.length<2||topics.length>8||
