@@ -129,7 +129,15 @@ window.nativeDirectTest=(()=>{
         if(typeof failure?.error==='string')detail=failure.error.slice(0,240);
         if(failure?.receipt==='not_submitted')receipt='not_submitted';
       }catch{}
-      const e=new Error('Pi HTTP '+response.status+' ('+path+')'+(detail?': '+detail:''));
+      // HTTP 413 is a reverse-proxy request-size rejection, not a missing PDF tool.
+      const readable=response.status===413?
+        (lang==='ar'?
+          'رفض خادم Pi حجم الطلب (HTTP 413) قبل وصول الملف إلى النموذج. يلزم تصحيح حد الرفع في Nginx الخاص بـPi ثم إعادة الإرسال.':
+          'Pi request exceeded the server upload limit (HTTP 413); the model did not receive the file. Correct the Pi Nginx upload limit and resend.'):
+        response.status===422&&detail?
+          (lang==='ar'?'رفض Pi المرفق أو الطلب: ':'Pi rejected the attachment or request: ')+detail:
+          'Pi HTTP '+response.status+' ('+path+')'+(detail?': '+detail:'');
+      const e=new Error(readable);
       e.status=response.status;
       // Only the Pi bridge can assert non-delivery after rejecting a
       // credential/model preflight. Network timeouts remain uncertain.
@@ -438,7 +446,10 @@ const api=async(path,options={})=>{
  if(revision!==authenticationRevision)throw new Error('Authenticated session changed');
  if(!response.ok){
   if(response.status===401&&!options.allowAnonymous&&currentUser)clearAuthenticatedState();
-  const error=new Error(Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):(body.detail||'Request failed'));error.status=response.status;
+  const readable=response.status===413?
+    (lang==='ar'?'رفض الخادم حجم المرفق (HTTP 413) قبل إرسال الطلب إلى Pi؛ ليس ذلك دليلًا على عدم دعم PDF.':'Server rejected the attachment size (HTTP 413) before Pi received it; PDF support has not been tested.'):
+    Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):(body.detail||'Request failed');
+  const error=new Error(readable);error.status=response.status;
   throw error;
  }
  invalidateProviderMutation(path,options.method);return body;
