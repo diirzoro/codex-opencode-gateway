@@ -964,6 +964,16 @@ const server=http.createServer(async(req,res)=>{
       return issueBrowserGrant(res,grant.account);
     }
     const s=await scope(req,query);
+    // Signed-in account execution lookup. Works from both the account catalog
+    // and project pages without fetching anything through Python.
+    if(pathname==="/execution"&&req.method==="GET"){
+      const running=liveAccountExecution(s.userId);
+      return json(res,200,{running:!!running,
+        project_id:running?.scope.projectId||null,
+        workspace_id:running?.scope.workspaceId||null,
+        project_name:running?.title||null,
+        pending:running?Number(running.session?.pendingMessageCount)||0:0});
+    }
     if(s.catalog){
       if(pathname==="/provider"&&req.method==="GET") {
         const native=await nativeDiscovery(s.userId);
@@ -988,16 +998,6 @@ const server=http.createServer(async(req,res)=>{
       if(pathname==="/provider/auth" || /^\/auth\//.test(pathname))
         return error(res,410,"Shared Pi credential endpoints retired. Verified account-owned connections must be managed by Gateway.");
       return error(res,404,"Pi account endpoint not found");
-    }
-    // Read-only per-account execution status without instantiating another
-    // project worker or involving Gateway/Python on every chat action.
-    if(pathname==="/execution"&&req.method==="GET"){
-      const running=liveAccountExecution(s.userId);
-      return json(res,200,{running:!!running,
-        project_id:running?.scope.projectId||null,
-        workspace_id:running?.scope.workspaceId||null,
-        project_name:running?.title||null,
-        pending:running?Number(running.session?.pendingMessageCount)||0:0});
     }
     // The old OpenCode client polls question/permission queue endpoints.
     // This Pi SDK integration does not create an HTTP approval queue; Pi
