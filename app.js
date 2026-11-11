@@ -134,6 +134,10 @@ window.nativeDirectTest=(()=>{
         (lang==='ar'?
           'رفض خادم Pi حجم الطلب (HTTP 413) قبل وصول الملف إلى النموذج. يلزم تصحيح حد الرفع في Nginx الخاص بـPi ثم إعادة الإرسال.':
           'Pi request exceeded the server upload limit (HTTP 413); the model did not receive the file. Correct the Pi Nginx upload limit and resend.'):
+        response.status===409?
+          (detail||(lang==='ar'?
+            'Pi ما زال ينفّذ مهمة سابقة. استخدم «إيقاف» ثم اختر النموذج الجديد بعد التأكد من انتهاء الطابور.':
+            'Pi is still running a previous task. Use Stop and wait for the queue before changing models.')):
         response.status===422&&detail?
           (lang==='ar'?'رفض Pi المرفق أو الطلب: ':'Pi rejected the attachment or request: ')+detail:
           'Pi HTTP '+response.status+' ('+path+')'+(detail?': '+detail:'');
