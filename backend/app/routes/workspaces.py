@@ -4,7 +4,7 @@ from typing import Literal
 
 
 from fastapi.responses import FileResponse
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
@@ -14,7 +14,7 @@ from ..config import settings
 from ..security.origins import same_origin
 from ..database import get_db
 from ..models import ExecutionEvent, Project, ProjectNativeSessionBinding, User, Workspace, WorkspaceSession
-from ..services import github, policy, preview
+from ..services import github, policy, preview, attachment_reader
 from ..services import workspaces as manager
 from ..services.entitlements import access_payload, require_advanced
 from .dependencies import require_user, require_workspace_entitlement
@@ -299,6 +299,29 @@ def workspace(workspace_id: uuid.UUID,user: User=Depends(require_user),db: Sessi
     # Project location is platform metadata; no AI service-enable gate applies.
     payload["native_directory"]=str(manager.root_for(row,allow_expired=True))
     return payload
+
+@router.post("/workspaces/{workspace_id}/attachments/pi-preflight")
+async def pi_attachment_preflight(workspace_id:uuid.UUID,request:Request,
+                                  file:UploadFile=File(...),
+                                  user:User=Depends(require_user),
+                                  db:Session=Depends(get_db)):
+    """Security-only admission before sending bytes directly to Pi Native.
+
+    Never executes, summarizes, extracts or stores uploaded content.
+    """
+    if not same_origin(request.headers.get("origin"),settings.public_base_url):
+        raise HTTPException(403,"Attachment preflight requires the Gateway origin")
+    workspace=manager.owned(db,Workspace,workspace_id,user.id)
+    project=manager.owned(db,Project,workspace.project_id,user.id)
+    if workspace.project_id!=project.id or project.archived_at is not None:
+        raise HTTPException(403,"The selected project is unavailable")
+    # Starlette's UploadFile can be spooled to disk; enforce a real size cap.
+    raw=await file.read(attachment_reader.PI_UPLOAD_MAX_BYTES+1)
+    try:
+        return attachment_reader.pi_upload_preflight(file.filename,raw)
+    finally:
+        await file.close()
+
 
 @router.get("/workspaces/{workspace_id}/preview/capabilities")
 def workspace_preview_capabilities(workspace_id: uuid.UUID,user: User=Depends(require_user),
