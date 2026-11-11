@@ -1099,7 +1099,15 @@ const server=http.createServer(async(req,res)=>{
   // A failed gateway credential lookup or model preflight means Pi NEVER
   // received a prompt. Once prompt() is dispatched, an HTTP error can be
   // ambiguous and MUST NOT be labelled as a safe-to-retry rejection.
-  let promptDispatched=false;
+  let promptDispatched=false,unacceptedUpload=null;
+  const cleanupUnaccepted=()=>{
+    if(!promptDispatched&&unacceptedUpload)
+      cleanPiStagedDirectories(unacceptedUpload.scope,unacceptedUpload.sessionId,unacceptedUpload.staged);
+  };
+  // HTTP 409/422 and other pre-admission replies must not leave copies of
+  // files in .pi-uploads. Accepted running/queued jobs retain their files.
+  res.once("finish",cleanupUnaccepted);
+  res.once("close",cleanupUnaccepted);
   try{
     const {pathname,query}=cleanPath(req.url||"/");
     if(pathname==="/health" && req.method==="GET")return json(res,200,{service:"pi-central",status:"ready",activeWorkers:pool.size,maxWorkers:MAX_PROCS,activeExecutions:executing.size,maxActiveExecutions:MAX_ACTIVE_EXECUTIONS});
@@ -1228,9 +1236,18 @@ const server=http.createServer(async(req,res)=>{
     }
     if(pathname==="/session" && req.method==="GET")return json(res,200,[{id:a.id,directory:s.directory,title:a.title}]);
     if(pathname==="/session" && req.method==="POST")return json(res,200,{id:a.id,directory:s.directory,title:a.title});
-    if(pathname==="/session/status")return json(res,200,{
-      [a.id]:{type:a.active||a.running?"busy":"idle",
-        pending:Number(a.session.pendingMessageCount)||0}});
+    if(pathname==="/session/status"){
+      const pending=Number(a.session.pendingMessageCount)||0;
+      if(!a.active&&!a.running&&!a.queueContinuationActive&&
+         a.session.isIdle===true&&pending===0){
+        // Reap orphaned temporary attachments from earlier completed runs.
+        // Originals in the project and archive records are never removed.
+        cleanPiFinishedFiles(s,a.id);
+        if(executing.has(a)){releaseExecution(a);a.runningModel=null;}
+      }
+      return json(res,200,{[a.id]:{type:a.active||a.running?"busy":"idle",
+        pending,model:a.runningModel||null}});
+    }
     if(pathname==="/event") {
       res.writeHead(200,{"content-type":"text/event-stream","cache-control":"no-cache, no-store",
         connection:"keep-alive","x-accel-buffering":"no"});
@@ -1362,7 +1379,9 @@ const server=http.createServer(async(req,res)=>{
     }
     if(action==="prompt_async" && req.method==="POST") {
       const b=await body(req);
-      const {message,images}=piPromptParts(b.parts,s,a.id);
+      const parsed=piPromptParts(b.parts,s,a.id);
+      const {message,images}=parsed;
+      unacceptedUpload={scope:s,sessionId:a.id,staged:parsed.staged};
       if((!message.trim()&&!images.length)||message.length>100000)
         return error(res,422,"Prompt required","not_submitted");
       if(!b.model?.providerID||!b.model?.modelID)
@@ -1375,13 +1394,22 @@ const server=http.createServer(async(req,res)=>{
       const other=liveAccountExecution(s.userId);
       if(other&&other.id!==a.id)
         return error(res,409,projectBusyMessage(other),"not_submitted");
+      // Only release a genuinely stale reservation: no SDK run, queue, or
+      // streaming request exists. Do not interrupt a live provider retry.
+      if(a.session.isIdle===true&&!a.active&&!a.running&&!a.queueContinuationActive&&
+         Number(a.session.pendingMessageCount)===0&&executing.has(a)){
+        releaseExecution(a);a.runningModel=null;
+      }
       if(a.active||a.running||executing.has(a)){
         if(images.length&&Array.isArray(a.session.model?.input)&&
            !a.session.model.input.includes("image"))
           return error(res,422,"Selected Pi model cannot read images","not_submitted");
         if(a.runningModel?.providerID!==b.model.providerID||
            a.runningModel?.modelID!==b.model.modelID)
-          return error(res,409,"رسائل الطابور تستخدم نفس النموذج الجاري. انتظر انتهاء المهمة لتغيير النموذج.","not_submitted");
+          return error(res,409,
+            "هناك مهمة Pi ما زالت تعمل بالنموذج السابق. لا يمكن تغيير النموذج أثناء تشغيلها. "+
+            "أوقف المهمة الحالية باستخدام زر «إيقاف» أو انتظر اكتمالها، ثم أرسل بالنموذج الجديد. "+
+            "لن تُحذف المحادثة أو رسائل الطابور.","not_submitted");
         // The already-running agent remains selected for queued messages.
         // A composer agent selection does not create a new agent or project.
         if(!["followUp","steer",undefined].includes(b.queueMode))
@@ -1420,8 +1448,9 @@ const server=http.createServer(async(req,res)=>{
         // Pi can consume an extension command without starting a model run.
         // A started/queued prompt stays reserved until agent_settled or exit.
         if(accepted?.disposition==="handled"){
-          // An installed Pi extension consumed the input; no assistant turn
-          // is guaranteed. Distinguish this from a running provider request.
+          // No model run will read the file. It is safe to remove this
+          // request's staging now, without touching earlier queued jobs.
+          cleanPiStagedDirectories(s,a.id,parsed.staged);
           return json(res,200,{accepted:true,handled:true,disposition:"handled"});
         }
         if(accepted?.disposition==="queued")
