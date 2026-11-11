@@ -1327,6 +1327,16 @@ async function refreshMessages(){
    if(row.role==='assistant'&&!hasText&&presentation.feedback){const state=presentation.state;
     const labels={waiting_approval:['Waiting for your approval…','بانتظار موافقتك…'],failed:['The agent could not finish this request. Review the activity below before retrying.','تعذر على الوكيل إكمال الطلب. راجع النشاط أدناه قبل إعادة المحاولة.'],cancelled:['Execution stopped.','تم إيقاف التنفيذ.'],working:['The agent is working…','الوكيل يعمل الآن…'],completed:['Tool step completed.','اكتملت خطوة الأدوات.']};
     if(latest&&state==='completed')labels.completed=['The agent finished without a text reply. Review the tool results below.','انتهى الوكيل دون رد نصي. راجع نتائج الأدوات أدناه.'];
+    if(Array.isArray(previousAttachments)&&previousAttachments.length){
+      labels.failed=[
+        'Pi could not complete the file-reading request. Check actual Pi tool results; model or tool support may be unavailable. Do not assume the file was read.',
+        'لم يتمكن Pi من إكمال قراءة المرفق. راجع نتائج أدوات Pi الحقيقية؛ قد لا يدعم النموذج أو الأداة هذا النوع. لا تفترض أنه قرأ الملف.'
+      ];
+      if(latest&&state==='completed')labels.completed=[
+        'Pi did not provide a readable response to the attachment. Check the tool results before assuming its contents were inspected.',
+        'لم يقدم Pi ردًا مقروءًا على المرفق؛ افحص نتائج الأدوات قبل افتراض أنه فحص المحتوى.'
+      ];
+    }
     const feedback=textElement('p',labels[state][lang==='ar'?1:0],'agent-progress-note');feedback.setAttribute('role','status');node.append(feedback);
    }if(row.role==='user'&&row.attachments?.length){const attached=textElement('div','','message-attachments');for(const file of row.attachments){const label=textElement('span',file.name+(Number.isFinite(file.size)?' · '+Math.ceil(file.size/1024)+' KB':''));label.dir='auto';attached.append(label);}node.append(attached);}
    window.renderMessageActivity?.(node,presentation.activity);
