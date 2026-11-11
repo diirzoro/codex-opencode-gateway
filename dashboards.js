@@ -2158,7 +2158,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       let receipt;
       try{receipt=await form.onsubmit({preventDefault(){}});}
       finally{choiceContinuation=false;}
-      if(receipt?.accepted===true)return receipt;
+      if(receipt?.accepted===true&&!receipt?.handled)return receipt;
+      if(receipt?.handled){
+        return {accepted:false,handled:true,reason:tr(
+          'The Pi command intercepted the choice without starting a model response. Select regular Pi chat and continue; nothing was resent.',
+          'اعترض أمر Pi الاختيار دون بدء رد من النموذج. اختر محادثة Pi العادية ثم تابع؛ لم تُعَد الرسالة تلقائيًا.')};
+      }
       const uncertain=Boolean(window.nativeSession?.blocked(sessionId));
       if(!uncertain&&input.value===text){
         input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));
@@ -2200,14 +2205,16 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           text:prompt,providerID:provider,modelID:model,agent:selectedAgent,
           variant:nativeVariant.value||undefined,files:nativeFiles
         });
-        sentAttachments({attachments:nativeFiles});draft.confirm();
         if(receipt?.handled){
           clearSendingPreview();
+          // Pi did not create a model turn. Keep the unsent text and attached
+          // files available instead of falsely consuming the user's draft.
           submissionStatus.textContent=tr(
-            'The selected Pi command processed the message without starting a model response. Use the normal Pi chat mode for an answer, or inspect command activity.',
-            'عالج أمر Pi المحدد الرسالة دون بدء رد من النموذج. استخدم وضع المحادثة العادية مع Pi للحصول على إجابة، أو راجع نشاط الأمر.');
+            'The selected Pi command handled the input without starting a model reply. Your draft is preserved. Select normal Pi chat to send it to the model.',
+            'عالج أمر Pi المحدد الإدخال دون بدء رد من النموذج. بقيت مسودتك محفوظة. اختر محادثة Pi العادية لإرسالها إلى النموذج.');
           return {accepted:true,handled:true,queued:false};
         }
+        sentAttachments({attachments:nativeFiles});draft.confirm();
         if(receipt?.queued){
           submissionStatus.textContent=tr('Added to Pi queue ('+receipt.pending+' pending).',
             'أُضيفت الرسالة إلى طابور Pi ('+receipt.pending+' منتظرة).');
