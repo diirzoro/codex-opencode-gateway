@@ -510,6 +510,25 @@ class SdkAgent {
       for(const res of this.events)try{res.write("data: "+issue+"\n\n");}catch{this.events.delete(res);}
     }
     if(event.type==="agent_settled"){
+      // An accepted HTTP prompt is not proof of a model answer. Detect
+      // genuinely settled Pi runs that produced no text for their latest
+      // user turn, without altering the native queue or retrying automatically.
+      if(!event.aborted&&!this.queueContinuationActive){
+        const messages=Array.isArray(this.session.messages)?this.session.messages:[];
+        let lastUser=-1;
+        for(let i=messages.length-1;i>=0;i--){
+          if(messages[i]?.role==="user"){lastUser=i;break;}
+        }
+        if(lastUser>=0){
+          const assistants=messages.slice(lastUser+1).filter(x=>x?.role==="assistant");
+          const hasText=assistants.some(message=>Array.isArray(message.content)&&
+            message.content.some(part=>part?.type==="text"&&String(part.text||"").trim()));
+          const failed=assistants.some(message=>message.stopReason==="error"||message.errorMessage);
+          if(!hasText&&!failed)this.emitUI("run_outcome",{
+            kind:"no_text",pending:Number(this.session.pendingMessageCount)||0
+          });
+        }
+      }
       const now=Date.now();
       for(const res of this.events)try{
         res.write("data: "+JSON.stringify({type:"message.updated",
