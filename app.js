@@ -1170,10 +1170,10 @@ function renderPiOptionCards(host,answer,messageId){
    for(const radio of radios)radio.disabled=true;
    customText.disabled=true;cancelButton.disabled=true;continueButton.disabled=true;
    status.textContent=result.queued?
-    (lang==='ar'?'استلم Pi اختيارك وأضافه إلى الطابور، وسيكمل المحادثة تلقائيًا.':
-      'Pi queued your choice and will continue this conversation automatically.'):
-    (lang==='ar'?'استلم Pi اختيارك، وسيكمل العمل في هذه المحادثة.':
-      'Pi accepted your choice and will continue in this conversation.');
+    (lang==='ar'?'أُضيف اختيارك إلى طابور Pi داخل المحادثة نفسها. لم يكتمل الرد بعد.':
+      'Pi queued your choice in the same conversation. The model reply is still pending.'):
+    (lang==='ar'?'استلم Pi اختيارك في الجلسة نفسها. ننتظر الآن الرد الفعلي من النموذج.':
+      'Pi accepted your choice in this session. Waiting for the actual model reply.');
    return;
   }
   if(result?.uncertain){
@@ -1193,7 +1193,7 @@ function renderPiOptionCards(host,answer,messageId){
  if(savedStatus==='requested'){
   for(const radio of radios)radio.disabled=true;
   customText.disabled=true;cancelButton.disabled=true;continueButton.disabled=true;
-  status.textContent=lang==='ar'?'تم طلب المتابعة باستخدام هذا الاختيار.':'Continuation was requested with this choice.';
+  status.textContent=lang==='ar'?'تم إرسال الاختيار سابقًا إلى Pi. تحقق من رد المحادثة أو من نشاط الأدوات.':'The choice was previously submitted to Pi. Check the reply or tool activity.';
  }else update();
  if(structured&&host.firstChild){
    // Avoid repeating Pi's long comparison prose above the compact table.
@@ -1368,7 +1368,7 @@ async function refreshMessages(){
    if(row.role==='user')foldLongUserMessage(node,content,row.text||'',expandedUserMessages.has(String(row.id)));
    if(row.role==='assistant'&&!hasText&&presentation.feedback){const state=presentation.state;
     const labels={waiting_approval:['Waiting for your approval…','بانتظار موافقتك…'],failed:['The agent could not finish this request. Review the activity below before retrying.','تعذر على الوكيل إكمال الطلب. راجع النشاط أدناه قبل إعادة المحاولة.'],cancelled:['Execution stopped.','تم إيقاف التنفيذ.'],working:['The agent is working…','الوكيل يعمل الآن…'],completed:['Tool step completed.','اكتملت خطوة الأدوات.']};
-    if(latest&&state==='completed')labels.completed=['The agent finished without a text reply. Review the tool results below.','انتهى الوكيل دون رد نصي. راجع نتائج الأدوات أدناه.'];
+    if(latest&&state==='completed')labels.completed=['Pi ended this run without a text reply. Check actual tool results and use Recover Conversation before resending.','أنهى Pi التشغيل دون رد نصي. افحص نتائج الأدوات واستخدم «استعادة المحادثة» قبل إعادة إرسال الطلب.'];
     if(Array.isArray(previousAttachments)&&previousAttachments.length){
       labels.failed=[
         'Pi could not complete the file-reading request. Check actual Pi tool results; model or tool support may be unavailable. Do not assume the file was read.',
