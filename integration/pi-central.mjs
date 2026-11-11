@@ -764,12 +764,41 @@ async function body(req) {
   let s="";for await(const part of req){s+=part;if(s.length>12*1024*1024)throw Object.assign(new Error("Body too large"),{status:413});}
   try{return s?JSON.parse(s):{};}catch{throw Object.assign(new Error("Invalid JSON"),{status:400});}
 }
+function cleanPiStagedDirectories(scope,sessionId,staged=[]){
+  // Only Pi-generated UUID folders in THIS authenticated workspace/session.
+  // Never remove the project source, archives or an arbitrary client path.
+  const base=path.resolve(scope.directory,".pi-uploads",sessionId);
+  const root=path.resolve(scope.directory);
+  if(!base.startsWith(root+path.sep))return;
+  for(const folder of staged){
+    const absolute=path.resolve(folder);
+    if(path.dirname(absolute)!==base||
+       !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(path.basename(absolute)))continue;
+    try{
+      if(existsSync(absolute)&&!lstatSync(absolute).isSymbolicLink())
+        rmSync(absolute,{recursive:true,force:true,maxRetries:2,retryDelay:50});
+    }catch(e){console.warn("Pi temporary file cleanup failed:",e.code||e.name);}
+  }
+}
+function cleanPiFinishedFiles(scope,sessionId){
+  const root=path.resolve(scope.directory);
+  const base=path.resolve(root,".pi-uploads",sessionId);
+  if(!base.startsWith(root+path.sep)||!existsSync(base))return;
+  try{
+    if(lstatSync(base).isSymbolicLink()||realpathSync(base)!==base)return;
+    const list=readdirSync(base,{withFileTypes:true})
+      .filter(x=>x.isDirectory())
+      .map(x=>path.join(base,x.name));
+    cleanPiStagedDirectories(scope,sessionId,list);
+  }catch(e){console.warn("Pi completed upload cleanup failed:",e.code||e.name);}
+}
 function piPromptParts(rawParts, scope, sessionId) {
   // The existing browser form sends file parts as data URLs or file:// URLs.
   // Images go directly to Pi RPC; other files are staged *inside* the owned
   // Pi workspace and referenced by path for Pi's native tools to inspect.
   const parts=Array.isArray(rawParts)?rawParts:[];
-  const messages=[], images=[];
+  const messages=[], images=[], staged=[];
+  try{
   for(const p of parts) {
     if(p?.type==="text") {
       if(typeof p.text==="string")messages.push(p.text);
@@ -824,8 +853,12 @@ function piPromptParts(rawParts, scope, sessionId) {
       continue;
     }
     const target=path.join(scope.directory,".pi-uploads",sessionId,randomUUID(),filename);
-    mkdirSync(path.dirname(target),{recursive:true,mode:0o700});
+    const folder=path.dirname(target);
+    mkdirSync(folder,{recursive:true,mode:0o700});
+    if(realpathSync(folder)!==path.resolve(folder))
+      throw Object.assign(new Error("Unsafe Pi attachment directory"),{status:403});
     writeFileSync(target,data,{mode:0o600,flag:"wx"});
+    staged.push(folder);
     const relative=path.relative(scope.directory,target);
     if(mime==="application/pdf")
       messages.push("USER-ATTACHED PDF: "+filename+" at "+relative+
@@ -837,7 +870,11 @@ function piPromptParts(rawParts, scope, sessionId) {
     else messages.push("USER-ATTACHED UTF-8 TEXT FILE: "+filename+" at "+relative+
       "\nUse Pi's own read tool to inspect the text before summarizing it.");
   }
-  return {message:messages.join("\n"),images};
+  return {message:messages.join("\n"),images,staged};
+  }catch(e){
+    cleanPiStagedDirectories(scope,sessionId,staged);
+    throw e;
+  }
 }
 // Existing project-file explorer transport. File contents are workspace data,
 // not a second coding agent or Python file processor. The Pi agent itself uses
