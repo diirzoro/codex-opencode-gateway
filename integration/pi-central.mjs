@@ -645,10 +645,10 @@ class SdkAgent {
     if(this.active||this.running)
       throw Object.assign(new Error("Project already has an active Pi run"),{status:409});
     // Pi SDK prompt() resolves when the full run finishes. Its documented
-    // preflightResult(true) confirms prompt acceptance BEFORE model completion.
+    // preflightResult("started"|"queued"|"handled") runs before completion.
     const images=Array.isArray(fields.images)?fields.images:[];
     this.settledObserved=false;
-    let admissionResolve,admissionReject,admitted=false;
+    let admissionResolve,admissionReject,admitted=false,startedDisposition=null;
     const admission=new Promise((resolve,reject)=>{
       admissionResolve=resolve;admissionReject=reject;
     });
@@ -657,6 +657,7 @@ class SdkAgent {
     const completeAdmission=(disposition)=>{
       if(admitted)return;
       admitted=true;
+      startedDisposition=disposition;
       if(["started","queued","handled"].includes(disposition)){
         admissionResolve(disposition);
         return;
@@ -687,7 +688,11 @@ class SdkAgent {
       catch{this.close();}
       this.running=null;this.active=false;this.runningModel=null;
       releaseExecution(this);
-      if(!this.closed&&!this.settledObserved)this.consume({type:"agent_settled"});
+      // An extension-handled command never started an agent run. Fabricating
+      // agent_settled for it incorrectly marks the prior chat as completed
+      // and can make new messages appear blocked/finished without a response.
+      if(!this.closed&&!this.settledObserved&&startedDisposition==="started")
+        this.consume({type:"agent_settled",aborted:false});
     }).catch(()=>{});
     const disposition=await admission;
     return {accepted:true,disposition};
