@@ -970,9 +970,10 @@ async function refreshWorkspaceTodos(force=false){
   if(panel.hidden)return;
   if(firstAppearance)panel.open=true;
   const finished=rows.filter(x=>x.status==='completed').length;
+  const verified=data.source==='pi-tool';
   panel.querySelector('summary').textContent=
-   (lang==='ar'?'قائمة المهام من خطة Pi':'Pi plan checklist')+
-   ' · '+finished+'/'+rows.length+' '+(lang==='ar'?'مُعلّم كمكتمل':'marked complete');
+   (verified?(lang==='ar'?'مهام Pi الفعلية':'Pi tasks'):(lang==='ar'?'خطة Pi المكتوبة':'Pi plan checklist'))+
+   ' · '+finished+'/'+rows.length+' '+(verified?(lang==='ar'?'مكتمل':'completed'):(lang==='ar'?'مُعلّم كمكتمل':'marked complete'));
   const list=panel.querySelector('ol');list.replaceChildren();
   for(const item of rows){
    const li=document.createElement('li');li.textContent=item.content;li.className='todo-'+item.status;const state=document.createElement('small');state.textContent=' · '+({pending:lang==='ar'?'بانتظار التنفيذ':'Pending',in_progress:lang==='ar'?'قيد التنفيذ':'In progress',completed:lang==='ar'?'مكتمل':'Completed',cancelled:lang==='ar'?'أُلغي':'Cancelled'}[item.status]||'');li.append(state);

@@ -653,6 +653,20 @@ function projectFileRequest(scope,pathname,query) {
   }
   throw Object.assign(new Error("Unsupported project file operation"),{status:404});
 }
+function piNativeTodos(messages){
+  // Only the existing Pi todo extension's tool results represent real state.
+  for(let index=messages.length-1;index>=0;index--){
+    const message=messages[index];
+    if(message?.role!=="toolResult"||message.toolName!=="todo"||
+       !Array.isArray(message.details?.todos))continue;
+    const items=message.details.todos.slice(0,32)
+      .filter(item=>item&&typeof item.text==="string")
+      .map(item=>({content:item.text.slice(0,220),
+        status:item.done===true?"completed":"pending"}));
+    return {supported:true,source:"pi-tool",items};
+  }
+  return {supported:false,source:"pi-tool",items:[]};
+}
 function mapped(messages, id) {
   // Use real Pi toolCall and toolResult records from the native JSONL.
   // Text that merely says "<tool_call>" never becomes an executed tool.
@@ -929,6 +943,8 @@ const server=http.createServer(async(req,res)=>{
       const data=await a.command("get_messages");
       return json(res,200,mapped(data?.messages||[],a.id));
     }
+    if(action==="todos" && req.method==="GET")
+      return json(res,200,piNativeTodos((await a.command("get_messages"))?.messages||[]));
     if(action==="prompt_async" && req.method==="POST") {
       const b=await body(req);
       const {message,images}=piPromptParts(b.parts,s,a.id);

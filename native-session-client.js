@@ -402,7 +402,10 @@
     // Optional OpenCode compatibility routes are not native Pi session
     // operations. Do not call them and produce 501 on every workspace open.
     // Workspace git/status remains the authoritative file-change source.
-    if(tail==='todos')return {value:piTasks(await history(id))};
+    if(tail==='todos'){
+      const nativeTasks=await sessionRequest(id,'todos');
+      return {value:nativeTasks?.supported?nativeTasks:piTasks(await history(id))};
+    }
     if(tail==='diff')return {value:[]};
     if(tail==='stop')return {value:await forceStop(id)};
     if(tail==='questions')return {value:{requests:await requests('question',id)}};
@@ -530,6 +533,8 @@
             stage:"tool_activity",files:file?[{path:file,operation}]:[]
           });
         }
+        if(finished&&tool==="todo")
+          void window.refreshWorkspaceTodos?.(true);
         if(finished&&!p.isError&&["write","edit","bash","apply_patch"].includes(tool))
           filesChanged();
         return;
