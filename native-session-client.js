@@ -289,7 +289,7 @@
   function toolActivity(part,row){
     const state=part.state||{},input=state.input||{},metadata=state.metadata||{},files=[];
     const add=(value,operation)=>{const path=relativeFile(value,row);if(path&&!files.some(f=>f.path===path&&f.operation===operation))files.push({path,operation});};
-    if(['read','edit','write','multiedit'].includes(part.tool))add(input.filePath,part.tool==='read'?'inspected':'changed');
+    if(['read','edit','write','multiedit'].includes(part.tool))add(input.filePath||input.path,part.tool==='read'?'inspected':'changed');
     if(part.tool==='apply_patch'&&Array.isArray(metadata.files))for(const file of metadata.files.slice(0,50)){const operation={add:'created',update:'changed',delete:'deleted',move:'moved'}[file?.type];if(operation){add(file.relativePath||file.filePath,operation);if(file.movePath)add(file.movePath,'moved');}}
     const status=['pending','running','completed','error'].includes(state.status)?state.status:'pending';
     const result={native:true,workspace_id:row?.workspace_id,id:part.callID,tool:part.tool,status,stage:'tool_activity',files};
@@ -299,6 +299,27 @@
     // credentials/file contents. Only these bounded numeric facts are displayed.
     for(const key of ['matches','count'])if(Number.isInteger(metadata[key])&&metadata[key]>=0)result[key]=metadata[key];
     return result;
+  }
+  // Display Pi's existing checkbox plan in the existing Todo panel.
+  // This does not implement a second task engine or mark execution complete.
+  function piTasks(messages){
+    if(!Array.isArray(messages))return {supported:false,items:[]};
+    for(let i=messages.length-1;i>=0;i--){
+      const m=messages[i];
+      if(m?.info?.role!=="assistant")continue;
+      const text=(m.parts||[]).filter(p=>p?.type==="text")
+        .map(p=>p.text||"").join("\n");
+      if(!text||!/(?:todo|to-do|task list|checklist|قائمة المهام|قائمة أعمال|المهام)/i.test(text))continue;
+      const items=[];
+      for(const line of text.split("\n")){
+        const match=line.match(/^\s*(?:[-*•]|\d+[.)])\s+\[([ xX])\]\s+(.{1,220})\s*$/);
+        if(match)items.push({content:match[2].trim(),
+          status:/[xX]/.test(match[1])?"completed":"pending"});
+        if(items.length>=32)break;
+      }
+      if(items.length)return {supported:true,source:"pi-message",items};
+    }
+    return {supported:false,items:[]};
   }
   function display(messages,row){
     if(!Array.isArray(messages))throw Error('Invalid native message snapshot');
@@ -381,7 +402,7 @@
     // Optional OpenCode compatibility routes are not native Pi session
     // operations. Do not call them and produce 501 on every workspace open.
     // Workspace git/status remains the authoritative file-change source.
-    if(tail==='todos')return {value:{supported:false,items:[]}};
+    if(tail==='todos')return {value:piTasks(await history(id))};
     if(tail==='diff')return {value:[]};
     if(tail==='stop')return {value:await forceStop(id)};
     if(tail==='questions')return {value:{requests:await requests('question',id)}};
@@ -487,6 +508,24 @@
         statuses.set(id,"failed");if(activeSession?.id===id)activeSession.execution_status="failed";
         toast(readable);return;
       }
+      if(/^pi\.tool_execution_(start|update|end)$/.test(e.type)){
+        // Pi SDK is the authority. Do not infer tool usage from model prose.
+        const tool=String(p.toolName||""),callId=String(p.toolCallId||"");
+        const finished=e.type==="pi.tool_execution_end";
+        if(tool&&callId&&(e.type==="pi.tool_execution_start"||finished)){
+          const args=p.args&&typeof p.args==="object"?p.args:{};
+          const file=relativeFile(args.path||args.filePath||"",row);
+          const operation=tool==="read"?"inspected":"changed";
+          window.renderWorkspaceEventLine?.("activity",{
+            native:true,workspace_id:row.workspace_id,
+            id:callId,tool,status:finished?(p.isError?"error":"completed"):"running",
+            stage:"tool_activity",files:file?[{path:file,operation}]:[]
+          });
+        }
+        if(finished&&!p.isError&&["write","edit","bash","apply_patch"].includes(tool))
+          filesChanged();
+        return;
+      }
       if(e.type==="pi.message_end"){
         const m=p.message;
         if(m?.role==="assistant"){
@@ -502,7 +541,9 @@
         if(activeSession?.id===id)activeSession.execution_status=finalState;
         void history(id,true).then(async()=>{
           if(stream!==source||!current(id,user))return;
-          await refreshMessages();clearPiReply(id);
+          await refreshMessages();
+          await window.refreshWorkspaceTodos?.(true);
+          clearPiReply(id);
         }).catch(err=>{if(stream===source&&current(id,user))
           document.getElementById("runtimeStatus").textContent=err.message;});
         return;

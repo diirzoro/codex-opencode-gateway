@@ -965,10 +965,14 @@ async function refreshWorkspaceTodos(force=false){
   const data=await api('/api/sessions/'+encodeURIComponent(sessionId)+'/todos');
   if(todoSessionKey!==key||todoEpoch!==token.epoch||activeSession?.id!==sessionId||currentUser?.id!==ownerId)return;
   const rows=Array.isArray(data.items)?data.items:[];
+  const firstAppearance=panel.hidden;
   panel.hidden=!data.supported||!rows.length;
   if(panel.hidden)return;
+  if(firstAppearance)panel.open=true;
   const finished=rows.filter(x=>x.status==='completed').length;
-  panel.querySelector('summary').textContent=(lang==='ar'?'قائمة المهام':'Task list')+' · '+finished+'/'+rows.length+' '+(lang==='ar'?'مكتمل':'completed');
+  panel.querySelector('summary').textContent=
+   (lang==='ar'?'قائمة المهام من خطة Pi':'Pi plan checklist')+
+   ' · '+finished+'/'+rows.length+' '+(lang==='ar'?'مُعلّم كمكتمل':'marked complete');
   const list=panel.querySelector('ol');list.replaceChildren();
   for(const item of rows){
    const li=document.createElement('li');li.textContent=item.content;li.className='todo-'+item.status;const state=document.createElement('small');state.textContent=' · '+({pending:lang==='ar'?'بانتظار التنفيذ':'Pending',in_progress:lang==='ar'?'قيد التنفيذ':'In progress',completed:lang==='ar'?'مكتمل':'Completed',cancelled:lang==='ar'?'أُلغي':'Cancelled'}[item.status]||'');li.append(state);
@@ -980,6 +984,12 @@ async function refreshWorkspaceTodos(force=false){
 // A deliberately small, text-only Markdown subset. Never interpret Agent HTML.
 function renderAgentText(host,value){
  host.replaceChildren();host.classList.add('message-rich');host.dir='auto';
+ // Present paths relative to the verified selected project's root.
+ // Keep the stored Pi message and clipboard text unchanged.
+ const root=activeSession?.native_directory;
+ if(typeof root==='string'&&root.startsWith('/')&&root.length>10){
+   value=String(value).split(root.replace(/\/$/,'')+'/').join('./');
+ }
  function inline(node,text){
   let at=0;const tokens=/(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
   for(const match of text.matchAll(tokens)){

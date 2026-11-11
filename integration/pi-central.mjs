@@ -548,13 +548,36 @@ function projectFileRequest(scope,pathname,query) {
   throw Object.assign(new Error("Unsupported project file operation"),{status:404});
 }
 function mapped(messages, id) {
-  return messages.map((m,index)=>{
-    const text=Array.isArray(m.content) ? m.content.filter(x=>x.type==="text").map(x=>x.text||"").join("\n"):typeof m.content==="string"?m.content:"";
+  // Use real Pi toolCall and toolResult records from the native JSONL.
+  // Text that merely says "<tool_call>" never becomes an executed tool.
+  const receipts=new Map();
+  for(const m of messages)if(m?.role==="toolResult"&&typeof m.toolCallId==="string")
+    receipts.set(m.toolCallId,m);
+  return messages.flatMap((m,index)=>{
+    if(!m||m.role==="toolResult")return [];
     const mid="msg_"+createHash("sha256").update(id+":"+index).digest("hex").slice(0,24);
-    return {info:{id:mid,sessionID:id,role:m.role==="assistant"?"assistant":m.role==="user"?"user":"tool",time:{created:Date.now()},
+    const content=Array.isArray(m.content)?m.content:[];
+    const text=content.length?content.filter(x=>x?.type==="text").map(x=>x.text||"").join("\n"):
+      typeof m.content==="string"?m.content:"";
+    const parts=[];
+    if(text)parts.push({id:"part_"+mid,messageID:mid,sessionID:id,type:"text",text});
+    for(const item of content){
+      if(item?.type!=="toolCall"||typeof item.id!=="string"||
+         typeof item.name!=="string")continue;
+      const result=receipts.get(item.id);
+      const args=item.arguments&&typeof item.arguments==="object"?item.arguments:{};
+      const filePath=typeof args.path==="string"?args.path:
+        typeof args.filePath==="string"?args.filePath:"";
+      parts.push({id:"tool_"+mid+"_"+parts.length,messageID:mid,sessionID:id,
+        type:"tool",callID:item.id,tool:item.name,
+        state:{status:result?(result.isError?"error":"completed"):"pending",
+          input:filePath?{filePath}:{},metadata:{}}});
+    }
+    return [{info:{id:mid,sessionID:id,
+      role:m.role==="assistant"?"assistant":m.role==="user"?"user":"tool",
+      time:{created:Date.now()},
       ...(m.role==="assistant"&&(m.stopReason==="error"||m.errorMessage)
-        ?{error:{name:"ProviderError",kind:piProviderFailure(m)}}:{})},
-      parts:[{id:"part_"+mid,messageID:mid,sessionID:id,type:"text",text}]};
+        ?{error:{name:"ProviderError",kind:piProviderFailure(m)}}:{})},parts}];
   });
 }
 
