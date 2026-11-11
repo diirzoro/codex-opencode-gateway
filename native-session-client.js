@@ -407,6 +407,10 @@
       return {value:nativeTasks?.supported?nativeTasks:piTasks(await history(id))};
     }
     if(tail==='diff')return {value:[]};
+    if(tail==='queue'&&method==='GET')
+      return {value:await sessionRequest(id,'queue')};
+    if(tail==='reset-context'&&method==='POST')
+      return {value:await resetContext(id)};
     if(tail==='stop')return {value:await forceStop(id)};
     if(tail==='questions')return {value:{requests:await requests('question',id)}};
     if(tail==='permissions')return {value:await requests('permission',id)};
@@ -499,6 +503,8 @@
         void window.refreshWorkspaceQuestions?.();
         return;
       }
+      if(e.type==="pi.queue_updated"||e.type==="pi.agent_settled")
+        void window.refreshWorkspaceQueue?.();
       if(e.type==="pi.ui_notice"){
         if(typeof p.text==="string"&&p.text)toast(p.text.slice(0,300));
         return;
@@ -628,6 +634,24 @@
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
   }
   function stop(){stream?.close();stream=null;streamId='';}
+  async function resetContext(id){
+    const row=await context(id);
+    if(!activeWorkspace||String(row.workspace_id)!==String(activeWorkspace.id))
+      throw Error(label('Choose the project before cleaning its context.','اختر المشروع قبل تنظيف سياقه.'));
+    const result=await native(row.workspace_id,
+      'session/'+encodeURIComponent(row.runtime_id)+'/reset_context',
+      {confirm:'RESET_PROJECT_CONTEXT'},{timeout:30000});
+    if(!result?.reset)throw Error(label('Pi did not confirm context reset.','لم يؤكد Pi تنظيف السياق.'));
+    histories.delete(id);uncertain.delete(id);piLive.delete(id);
+    statuses.set(id,'idle');
+    try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
+    stop();
+    if(activeSession?.id===id){
+      activeSession.execution_status='idle';
+      await start();
+    }
+    return result;
+  }
   async function forceStop(id){
     const user=owner(),generation=epoch;
     sendGenerations.set(id,(sendGenerations.get(id)||0)+1);
@@ -677,8 +701,10 @@
     }))];
     const pending={messageID,text,files:files.map(f=>({path:f.path,mime:f.mime,name:f.name})),providerID,modelID,agent,variant};uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}
     const submissionController=new AbortController();submissionsInFlight.set(id,submissionController);
-    try{await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
-      messageID,model:{providerID,modelID},...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,timeout:30000});}
+    let receipt=null;
+    try{receipt=await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
+      messageID,model:{providerID,modelID},queueMode:'followUp',
+      ...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,timeout:30000});}
     catch(error){
       // A user-initiated Stop/attachment cancellation MUST release the
       // original submission immediately. A message-history GET can itself
@@ -730,8 +756,9 @@
     uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
     if((statusEvents.get(id)||0)===seenStatus)statuses.set(id,'submitted');
     if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'submitted';
-    // The native acknowledgment is final for submission. Live/reconnect SSE
-    // reconciles execution; a second status read cannot undo the acknowledgment.
+    // Pi continues on the server after navigation or browser disconnect.
+    void window.refreshWorkspaceQueue?.();
+    return {queued:receipt?.queued===true,pending:receipt?.pending||0};
   }
   // Native owns both cancellation and subsequent execution. Never touch another session.
   async function replaceRunningModel(id,providerID,modelID){
@@ -871,7 +898,7 @@
           .map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
       }))};
   }
-  window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
+  window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,resetContext,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
   window.addEventListener('account-provider-changed',()=>{snapshots.clear();discoveryReads.clear();});
 })();
