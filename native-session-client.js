@@ -431,7 +431,12 @@
     const live=await coalesce('status:'+row.workspace_id,()=>native(row.workspace_id,'session/status'));
     if(!live||typeof live!=='object'||Array.isArray(live))throw Error('Invalid native session status');
     if(epoch!==generation||owner()!==user||statusReads.get(id)!==sequence||(statusEvents.get(id)||0)!==seen||!valid())return;
-    statuses.set(id,live[row.runtime_id]?.type&&live[row.runtime_id].type!=='idle'?'submitted':'idle');
+    const state=live[row.runtime_id]?.type&&live[row.runtime_id].type!=='idle'?'submitted':'idle';
+    statuses.set(id,state);
+    if(current(id,user))activeSession.execution_status=state;
+    window.dispatchEvent(new CustomEvent('workspace-native-execution-changed',{
+      detail:{sessionId:id,state}
+    }));
   }
   function piReply(id,fragment,final=false){
     if(!current(id,owner())||typeof fragment!=="string")return;
@@ -805,6 +810,13 @@
         if(owner()===user&&epoch===sendEpoch){
           uncertain.delete(id);
           try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
+          // On a model-mismatch 409, fetch authoritative Pi status. The
+          // frontend may think the prior run is idle, hiding its Stop control.
+          // Do not stop a live run or discard its queue automatically.
+          if(error.status===409){
+            try{await synchronizeStatus(row,id,()=>current(id,user));}
+            catch{/* Preserve the original server rejection and draft. */}
+          }
         }
         throw error;
       }
