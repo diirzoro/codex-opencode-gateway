@@ -1117,7 +1117,8 @@ const server=http.createServer(async(req,res)=>{
   // HTTP 409/422 and other pre-admission replies must not leave copies of
   // files in .pi-uploads. Accepted running/queued jobs retain their files.
   res.once("finish",cleanupUnaccepted);
-  res.once("close",cleanupUnaccepted);
+  // Never remove staging on an early client disconnect: Native Pi may still
+  // be admitting this request. The rejection and settle paths own cleanup.
   try{
     const {pathname,query}=cleanPath(req.url||"/");
     if(pathname==="/health" && req.method==="GET")return json(res,200,{service:"pi-central",status:"ready",activeWorkers:pool.size,maxWorkers:MAX_PROCS,activeExecutions:executing.size,maxActiveExecutions:MAX_ACTIVE_EXECUTIONS});
@@ -1477,6 +1478,7 @@ const server=http.createServer(async(req,res)=>{
     if(action==="abort" && req.method==="POST")return json(res,200,await a.command("abort",{},30000));
     return error(res,501,"Pi operation not implemented");
   }catch(e){
+    if(!promptDispatched)cleanupUnaccepted();
     const isPrompt=(req.method==="POST"&&
       /^\/session\/[^/]+\/prompt_async(?:\?|$)/.test(cleanPath(req.url||"/").pathname));
     return error(res,e.status||502,e.message||"Pi adapter error",
