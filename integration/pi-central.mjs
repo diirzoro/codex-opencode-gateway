@@ -11,7 +11,7 @@
 import http from "node:http";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 
@@ -1144,6 +1144,47 @@ const server=http.createServer(async(req,res)=>{
       return json(res,200,piNativeTodos((await a.command("get_messages"))?.messages||[]));
     if(action==="queue"&&req.method==="GET")
       return json(res,200,await a.command("get_queue"));
+    // Archived conversations belong to this authenticated project only.
+    // Read-only archive browsing never touches source files or starts an AI run.
+    if(req.method==="GET"&&(action==="archives"||action.startsWith("archives/"))){
+      const archive=path.resolve(ROOT,"projects",s.userId,s.workspaceId,"history-archive");
+      const parent=path.resolve(ROOT,"projects",s.userId,s.workspaceId);
+      if(!archive.startsWith(parent+path.sep))
+        return error(res,403,"Invalid conversation archive directory");
+      if(!existsSync(archive))return action==="archives"?
+        json(res,200,{archives:[]}):error(res,404,"Archived conversation not found");
+      if(lstatSync(archive).isSymbolicLink()||realpathSync(archive)!==archive)
+        return error(res,403,"Unsafe conversation archive directory");
+      const valid=name=>/^[0-9]{13}-[0-9a-f-]{36}\.jsonl$/i.test(name);
+      if(action==="archives"){
+        const items=readdirSync(archive,{withFileTypes:true})
+          .filter(item=>item.isFile()&&valid(item.name))
+          .sort((one,two)=>two.name.localeCompare(one.name)).slice(0,60)
+          .map(item=>({id:item.name,archived_at:Number(item.name.slice(0,13)),
+            bytes:statSync(path.join(archive,item.name)).size}));
+        return json(res,200,{archives:items});
+      }
+      const name=decodeURIComponent(action.slice("archives/".length));
+      if(!valid(name))return error(res,404,"Archived conversation not found");
+      const filename=path.join(archive,name);
+      if(!existsSync(filename)||lstatSync(filename).isSymbolicLink()||
+          !statSync(filename).isFile())return error(res,404,"Archived conversation not found");
+      if(statSync(filename).size>8*1024*1024)
+        return error(res,413,"Archive is too large for browser preview; the original remains saved");
+      const messages=[];
+      for(const raw of readFileSync(filename,"utf8").split("\n")){
+        if(!raw||messages.length>=250)continue;
+        let entry;try{entry=JSON.parse(raw)}catch{continue}
+        const msg=entry?.type==="message"?entry.message:null;
+        if(!msg||!["user","assistant"].includes(msg.role))continue;
+        const content=typeof msg.content==="string"?msg.content:
+          Array.isArray(msg.content)?msg.content.filter(x=>x?.type==="text")
+            .map(x=>String(x.text||"")).join("\n"):"";
+        if(content.trim())messages.push({role:msg.role,text:content.slice(0,14000)});
+      }
+      return json(res,200,{id:name,archived_at:Number(name.slice(0,13)),
+        messages,truncated:messages.length>=250});
+    }
     if(action==="reset_context"&&req.method==="POST"){
       const bodyData=await body(req);
       if(bodyData?.confirm!=="RESET_PROJECT_CONTEXT")
