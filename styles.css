@@ -1752,6 +1752,10 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 :root #workspacePage .pi-choice-actions .button{min-height:33px;font-size:12px}
 :root #workspacePage .pi-choice-status{margin:0;font-size:11px;line-height:1.5;color:var(--muted);overflow-wrap:anywhere}
 :root #workspacePage .pi-choice-status:empty{display:none}
+:root #workspacePage .pi-choice-explanation{max-width:780px;margin:7px 0 12px;border-block-start:1px solid var(--line);padding-block-start:6px}
+:root #workspacePage .pi-choice-explanation>summary{cursor:pointer;padding:6px 2px;font-size:12px;color:var(--primary);font-weight:600}
+:root #workspacePage .pi-choice-explanation[open]{padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+
 @media(max-width:600px){
  :root #workspacePage .pi-choice-table-panel{padding:9px;gap:8px}
  :root #workspacePage .pi-choice-table{min-width:400px}
