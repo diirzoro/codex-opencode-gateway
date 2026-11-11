@@ -361,7 +361,7 @@ class SdkAgent {
         "machine-readable fenced block tagged pi_choices, formatted as JSON: "+
         "Use a JSON object with question and options; each option must include "+
         "title, description, value, and a boolean recommended flag. "+
-        "The browser renders valid choice blocks as selectable cards inside "+
+        "The browser renders valid choice blocks as a compact selectable table inside "+
         "your reply in the conversation. Recommend only a reasoned choice. Do not invent fixed "+
         "options or ask this question for every task; follow direct instructions "+
         "when the user has already chosen. Never fabricate tool calls."
@@ -754,7 +754,30 @@ function piPromptParts(rawParts, scope, sessionId) {
     const data=Buffer.from(match[2],"base64");
     if(data.length>8*1024*1024)
       throw Object.assign(new Error("Attachment exceeds 8 MB"),{status:413});
-    if(["image/png","image/jpeg","image/webp"].includes(mime)){
+    const failAttachment=message=>{
+      throw Object.assign(new Error(message),{status:422,receipt:"not_submitted"});
+    };
+    const isImage=["image/png","image/jpeg","image/webp"].includes(mime);
+    if(!isImage&&mime!=="application/pdf"&&mime!=="text/plain")
+      failAttachment("Unsupported Pi attachment. Use PNG, JPEG, WebP, PDF, TXT or MD.");
+    if(mime==="image/png"&&(!data.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))||
+        data.subarray(12,16).toString()!=="IHDR"))failAttachment("Invalid PNG image");
+    if(mime==="image/jpeg"&&(!data.subarray(0,3).equals(Buffer.from([255,216,255]))||
+        !data.subarray(-2).equals(Buffer.from([255,217]))))failAttachment("Invalid JPEG image");
+    if(mime==="image/webp"&&(data.subarray(0,4).toString()!=="RIFF"||
+        data.subarray(8,12).toString()!=="WEBP"))failAttachment("Invalid WebP image");
+    if(mime==="application/pdf"){
+      if(!data.subarray(0,1024).toString("latin1").trimStart().startsWith("%PDF-")||
+         !data.subarray(-4096).includes(Buffer.from("%%EOF")))
+        failAttachment("Invalid or incomplete PDF");
+      if(/\/\s*(?:Encrypt|JavaScript|JS|OpenAction|AA|Launch|EmbeddedFile|RichMedia)\b/i.test(data.toString("latin1")))
+        failAttachment("Encrypted/active PDF is not supported. Export an unencrypted PDF without scripts.");
+    }
+    if(mime==="text/plain"){
+      if(data.length>256*1024||data.includes(0))failAttachment("Invalid or oversized UTF-8 text attachment");
+      try{new TextDecoder("utf-8",{fatal:true}).decode(data)}catch{failAttachment("Invalid UTF-8 attachment")}
+    }
+    if(isImage){
       images.push({type:"image",source:{type:"base64",mediaType:mime,data:match[2]}});
       messages.push("Attached image: "+filename);
       continue;
@@ -762,7 +785,16 @@ function piPromptParts(rawParts, scope, sessionId) {
     const target=path.join(scope.directory,".pi-uploads",sessionId,randomUUID(),filename);
     mkdirSync(path.dirname(target),{recursive:true,mode:0o700});
     writeFileSync(target,data,{mode:0o600,flag:"wx"});
-    messages.push("Attached file for Pi tools to inspect: "+path.relative(scope.directory,target));
+    const relative=path.relative(scope.directory,target);
+    if(mime==="application/pdf")
+      messages.push("USER-ATTACHED PDF: "+filename+" at "+relative+
+        "\nUse an installed Pi-native read/bash/skill tool (for example pdftotext if "+
+        "available) to actually inspect the PDF BEFORE describing its contents. "+
+        "If extraction fails, or the PDF contains scanned pages you cannot read, "+
+        "say clearly in the user's language that you could NOT read the contents. "+
+        "Never infer content from the filename or claim to have read pages.");
+    else messages.push("USER-ATTACHED UTF-8 TEXT FILE: "+filename+" at "+relative+
+      "\nUse Pi's own read tool to inspect the text before summarizing it.");
   }
   return {message:messages.join("\n"),images};
 }
@@ -1266,6 +1298,9 @@ const server=http.createServer(async(req,res)=>{
       if(other&&other.id!==a.id)
         return error(res,409,projectBusyMessage(other),"not_submitted");
       if(a.active||a.running||executing.has(a)){
+        if(images.length&&Array.isArray(a.session.model?.input)&&
+           !a.session.model.input.includes("image"))
+          return error(res,422,"Selected Pi model cannot read images","not_submitted");
         if(a.runningModel?.providerID!==b.model.providerID||
            a.runningModel?.modelID!==b.model.modelID)
           return error(res,409,"رسائل الطابور تستخدم نفس النموذج الجاري. انتظر انتهاء المهمة لتغيير النموذج.","not_submitted");
@@ -1284,6 +1319,11 @@ const server=http.createServer(async(req,res)=>{
         try{await a.setCredential(b.model.providerID,authorizedKey);}
         catch{throw Object.assign(new Error("Pi credential injection failed"),{status:502});}
         await a.command("set_model",{provider:b.model.providerID,modelId:b.model.modelID});
+        if(images.length&&Array.isArray(a.session.model?.input)&&
+           !a.session.model.input.includes("image")){
+          releaseExecution(a);
+          return error(res,422,"Selected Pi model does not support image input; select a vision model","not_submitted");
+        }
         a.runningModel={providerID:b.model.providerID,modelID:b.model.modelID};
         // Keep the original Pi command/skill mechanism. Do not invent agents.
         let prompt=message;
