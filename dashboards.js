@@ -2081,8 +2081,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     (!window.nativeSession?.active()&&['submitted','waiting_approval'].includes(activeSession?.execution_status));
   // The inline Pi recommendation table uses the SAME existing composer submit.
   // Do not overwrite an unfinished user draft or include unrelated attachments.
-  window.submitWorkspacePiChoice=({owner,sessionId,text}={})=>{
-    const error=(en,ar)=>({handedOff:false,reason:tr(en,ar)});
+  window.submitWorkspacePiChoice=async({owner,sessionId,text}={})=>{
+    const error=(en,ar)=>({accepted:false,reason:tr(en,ar)});
     if(!window.nativeSession?.active()||!activeSession||
        String(activeSession.id)!==String(sessionId)||
        String(currentUser?.id)!==String(owner))
@@ -2091,6 +2091,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(!workAccess||sending||queuing||pendingSubmission||anotherProjectRunning)
       return error('Pi is not ready to receive this choice yet. Please retry.',
         'Pi ليس جاهزًا لاستقبال الاختيار الآن. حاول مجددًا.');
+    if(window.nativeSession.blocked(sessionId))
+      return error('Verify the previous Pi submission receipt before trying again.',
+        'تحقق من استلام Pi للرسالة السابقة قبل إعادة المحاولة.');
     if(attachments.some(item=>!item.cancelled))
       return error('Send or remove the existing attachments first.',
         'أرسل المرفقات الحالية أو أزلها أولًا.');
@@ -2098,20 +2101,31 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(input.value.trim())
       return error('You have an unsent draft. Send or clear it before continuing.',
         'لديك مسودة غير مرسلة. أرسلها أو امسحها قبل المتابعة.');
-    if(!String(text||'').trim()||!form?.requestSubmit)
+    if(!String(text||'').trim()||String(text).length>5000||typeof form?.onsubmit!=='function')
       return error('This choice cannot be submitted. Please retry.',
         'تعذّر إرسال هذا الاختيار. حاول مجددًا.');
     if(q('sendMessage').disabled)
       return error('Select an available Pi provider and model, then retry.',
         'اختر مزوّد Pi ونموذجًا متاحًا ثم حاول مجددًا.');
-    input.value=String(text).slice(0,2000);
+    input.value=String(text);
     input.dispatchEvent(new Event('input',{bubbles:true}));
     window.resizeWorkspaceComposer?.();
-    try{form.requestSubmit(q('sendMessage'));}
-    catch(error){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));
-      return {handedOff:false,reason:error.message};}
-    // Submission may still fail asynchronously; existing Pi UI reports receipt.
-    return {handedOff:true};
+    // Invoke the existing submit handler and await the real Native Pi receipt.
+    // Dispatch-only would falsely show "continued" even after an HTTP failure.
+    try{
+      const receipt=await form.onsubmit({preventDefault(){}});
+      if(receipt?.accepted===true)return receipt;
+      const uncertain=Boolean(window.nativeSession?.blocked(sessionId));
+      if(!uncertain&&input.value===text){
+        input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));
+      }
+      return {accepted:false,uncertain,
+        reason:receipt?.reason||submissionStatus.textContent||
+          tr('Pi has not confirmed the choice. Please retry.','لم يؤكد Pi استلام الاختيار؛ حاول مجددًا.')};
+    }catch(cause){
+      return {accepted:false,uncertain:Boolean(window.nativeSession?.blocked(sessionId)),
+        reason:cause?.message||tr('Pi submission failed.','تعذّر إرسال الاختيار إلى Pi.')};
+    }
   };
   q('promptForm').onsubmit=async event=>{
     event.preventDefault();if(sending||queuing||pendingSubmission)return;
@@ -2148,13 +2162,15 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
             'أُضيفت الرسالة إلى طابور Pi ('+receipt.pending+' منتظرة).');
           clearSendingPreview();
           await refreshMessageQueue();
-          return;
+          return {accepted:true,queued:true};
         }
         if(sendingPreview){const note=sendingPreview.node.querySelector('.sending-preview-status');if(note)note.textContent=tr('Received by Pi','استلمها Pi');}
         if(!submissionStatus.dataset.piProviderError)submissionStatus.textContent=tr('Pi received the request; awaiting provider response.','استلم Pi الطلب؛ جارٍ انتظار رد المزوّد.');
-        // Pi SSE owns reply presentation. No blocking Gateway history
-        // or status request after the Native prompt receipt.
-      }catch(error){clearSendingPreview();toast(error.message);submissionStatus.textContent=error.message;}finally{draft.restore();sending=false;updateSend();}return;
+        // Pi SSE owns reply presentation. The same Pi session now continues.
+        return {accepted:true,queued:false};
+      }catch(error){clearSendingPreview();toast(error.message);submissionStatus.textContent=error.message;
+        return {accepted:false,reason:error.message,uncertain:Boolean(window.nativeSession?.blocked(activeSession?.id))};
+      }finally{draft.restore();sending=false;updateSend();}return;
     }
     // LIVE must not silently fall back to the legacy Python AI queue if Native is unavailable.
     if(location.hostname==='opencode-gateway.codes'&&!window.nativeSession?.active()){
