@@ -827,7 +827,8 @@
     if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'submitted';
     // Pi continues on the server after navigation or browser disconnect.
     void window.refreshWorkspaceQueue?.();
-    return {queued:receipt?.queued===true,pending:receipt?.pending||0};
+    return {queued:receipt?.queued===true,handled:receipt?.handled===true,
+      pending:receipt?.pending||0};
   }
   // Native owns both cancellation and subsequent execution. Never touch another session.
   async function replaceRunningModel(id,providerID,modelID){
