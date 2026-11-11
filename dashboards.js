@@ -1004,9 +1004,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         if(revision!==attachmentRevision||workspaceId!==activeWorkspace?.id||owner!==currentUser?.id)break;
         const temporary=true;
         const extension=file.name.split('.').at(-1)?.toLowerCase();
-        if(!new Set(['png','jpg','jpeg','webp','pdf','txt','md']).has(extension)||!file.size||file.size>8*1024*1024){
-          toast(tr('Pi supports PNG, JPEG, WebP, PDF, TXT, and MD files up to 8 MB only.',
-            'Pi يدعم PNG وJPEG وWebP وPDF وTXT وMD فقط حتى 8 ميجابايت.'));continue;
+        const pendingBytes=attachments.filter(a=>!a.cancelled&&!a.error)
+          .reduce((total,item)=>total+(Number(item.size)||0),0);
+        if(!new Set(['png','jpg','jpeg','webp','pdf','txt','md']).has(extension)||
+           !file.size||file.size+pendingBytes>8*1024*1024){
+          toast(tr('Pi supports PNG, JPEG, WebP, PDF, TXT and MD, up to 8 MB combined per message.',
+            'Pi يدعم PNG وJPEG وWebP وPDF وTXT وMD، بحد 8 ميجابايت إجمالًا لكل رسالة.'));continue;
         }
         const item={name:file.name,size:file.size,type:file.type||'application/octet-stream',
           temporary,owner,workspaceId,state:'uploading',
