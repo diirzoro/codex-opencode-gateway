@@ -648,8 +648,9 @@
   // Gateway validates the owned project/workspace and returns its Pi directory;
   // the Native server independently enforces account+workspace scope.
   async function projectArchiveTarget(projectId,workspaceId){
-    const user=owner(),generation=epoch;
+    const user=owner();
     if(!user||!await ready())throw Error('Pi session authentication required');
+    const generation=epoch;
     const ctx=await localProjectContext(String(workspaceId));
     if(owner()!==user||generation!==epoch)throw Error('Authenticated account changed');
     if(String(ctx.projectId)!==String(projectId))
