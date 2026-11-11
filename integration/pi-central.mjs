@@ -359,7 +359,8 @@ class SdkAgent {
         "languages, or design approaches, ask a concise question with two to "+
         "five relevant options grounded in their request. Include one optional "+
         "machine-readable fenced block tagged pi_choices, formatted as JSON: "+
-        "{\\\"question\\\":\\\"Which approach?\\\",\\\"options\\\":[{\\\"title\\\":\\\"Option A\\\",\\\"description\\\":\\\"Why\\\",\\\"value\\\":\\\"Option A\\\",\\\"recommended\\\":true}]}. "+
+        "Use a JSON object with question and options; each option must include "+
+        "title, description, value, and a boolean recommended flag. "+
         "The browser renders this as selectable cards beside the message "+
         "composer. Recommend only a reasoned choice. Do not invent fixed "+
         "options or ask this question for every task; follow direct instructions "+
