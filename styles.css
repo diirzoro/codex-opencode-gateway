@@ -1809,3 +1809,19 @@ body:has(#workspacePage.active) .app-header{display:none!important}
   margin:4px auto 8px;font-size:11px;line-height:1.5;color:var(--muted);
   overflow-wrap:anywhere;padding-inline:8px;
 }
+
+/* Keep long, unrequested script output compact; preserve explicit on-demand access. */
+:root #workspacePage .message-code-folded{
+ margin:8px 0;border:1px solid var(--line);border-radius:10px;
+ background:var(--panel2);max-width:100%;overflow:hidden
+}
+:root #workspacePage .message-code-folded>summary{
+ cursor:pointer;padding:9px 12px;font-size:12px;font-weight:600;
+ color:var(--primary);list-style-position:inside
+}
+:root #workspacePage .message-code-folded>summary:focus-visible{
+ outline:2px solid var(--primary);outline-offset:-2px
+}
+:root #workspacePage .message-code-folded>.message-code-block{
+ margin:0;border:0;border-top:1px solid var(--line);border-radius:0
+}
