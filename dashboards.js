@@ -1162,8 +1162,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const approvalsList=document.createElement('details');approvalsList.className='chat-approval-settings';workspaceDetails.append(approvalsList);
   const questionView=textElement('section','','chat-questions');questionView.hidden=true;let questionSession=null,questionOwner=null,questionSignature='',questionSending=false,questionRevision=0,questionError='';
   window.resetWorkspaceQuestions=()=>{questionRevision++;questionSession=null;questionOwner=null;questionSignature='';questionView.hidden=true;questionView.replaceChildren();};
-  function keepQuestions(){if(!questionView.hidden&&activeSession?.id===questionSession&&currentUser?.id===questionOwner&&!questionView.isConnected)q('agentFeed').append(questionView);}
-  new MutationObserver(keepQuestions).observe(q('agentFeed'),{childList:true});
+  function keepQuestions(){if(!questionView.hidden&&activeSession?.id===questionSession&&currentUser?.id===questionOwner&&!questionView.isConnected)q('promptForm').before(questionView);}
+  q('promptForm').before(questionView);
+  new MutationObserver(keepQuestions).observe(q('promptForm').parentElement,{childList:true});
   window.refreshWorkspaceQuestions=async()=>{if(!activeSession||questionSending)return;const sessionId=activeSession.id,owner=currentUser?.id,revision=++questionRevision;
     try{const data=await api('/api/sessions/'+sessionId+'/questions');if(revision!==questionRevision||activeSession?.id!==sessionId||currentUser?.id!==owner)return;questionError='';const signature=lang+JSON.stringify(data.requests||[]);
       if(questionSession===sessionId&&questionOwner===owner&&signature===questionSignature){keepQuestions();return;}
@@ -1190,7 +1191,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       }
       for(const form of [...questionView.children])if(!nextForms.includes(form))form.remove();
       let cursor=questionView.firstChild;for(const form of nextForms){if(form===cursor)cursor=cursor.nextSibling;else questionView.insertBefore(form,cursor);}
-      if(!questionView.hidden)q('agentFeed').append(questionView);
+      if(!questionView.hidden)q('promptForm').before(questionView);
     }catch(error){if(revision===questionRevision&&activeSession?.id===sessionId&&currentUser?.id===owner&&questionError!==error.message){questionError=error.message;toast(error.message);}}
   };
   const approvalBusy=new Set();let approvalOwner=null,approvalSession=null;
@@ -1674,7 +1675,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     formatMenu.append(option);
   }
   formatOptions.append(formatTitle,formatMenu);
-  utilities.append(formatOptions);
+  // The old fixed language picker is superseded by Pi-authored choices near the composer.
   projectPanelBrand.append(q('chatGithub'),q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
   const choices=textElement('button','','icon-btn composer-choice-toggle');choices.type='button';choices.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
   choices.onclick=()=>{const open=picks.classList.toggle('open');choices.setAttribute('aria-expanded',String(open));};
@@ -2081,8 +2082,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         if(queueCount){
           queueView.append(textElement('summary',tr('Pi queue · ','طابور Pi · ')+queueCount));
           queueView.append(textElement('small',
-            tr('Runs in order within this project. Stop cancels all waiting messages.',
-              'يُنفّذ بالترتيب داخل هذا المشروع. الإيقاف يلغي جميع الرسائل المنتظرة.')));
+            tr('Runs in order within this project. Stop cancels the current run only; waiting Pi messages continue.',
+              'يُنفّذ بالترتيب داخل هذا المشروع. الإيقاف يوقف المهمة الحالية فقط وتتابع الرسائل المنتظرة.')));
           for(const item of entries.slice(0,10)){
             const line=textElement('div','','queued-message');
             line.append(textElement('p',String(item.text).slice(0,360)),
