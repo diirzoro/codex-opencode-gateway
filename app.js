@@ -1004,13 +1004,25 @@ function renderPiOptionCards(host,answer){
  const text=String(answer||"");
  if(text.length>24000)return;
  const lines=text.split(/\r?\n/),topics=[];
+ let nativeOptions=null,question='';
+ const structured=text.match(/\x60{3}pi[_-]choices\s*\r?\n([\s\S]*?)\x60{3}/i);
+ if(structured)try{
+  const data=JSON.parse(structured[1].trim());question=String(data.question||'').trim().slice(0,300);
+  if(Array.isArray(data.options))nativeOptions=data.options.slice(0,6).map(item=>({
+   title:String(item.title||item.label||'').trim().slice(0,110),
+   description:String(item.description||item.reason||'').trim().slice(0,180),advantages:[],
+   recommended:item.recommended===true,
+   value:String(item.value||item.title||item.label||'').trim().slice(0,220)
+  })).filter(item=>item.title&&item.value);
+ }catch{/* Invalid optional Pi choices stay in its saved answer. */}
  for(let i=0;i<lines.length;i++){
   const m=lines[i].match(/^\s*#{2,6}\s+(?:\*\*)?(\d+)[.)]\s+(.+?)\s*$/);
   if(m&&topics.length<10)topics.push({start:i,title:m[2].replace(/\*\*/g,"").trim().slice(0,110)});
  }
- if(topics.length<2||topics.length>8||
-   !/(languages|frameworks|technologies|best for|recommended|لغات|تقنيات|خيارات|الأفضل)/i.test(text.slice(0,1000)))return;
- const options=topics.map((item,index)=>{
+ if((!nativeOptions||nativeOptions.length<2)&&
+  (topics.length<2||topics.length>8||
+   !/(languages|frameworks|technologies|best for|recommended|لغات|تقنيات|خيارات|الأفضل)/i.test(text.slice(0,1000))))return;
+ const options=nativeOptions?.length>=2?nativeOptions:topics.map((item,index)=>{
   const body=lines.slice(item.start+1,topics[index+1]?.start||lines.length).join("\n");
   const suitable=body.match(/(?:\*\*)?(?:Best for|الأفضل لـ|مناسب لـ)\s*:?\s*(?:\*\*)?\s*([^\n]+)/i)?.[1]?.replace(/\*\*/g,"").trim();
   const advantages=body.split("\n").filter(x=>/^\s*[-*•]\s+/.test(x))
@@ -1022,7 +1034,7 @@ function renderPiOptionCards(host,answer){
  container.className="pi-option-choices";
  const heading=document.createElement("div");heading.className="pi-option-header";
  const title=document.createElement("strong");
- title.textContent=lang==='ar'?"اختر التقنية الأنسب":"Choose the best approach";
+ title.textContent=question||(lang==='ar'?"اختر التقنية الأنسب":"Choose the best approach");
  const help=document.createElement("small");
  help.textContent=lang==='ar'?"خيارات من توصيات Pi — لا يبدأ التنفيذ حتى ترسل طلبك":
   "From Pi's recommendations — no action runs until you submit";
@@ -1038,22 +1050,19 @@ function renderPiOptionCards(host,answer){
   select.textContent=lang==='ar'?"استخدم هذا الخيار":"Use this option";
   select.onclick=()=>{
    const input=document.getElementById("promptInput");if(!input)return;
-   const sentence=lang==='ar'?"أريد استخدام "+choice.title+" في المشروع الحالي.":
-    "Use "+choice.title+" for the current project.";
+   const sentence=lang==='ar'?"أختار "+(choice.value||choice.title)+" في المشروع الحالي.":
+    "I choose "+(choice.value||choice.title)+" for this project.";
    input.value=(input.value.trimEnd()?input.value.trimEnd()+"\n":"")+sentence;
    input.dispatchEvent(new Event("input",{bubbles:true}));
    window.resizeWorkspaceComposer?.();input.focus();
    for(const node of grid.children)node.classList.toggle("selected",node===card);
   };
-  card.append(name,why,perks,select);grid.append(card);
+  card.append(name,why,perks);
+  if(choice.recommended){const badge=document.createElement('span');badge.className='pi-option-recommended';badge.textContent=lang==='ar'?'موصى به من Pi':'Recommended by Pi';card.append(badge);}
+  card.append(select);grid.append(card);
  }
  container.append(grid);
- const original=document.createElement("details");original.className="pi-option-full";
- const summary=document.createElement("summary");
- summary.textContent=lang==='ar'?"عرض الشرح الكامل":"Read full comparison";
- original.append(summary);
- while(host.firstChild)original.append(host.firstChild);
- host.append(container,original);
+ host.append(container);
 }
 // A deliberately small, text-only Markdown subset. Never interpret Agent HTML.
 function renderAgentText(host,value){
@@ -1088,7 +1097,9 @@ function renderAgentText(host,value){
   if(fence){flush();const body=[],marker=fence[1][0],length=fence[1].length;
    while(++i<lines.length){const end=lines[i].trim();if(end.length>=length&&[...end].every(c=>c===marker))break;body.push(lines[i]);}
    const block=textElement('section','','message-code-block'),header=textElement('div','','message-code-header'),pre=document.createElement('pre'),code=document.createElement('code');
-   const language=fence[2].trim().split(/\s/)[0].slice(0,40)||'text';header.append(textElement('span',language),feedAction('copy',body.join('\n')));code.textContent=body.join('\n');pre.dir='ltr';pre.append(code);block.append(header,pre);host.append(block);continue;
+   const language=fence[2].trim().split(/\s/)[0].slice(0,40)||'text';
+   if(/^pi[_-]choices$/i.test(language))continue;
+   header.append(textElement('span',language),feedAction('copy',body.join('\n')));code.textContent=body.join('\n');pre.dir='ltr';pre.append(code);block.append(header,pre);host.append(block);continue;
   }
   if(!lines[i].trim()){flush();continue;}
   if(/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(lines[i])){flush();host.append(document.createElement('hr'));continue;}
@@ -1111,7 +1122,7 @@ function renderAgentText(host,value){
   else{if(list)flush();paragraph.push(lines[i]);}
  }
  flush();
- // Choices supplied by Pi are rendered beside the composer.
+ renderPiOptionCards(host,value);
 }
 function compactNativeToolMessages(rows){
  // Fold adjacent tool-only assistant records into a single visual activity
@@ -1169,11 +1180,6 @@ async function refreshMessages(){
   const nextNodes=[],seen=new Set();let previousPrompt='',previousAttachments=[];
   const displayRows=nativeIncremental?compactNativeToolMessages(rows):rows;
   const latestAssistant=displayRows.filter(row=>row.role==='assistant').at(-1);
-  const latestRow=displayRows.at(-1);
-  window.updateWorkspacePiRecommendations?.({
-    sessionId,owner,messageId:latestAssistant?.id||'',
-    text:latestRow===latestAssistant?latestAssistant?.text||'':''
-  });
   for(const row of displayRows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
    if(row.role==='user'){previousPrompt=row.text;previousAttachments=row.attachments||[];}
