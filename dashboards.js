@@ -744,6 +744,62 @@
     dialog.showModal();
   };
   projectbar.append(cleanContext);
+  const archivedChats=document.createElement('button');
+  archivedChats.type='button';archivedChats.className='button ghost small workspace-view-archives';
+  archivedChats.textContent=tr('Archived chats','المحادثات المؤرشفة');
+  archivedChats.onclick=async()=>{
+    if(!activeSession||!window.nativeSession?.active())return;
+    const sessionId=activeSession.id,projectId=activeProject?.id,owner=currentUser?.id;
+    const dialog=document.createElement('dialog');dialog.className='workspace-project-chooser workspace-archives-dialog';
+    const heading=document.createElement('h2');heading.textContent=tr('Archived chats','المحادثات المؤرشفة');
+    const list=document.createElement('section');list.className='workspace-archive-list';
+    const close=document.createElement('button');close.type='button';close.className='button ghost small';
+    close.textContent=tr('Close','إغلاق');close.onclick=()=>dialog.close();
+    dialog.append(heading,list,close);document.body.append(dialog);
+    dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();
+    const valid=()=>dialog.open&&activeSession?.id===sessionId&&activeProject?.id===projectId&&currentUser?.id===owner;
+    async function renderList(){
+      list.replaceChildren(textElement('p',tr('Loading archives…','جارٍ تحميل الأرشيف…')));
+      try{
+        const data=await window.nativeSession.archives(sessionId);if(!valid())return;
+        list.replaceChildren();
+        if(!data.archives?.length){list.append(textElement('p',tr('No archived chats yet.','لا توجد محادثات مؤرشفة بعد.')));return;}
+        for(const archive of data.archives){
+          const button=document.createElement('button');button.type='button';
+          button.className='button ghost small workspace-archive-entry';
+          const date=new Date(archive.archived_at);
+          button.textContent=date.toLocaleString(lang==='ar'?'ar-YE':'en-GB')+
+            ' · '+Math.ceil((Number(archive.bytes)||0)/1024)+' KB';
+          button.onclick=async()=>{
+            button.disabled=true;
+            try{
+              const result=await window.nativeSession.readArchive(sessionId,archive.id);if(!valid())return;
+              list.replaceChildren();
+              const back=document.createElement('button');back.type='button';back.className='button ghost small';
+              back.textContent=tr('Back to archives','العودة للأرشيف');back.onclick=()=>void renderList();list.append(back);
+              const transcript=document.createElement('div');transcript.className='workspace-archive-transcript';
+              for(const message of result.messages||[]){
+                const row=document.createElement('article');row.className='workspace-archive-message';
+                row.append(textElement('strong',message.role==='user'?tr('You','أنت'):'Pi'));
+                const body=document.createElement('p');body.textContent=message.text;body.dir='auto';row.append(body);
+                transcript.append(row);
+              }
+              if(!transcript.childElementCount)transcript.append(textElement('p',
+                tr('No readable messages in this archive.','لا توجد رسائل قابلة للعرض في الأرشيف.')));
+              if(result.truncated)transcript.append(textElement('small',
+                tr('Preview is limited to 250 messages; full archive is preserved.',
+                'المعاينة حتى 250 رسالة؛ الأرشيف الكامل محفوظ.')));
+              list.append(transcript);
+            }catch(error){if(valid())toast(error.message);}
+            finally{button.disabled=false;}
+          };
+          list.append(button);
+        }
+      }catch(error){if(valid())list.replaceChildren(textElement('p',error.message));}
+    }
+    void renderList();
+  };
+  projectbar.append(archivedChats);
   projectbar.querySelector('.repo-title')?.setAttribute('hidden','');
   const context=textElement('div','','composer-context');projectbar.append(context);const workspaceDetails=q('connectionsWorkspace');workspaceDetails.append(title('Workspace details','تفاصيل مساحة العمل'),q('workspaceRepo'),q('workspaceBranch'));const gitState=textElement('span',tr('GitHub: checking…','GitHub: جارٍ التحقق…'));gitState.id='workspaceGithubState';workspaceDetails.append(gitState,q('runtimeStatus'));context.append(workspaceDays);
   const storageChip=textElement('span',tr('Storage: …','التخزين: …'));storageChip.id='workspaceStorage';context.append(storageChip);
