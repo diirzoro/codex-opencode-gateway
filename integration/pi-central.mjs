@@ -288,14 +288,107 @@ class SdkAgent {
     if(typeof session.getAllTools==="function"&&
        typeof session.setActiveToolsByName==="function")
       session.setActiveToolsByName(session.getAllTools().map(tool=>tool.name));
-    return new SdkAgent(scope,session,runtime);
+    const agent=new SdkAgent(scope,session,runtime);
+    // Bind the SDK's existing extension UI channel to the same Pi session.
+    // Dialog requests are handled by the existing Workspace question form.
+    try{
+      if(typeof session.bindExtensions==="function")
+        await session.bindExtensions({mode:"rpc",uiContext:agent.extensionUI()});
+    }catch(e){agent.close();throw e;}
+    return agent;
   }
   constructor(scope,session,runtime){
     this.scope=scope;this.id=projectIdFor(scope);this.title=scope.projectId;
     this.session=session;this.runtime=runtime;
     this.events=new Set();this.busy=false;this.active=false;this.closed=false;
     this.last=Date.now();this.running=null;this.credentialProvider=null;this.settledObserved=false;
+    this.uiRequests=new Map();this.uiWidgets=new Map();
     this.unsub=session.subscribe(event=>this.consume(event));
+  }
+  emitUI(type,properties={}){
+    const line="data: "+JSON.stringify({type:"pi."+type,properties})+"\n\n";
+    for(const response of this.events)try{response.write(line);}catch{this.events.delete(response);}
+  }
+  async askUI(kind,title,options=[],opts={}){
+    if(this.closed)return kind==="confirm"?false:undefined;
+    const choices=Array.isArray(options)?options.filter(x=>typeof x==="string")
+      .slice(0,24).map(x=>x.slice(0,200)):[];
+    const timeout=Math.min(300000,Math.max(1000,Number(opts?.timeout)||300000));
+    return new Promise(resolve=>{
+      const id=randomUUID();
+      const request={id,sessionID:this.id,kind,
+        questions:[{header:String(title||"Pi needs your input").slice(0,200),
+          question:String(title||"Choose an option").slice(0,300),
+          options:choices.map(label=>({label})),multiple:false,
+          custom:kind==="input"||kind==="editor",
+          placeholder:String(opts?.placeholder||"").slice(0,200)}]};
+      let done=false;
+      const finish=value=>{
+        if(done)return;done=true;this.uiRequests.delete(id);
+        clearTimeout(timer);opts?.signal?.removeEventListener("abort",aborted);
+        resolve(value);
+        this.emitUI("ui_question_closed",{id});
+      };
+      const aborted=()=>finish(kind==="confirm"?false:undefined);
+      const timer=setTimeout(aborted,timeout);
+      if(opts?.signal?.aborted){aborted();return;}
+      opts?.signal?.addEventListener("abort",aborted,{once:true});
+      request.answer=payload=>{
+        if(payload?.reject){finish(kind==="confirm"?false:undefined);return;}
+        const answers=payload?.answers;
+        if(!Array.isArray(answers)||!Array.isArray(answers[0]))
+          throw Object.assign(new Error("Choose an answer first"),{status:422});
+        const chosen=String(answers[0][0]??"").trim().slice(0,2000);
+        if(kind==="select"&&!choices.includes(chosen))
+          throw Object.assign(new Error("Invalid Pi option"),{status:422});
+        if(kind==="confirm"&&!["Yes","No"].includes(chosen))
+          throw Object.assign(new Error("Invalid Pi confirmation"),{status:422});
+        if((kind==="input"||kind==="editor")&&!chosen)
+          throw Object.assign(new Error("A response is required"),{status:422});
+        finish(kind==="confirm"?chosen==="Yes":chosen);
+      };
+      this.uiRequests.set(id,request);
+      this.emitUI("ui_question",{id});
+    });
+  }
+  extensionUI(){
+    const ignore=()=>{};
+    const self=this;
+    return {
+      select:(title,options,opts)=>self.askUI("select",title,options,opts),
+      confirm:(title,message,opts)=>self.askUI("confirm",
+        String(title||"Confirmation")+": "+String(message||""),["Yes","No"],opts),
+      input:(title,placeholder,opts)=>self.askUI("input",title,[],{...opts,placeholder}),
+      editor:(title,prefill)=>self.askUI("editor",title,[],{placeholder:prefill}),
+      notify:(message,type)=>self.emitUI("ui_notice",{
+        text:String(message||"").slice(0,500),level:String(type||"info")}),
+      setWidget:(key,content,options)=>{
+        if(typeof key!=="string"||key.length>80)return;
+        const lines=Array.isArray(content)?content.filter(x=>typeof x==="string")
+          .slice(0,40).map(x=>x.replace(/\x1b\[[0-9;]*m/g,"").slice(0,260)):[];
+        if(lines.length)self.uiWidgets.set(key,lines);else self.uiWidgets.delete(key);
+        self.emitUI("ui_widget",{key,lines,placement:options?.placement||"aboveEditor"});
+      },
+      setStatus:(key,message)=>self.emitUI("ui_status",{
+        key:String(key||"").slice(0,80),text:String(message||"").slice(0,300)}),
+      setWorkingMessage:ignore,setWorkingVisible:ignore,setWorkingIndicator:ignore,
+      setHiddenThinkingLabel:ignore,setFooter:ignore,setHeader:ignore,setTitle:ignore,
+      onTerminalInput:()=>ignore,pasteToEditor:ignore,setEditorText:ignore,
+      getEditorText:()=>"",addAutocompleteProvider:ignore,setEditorComponent:ignore,
+      getEditorComponent:()=>undefined,
+      get theme(){return undefined;},getAllThemes:()=>[],getTheme:()=>undefined,
+      setTheme:()=>({success:false,error:"Web theme is managed by Workspace"}),
+      getToolsExpanded:()=>false,setToolsExpanded:ignore,
+      custom:async()=>undefined
+    };
+  }
+  pendingUI(){
+    return [...this.uiRequests.values()].map(({id,sessionID,questions})=>({id,sessionID,questions}));
+  }
+  respondUI(id,payload){
+    const request=this.uiRequests.get(id);
+    if(!request)throw Object.assign(new Error("Pi question expired"),{status:404});
+    request.answer(payload);return {answered:true};
   }
   consume(event){
     if(this.closed)return;
@@ -387,6 +480,8 @@ class SdkAgent {
   }
   close(){
     if(this.closed)return;this.closed=true;
+    for(const request of this.uiRequests.values())try{request.answer({reject:true});}catch{}
+    this.uiRequests.clear();this.uiWidgets.clear();
     releaseExecution(this);
     try{this.unsub?.();}catch{}
     try{this.session.dispose();}catch{}
@@ -760,7 +855,7 @@ const server=http.createServer(async(req,res)=>{
     // handles its configured extension/tool lifecycle internally. A queue
     // *read* is empty, not a non-existent "session" 404. Do not invent
     // affirmative permission replies or claim a prompt was approved.
-    if(req.method==="GET"&&["/question","/permission"].includes(pathname))
+    if(req.method==="GET"&&pathname==="/permission")
       return json(res,200,[]);
     // A Project deletion must NOT instantiate a new Pi session just to
     // remove it. Both GET-after-delete and DELETE are checked against the
@@ -792,6 +887,12 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==="GET"&&["/file","/file/content","/file/status","/vcs"].includes(pathname))
       return json(res,200,projectFileRequest(s,pathname,query));
     const a=await agent(s);
+    if(pathname==="/question"&&req.method==="GET")
+      return json(res,200,a.pendingUI());
+    const questionAnswer=pathname.match(/^\/question\/([0-9a-f-]{36})\/(reply|reject)$/i);
+    if(questionAnswer&&req.method==="POST")
+      return json(res,200,a.respondUI(questionAnswer[1],
+        questionAnswer[2]==="reject"?{reject:true}:await body(req)));
     if(pathname==="/agent"&&req.method==="GET") {
       const native=await a.command("get_commands");
       return json(res,200,nativeCommands(native?.commands||[]));

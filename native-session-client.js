@@ -492,6 +492,14 @@
         return;
       }
       const p=e.properties||{};
+      if(e.type==="pi.ui_question"||e.type==="pi.ui_question_closed"){
+        void window.refreshWorkspaceQuestions?.();
+        return;
+      }
+      if(e.type==="pi.ui_notice"){
+        if(typeof p.text==="string"&&p.text)toast(p.text.slice(0,300));
+        return;
+      }
       if(e.type==="pi.message_update"){
         const part=p.assistantMessageEvent;
         if(part?.type==="text_delta"&&typeof part.delta==="string"&&part.delta)piReply(id,part.delta);
