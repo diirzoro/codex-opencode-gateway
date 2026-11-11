@@ -520,7 +520,7 @@ window.authSession=(()=>{
  return {observe,stop,workspaceOpened(){if(dirty){clearTimeout(flushTimer);flush();}},start(){stopped=false;if(!timer)timer=setInterval(tick,1000);tick();}};
 })();
 function showPage(id){navigationRevision++;document.documentElement.classList.remove('bootstrapping');if(['admin','owner'].includes(currentUser?.role)&&['workspaceHomePage','connectionsPage','workspacePage','onboarding','clientPage','accountPage','billingPage'].includes(id))id='adminPage';if(currentUser?.id&&['adminPage','workspaceHomePage','workspacePage','connectionsPage','clientPage','onboarding','accountPage','billingPage'].includes(id)){try{sessionStorage.setItem('og-current-page:'+currentUser.id,id);}catch{}}$('#welcomeSidebar').classList.remove('visible');$('#sessionSidebar').classList.remove('open');overlay(false);$$('.page').forEach(p=>p.classList.toggle('active',p.id===id||(id==='authPage'&&p.id==='landing')));$('#siteHeader').style.display=id==='landing'?'flex':'none';window.scrollTo(0,0);syncPermissionPolling()}
-async function page(id){await authReady;await interfaceReady;if(protectedPages.has(id)&&!currentUser){showPage('authPage');window.loadManagement().catch(error=>toast(error.message));return}if(id==='adminPage'&&!['admin','owner'].includes(currentUser?.role)){toast('Administrator access required');return}showPage(id);if(['authPage','landing'].includes(id))window.loadManagement().catch(error=>toast(error.message));try{if(id==='accountPage'){renderProfile(await api('/api/profile'));await loadProjects()}if(id==='adminPage')await loadAdminUsers();if(id==='workspacePage'&&!activeWorkspace&&!window.workspaceRestoring){showPage('onboarding')}}catch(error){if(currentUser)toast(error.message)}}
+async function page(id){await authReady;await interfaceReady;if(protectedPages.has(id)&&!currentUser){showPage('authPage');window.loadManagement().catch(error=>toast(error.message));return}if(id==='adminPage'&&!['admin','owner'].includes(currentUser?.role)){toast('Administrator access required');return}showPage(id);if(['authPage','landing'].includes(id))window.loadManagement().catch(error=>toast(error.message));try{if(id==='accountPage'){renderProfile(await api('/api/profile'));await loadProjects()}if(id==='adminPage')await loadAdminUsers();if(id==='workspacePage'&&!activeWorkspace&&!window.workspaceRestoring){await promptProjectChoice()}}catch(error){if(currentUser)toast(error.message)}}
 function updateNavigation(){$$('[data-go="adminPage"]').forEach(el=>el.hidden=!['admin','owner'].includes(currentUser?.role))}
 function stopEvents(){window.nativeSession?.stop();eventStream?.close();eventStream=null;if(permissionTimer)clearInterval(permissionTimer);permissionTimer=null}
 function syncPermissionPolling(){
@@ -833,10 +833,62 @@ $('#logoutButton').onclick=()=>window.logoutSession().catch(error=>toast(error.m
 
 $$('[data-preview-action]').forEach(el=>{el.disabled=true;el.title='Not available yet'});
 $$('[data-payment]').forEach(el=>el.onclick=()=>{$$('[data-payment]').forEach(b=>b.classList.toggle('active',b===el));$$('[data-payment-panel]').forEach(p=>p.classList.toggle('active',p.dataset.paymentPanel===el.dataset.payment))});
+let projectChoicePending=null;
+async function promptProjectChoice(){
+ if(!currentUser){await page('authPage');return;}
+ let dialog=document.getElementById('workspaceProjectChooser');
+ if(!dialog){
+  dialog=document.createElement('dialog');dialog.id='workspaceProjectChooser';
+  dialog.className='workspace-project-chooser';
+  dialog.setAttribute('aria-label',lang==='ar'?'اختر المشروع':'Select project');
+  const heading=document.createElement('h2');heading.id='workspaceProjectChooserTitle';
+  heading.textContent=lang==='ar'?'اختر مشروعًا للبدء':'Choose a project to continue';
+  const explanation=document.createElement('p');
+  explanation.textContent=lang==='ar'?
+   'لا تبدأ محادثة Pi إلا داخل مشروع موجود. اختر مشروعك أو أنشئ مشروعًا جديدًا.':
+   'Pi conversations run inside an existing project. Choose one or create a new project.';
+  const results=document.createElement('div');results.id='workspaceProjectChoices';results.className='workspace-project-choices';
+  const actions=document.createElement('div');actions.className='workspace-project-chooser-actions';
+  const create=document.createElement('button');create.type='button';create.className='button';create.textContent=lang==='ar'?'إنشاء مشروع جديد':'Create new project';
+  create.onclick=()=>{dialog.close();void page('onboarding');};
+  const close=document.createElement('button');close.type='button';close.className='button ghost';close.textContent=lang==='ar'?'إلغاء':'Cancel';close.onclick=()=>dialog.close();
+  actions.append(create,close);dialog.append(heading,explanation,results,actions);
+  document.body.append(dialog);
+ }
+ dialog.querySelector('h2').textContent=lang==='ar'?'اختر مشروعًا للبدء':'Choose a project to continue';
+ dialog.showModal();
+ const list=dialog.querySelector('#workspaceProjectChoices');
+ if(projectChoicePending)return projectChoicePending;
+ list.replaceChildren(textElement('p',lang==='ar'?'جارٍ تحميل مشاريعك…':'Loading your projects…'));
+ const owner=currentUser.id, job=(async()=>{
+  try{
+   const [projects,workspaces]=await Promise.all([api('/api/projects'),api('/api/workspaces')]);
+   if(!dialog.open||currentUser?.id!==owner)return;
+   list.replaceChildren();
+   for(const project of projects){
+    const workspace=workspaces.find(w=>w.project_id===project.id);
+    if(!workspace)continue;
+    const button=document.createElement('button');button.type='button';button.className='workspace-project-option';
+    const name=document.createElement('strong');name.textContent=project.name;
+    const kind=document.createElement('small');kind.textContent=project.source_type==='github'?'GitHub':'Local project';
+    button.append(name,kind);
+    button.onclick=async()=>{if(!dialog.open)return;dialog.close();try{await openWorkspace(project,workspace);}catch(error){toast(error.message);}};
+    list.append(button);
+   }
+   if(!list.children.length)list.append(textElement('p',lang==='ar'?'لا توجد مشاريع. أنشئ مشروعًا جديدًا.':'No existing projects. Create one first.'));
+  }catch(error){if(dialog.open&&currentUser?.id===owner)list.replaceChildren(textElement('p',error.message));}
+ })();
+ projectChoicePending=job;
+ try{await job;}finally{if(projectChoicePending===job)projectChoicePending=null;}
+}
+window.promptProjectChoice=promptProjectChoice;
 async function loadProjects(){const projects=await api('/api/projects'),workspaces=await api('/api/workspaces');const list=$('#projectList');list.replaceChildren();if(!projects.length)list.append(textElement('p',t('noProjects')));for(const project of projects){const button=textElement('button',`${project.name} · ${project.source_type}`,'button ghost');button.onclick=()=>{const workspace=workspaces.find(w=>w.project_id===project.id);if(workspace)openWorkspace(project,workspace);else toast('Workspace unavailable')};list.append(button)}}
 $('#sourceType').onchange=()=>{const hint=$('#githubHint');if(hint)hint.hidden=value('sourceType')!=='github';};$('#githubHintOpen').onclick=()=>window.openConnections&&window.openConnections('github');
 $('#createProjectForm').onsubmit=async event=>{event.preventDefault();const button=$('#createProjectButton');button.disabled=true;try{if(value('sourceType')==='github'){document.querySelector('#createProjectForm').closest('dialog')?.close();await window.openGithubProject();return;}const result=await api('/api/projects',{method:'POST',body:JSON.stringify({project_name:value('projectName'),source_type:value('sourceType')})});await openWorkspace(result.project,result.workspace)}catch(error){apiMessage('createProjectMessage',error.message,true)}finally{button.disabled=false}};
-async function openWorkspace(project,workspace){if(['admin','owner'].includes(currentUser?.role)){await page('adminPage');return;}stopEvents();activeProject=project;activeWorkspace=workspace;activeSession=null;$('#workspaceRepo').textContent=project.name;$('#workspaceBranch').textContent=project.branch||'No branch';renderWorkspaceEmpty();$('#promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';$('#runtimeStatus').textContent=t('sessionDisconnected');await page('workspacePage');await Promise.all([refreshSessions(),refreshGit()]);$('#sendMessage').disabled=true;$('#providerSelect').replaceChildren(new Option(t('selectProvider'),''));$('#modelSelect').replaceChildren(new Option(t('selectModel'),''))}
+async function openWorkspace(project,workspace){if(['admin','owner'].includes(currentUser?.role)){await page('adminPage');return;}
+if(!currentUser||!project?.id||!workspace?.id||String(workspace.project_id)!==String(project.id))
+ throw Error(lang==='ar'?'اختر مشروعًا صحيحًا قبل فتح المحادثة.':'Select a valid project before opening Pi chat.');
+stopEvents();activeProject=project;activeWorkspace=workspace;activeSession=null;$('#workspaceRepo').textContent=project.name;window.refreshWorkspaceProjectBadge?.();$('#workspaceBranch').textContent=project.branch||'No branch';renderWorkspaceEmpty();$('#promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';$('#runtimeStatus').textContent=t('sessionDisconnected');await page('workspacePage');await Promise.all([refreshSessions(),refreshGit()]);$('#sendMessage').disabled=true;$('#providerSelect').replaceChildren(new Option(t('selectProvider'),''));$('#modelSelect').replaceChildren(new Option(t('selectModel'),''))}
 async function refreshGit(){if(!activeWorkspace)return;const state=await api(`/api/workspaces/${activeWorkspace.id}/git/status`);$('#commitButton').disabled=state.clean;$('#pushButton').disabled=true;$('#gitSummary').textContent=`${state.changes.length} ${t('changedFiles')} · ${state.head?state.head.slice(0,8):t('noCommits')}`}
 async function refreshSessions(){if(!activeWorkspace)return;const rows=await api(`/api/workspaces/${activeWorkspace.id}/sessions`);const list=$('#sessionList');list.replaceChildren();for(const row of rows){const button=textElement('button',row.title,'session');button.onclick=()=>selectSession(row);list.append(button)}}
 async function selectSession(session){const revision=++sessionSelectionRevision,workspaceId=activeWorkspace?.id;const opened=await api(`/api/sessions/${session.id}/open`,{method:'POST'});if(revision!==sessionSelectionRevision||activeWorkspace?.id!==workspaceId)return;stopEvents();activeSession={...session,...opened};window.resetWorkspaceQuestions?.();try{localStorage.setItem('og-context:'+currentUser.id,JSON.stringify({workspace_id:workspaceId,session_id:session.id}));}catch(error){}window.refreshWorkspaceTodos?.(true);$('#runtimeStatus').textContent=opened.status;if($('#agentFeed').workspaceFollow)$('#agentFeed').workspaceFollow.following=true;$('#agentFeed').messageSnapshot=null;$('#agentFeed').replaceChildren(textElement('p',session.title));startEvents();syncPermissionPolling();if(window.nativeSession?.active()){void refreshMessages().catch(error=>{if(revision===sessionSelectionRevision&&activeSession?.id===session.id)toast(error.message);});}else{await refreshMessages();}}

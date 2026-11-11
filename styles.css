@@ -1693,3 +1693,16 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 .provider-connected-detail:not([open]) > .provider-connected-content{
   display:none!important;
 }
+
+/* Project identity and project selection reuse the existing project/session APIs. */
+#workspacePage .workspace-project-badge{display:inline-flex;align-items:center;max-width:min(100%,420px);min-height:32px;padding:5px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--text);font-size:12px;font-weight:650;white-space:normal;overflow-wrap:anywhere;text-align:start;cursor:pointer}
+#workspacePage .workspace-project-badge:hover{border-color:var(--primary);background:var(--panel2)}
+.workspace-project-chooser{width:min(540px,92vw);max-height:min(78vh,700px);overflow:auto;border:1px solid var(--line);border-radius:16px;padding:20px;background:var(--panel);color:var(--text);box-shadow:0 24px 80px rgba(0,0,0,.16)}
+.workspace-project-chooser::backdrop{background:rgba(15,23,42,.48)}
+.workspace-project-chooser h2{font-size:18px;margin:0 0 6px}
+.workspace-project-chooser p{font-size:13px;color:var(--muted);margin:4px 0 14px}
+.workspace-project-choices{display:grid;gap:8px;max-height:42vh;overflow:auto;margin-bottom:15px}
+.workspace-project-option{display:flex;align-items:center;justify-content:space-between;gap:12px;text-align:start;width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--text);cursor:pointer;overflow-wrap:anywhere}
+.workspace-project-option:hover,.workspace-project-option:focus-visible{border-color:var(--primary)}
+.workspace-project-option small{color:var(--muted);font-size:11px;flex:none}
+.workspace-project-chooser-actions{display:flex;flex-wrap:wrap;gap:9px;justify-content:flex-end}

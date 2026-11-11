@@ -661,6 +661,19 @@
 
   const projectbar=center.querySelector('.project-bar');projectbar.querySelector('.statuses').hidden=true;
   projectbar.prepend(text('h1','Workspace','مساحة العمل','workspace-heading'));
+  // Keep the exact selected project visible above the chat, even on mobile.
+  const projectBadge=document.createElement('button');
+  projectBadge.type='button';projectBadge.id='workspaceProjectBadge';projectBadge.className='workspace-project-badge';
+  projectBadge.onclick=()=>window.promptProjectChoice?.();
+  window.refreshWorkspaceProjectBadge=()=>{
+    const selected=activeProject&&activeWorkspace?.project_id===activeProject.id;
+    projectBadge.textContent=selected?
+      tr('Project: ','المشروع: ')+activeProject.name+' ▾':
+      tr('Choose a project ▾','اختر مشروعًا ▾');
+    projectBadge.title=selected?tr('Change project','تغيير المشروع'):tr('Choose or create a project','اختر مشروعًا أو أنشئ واحدًا');
+    projectBadge.setAttribute('aria-label',projectBadge.title);
+  };
+  projectbar.append(projectBadge);window.refreshWorkspaceProjectBadge();
   projectbar.querySelector('.repo-title')?.setAttribute('hidden','');
   const context=textElement('div','','composer-context');projectbar.append(context);const workspaceDetails=q('connectionsWorkspace');workspaceDetails.append(title('Workspace details','تفاصيل مساحة العمل'),q('workspaceRepo'),q('workspaceBranch'));const gitState=textElement('span',tr('GitHub: checking…','GitHub: جارٍ التحقق…'));gitState.id='workspaceGithubState';workspaceDetails.append(gitState,q('runtimeStatus'));context.append(workspaceDays);
   const storageChip=textElement('span',tr('Storage: …','التخزين: …'));storageChip.id='workspaceStorage';context.append(storageChip);
@@ -1901,7 +1914,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   window.workspaceSubmissionBlocked=()=>sending||queuing||Boolean(pendingSubmission)||['submitted','waiting_approval'].includes(activeSession?.execution_status);
   q('promptForm').onsubmit=async event=>{
-    event.preventDefault();if(sending||queuing||pendingSubmission||!activeWorkspace)return;if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
+    event.preventDefault();if(sending||queuing||pendingSubmission)return;
+    if(!activeProject||!activeWorkspace||activeWorkspace.project_id!==activeProject.id){
+      submissionStatus.textContent=tr('Select an existing project before chatting with Pi.','اختر مشروعًا موجودًا قبل الدردشة مع Pi.');
+      await window.promptProjectChoice?.();return;
+    }
+    if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
     const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){

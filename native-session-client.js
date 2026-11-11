@@ -204,11 +204,18 @@
   // Workspace session metadata remains in the existing application DB;
   // no Python code processes the prompt or response body.
   function nativeRoot(workspace){
-    const record=[...rows.values()].find(row=>String(row.workspace_id)===String(workspace));
-    if(record?.native_directory)return record.native_directory;
-
-    return window.nativeDirectTest?.rootFromFile(record?.file_base)
-      ||window.nativeDirectTest?.defaultDirectory?.();
+    // Never silently fall back to the generic Pi directory when a project
+    // session is missing. Pi must run only in this selected project's root.
+    if(!workspace||!activeWorkspace||
+       String(workspace)!==String(activeWorkspace.id))
+      throw Error(label('Choose a project before using Pi.','اختر مشروعًا قبل تشغيل Pi.'));
+    const record=[...rows.values()].find(row=>
+      String(row.workspace_id)===String(workspace)&&
+      String(row.project_id)===String(activeWorkspace.project_id));
+    if(typeof record?.native_directory!=='string'||!record.native_directory)
+      throw Error(label('Project root has not been confirmed. Open its conversation first.',
+        'لم يتأكد مجلد المشروع. افتح محادثة المشروع أولًا.'));
+    return record.native_directory;
   }
   const url=(workspace,path)=>window.nativeDirectTest.url(path,nativeRoot(workspace));
   async function native(workspace,path,body,{signal,timeout=30000}={}){
@@ -597,6 +604,12 @@
   }
   async function send(id,{text,providerID,modelID,agent,variant,files=[]}){
     const row=await context(id);
+    if(!activeProject||!activeWorkspace||!activeSession||
+       String(row.project_id)!==String(activeProject.id)||
+       String(row.workspace_id)!==String(activeWorkspace.id)||
+       String(activeSession.id)!==String(id))
+      throw Error(label('Pi session is not bound to the current project. Select its project first.',
+        'جلسة Pi ليست مرتبطة بالمشروع الحالي. اختر المشروع أولًا.'));
     if(blocked(id))throw Error(label('Recover this conversation before sending. Your draft is preserved.','استعد هذه المحادثة قبل الإرسال. مسودتك محفوظة.'));
     const user=owner(),sendEpoch=epoch,sendGeneration=sendGenerations.get(id)||0,seenStatus=statusEvents.get(id)||0;select(id,{providerID,modelID,agent,variant});
     if(streamId!==id)await start();
