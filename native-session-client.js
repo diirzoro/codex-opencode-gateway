@@ -661,7 +661,15 @@
       if(owner()!==user||epoch!==generation)throw Error('Authenticated account changed');
       // Abort immediately via the EXISTING Pi Native session endpoint.
       // A file-read/history request must never precede or gate cancellation.
-      await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/abort',{}, {timeout:8000});
+      const stoppedResult=await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/abort',{}, {timeout:8000});
+      if(stoppedResult?.continuing){
+        // Stop acknowledged; Pi is already executing the NEXT native queue
+        // item. Do not wait for idle or mark this project as stopped.
+        statuses.set(id,'submitted');
+        if(current(id,user))activeSession.execution_status='submitted';
+        void window.refreshWorkspaceQueue?.();
+        return {status:'busy',continuing:true,pending:stoppedResult.pending||0};
+      }
       let stopped=false;
       // Native abort may acknowledge while a running read/model is winding
       // down. Poll authoritative Native status; don't invent local idle.
