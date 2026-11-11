@@ -386,6 +386,7 @@ class SdkAgent {
     this.events=new Set();this.busy=false;this.active=false;this.closed=false;
     this.last=Date.now();this.running=null;this.runningModel=null;
     this.credentialProvider=null;this.settledObserved=false;
+    this.keepQueueOnStop=false;this.queueContinuationActive=false;
     this.uiRequests=new Map();this.uiWidgets=new Map();
     this.unsub=session.subscribe(event=>this.consume(event));
   }
@@ -539,12 +540,60 @@ class SdkAgent {
       return {queued:true,pending:Number(this.session.pendingMessageCount)||0};
     }
     if(type==="abort"){
-      // Explicit Stop cancels the current execution AND Pi's own queued
-      // steer/followUp messages. Navigating away never calls this command.
-      this.session.clearQueue();
-      await this.session.abort();
-      this.emitUI("queue_updated",{pending:0});
-      return {};
+      // Stop only the current Pi run. Never clear the native follow-up/steer
+      // queue: the next queued message must run in this SAME project.
+      // Pi SDK 1.5.0 abort() settles without automatically waking its queue.
+      if(this.queueContinuationActive){
+        this.session.agent.abort();
+        const pending=Number(this.session.pendingMessageCount)||0;
+        this.emitUI("queue_updated",{pending});
+        return {stopped:true,continuing:pending>0,pending};
+      }
+      const previous=this.running;
+      this.keepQueueOnStop=true;
+      try{
+        await this.session.abort();
+        if(previous)await previous.catch(()=>{});
+        // Let the previous run's cleanup callback finish before taking over
+        // this.running. Its credential and execution slot remain reserved
+        // whenever Pi still has queued messages.
+        await new Promise(resolve=>setImmediate(resolve));
+        const pending=Number(this.session.pendingMessageCount)||0;
+        if(!pending){
+          this.keepQueueOnStop=false;
+          this.emitUI("queue_updated",{pending:0});
+          return {stopped:true,continuing:false,pending:0};
+        }
+        this.queueContinuationActive=true;
+        this.settledObserved=false;
+        // The native Pi Agent owns the original queued messages (including
+        // attached images). Do not copy, clear, or re-submit them via Python.
+        const continuation=Promise.resolve().then(async()=>{
+          while(Number(this.session.pendingMessageCount)>0){
+            const before=Number(this.session.pendingMessageCount);
+            await this.session.agent.continue();
+            if(Number(this.session.pendingMessageCount)>=before)
+              throw new Error("Pi did not advance its native queue after Stop");
+          }
+        });
+        this.running=continuation;
+        continuation.catch(e=>{
+          this.emitUI("provider_error",{kind:piProviderFailure(e)});
+        }).finally(async()=>{
+          this.queueContinuationActive=false;
+          this.keepQueueOnStop=false;
+          try{await this.clearCredential();}catch{this.close();}
+          this.running=null;this.active=false;this.runningModel=null;
+          releaseExecution(this);
+          if(!this.closed)this.consume({type:"agent_settled",aborted:false});
+          this.emitUI("queue_updated",{pending:Number(this.session.pendingMessageCount)||0});
+        }).catch(()=>{});
+        this.emitUI("queue_updated",{pending,continuing:true});
+        return {stopped:true,continuing:true,pending};
+      }catch(e){
+        this.keepQueueOnStop=false;
+        throw e;
+      }
     }
     if(type!=="prompt")throw Object.assign(new Error("Unsupported Pi SDK command"),{status:501});
     if(this.active||this.running)
@@ -575,8 +624,13 @@ class SdkAgent {
         type:"pi.provider_error",properties:{kind:piProviderFailure(e)}
       })+"\n\n");}catch{this.events.delete(res);}
     }).finally(async()=>{
-      // Once Pi settles, promptly erase the customer's runtime API override.
-      // Capacity stays reserved until the removal completes.
+      // Stop with pending native work retains the SAME provider credential,
+      // model and per-account execution reservation for the queued messages.
+      if(this.keepQueueOnStop&&Number(this.session.pendingMessageCount)>0){
+        this.running=null;this.active=false;
+        return;
+      }
+      // Otherwise remove the customer's runtime API override after settling.
       try{await this.clearCredential();}
       catch{this.close();}
       this.running=null;this.active=false;this.runningModel=null;
