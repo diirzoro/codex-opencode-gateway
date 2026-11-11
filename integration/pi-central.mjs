@@ -564,6 +564,12 @@ class SdkAgent {
           this.emitUI("queue_updated",{pending:0});
           return {stopped:true,continuing:false,pending:0};
         }
+        // In Pi SDK v1.5.0 abort() leaves this private cancellation latch
+        // raised. The native agent_start handler would otherwise abort every
+        // queued continuation immediately. Reset ONLY after abort settles.
+        if(this.session._agentRunAbortRequested!==true)
+          throw new Error("Installed Pi abort state changed; queue preserved for recovery");
+        this.session._agentRunAbortRequested=false;
         this.queueContinuationActive=true;
         this.settledObserved=false;
         // The native Pi Agent owns the original queued messages (including
