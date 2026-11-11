@@ -1744,3 +1744,39 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 
 #workspacePage .workspace-execution-lock{padding:11px 15px;margin:8px 12px;border:1px solid var(--line);border-inline-start:3px solid var(--primary);border-radius:10px;background:var(--panel2);font-size:13px;line-height:1.6;color:var(--text)}
 #workspacePage .workspace-execution-lock[hidden]{display:none!important}
+
+/* Pi native recommendations and archive viewer: existing Workspace, no extra app/service. */
+#workspacePage .pi-composer-recommendations{
+  width:min(calc(100% - 28px),var(--chat-width,960px));box-sizing:border-box;
+  margin:6px auto 8px;padding:12px 14px;border:1px solid var(--line);
+  border-radius:14px;background:var(--panel);box-shadow:var(--card-shadow);
+  max-height:min(42dvh,380px);overflow:auto;flex-shrink:0;order:9;
+}
+#workspacePage .pi-composer-recommendations[hidden]{display:none!important}
+#workspacePage .pi-composer-suggestion-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+#workspacePage .pi-composer-suggestion-heading strong{font-size:13px}
+#workspacePage .pi-composer-suggestion-heading button{min-width:28px;padding:3px 8px}
+#workspacePage .pi-composer-recommendations>p{font-size:13px;margin:8px 0;line-height:1.5}
+#workspacePage .pi-composer-option-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:8px;margin:10px 0}
+#workspacePage .pi-composer-option{
+ display:flex;align-items:flex-start;gap:9px;padding:11px;border:1px solid var(--line);
+ border-radius:11px;background:var(--panel2);cursor:pointer;position:relative;min-width:0;
+}
+#workspacePage .pi-composer-option:has(input:checked){border-color:var(--primary);outline:1px solid var(--primary)}
+#workspacePage .pi-composer-option>input{flex:none;width:16px;height:16px;min-height:16px;margin:2px 0}
+#workspacePage .pi-composer-option-body{display:grid;gap:3px;min-width:0;overflow-wrap:anywhere}
+#workspacePage .pi-composer-option-body strong{font-size:13px}
+#workspacePage .pi-composer-option-body small{font-size:11px;color:var(--muted);line-height:1.45}
+#workspacePage .pi-composer-recommended{font-size:10px;color:var(--primary);font-weight:700;white-space:nowrap}
+#workspacePage .chat-questions{width:min(calc(100% - 28px),var(--chat-width,960px));margin:5px auto;max-height:38dvh;overflow:auto;order:9;flex:none}
+.workspace-archives-dialog{width:min(760px,94vw);max-width:94vw;max-height:83dvh;box-sizing:border-box}
+.workspace-archives-dialog .workspace-archive-list{display:grid;gap:8px;max-height:61dvh;overflow:auto;padding:8px 0}
+.workspace-archives-dialog .workspace-archive-entry{text-align:start;white-space:normal;overflow-wrap:anywhere}
+.workspace-archives-dialog .workspace-archive-transcript{display:grid;gap:10px}
+.workspace-archives-dialog .workspace-archive-message{border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--panel);min-width:0}
+.workspace-archives-dialog .workspace-archive-message p{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font-size:12px;line-height:1.6}
+@media(max-width:600px){
+ #workspacePage .pi-composer-recommendations{width:calc(100% - 18px);padding:10px;max-height:46dvh}
+ #workspacePage .pi-composer-option-list{grid-template-columns:1fr}
+ #workspacePage .chat-questions{width:calc(100% - 18px)}
+}
