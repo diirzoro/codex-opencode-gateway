@@ -644,6 +644,52 @@
     const row=await context(id);
     return native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/archives/'+encodeURIComponent(archiveId));
   }
+  // Project dashboard archive management does not switch the active session.
+  // Gateway validates the owned project/workspace and returns its Pi directory;
+  // the Native server independently enforces account+workspace scope.
+  async function projectArchiveTarget(projectId,workspaceId){
+    const user=owner(),generation=epoch;
+    if(!user||!await ready())throw Error('Pi session authentication required');
+    const ctx=await localProjectContext(String(workspaceId));
+    if(owner()!==user||generation!==epoch)throw Error('Authenticated account changed');
+    if(String(ctx.projectId)!==String(projectId))
+      throw Error('Archive workspace does not belong to the selected project');
+    if(!ctx.binding)return null;
+    if(String(ctx.binding.workspace_id)!==String(workspaceId)||
+       !/^pi_[0-9a-f]{32}$/i.test(ctx.binding.native_session_id))
+      throw Error('The project has no confirmed Pi conversation binding');
+    return {user,generation,root:ctx.root,id:ctx.binding.native_session_id};
+  }
+  async function projectArchiveRequest(projectId,workspaceId,archiveId,operation){
+    const target=await projectArchiveTarget(projectId,workspaceId);
+    if(!target){
+      if(operation==='list')return {archives:[]};
+      throw Error('No archived Pi conversations exist for this project');
+    }
+    const valid=()=>owner()===target.user&&epoch===target.generation;
+    if(!valid())throw Error('Authenticated account changed');
+    const base='session/'+encodeURIComponent(target.id)+'/archives';
+    let result;
+    if(operation==='list')result=await window.nativeDirectTest.direct(base,{directory:target.root});
+    else{
+      if(!/^[0-9]{13}-[0-9a-f-]{36}\.jsonl$/i.test(archiveId))
+        throw Error('Invalid archived conversation identifier');
+      const url=base+'/'+encodeURIComponent(archiveId);
+      result=await window.nativeDirectTest.direct(url,{
+        directory:target.root,...(operation==='delete'?{
+          method:'DELETE',value:{confirm:'DELETE_PI_ARCHIVED_CHAT',archive_id:archiveId}
+        }:{})
+      });
+    }
+    if(!valid())throw Error('Authenticated account changed');
+    return result;
+  }
+  const projectArchives=(projectId,workspaceId)=>
+    projectArchiveRequest(projectId,workspaceId,null,'list');
+  const projectArchiveMessages=(projectId,workspaceId,archiveId)=>
+    projectArchiveRequest(projectId,workspaceId,archiveId,'read');
+  const deleteProjectArchive=(projectId,workspaceId,archiveId)=>
+    projectArchiveRequest(projectId,workspaceId,archiveId,'delete');
   async function resetContext(id){
     const row=await context(id);
     if(!activeWorkspace||String(row.workspace_id)!==String(activeWorkspace.id))
@@ -920,7 +966,7 @@
           .map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
       }))};
   }
-  window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,resetContext,archives,readArchive,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
+  window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,resetContext,archives,readArchive,projectArchives,projectArchiveMessages,deleteProjectArchive,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
   window.addEventListener('account-provider-changed',()=>{snapshots.clear();discoveryReads.clear();});
 })();
