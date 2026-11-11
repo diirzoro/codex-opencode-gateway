@@ -674,6 +674,32 @@
     projectBadge.setAttribute('aria-label',projectBadge.title);
   };
   projectbar.append(projectBadge);window.refreshWorkspaceProjectBadge();
+  const executionLockBanner=document.createElement('aside');
+  executionLockBanner.className='workspace-execution-lock';
+  executionLockBanner.setAttribute('role','status');
+  executionLockBanner.hidden=true;
+  projectbar.after(executionLockBanner);
+  let anotherProjectRunning=false;
+  window.addEventListener('pi-execution-status',event=>{
+    const current=activeProject?.id;
+    const state=event.detail||{};
+    anotherProjectRunning=Boolean(state.running&&current&&
+      String(state.project_id)!==String(current));
+    executionLockBanner.hidden=!anotherProjectRunning;
+    if(anotherProjectRunning){
+      executionLockBanner.textContent=tr(
+        'You cannot start this project while '+(state.project_name||'another project')+
+          ' has a running task. Wait or stop that task first.',
+        'لا يمكنك تشغيل هذا المشروع بينما هناك مهمة قائمة في المشروع «'+
+          (state.project_name||'مشروع آخر')+'». انتظر اكتمالها أو أوقفها أولًا.');
+    }else executionLockBanner.textContent='';
+    updateSend();
+  });
+  setInterval(()=>{
+    if(anotherProjectRunning&&currentUser&&
+      document.getElementById('workspacePage')?.classList.contains('active'))
+      void window.piExecutionStatus?.().catch(()=>{});
+  },8000);
   const cleanContext=document.createElement('button');
   cleanContext.type='button';cleanContext.className='button ghost small workspace-clean-context';
   cleanContext.textContent=tr('New clean context','بدء سياق نظيف');
@@ -1612,8 +1638,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     manualModel.hidden=!window.nativeSession?.active();
     recoveryAction.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
     cancelAttachment.hidden=!activeSession||!window.nativeSession?.pendingAttachment(activeSession.id);
-    q('sendMessage').disabled=sending||queuing||nativeBusy||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
-    q('sendMessage').title=nativeBusy?tr('Verify the previous message receipt before sending','تحقق من استلام الرسالة السابقة أولًا'):(busy||queueCount)?tr('Add to Pi task queue','إضافة إلى طابور Pi'):tr('Send','إرسال');
+    q('sendMessage').disabled=sending||queuing||nativeBusy||anotherProjectRunning||
+      Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||
+      !selected?.connected||selected.allowed===false||!q('modelSelect').value;
+    q('sendMessage').title=anotherProjectRunning?
+      tr('Another project is running','هناك مهمة قائمة في مشروع آخر'):
+      nativeBusy?tr('Verify the previous message receipt before sending','تحقق من استلام الرسالة السابقة أولًا'):
+      (busy||queueCount)?tr('Add to Pi task queue','إضافة إلى طابور Pi'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
     // Unconfirmed Native receipt is still an actionable stop: even an idle
     // runtime needs a verified session-scoped stop to unblock the saved draft.
@@ -2011,6 +2042,10 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     (!window.nativeSession?.active()&&['submitted','waiting_approval'].includes(activeSession?.execution_status));
   q('promptForm').onsubmit=async event=>{
     event.preventDefault();if(sending||queuing||pendingSubmission)return;
+    if(anotherProjectRunning){
+      submissionStatus.textContent=executionLockBanner.textContent;
+      return;
+    }
     if(!activeProject||!activeWorkspace||activeWorkspace.project_id!==activeProject.id){
       submissionStatus.textContent=tr('Select an existing project before chatting with Pi.','اختر مشروعًا موجودًا قبل الدردشة مع Pi.');
       await window.promptProjectChoice?.();return;

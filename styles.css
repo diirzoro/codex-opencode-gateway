@@ -1741,3 +1741,6 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 @media(max-width:520px){:root #workspacePage .pi-option-grid,:root #workspacePage .chat-questions .chat-approval fieldset{grid-template-columns:1fr}}
 
 #workspacePage .workspace-clean-context{font-size:12px;padding:7px 10px;min-height:32px;white-space:normal}
+
+#workspacePage .workspace-execution-lock{padding:11px 15px;margin:8px 12px;border:1px solid var(--line);border-inline-start:3px solid var(--primary);border-radius:10px;background:var(--panel2);font-size:13px;line-height:1.6;color:var(--text)}
+#workspacePage .workspace-execution-lock[hidden]{display:none!important}

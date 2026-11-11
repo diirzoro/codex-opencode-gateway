@@ -884,7 +884,9 @@ async function promptProjectChoice(){
 window.promptProjectChoice=promptProjectChoice;
 window.piExecutionStatus=async()=>{
   if(!currentUser||!window.nativeDirectTest?.active?.())return null;
-  return window.nativeDirectTest.direct('execution');
+  const result=await window.nativeDirectTest.direct('execution');
+  window.dispatchEvent(new CustomEvent('pi-execution-status',{detail:result}));
+  return result;
 };
 async function loadProjects(){const projects=await api('/api/projects'),workspaces=await api('/api/workspaces');const list=$('#projectList');list.replaceChildren();if(!projects.length)list.append(textElement('p',t('noProjects')));for(const project of projects){const button=textElement('button',`${project.name} · ${project.source_type}`,'button ghost');button.onclick=()=>{const workspace=workspaces.find(w=>w.project_id===project.id);if(workspace)openWorkspace(project,workspace);else toast('Workspace unavailable')};list.append(button)}}
 $('#sourceType').onchange=()=>{const hint=$('#githubHint');if(hint)hint.hidden=value('sourceType')!=='github';};$('#githubHintOpen').onclick=()=>window.openConnections&&window.openConnections('github');
