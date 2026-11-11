@@ -499,14 +499,24 @@ class SdkAgent {
   consume(event){
     if(this.closed)return;
     this.last=Date.now();
-    if(event.type==="agent_start")this.active=true;
-    if(event.type==="agent_settled"){this.active=false;this.settledObserved=true;}
+    if(event.type==="agent_start"){
+      this.active=true;
+      console.info("[Pi TEST] model run started",this.id.slice(0,15));
+    }
+    if(event.type==="agent_settled"){
+      this.active=false;this.settledObserved=true;
+      console.info("[Pi TEST] model run settled",this.id.slice(0,15),
+        "aborted",Boolean(event.aborted),
+        "queued",Number(this.session.pendingMessageCount)||0);
+    }
     const serialized=JSON.stringify({type:"pi."+event.type,properties:event});
     for(const res of this.events)try{res.write("data: "+serialized+"\n\n");}catch{this.events.delete(res);}
     if((event.type==="message_end"||event.type==="turn_end")&&event.message?.role==="assistant"&&
        (event.message.stopReason==="error"||event.message.errorMessage)){
+      const category=piProviderFailure(event.message);
+      console.warn("[Pi TEST] provider error",this.id.slice(0,15),category);
       const issue=JSON.stringify({type:"pi.provider_error",
-        properties:{kind:piProviderFailure(event.message)}});
+        properties:{kind:category}});
       for(const res of this.events)try{res.write("data: "+issue+"\n\n");}catch{this.events.delete(res);}
     }
     if(event.type==="agent_settled"){
@@ -705,6 +715,7 @@ class SdkAgent {
         this.consume({type:"agent_settled",aborted:false});
     }).catch(()=>{});
     const disposition=await admission;
+    console.info("[Pi TEST] prompt admission",this.id.slice(0,15),disposition);
     return {accepted:true,disposition};
   }
   close(){
