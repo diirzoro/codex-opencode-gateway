@@ -663,6 +663,10 @@
       // A file-read/history request must never precede or gate cancellation.
       const stoppedResult=await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/abort',{}, {timeout:8000});
       if(stoppedResult?.continuing){
+        // The stopped submission is resolved by Pi; keep the queued messages
+        // and allow later follow-ups without the old uncertain-receipt lock.
+        uncertain.delete(id);
+        try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
         // Stop acknowledged; Pi is already executing the NEXT native queue
         // item. Do not wait for idle or mark this project as stopped.
         statuses.set(id,'submitted');
