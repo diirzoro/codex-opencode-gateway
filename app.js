@@ -882,13 +882,29 @@ async function promptProjectChoice(){
  try{await job;}finally{if(projectChoicePending===job)projectChoicePending=null;}
 }
 window.promptProjectChoice=promptProjectChoice;
+window.piExecutionStatus=async()=>{
+  if(!currentUser||!window.nativeDirectTest?.active?.())return null;
+  return window.nativeDirectTest.direct('execution');
+};
 async function loadProjects(){const projects=await api('/api/projects'),workspaces=await api('/api/workspaces');const list=$('#projectList');list.replaceChildren();if(!projects.length)list.append(textElement('p',t('noProjects')));for(const project of projects){const button=textElement('button',`${project.name} · ${project.source_type}`,'button ghost');button.onclick=()=>{const workspace=workspaces.find(w=>w.project_id===project.id);if(workspace)openWorkspace(project,workspace);else toast('Workspace unavailable')};list.append(button)}}
 $('#sourceType').onchange=()=>{const hint=$('#githubHint');if(hint)hint.hidden=value('sourceType')!=='github';};$('#githubHintOpen').onclick=()=>window.openConnections&&window.openConnections('github');
 $('#createProjectForm').onsubmit=async event=>{event.preventDefault();const button=$('#createProjectButton');button.disabled=true;try{if(value('sourceType')==='github'){document.querySelector('#createProjectForm').closest('dialog')?.close();await window.openGithubProject();return;}const result=await api('/api/projects',{method:'POST',body:JSON.stringify({project_name:value('projectName'),source_type:value('sourceType')})});await openWorkspace(result.project,result.workspace)}catch(error){apiMessage('createProjectMessage',error.message,true)}finally{button.disabled=false}};
 async function openWorkspace(project,workspace){if(['admin','owner'].includes(currentUser?.role)){await page('adminPage');return;}
 if(!currentUser||!project?.id||!workspace?.id||String(workspace.project_id)!==String(project.id))
  throw Error(lang==='ar'?'اختر مشروعًا صحيحًا قبل فتح المحادثة.':'Select a valid project before opening Pi chat.');
-stopEvents();activeProject=project;activeWorkspace=workspace;activeSession=null;$('#workspaceRepo').textContent=project.name;window.refreshWorkspaceProjectBadge?.();$('#workspaceBranch').textContent=project.branch||'No branch';renderWorkspaceEmpty();$('#promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';$('#runtimeStatus').textContent=t('sessionDisconnected');await page('workspacePage');await Promise.all([refreshSessions(),refreshGit()]);$('#sendMessage').disabled=true;$('#providerSelect').replaceChildren(new Option(t('selectProvider'),''));$('#modelSelect').replaceChildren(new Option(t('selectModel'),''))}
+stopEvents();activeProject=project;activeWorkspace=workspace;activeSession=null;$('#workspaceRepo').textContent=project.name;window.refreshWorkspaceProjectBadge?.();$('#workspaceBranch').textContent=project.branch||'No branch';renderWorkspaceEmpty();$('#promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';$('#runtimeStatus').textContent=t('sessionDisconnected');await page('workspacePage');await Promise.all([refreshSessions(),refreshGit()]);
+// Viewing another project is permitted; running it while a different project
+// is busy is rejected by Pi itself. This warning does not stop that task.
+void window.piExecutionStatus?.().then(status=>{
+  if(activeProject?.id!==project.id||!status?.running||
+     String(status.project_id)===String(project.id))return;
+  const warning=lang==='ar'?
+    'لا يمكنك تشغيل مشروع آخر بينما هناك مهمة قائمة في المشروع «'+status.project_name+'».':
+    'You cannot start another project while '+status.project_name+' has a running task.';
+  $('#runtimeStatus').textContent=warning;
+  toast(warning);
+}).catch(()=>{});
+$('#sendMessage').disabled=true;$('#providerSelect').replaceChildren(new Option(t('selectProvider'),''));$('#modelSelect').replaceChildren(new Option(t('selectModel'),''))}
 async function refreshGit(){if(!activeWorkspace)return;const state=await api(`/api/workspaces/${activeWorkspace.id}/git/status`);$('#commitButton').disabled=state.clean;$('#pushButton').disabled=true;$('#gitSummary').textContent=`${state.changes.length} ${t('changedFiles')} · ${state.head?state.head.slice(0,8):t('noCommits')}`}
 async function refreshSessions(){if(!activeWorkspace)return;const rows=await api(`/api/workspaces/${activeWorkspace.id}/sessions`);const list=$('#sessionList');list.replaceChildren();for(const row of rows){const button=textElement('button',row.title,'session');button.onclick=()=>selectSession(row);list.append(button)}}
 async function selectSession(session){const revision=++sessionSelectionRevision,workspaceId=activeWorkspace?.id;const opened=await api(`/api/sessions/${session.id}/open`,{method:'POST'});if(revision!==sessionSelectionRevision||activeWorkspace?.id!==workspaceId)return;stopEvents();activeSession={...session,...opened};window.resetWorkspaceQuestions?.();try{localStorage.setItem('og-context:'+currentUser.id,JSON.stringify({workspace_id:workspaceId,session_id:session.id}));}catch(error){}window.refreshWorkspaceTodos?.(true);$('#runtimeStatus').textContent=opened.status;if($('#agentFeed').workspaceFollow)$('#agentFeed').workspaceFollow.following=true;$('#agentFeed').messageSnapshot=null;$('#agentFeed').replaceChildren(textElement('p',session.title));startEvents();syncPermissionPolling();if(window.nativeSession?.active()){void refreshMessages().catch(error=>{if(revision===sessionSelectionRevision&&activeSession?.id===session.id)toast(error.message);});}else{await refreshMessages();}}

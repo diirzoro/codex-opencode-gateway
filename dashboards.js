@@ -674,6 +674,41 @@
     projectBadge.setAttribute('aria-label',projectBadge.title);
   };
   projectbar.append(projectBadge);window.refreshWorkspaceProjectBadge();
+  const cleanContext=document.createElement('button');
+  cleanContext.type='button';cleanContext.className='button ghost small workspace-clean-context';
+  cleanContext.textContent=tr('New clean context','بدء سياق نظيف');
+  cleanContext.title=tr('Archive the previous Pi chat and start fresh within this project',
+    'أرشفة سجل Pi السابق وبدء سياق جديد داخل المشروع نفسه');
+  cleanContext.onclick=async()=>{
+    if(!activeSession||!window.nativeSession?.active())return;
+    const projectName=activeProject?.name||activeSession.title||'Project';
+    const dialog=document.createElement('dialog');dialog.className='workspace-project-chooser';
+    const heading=document.createElement('h2');
+    heading.textContent=tr('Start a clean project context?','بدء سياق نظيف للمشروع؟');
+    const detail=document.createElement('p');
+    detail.textContent=tr('Project: '+projectName+'. The previous conversation is archived. Project files remain untouched. Any running task must be stopped first.',
+      'المشروع: '+projectName+'. سيُؤرشف سجل المحادثة السابق وتبقى ملفات المشروع دون تغيير. يجب إيقاف أي مهمة قائمة أولًا.');
+    const actions=document.createElement('div');actions.className='workspace-project-chooser-actions';
+    const confirm=document.createElement('button');confirm.type='button';
+    confirm.className='button danger';confirm.textContent=tr('Confirm new context','تأكيد بدء سياق جديد');
+    const cancel=document.createElement('button');cancel.type='button';
+    cancel.className='button ghost';cancel.textContent=tr('Cancel','إلغاء');
+    cancel.onclick=()=>dialog.close();
+    confirm.onclick=async()=>{
+      confirm.disabled=cancel.disabled=true;
+      try{
+        await window.nativeSession.resetContext(activeSession.id);
+        dialog.close();window.resetWorkspaceQueue?.();window.resetWorkspaceQuestions?.();
+        await refreshMessages();await window.refreshWorkspaceTodos?.(true);
+        submissionStatus.textContent=tr('Clean context ready. Project files were preserved.',
+          'بدأ سياق نظيف. ملفات المشروع محفوظة.');
+      }catch(error){toast(error.message);confirm.disabled=cancel.disabled=false;}
+    };
+    actions.append(cancel,confirm);dialog.append(heading,detail,actions);
+    document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    dialog.showModal();
+  };
+  projectbar.append(cleanContext);
   projectbar.querySelector('.repo-title')?.setAttribute('hidden','');
   const context=textElement('div','','composer-context');projectbar.append(context);const workspaceDetails=q('connectionsWorkspace');workspaceDetails.append(title('Workspace details','تفاصيل مساحة العمل'),q('workspaceRepo'),q('workspaceBranch'));const gitState=textElement('span',tr('GitHub: checking…','GitHub: جارٍ التحقق…'));gitState.id='workspaceGithubState';workspaceDetails.append(gitState,q('runtimeStatus'));context.append(workspaceDays);
   const storageChip=textElement('span',tr('Storage: …','التخزين: …'));storageChip.id='workspaceStorage';context.append(storageChip);
@@ -1571,15 +1606,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const busy=['submitted','waiting_approval'].includes(activeSession?.execution_status);
     renderAttachments();
     attach.disabled=!workAccess||sending||Boolean(pendingSubmission)||busy;attachmentList.querySelectorAll('button').forEach(button=>button.disabled=sending||Boolean(pendingSubmission));
-    // Pi 1.x does not guarantee that a second prompt_async while a
-    // session is already running will execute. Never advertise a Gateway
-    // queue in native mode or acknowledge a potentially orphaned prompt.
+    // The SDK supports followUp() while streaming. Only a genuinely
+    // uncertain transport receipt blocks Native sending, not a running task.
     const nativeBusy=Boolean(window.nativeSession?.active()&&window.nativeSession.blocked(activeSession?.id));
     manualModel.hidden=!window.nativeSession?.active();
     recoveryAction.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
     cancelAttachment.hidden=!activeSession||!window.nativeSession?.pendingAttachment(activeSession.id);
-    q('sendMessage').disabled=sending||queuing||nativeBusy||(window.nativeSession?.active()&&busy)||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
-    q('sendMessage').title=nativeBusy?tr('Pi is busy — send when this turn finishes','Pi مشغول — أرسل بعد انتهاء الرد'):!window.nativeSession?.active()&&(busy||queueCount)?tr('Add to conversation queue','إضافة إلى طابور المحادثة'):tr('Send','إرسال');
+    q('sendMessage').disabled=sending||queuing||nativeBusy||Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value;
+    q('sendMessage').title=nativeBusy?tr('Verify the previous message receipt before sending','تحقق من استلام الرسالة السابقة أولًا'):(busy||queueCount)?tr('Add to Pi task queue','إضافة إلى طابور Pi'):tr('Send','إرسال');
     q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
     // Unconfirmed Native receipt is still an actionable stop: even an idle
     // runtime needs a verified session-scoped stop to unblock the saved draft.
@@ -1856,7 +1890,39 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   let queuePolling=false;
   const queueCurrent=(owner,id)=>currentUser?.id===owner&&activeSession?.id===id;
   async function refreshMessageQueue(){
-    if(window.nativeSession?.active()){queueCount=0;queueView.hidden=true;return;}
+    if(window.nativeSession?.active()){
+      if(queuePolling)return;
+      const owner=currentUser?.id,id=activeSession?.id,revision=++queueRevision;
+      if(!id){queueCount=0;queueView.hidden=true;return;}
+      queuePolling=true;
+      try{
+        const data=await api('/api/sessions/'+id+'/queue');
+        if(revision!==queueRevision||!queueCurrent(owner,id))return;
+        const entries=[
+          ...(data.steering||[]).map(text=>({text,mode:'steer'})),
+          ...(data.followUps||[]).map(text=>({text,mode:'followUp'}))
+        ];
+        queueCount=Number(data.pending)||entries.length;
+        queueView.replaceChildren();
+        queueView.hidden=!queueCount;
+        if(queueCount){
+          queueView.append(textElement('summary',tr('Pi queue · ','طابور Pi · ')+queueCount));
+          queueView.append(textElement('small',
+            tr('Runs in order within this project. Stop cancels all waiting messages.',
+              'يُنفّذ بالترتيب داخل هذا المشروع. الإيقاف يلغي جميع الرسائل المنتظرة.')));
+          for(const item of entries.slice(0,10)){
+            const line=textElement('div','','queued-message');
+            line.append(textElement('p',String(item.text).slice(0,360)),
+              textElement('small',item.mode==='steer'?
+                tr('Next turn','الدور التالي'):tr('Waiting','بانتظار التنفيذ')));
+            queueView.append(line);
+          }
+        }
+        updateSend();
+      }catch(error){if(queueCurrent(owner,id))submissionStatus.textContent=error.message;}
+      finally{queuePolling=false;}
+      return;
+    }
     if(queuePolling)return;
     const owner=currentUser?.id,id=activeSession?.id,revision=++queueRevision;
     if(!id){queueCount=0;queueView.hidden=true;queueView.replaceChildren();queueSignature='';return;}
@@ -1941,7 +2007,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }catch(error){if(submissionCurrent(pending)){retrySubmission.hidden=false;submissionStatus.textContent=error.message;toast(error.message);}}
     finally{sending=false;updateSend();}
   }
-  window.workspaceSubmissionBlocked=()=>sending||queuing||Boolean(pendingSubmission)||['submitted','waiting_approval'].includes(activeSession?.execution_status);
+  window.workspaceSubmissionBlocked=()=>sending||queuing||Boolean(pendingSubmission)||
+    (!window.nativeSession?.active()&&['submitted','waiting_approval'].includes(activeSession?.execution_status));
   q('promptForm').onsubmit=async event=>{
     event.preventDefault();if(sending||queuing||pendingSubmission)return;
     if(!activeProject||!activeWorkspace||activeWorkspace.project_id!==activeProject.id){
@@ -1952,11 +2019,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
-      // A new prompt never cancels a running Native model. Stop is explicit.
-      if(['submitted','waiting_approval'].includes(activeSession?.execution_status)){
-        submissionStatus.textContent=tr('Pi is processing this conversation. Wait or press Stop.','Pi يعالج هذه المحادثة. انتظر أو اضغط إيقاف صراحة.');
-        return;
-      }
+      // A second prompt is added through Pi's own followUp queue and never
+      // cancels the active task. Other projects are blocked on the Pi server.
       const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
       // Immediate visual receipt; no Python entitlement round-trip per Pi prompt.
       showSendingPreview(prompt);
@@ -1966,8 +2030,18 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
         const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type,url:a.url,name:a.name}));
         if(sendingPreview)sendingPreview.sessionId=sessionId;
-        await window.nativeSession.send(sessionId,{text:prompt,providerID:provider,modelID:model,agent:selectedAgent,variant:nativeVariant.value||undefined,files:nativeFiles});
+        const receipt=await window.nativeSession.send(sessionId,{
+          text:prompt,providerID:provider,modelID:model,agent:selectedAgent,
+          variant:nativeVariant.value||undefined,files:nativeFiles
+        });
         sentAttachments({attachments:nativeFiles});draft.confirm();
+        if(receipt?.queued){
+          submissionStatus.textContent=tr('Added to Pi queue ('+receipt.pending+' pending).',
+            'أُضيفت الرسالة إلى طابور Pi ('+receipt.pending+' منتظرة).');
+          clearSendingPreview();
+          await refreshMessageQueue();
+          return;
+        }
         if(sendingPreview){const note=sendingPreview.node.querySelector('.sending-preview-status');if(note)note.textContent=tr('Received by Pi','استلمها Pi');}
         if(!submissionStatus.dataset.piProviderError)submissionStatus.textContent=tr('Pi received the request; awaiting provider response.','استلم Pi الطلب؛ جارٍ انتظار رد المزوّد.');
         // Pi SSE owns reply presentation. No blocking Gateway history
