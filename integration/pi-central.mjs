@@ -633,20 +633,26 @@ class SdkAgent {
     const admission=new Promise((resolve,reject)=>{
       admissionResolve=resolve;admissionReject=reject;
     });
-    const completeAdmission=(accepted)=>{
+    // The actual Pi 1.5.0 preflightResult value is "started", "queued",
+    // or "handled". "handled" does not start an LLM response.
+    const completeAdmission=(disposition)=>{
       if(admitted)return;
       admitted=true;
-      if(accepted)admissionResolve();
-      else admissionReject(Object.assign(
-        new Error("Pi did not accept the prompt"),{status:422}));
+      if(["started","queued","handled"].includes(disposition)){
+        admissionResolve(disposition);
+        return;
+      }
+      admissionReject(Object.assign(
+        new Error("Pi did not start the requested model response."),
+        {status:422,receipt:"not_submitted"}));
     };
     const run=Promise.resolve().then(()=>this.session.prompt(fields.message,{
       ...(images.length?{images}:{}),
       preflightResult:completeAdmission
     }));
     this.running=run;
-    run.then(()=>completeAdmission(true)).catch(e=>{
-      completeAdmission(false);
+    run.then(()=>completeAdmission("missing_preflight")).catch(e=>{
+      completeAdmission("rejected");
       for(const res of this.events)try{res.write("data: "+JSON.stringify({
         type:"pi.provider_error",properties:{kind:piProviderFailure(e)}
       })+"\n\n");}catch{this.events.delete(res);}
@@ -664,8 +670,8 @@ class SdkAgent {
       releaseExecution(this);
       if(!this.closed&&!this.settledObserved)this.consume({type:"agent_settled"});
     }).catch(()=>{});
-    await admission;
-    return {accepted:true};
+    const disposition=await admission;
+    return {accepted:true,disposition};
   }
   close(){
     if(this.closed)return;this.closed=true;
@@ -1353,8 +1359,12 @@ const server=http.createServer(async(req,res)=>{
         // Pi can consume an extension command without starting a model run.
         // A started/queued prompt stays reserved until agent_settled or exit.
         if(accepted?.disposition==="handled"){
-          a.runningModel=null;releaseExecution(a);
+          // An installed Pi extension consumed the input; no assistant turn
+          // is guaranteed. Distinguish this from a running provider request.
+          return json(res,200,{accepted:true,handled:true,disposition:"handled"});
         }
+        if(accepted?.disposition==="queued")
+          return json(res,200,{accepted:true,queued:true,disposition:"queued"});
         res.writeHead(204,{"cache-control":"no-store"});res.end();return;
       } catch(e) {
         // Never release an actively running request just because its RPC ack
@@ -1369,7 +1379,7 @@ const server=http.createServer(async(req,res)=>{
     const isPrompt=(req.method==="POST"&&
       /^\/session\/[^/]+\/prompt_async(?:\?|$)/.test(cleanPath(req.url||"/").pathname));
     return error(res,e.status||502,e.message||"Pi adapter error",
-      isPrompt&&!promptDispatched?"not_submitted":undefined);
+      isPrompt&&(!promptDispatched||e.receipt==="not_submitted")?"not_submitted":undefined);
   }
 });
 server.on("clientError",(_,s)=>s.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
