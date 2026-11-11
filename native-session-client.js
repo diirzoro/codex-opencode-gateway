@@ -515,6 +515,18 @@
         else if(part?.type==="text_end"&&typeof part.content==="string")piReply(id,part.content,true);
         return;
       }
+      if(e.type==="pi.run_outcome"){
+        if(p.kind==="no_text"&&activeSession?.id===id){
+          const message=label(
+            'Pi finished without an assistant text reply. Check Pi tool activity, the selected model, and provider credits. You can send a new message in this same conversation; nothing was resent automatically.',
+            'أنهى Pi التشغيل دون رد نصي. راجع نشاط أدوات Pi والنموذج المختار ورصيد المزوّد. يمكنك إرسال رسالة جديدة في نفس المحادثة؛ لم تُعَد أي رسالة تلقائيًا.');
+          const status=document.getElementById("submissionStatus");
+          if(status&&!status.dataset.piProviderError)status.textContent=message;
+          const runtime=document.getElementById("runtimeStatus");
+          if(runtime)runtime.textContent=message;
+        }
+        return;
+      }
       if(e.type==="pi.provider_error"){
         const status=document.getElementById("submissionStatus");
         if(status?.dataset.piProviderError===(p.kind||"provider_error"))return;
