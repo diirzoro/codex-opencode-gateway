@@ -1000,9 +1000,11 @@ async function refreshWorkspaceTodos(force=false){
  }catch(error){/* Keep the composer responsive when optional task discovery fails. */}
  finally{if(todoRequest===token)todoRequest=null;}
 }
-function renderPiOptionCards(host,answer){
+// Keep selections while Pi history refreshes a message; never persist free text.
+const piChoiceDrafts=new Map();
+function renderPiOptionCards(host,answer,messageId){
  const text=String(answer||"");
- if(text.length>24000)return;
+ if(!text||text.length>24000)return;
  const lines=text.split(/\r?\n/),topics=[];
  let nativeOptions=null,question='';
  const structured=text.match(/\x60{3}pi[_-]choices\s*\r?\n([\s\S]*?)\x60{3}/i);
@@ -1010,62 +1012,155 @@ function renderPiOptionCards(host,answer){
   const data=JSON.parse(structured[1].trim());question=String(data.question||'').trim().slice(0,300);
   if(Array.isArray(data.options))nativeOptions=data.options.slice(0,6).map(item=>({
    title:String(item.title||item.label||'').trim().slice(0,110),
-   description:String(item.description||item.reason||'').trim().slice(0,180),advantages:[],
+   description:String(item.description||item.reason||'').trim().slice(0,180),
    recommended:item.recommended===true,
    value:String(item.value||item.title||item.label||'').trim().slice(0,220)
   })).filter(item=>item.title&&item.value);
- }catch{/* Invalid optional Pi choices stay in its saved answer. */}
+ }catch{/* Invalid optional Pi choices are not interpreted as instructions. */}
  for(let i=0;i<lines.length;i++){
   const m=lines[i].match(/^\s*#{2,6}\s+(?:\*\*)?(\d+)[.)]\s+(.+?)\s*$/);
   if(m&&topics.length<10)topics.push({start:i,title:m[2].replace(/\*\*/g,"").trim().slice(0,110)});
  }
  if((!nativeOptions||nativeOptions.length<2)&&
-  (topics.length<2||topics.length>8||
-   !/(languages|frameworks|technologies|best for|recommended|لغات|تقنيات|خيارات|الأفضل)/i.test(text.slice(0,1000))))return;
+   (topics.length<2||topics.length>6||
+    !/(languages|frameworks|technologies|best for|recommended|لغات|تقنيات|خيارات|الأفضل)/i.test(text.slice(0,1000))))return;
  const options=nativeOptions?.length>=2?nativeOptions:topics.map((item,index)=>{
   const body=lines.slice(item.start+1,topics[index+1]?.start||lines.length).join("\n");
-  const suitable=body.match(/(?:\*\*)?(?:Best for|الأفضل لـ|مناسب لـ)\s*:?\s*(?:\*\*)?\s*([^\n]+)/i)?.[1]?.replace(/\*\*/g,"").trim();
-  const advantages=body.split("\n").filter(x=>/^\s*[-*•]\s+/.test(x))
-   .map(x=>x.replace(/^\s*[-*•]\s+/,"").replace(/\*\*/g,"").trim())
-   .filter(Boolean).slice(0,2);
-  return {...item,description:(suitable||advantages[0]||"").slice(0,180),advantages};
+  const best=body.match(/(?:\*\*)?(?:Best for|الأفضل لـ|مناسب لـ)\s*:?\s*(?:\*\*)?\s*([^\n]+)/i)?.[1]?.replace(/\*\*/g,"").trim();
+  const description=body.split("\n").find(x=>/^\s*[-*•]\s+/.test(x))||'';
+  return {title:item.title,value:item.title,description:(best||description).replace(/^\s*[-*•]\s*/,"").replace(/\*\*/g,"").trim().slice(0,180),
+   recommended:/موصى|recommended/i.test(item.title)};
  });
- const container=document.createElement("section");
- container.className="pi-option-choices";
- const heading=document.createElement("div");heading.className="pi-option-header";
- const title=document.createElement("strong");
- title.textContent=question||(lang==='ar'?"اختر التقنية الأنسب":"Choose the best approach");
- const help=document.createElement("small");
- help.textContent=lang==='ar'?"خيارات من توصيات Pi — لا يبدأ التنفيذ حتى ترسل طلبك":
-  "From Pi's recommendations — no action runs until you submit";
- heading.append(title,help);container.append(heading);
- const grid=document.createElement("div");grid.className="pi-option-grid";
- for(const choice of options){
-  const card=document.createElement("article");card.className="pi-option-card";
-  const name=document.createElement("strong");name.textContent=choice.title;
-  const why=document.createElement("p");why.textContent=choice.description;
-  const perks=document.createElement("div");perks.className="pi-option-tags";
-  for(const value of choice.advantages){const tag=document.createElement("span");tag.textContent=value;perks.append(tag);}
-  const select=document.createElement("button");select.type="button";select.className="button small";
-  select.textContent=lang==='ar'?"استخدم هذا الخيار":"Use this option";
-  select.onclick=()=>{
-   const input=document.getElementById("promptInput");if(!input)return;
-   const sentence=lang==='ar'?"أختار "+(choice.value||choice.title)+" في المشروع الحالي.":
-    "I choose "+(choice.value||choice.title)+" for this project.";
-   input.value=(input.value.trimEnd()?input.value.trimEnd()+"\n":"")+sentence;
-   input.dispatchEvent(new Event("input",{bubbles:true}));
-   window.resizeWorkspaceComposer?.();input.focus();
-   for(const node of grid.children)node.classList.toggle("selected",node===card);
-  };
-  card.append(name,why,perks);
-  if(choice.recommended){const badge=document.createElement('span');badge.className='pi-option-recommended';badge.textContent=lang==='ar'?'موصى به من Pi':'Recommended by Pi';card.append(badge);}
-  card.append(select);grid.append(card);
+ const account=currentUser?.id,sessionId=activeSession?.id;
+ const key=account&&sessionId&&messageId?
+  String(account)+':'+String(sessionId)+':'+String(messageId):'';
+ const storeKey=key?'og-pi-choice:'+key:'';
+ let savedStatus='';
+ if(storeKey)try{savedStatus=sessionStorage.getItem(storeKey)||'';}catch{}
+ if(savedStatus==='cancelled')return;
+ const previous=key?piChoiceDrafts.get(key):null;
+ const initial=previous?.selected??String(Math.max(0,options.findIndex(option=>option.recommended)));
+ const panel=document.createElement('section');panel.className='pi-option-choices pi-choice-table-panel';
+ const header=document.createElement('div');header.className='pi-option-header';
+ const title=document.createElement('strong');
+ title.textContent=question||(lang==='ar'?'أي خيار تفضّل؟':'Which option would you prefer?');
+ const description=document.createElement('small');
+ description.textContent=lang==='ar'?'اختر أحد الخيارات أو اكتب فكرتك، ثم اضغط متابعة.':
+  'Select an option or write your own idea, then Continue.';
+ header.append(title,description);panel.append(header);
+ const scroll=document.createElement('div');scroll.className='pi-choice-table-scroll';
+ const table=document.createElement('table');table.className='pi-choice-table';
+ const thead=document.createElement('thead'),heading=document.createElement('tr');
+ for(const label of (lang==='ar'?['اختيار','الحل المقترح','الشرح / التوصية']:
+   ['Select','Suggested approach','Explanation / recommendation'])){
+  const th=document.createElement('th');th.scope='col';th.textContent=label;heading.append(th);
  }
- container.append(grid);
- host.append(container);
+ thead.append(heading);table.append(thead);
+ const tbody=document.createElement('tbody');
+ const group='pi-option-'+crypto.randomUUID(),radios=[];
+ const recommendedIndex=options.findIndex(option=>option.recommended);
+ const draft=key?previous||{}:{};
+ const save=()=>{
+  if(!key)return;
+  if(piChoiceDrafts.size>150)piChoiceDrafts.delete(piChoiceDrafts.keys().next().value);
+  piChoiceDrafts.set(key,{selected:radios.find(x=>x.checked)?.value||'',
+   idea:customText.value});
+ };
+ const status=document.createElement('p');status.className='pi-choice-status';
+ status.setAttribute('role','status');
+ function update(){
+  const custom=radios.find(r=>r.value==='custom')?.checked===true;
+  customArea.hidden=!custom;
+  for(const row of tbody.children)row.classList.toggle('selected',row.querySelector('input[type=radio]')?.checked===true);
+  continueButton.disabled=savedStatus==='requested'||(custom&&!customText.value.trim())||!radios.some(r=>r.checked);
+  if(savedStatus!=='requested')status.textContent='';
+  save();
+ }
+ options.forEach((item,index)=>{
+  const row=document.createElement('tr');row.className='pi-choice-row';
+  const selectCell=document.createElement('td'),radio=document.createElement('input');
+  radio.type='radio';radio.name=group;radio.value=String(index);
+  radio.id=group+'-'+index;radio.checked=initial===String(index);
+  radio.setAttribute('aria-label',item.title);
+  radio.onchange=update;selectCell.append(radio);radios.push(radio);
+  const name=document.createElement('td'),label=document.createElement('label');
+  label.htmlFor=radio.id;label.textContent=item.title;name.append(label);
+  if(index===recommendedIndex){
+   const flag=document.createElement('span');flag.className='pi-choice-recommended';
+   flag.textContent=lang==='ar'?'موصى به من Pi':'Pi recommends';name.append(flag);
+  }
+  const why=document.createElement('td');why.textContent=item.description;
+  row.append(selectCell,name,why);
+  row.onclick=event=>{if(event.target===radio)return;radio.checked=true;update();};
+  tbody.append(row);
+ });
+ const customRow=document.createElement('tr');customRow.className='pi-choice-row pi-choice-custom-row';
+ const customRadio=document.createElement('input');customRadio.type='radio';customRadio.name=group;
+ customRadio.value='custom';customRadio.id=group+'-custom';
+ customRadio.checked=initial==='custom';customRadio.onchange=update;radios.push(customRadio);
+ const customSelect=document.createElement('td');customSelect.append(customRadio);
+ const customName=document.createElement('td'),customLabel=document.createElement('label');
+ customLabel.htmlFor=customRadio.id;customLabel.textContent=lang==='ar'?'اقتراحي الخاص':'Your own idea';
+ customName.append(customLabel);
+ const customHelp=document.createElement('td');
+ customHelp.textContent=lang==='ar'?'أريد استخدام فكرة أو تقنية أخرى':'Suggest a different approach';
+ customRow.append(customSelect,customName,customHelp);
+ customRow.onclick=event=>{if(event.target===customRadio)return;customRadio.checked=true;update();};
+ tbody.append(customRow);table.append(tbody);scroll.append(table);panel.append(scroll);
+ const customArea=document.createElement('div');customArea.className='pi-choice-custom';
+ const customText=document.createElement('textarea');customText.rows=2;customText.maxLength=2000;
+ customText.placeholder=lang==='ar'?'اكتب رأيك أو فكرتك أو التقنية التي تفضلها...':
+  'Write your preferred idea, technology, or approach...';
+ customText.setAttribute('aria-label',lang==='ar'?'اقتراحي الخاص':'Your own idea');
+ customText.value=draft.idea||'';
+ customText.oninput=update;customArea.append(customText);panel.append(customArea);
+ const actions=document.createElement('div');actions.className='pi-choice-actions';
+ const cancelButton=document.createElement('button');cancelButton.type='button';
+ cancelButton.className='button ghost small';cancelButton.textContent=lang==='ar'?'إلغاء':'Cancel';
+ const continueButton=document.createElement('button');continueButton.type='button';
+ continueButton.className='button small';continueButton.textContent=lang==='ar'?'متابعة':'Continue';
+ cancelButton.onclick=()=>{
+  if(storeKey)try{sessionStorage.setItem(storeKey,'cancelled');}catch{}
+  if(key)piChoiceDrafts.delete(key);
+  panel.hidden=true;
+ };
+ continueButton.onclick=()=>{
+  const checked=radios.find(r=>r.checked);
+  if(!checked)return;
+  const custom=checked.value==='custom',value=custom?customText.value.trim():options[Number(checked.value)]?.value;
+  if(!value){status.textContent=lang==='ar'?'اكتب اقتراحك أولًا.':'Write your idea first.';return;}
+  const prompt=custom?
+   (lang==='ar'?'هذا اقتراحي الخاص: ':'My own idea is: ')+value+
+     (lang==='ar'?'\nتابع الطلب السابق وفق هذا الاقتراح، مع احترام تعليماتي.':
+     '\nContinue the previous request using my idea and existing constraints.'):
+   (lang==='ar'?'أختار الحل التالي من توصياتك: ':'I choose this option from your recommendations: ')+value+
+     (lang==='ar'?'\nتابع الطلب السابق وفق هذا الخيار، مع احترام تعليماتي.':
+     '\nContinue the previous request using this option and existing constraints.');
+  const handoff=window.submitWorkspacePiChoice?.({owner:account,sessionId,text:prompt});
+  if(!handoff?.handedOff){
+   status.textContent=handoff?.reason||(lang==='ar'?
+    'تعذر الإرسال. اختر المشروع والنموذج، ثم حاول مجددًا.':
+    'Could not send. Select your project and model, then retry.');
+   return;
+  }
+  savedStatus='requested';
+  if(storeKey)try{sessionStorage.setItem(storeKey,'requested');}catch{}
+  for(const radio of radios)radio.disabled=true;
+  customText.disabled=true;cancelButton.disabled=true;continueButton.disabled=true;
+  status.textContent=lang==='ar'?
+   'تم تمرير اختيارك إلى إرسال Pi. راجع حالة الطلب في المحادثة.':
+   'Your choice was handed to Pi submission. Check its status in the conversation.';
+ };
+ actions.append(cancelButton,continueButton);panel.append(actions,status);
+ if(savedStatus==='requested'){
+  for(const radio of radios)radio.disabled=true;
+  customText.disabled=true;cancelButton.disabled=true;continueButton.disabled=true;
+  status.textContent=lang==='ar'?'تم طلب المتابعة باستخدام هذا الاختيار.':'Continuation was requested with this choice.';
+ }else update();
+ host.append(panel);
 }
 // A deliberately small, text-only Markdown subset. Never interpret Agent HTML.
-function renderAgentText(host,value){
+function renderAgentText(host,value,messageId){
  host.replaceChildren();host.classList.add('message-rich');host.dir='auto';
  // Present paths relative to the verified selected project's root.
  // Keep the stored Pi message and clipboard text unchanged.
@@ -1122,7 +1217,7 @@ function renderAgentText(host,value){
   else{if(list)flush();paragraph.push(lines[i]);}
  }
  flush();
- renderPiOptionCards(host,value);
+ renderPiOptionCards(host,value,messageId);
 }
 function compactNativeToolMessages(rows){
  // Fold adjacent tool-only assistant records into a single visual activity
@@ -1194,7 +1289,7 @@ async function refreshMessages(){
    node.append(avatar);
    if(row.id)node.dataset.messageId=row.id;
    const hasText=presentation.hasText;
-   const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text);node.append(content);
+   const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text,row.id);node.append(content);
    // Never promote a model's textual claim into a verified file operation.
    // Real Pi toolCall/toolResult activity is displayed separately.
    if(nativeIncremental&&row.role==='assistant'&&hasText&&!presentation.activity.length&&
