@@ -1111,7 +1111,7 @@ function renderAgentText(host,value){
   else{if(list)flush();paragraph.push(lines[i]);}
  }
  flush();
- renderPiOptionCards(host,value);
+ // Choices supplied by Pi are rendered beside the composer.
 }
 function compactNativeToolMessages(rows){
  // Fold adjacent tool-only assistant records into a single visual activity
@@ -1169,6 +1169,11 @@ async function refreshMessages(){
   const nextNodes=[],seen=new Set();let previousPrompt='',previousAttachments=[];
   const displayRows=nativeIncremental?compactNativeToolMessages(rows):rows;
   const latestAssistant=displayRows.filter(row=>row.role==='assistant').at(-1);
+  const latestRow=displayRows.at(-1);
+  window.updateWorkspacePiRecommendations?.({
+    sessionId,owner,messageId:latestAssistant?.id||'',
+    text:latestRow===latestAssistant?latestAssistant?.text||'':''
+  });
   for(const row of displayRows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
    if(row.role==='user'){previousPrompt=row.text;previousAttachments=row.attachments||[];}
