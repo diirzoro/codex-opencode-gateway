@@ -768,11 +768,13 @@
     const details=document.createElement('details');details.className='message-activity'+(rows.some(row=>row.native)?' native-activity':'');
 // Native Pi owns tool execution. Keep the UI summary compact;
 // show failures by default, but never expose tool arguments automatically.
-details.open=rows.some(row=>row.status==='error'||row.native&&['pending','running'].includes(row.status));
+const failures=rows.filter(row=>row.status==='error').length;
+details.open=rows.length<=5&&rows.some(row=>row.status==='error'||row.native&&['pending','running'].includes(row.status));
 if(rows.some(row=>row.native))details.dataset.activityId='group';
 const count=rows.length;
-details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')+' · '+count));const list=document.createElement('ul');
-    for(const row of rows){const item=document.createElement('li'),step=document.createElement('details');step.className='tool-execution';step.dataset.state=row.status;step.open=row.status==='error';
+details.append(textElement('summary',tr('Tool activity','نشاط الأدوات')+' · '+count+
+  (failures?' · '+failures+' '+tr('failed','فشل'):'')));const list=document.createElement('ul');
+    for(const row of rows){const item=document.createElement('li'),step=document.createElement('details');step.className='tool-execution';step.dataset.state=row.status;step.open=row.status==='error'&&rows.length<=5;
       const heading=textElement('summary',workLabel(row)+(row.native&&row.files?.length?' · '+row.files.slice(0,3).map(f=>f.path).join(', '):''));step.append(heading);
       if(row.native){step.dataset.activityId=row.id;for(const node of [details,step]){if(node.dataset.tracked)continue;node.dataset.tracked='1';const summary=node.querySelector('summary');summary?.addEventListener('click',()=>{node.dataset.userToggled='1';});node.addEventListener('toggle',()=>{if(node.dataset.userToggled)node.dataset.userOpen=String(node.open);});}}
       if(row.command){const pre=textElement('pre','','tool-execution-code'),command=textElement('code',row.command+(row.command_limited?tr(' (arguments hidden)',' (المعاملات مخفية)'):''),'activity-command');pre.dir='ltr';pre.append(command);step.append(pre);}

@@ -283,7 +283,7 @@
   }
   function toolError(state){
     const raw=(typeof state.error==='string'?state.error:state.error?.code||'').slice(0,2000).toLowerCase();
-    for(const [kind,pattern] of [['approval_rejected',/user rejected|permissionrejected/],['permission_denied',/eacces|eperm|access denied|permission denied|prevents you/],['file_not_found',/enoent|file not found|does not exist|no such file/],['interrupted',/abort|cancel|interrupt/],['timeout',/timed out|timeout/],['invalid_arguments',/invalid.*(?:input|arguments)|validationerror|zoderror/],['tool_unavailable',/unavailable tool|tool not found|tool is disabled/],['network_unavailable',/econnrefused|enotfound|network is unreachable/]])if(pattern.test(raw))return kind;
+    for(const [kind,pattern] of [['approval_rejected',/user rejected|permissionrejected/],['permission_denied',/eacces|eperm|access denied|permission denied|prevents you/],['file_not_found',/enoent|file not found|does not exist|no such file/],['command_not_found',/enoexec|command not found/],['interrupted',/abort|cancel|interrupt/],['timeout',/timed out|timeout/],['invalid_arguments',/invalid.*(?:input|arguments)|validationerror|zoderror/],['tool_unavailable',/unavailable tool|tool not found|tool is disabled/],['network_unavailable',/econnrefused|enotfound|network is unreachable/]])if(pattern.test(raw))return kind;
     return 'tool_failed';
   }
   function toolActivity(part,row){

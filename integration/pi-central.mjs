@@ -126,6 +126,8 @@ async function scope(req,query){
   if(!existsSync(directory)||realpathSync(directory)!==directory)
     throw Object.assign(new Error("Workspace path unavailable"),{status:404});
   return {directory,workspaceId:work.id,projectId:work.project_id,
+    projectName:typeof work.project_name==="string"?
+      work.project_name.slice(0,200):"",
     userId:account.user_id,account,testOwner:
     process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1"&&account.role==="owner"};
 }
@@ -325,18 +327,21 @@ class SdkAgent {
     const resourceLoader=new sdk.DefaultResourceLoader({
       extensionFactories:todoFallback,
       cwd:scope.directory,agentDir:PI_AGENT_DIR,settingsManager,
-      // Add project guidance to Pi's own native prompt rather than building
-      // a second agent or inferring tool execution from assistant text.
-      systemPromptOverride:base=>base+
-        "\nProject workspace: "+scope.directory+
-        "\nUse Pi's registered read/write/edit/bash tools for actual file changes. "+
-        "Do not print simulated tool_call/function=bash XML as a substitute for tools. "+
-        "Never report a file as created until a native tool succeeds. "+
-        "Report paths relative to the project directory, not absolute VPS paths. "+
-        "For multi-step tasks, use the installed Pi todo tool to track real progress "+
-        "and mark steps done only after tool execution. If todo is unavailable, "+
-        "show a Markdown checkbox plan and update it only after actual progress. "+
-        "If a material language or file-format choice is missing, ask the user before proceeding.",
+      // appendSystemPrompt is supported by the installed Pi ResourceLoader.
+      // The previous systemPromptOverride setting was not applied by Pi SDK.
+      appendSystemPrompt:[
+        "Current authenticated project name: "+
+          (scope.projectName||"not provided")+".\n"+
+        "Current project directory: "+scope.directory+".\n"+
+        "If asked for the current project name, answer from the name above "+
+        "without running read, bash, ls, or filesystem discovery. If the name "+
+        "was not provided, say so instead of searching for it.\n"+
+        "Use Pi tools only for work that requires them. Do not repeat failed "+
+        "tool calls with the same arguments indefinitely. "+
+        "Never simulate tool execution or claim files were created without "+
+        "a successful tool result. Report relative paths within this project. "+
+        "For multi-step work, use the installed Pi todo tool when available."
+      ],
       noExtensions:false,noSkills:false,
       noPromptTemplates:false,noContextFiles:false
     });
@@ -361,7 +366,8 @@ class SdkAgent {
     return agent;
   }
   constructor(scope,session,runtime){
-    this.scope=scope;this.id=projectIdFor(scope);this.title=scope.projectId;
+    this.scope=scope;this.id=projectIdFor(scope);
+    this.title=scope.projectName||scope.projectId;
     this.session=session;this.runtime=runtime;
     this.events=new Set();this.busy=false;this.active=false;this.closed=false;
     this.last=Date.now();this.running=null;this.credentialProvider=null;this.settledObserved=false;
@@ -730,6 +736,21 @@ function piNativeTodos(messages){
   }
   return {supported:false,source:"pi-tool",items:[]};
 }
+function piToolFailureCode(receipt){
+  if(!receipt?.isError)return "";
+  const content=Array.isArray(receipt.content)?receipt.content
+    .filter(x=>x?.type==="text"&&typeof x.text==="string")
+    .map(x=>x.text.slice(0,700)).join(" ").toLowerCase():"";
+  for(const [code,pattern] of [
+    ["ENOENT",/enoent|no such file|file not found|does not exist/],
+    ["EACCES",/eacces|eperm|permission denied|access denied/],
+    ["ETIMEDOUT",/etimedout|timed out|timeout/],
+    ["ENOEXEC",/command not found|executable not found|not recognized as a command/],
+    ["ECONNREFUSED",/econnrefused|network is unreachable|could not resolve/],
+    ["EINVAL",/invalid arguments|invalid input|validation failed/]
+  ])if(pattern.test(content))return code;
+  return "";
+}
 function mapped(messages, id) {
   // Use real Pi toolCall and toolResult records from the native JSONL.
   // Text that merely says "<tool_call>" never becomes an executed tool.
@@ -751,10 +772,12 @@ function mapped(messages, id) {
       const args=item.arguments&&typeof item.arguments==="object"?item.arguments:{};
       const filePath=typeof args.path==="string"?args.path:
         typeof args.filePath==="string"?args.filePath:"";
+      const failureCode=piToolFailureCode(result);
       parts.push({id:"tool_"+mid+"_"+parts.length,messageID:mid,sessionID:id,
         type:"tool",callID:item.id,tool:item.name,
         state:{status:result?(result.isError?"error":"completed"):"pending",
-          input:filePath?{filePath}:{},metadata:{}}});
+          input:filePath?{filePath}:{},metadata:{},
+          ...(failureCode?{error:{code:failureCode}}:{})}});
     }
     return [{info:{id:mid,sessionID:id,
       role:m.role==="assistant"?"assistant":m.role==="user"?"user":"tool",

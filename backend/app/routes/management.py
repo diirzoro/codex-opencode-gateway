@@ -962,7 +962,9 @@ def ai_pi_bootstrap(user: User = Depends(require_user),
         except HTTPException:
             continue
         owned_roots.append({"id": str(workspace.id),
-                            "project_id": str(project.id), "directory": directory})
+                            "project_id": str(project.id),
+                            "project_name": project.name,
+                            "directory": directory})
     rules = _ai_policy(db)
     personal = {}
     for connection in db.scalars(select(AiUserConnection).where(

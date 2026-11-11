@@ -1095,6 +1095,25 @@ function renderAgentText(host,value){
  flush();
  renderPiOptionCards(host,value);
 }
+function compactNativeToolMessages(rows){
+ // Fold adjacent tool-only assistant records into a single visual activity
+ // card. Keep the original SDK history, tool calls and chronological order.
+ const visible=[],buffer=[];
+ const flush=()=>{
+  if(!buffer.length)return;
+  visible.push({...buffer[0],id:"pi-tools-"+buffer[0].id,
+    text:"",activity:buffer.flatMap(m=>Array.isArray(m.activity)?m.activity:[])});
+  buffer.length=0;
+ };
+ for(const row of rows){
+  if(row?.role==="assistant"&&!String(row.text||"").trim()&&
+     Array.isArray(row.activity)&&row.activity.length){
+    buffer.push(row);continue;
+  }
+  flush();visible.push(row);
+ }
+ flush();return visible;
+}
 function workspaceMessagePresentation(row,latest,status){
  const hasText=Boolean(row.text?.trim()),activity=(row.activity||[]).filter(item=>!['todowrite','todoread'].includes(item.tool));
  if(row.role!=='assistant'||hasText)return {hasText,activity,omit:false,feedback:false};
@@ -1130,8 +1149,9 @@ async function refreshMessages(){
   const nativeIncremental=window.nativeSession?.active(),renderKey=JSON.stringify([owner,sessionId,lang]);
   if(!nativeIncremental||feed.nativeRenderKey!==renderKey){feed.replaceChildren();feed.nativeNodes=new Map();feed.nativeRenderKey=renderKey;}
   const nextNodes=[],seen=new Set();let previousPrompt='',previousAttachments=[];
-  const latestAssistant=rows.filter(row=>row.role==='assistant').at(-1);
-  for(const row of rows){
+  const displayRows=nativeIncremental?compactNativeToolMessages(rows):rows;
+  const latestAssistant=displayRows.filter(row=>row.role==='assistant').at(-1);
+  for(const row of displayRows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
    if(row.role==='user'){previousPrompt=row.text;previousAttachments=row.attachments||[];}
    const latest=row===latestAssistant,presentation=workspaceMessagePresentation(row,latest,latest?activeSession.execution_status:null);if(presentation.omit)continue;
