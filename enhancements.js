@@ -1082,6 +1082,113 @@ window.renderGithubConfirmation=function(root,status,refresh){
     return card;
   }
 
+  // Project-owned Pi conversation history. Read/delete archives through Pi only;
+  // the current Pi conversation and source files are never selected or altered.
+  function renderProjectArchivedConversations(data) {
+    var panel=document.querySelector('[data-client-panel="projects"]');
+    if(!panel)return;
+    var host=document.getElementById('clientPiArchivedConversations');
+    if(!host){host=textElement('section','','client-pi-archives');host.id='clientPiArchivedConversations';
+      panel.append(host);}
+    host.replaceChildren();
+    const heading=document.createElement('h2');
+    heading.textContent=tr('Archived Pi conversations','المحادثات المؤرشفة في Pi');
+    const help=textElement('p',tr(
+      'Open an archive to read it or permanently delete only that saved conversation. Project files and the active chat are preserved.',
+      'اعرض المحادثات المؤرشفة أو احذف محادثة مؤرشفة نهائيًا فقط. تبقى ملفات المشروع ومحادثته الحالية محفوظة.'));
+    host.append(heading,help);
+    const projects=(data.projects||[]).filter(p=>(p.workspaces||[]).length);
+    if(!projects.length){host.append(textElement('p',tr('No projects to browse.','لا توجد مشاريع لعرض أرشيفها.')));return;}
+    const owner=String(currentUser?.id||'');
+    for(const project of projects){
+      const group=document.createElement('details');group.className='client-pi-archives-project';
+      const summary=document.createElement('summary');summary.textContent=project.name;
+      group.append(summary);
+      const list=document.createElement('div');list.className='client-pi-archives-list';group.append(list);
+      host.append(group);
+      const valid=()=>group.isConnected&&String(currentUser?.id||'')===owner;
+      const refresh=async()=>{
+        if(!valid())return;
+        list.replaceChildren(textElement('p',tr('Loading saved chats…','جارٍ تحميل المحادثات المحفوظة…')));
+        const records=[];
+        for(const workspace of project.workspaces||[]){
+          try{
+            const result=await window.nativeSession.projectArchives(project.id,workspace.id);
+            if(!valid())return;
+            for(const item of result.archives||[])records.push({workspace,item});
+          }catch(error){records.push({workspace,error:error.message});}
+        }
+        if(!valid())return;
+        list.replaceChildren();
+        if(!records.length){
+          list.append(textElement('p',tr('No archived Pi chats in this project.','لا توجد محادثات Pi مؤرشفة لهذا المشروع.')));
+          return;
+        }
+        records.sort((a,b)=>(b.item?.archived_at||0)-(a.item?.archived_at||0));
+        for(const record of records){
+          if(record.error){list.append(textElement('p',record.error,'api-message show error'));continue;}
+          const archive=record.item,workspace=record.workspace;
+          const line=document.createElement('div');line.className='client-pi-archive-row';
+          const date=new Date(archive.archived_at);
+          const label=textElement('strong',
+            (Number.isFinite(date.getTime())?date.toLocaleString(lang==='ar'?'ar-YE':'en-GB'):archive.id)+
+            ' · '+Math.ceil((Number(archive.bytes)||0)/1024)+' KB');
+          const actions=document.createElement('div');actions.className='client-pi-archive-actions';
+          const view=textElement('button',tr('View','عرض'),'button ghost small');
+          const remove=textElement('button',tr('Delete permanently','حذف نهائي'),'button ghost small');
+          view.type=remove.type='button';actions.append(view,remove);line.append(label,actions);list.append(line);
+          const preview=document.createElement('div');preview.className='client-pi-archive-preview';preview.hidden=true;
+          line.append(preview);
+          view.onclick=async()=>{
+            if(!valid())return;
+            if(!preview.hidden){preview.hidden=true;view.textContent=tr('View','عرض');return;}
+            view.disabled=true;preview.hidden=false;
+            preview.replaceChildren(textElement('p',tr('Loading messages…','جارٍ تحميل الرسائل…')));
+            try{
+              const data=await window.nativeSession.projectArchiveMessages(project.id,workspace.id,archive.id);
+              if(!valid())return;
+              preview.replaceChildren();
+              for(const message of data.messages||[]){
+                const row=document.createElement('article');row.className='client-pi-archive-message';
+                row.append(textElement('strong',message.role==='user'?tr('You','أنت'):'Pi'));
+                const body=document.createElement('p');body.dir='auto';body.textContent=message.text;
+                row.append(body);preview.append(row);
+              }
+              if(!preview.childElementCount)preview.append(textElement('p',
+                tr('No readable text messages.','لا توجد رسائل نصية قابلة للعرض.')));
+              if(data.truncated)preview.append(textElement('small',
+                tr('Preview limited to 250 text messages; original history remains saved.',
+                  'المعاينة حتى 250 رسالة؛ الأرشيف الأصلي محفوظ.')));
+              view.textContent=tr('Hide','إخفاء');
+            }catch(error){preview.replaceChildren(textElement('p',error.message));}
+            finally{view.disabled=false;}
+          };
+          remove.onclick=async()=>{
+            if(!valid())return;
+            if(!await window.confirmAction(tr(
+              'Permanently delete this archived Pi conversation from "'+project.name+'"? This cannot be undone. The current conversation and project files are not affected.',
+              'هل تريد حذف محادثة Pi المؤرشفة من المشروع «'+project.name+'» نهائيًا؟ لا يمكن استعادتها. لن تتأثر المحادثة الحالية أو ملفات المشروع.')))return;
+            const typed=await window.requestInput(
+              tr('Type DELETE to confirm permanent removal of this archived chat.',
+                'اكتب DELETE لتأكيد الحذف النهائي لهذه المحادثة المؤرشفة.'),'');
+            if(typed!=='DELETE'){if(typed!==null)toast(tr('Delete confirmation was not accepted.','لم يتم تأكيد الحذف.'));return;}
+            if(!valid())return;
+            remove.disabled=true;
+            try{
+              const result=await window.nativeSession.deleteProjectArchive(project.id,workspace.id,archive.id);
+              if(!valid())return;
+              if(!result?.deleted||result.id!==archive.id)throw Error('Pi did not confirm archived chat removal');
+              toast(tr('Archived conversation deleted permanently.','تم حذف المحادثة المؤرشفة نهائيًا.'));
+              await refresh();
+            }catch(error){if(valid())toast(error.message);}
+            finally{remove.disabled=false;}
+          };
+        }
+      };
+      group.addEventListener('toggle',()=>{if(group.open)void refresh();});
+    }
+  }
+
   loadClientDashboard = async function () {
     var data = await api('/api/dashboard');
     var p = data.profile || {}, gh = data.github || {}, rt = data.runtime || {}, access = data.access || {};
@@ -1102,7 +1209,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
       [['#icon-plus', tr('New project', 'مشروع جديد'), function () { page('onboarding'); }], ['#icon-folder', tr('Open workspace', 'فتح مساحة عمل'), function () { setClientView('projects'); }], ['#icon-github', tr('New GitHub connection', 'ربط GitHub جديد'), function () { void window.startFreshGithubConnection(); }], ['#icon-opencode', tr('Configure AI provider', 'تهيئة مزوّد الذكاء'), function () { setClientView('ai'); }]].forEach(function (q) { var btn = textElement('button', '', 'button ghost'); btn.appendChild(navIcon(q[0])); btn.appendChild(textElement('span', q[1])); btn.onclick = q[2]; qa.append(btn); });
       var summaryEl = document.getElementById('clientSummary'); if (summaryEl && summaryEl.parentNode) summaryEl.parentNode.insertBefore(qa, summaryEl);
     }
-    renderClientProjectsUI(data); renderClientSessionsUI(data);
+    renderClientProjectsUI(data); renderProjectArchivedConversations(data); renderClientSessionsUI(data);
   };
 
   function renderClientProjectsUI(data) {
