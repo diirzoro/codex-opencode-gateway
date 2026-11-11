@@ -959,12 +959,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   let attachments=[];let attachmentRevision=0;
   const releasePreview=item=>{if(item.preview){URL.revokeObjectURL(item.preview);item.preview=null;}};
   async function cancelUpload(item){
-    if(item.cancelling)return;item.cancelling=true;item.cancelled=true;item.controller?.abort();
-    try{
-      item.state='cancelled';item.error=tr('Attachment removed','تم حذف المرفق');releasePreview(item);return;
-      item.state=item.id?'cancelled':'cancelling';item.error=item.id?tr('Upload cancelled; temporary attachment removed','تم إلغاء الرفع وحذف المرفق المؤقت'):tr('Upload cancelled; waiting to confirm temporary cleanup','أُلغي الرفع؛ ننتظر تأكيد تنظيف الملف المؤقت');releasePreview(item);
-    }catch(error){item.error=tr('Transfer stopped; cleanup unconfirmed: ','توقف النقل؛ لم يُؤكد الحذف: ')+error.message;}
-    finally{item.cancelling=false;renderAttachments();saveNativeDraft();}
+    if(item.cancelling)return;
+    item.cancelling=true;item.cancelled=true;item.controller?.abort();
+    // A rejected/cancelled inline attachment must leave the composer,
+    // including its browser-held Data URL. Do not touch project originals.
+    releasePreview(item);item.url=null;item.state='cancelled';
+    attachments=attachments.filter(value=>value!==item);
+    item.cancelling=false;renderAttachments();saveNativeDraft();
   }
   const clearAttachments=()=>{
     attachmentRevision++;
