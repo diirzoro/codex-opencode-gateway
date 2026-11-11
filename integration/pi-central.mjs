@@ -1103,13 +1103,16 @@ const server=http.createServer(async(req,res)=>{
         const oldFile=filename&&existsSync(filename)?filename:null;
         const archive=path.join(dir,"history-archive");
         const saved=oldFile?path.join(archive,Date.now()+"-"+randomUUID()+".jsonl"):null;
-        a.close();
+        // Verify both paths BEFORE closing a working session or moving data.
+        if(oldFile&&lstatSync(oldFile).isSymbolicLink())
+          throw Object.assign(new Error("Unsafe Pi history link"),{status:403});
         if(saved){
           mkdirSync(archive,{recursive:true,mode:0o700});
-          if(lstatSync(oldFile).isSymbolicLink())
-            throw Object.assign(new Error("Unsafe Pi history link"),{status:403});
-          renameSync(oldFile,saved);
+          if(lstatSync(archive).isSymbolicLink()||realpathSync(archive)!==archive)
+            throw Object.assign(new Error("Unsafe Pi archive directory"),{status:403});
         }
+        a.close();
+        if(saved)renameSync(oldFile,saved);
         try{
           const next=await SdkAgent.create(s);
           pool.set(next.id,next);
