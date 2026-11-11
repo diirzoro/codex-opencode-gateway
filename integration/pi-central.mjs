@@ -510,6 +510,11 @@ class SdkAgent {
       for(const res of this.events)try{res.write("data: "+issue+"\n\n");}catch{this.events.delete(res);}
     }
     if(event.type==="agent_settled"){
+      // Native Pi has finished its tool operations. Only now may the staged
+      // PDF/TXT files be removed, and only if no queued turn still needs them.
+      if(!this.keepQueueOnStop&&!this.queueContinuationActive&&
+         Number(this.session.pendingMessageCount)===0)
+        cleanPiFinishedFiles(this.scope,this.id);
       // An accepted HTTP prompt is not proof of a model answer. Detect
       // genuinely settled Pi runs that produced no text for their latest
       // user turn, without altering the native queue or retrying automatically.
@@ -601,6 +606,7 @@ class SdkAgent {
         const pending=Number(this.session.pendingMessageCount)||0;
         if(!pending){
           this.keepQueueOnStop=false;
+          cleanPiFinishedFiles(this.scope,this.id);
           this.emitUI("queue_updated",{pending:0});
           return {stopped:true,continuing:false,pending:0};
         }
@@ -628,6 +634,8 @@ class SdkAgent {
         }).finally(async()=>{
           this.queueContinuationActive=false;
           this.keepQueueOnStop=false;
+          if(Number(this.session.pendingMessageCount)===0)
+            cleanPiFinishedFiles(this.scope,this.id);
           try{await this.clearCredential();}catch{this.close();}
           this.running=null;this.active=false;this.runningModel=null;
           releaseExecution(this);
@@ -684,6 +692,8 @@ class SdkAgent {
         return;
       }
       // Otherwise remove the customer's runtime API override after settling.
+      if(Number(this.session.pendingMessageCount)===0&&!this.queueContinuationActive)
+        cleanPiFinishedFiles(this.scope,this.id);
       try{await this.clearCredential();}
       catch{this.close();}
       this.running=null;this.active=false;this.runningModel=null;
