@@ -1143,13 +1143,14 @@ const server=http.createServer(async(req,res)=>{
         if(a.runningModel?.providerID!==b.model.providerID||
            a.runningModel?.modelID!==b.model.modelID)
           return error(res,409,"رسائل الطابور تستخدم نفس النموذج الجاري. انتظر انتهاء المهمة لتغيير النموذج.","not_submitted");
-        if(b.agent)return error(res,409,"أوامر Pi التفاعلية لا تضاف لطابور التنفيذ الجاري.","not_submitted");
+        // The already-running agent remains selected for queued messages.
+        // A composer agent selection does not create a new agent or project.
         if(!["followUp","steer",undefined].includes(b.queueMode))
           return error(res,422,"Invalid Pi queue mode","not_submitted");
-        promptDispatched=true;
         const result=await a.command("queue_prompt",{
           message,images,mode:b.queueMode||"followUp"
         });
+        promptDispatched=true;
         return json(res,200,result);
       }
       reserveExecution(a);
