@@ -634,6 +634,16 @@
     const close=source.close.bind(source);source.close=()=>{clearTimeout(timer);clearTimeout(fileTimer);close();};
   }
   function stop(){stream?.close();stream=null;streamId='';}
+  async function archives(id){
+    const row=await context(id);
+    return native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/archives');
+  }
+  async function readArchive(id,archiveId){
+    if(!/^[0-9]{13}-[0-9a-f-]{36}\.jsonl$/i.test(archiveId))
+      throw Error('Invalid conversation archive');
+    const row=await context(id);
+    return native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/archives/'+encodeURIComponent(archiveId));
+  }
   async function resetContext(id){
     const row=await context(id);
     if(!activeWorkspace||String(row.workspace_id)!==String(activeWorkspace.id))
@@ -910,7 +920,7 @@
           .map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
       }))};
   }
-  window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,resetContext,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
+  window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,resetContext,archives,readArchive,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
   window.addEventListener('account-provider-changed',()=>{snapshots.clear();discoveryReads.clear();});
 })();
