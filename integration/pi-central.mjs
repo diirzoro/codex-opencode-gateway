@@ -35,10 +35,24 @@ for(const name of [
 const MAX_PROCS = Math.max(1,Math.min(32,Number(process.env.PI_MAX_WORKERS)||2));
 const MAX_ACTIVE_EXECUTIONS = Math.max(1,Math.min(MAX_PROCS,Number(process.env.PI_MAX_ACTIVE_EXECUTIONS)||1));
 const executing = new Set();
+const PI_QUEUE_LIMIT=10;
+function liveAccountExecution(userId){
+  return [...executing].find(worker=>worker.scope?.userId===userId&&
+    !worker.closed)||
+    [...pool.values()].find(worker=>worker.scope?.userId===userId&&
+      (worker.active||worker.running)&&!worker.closed)||null;
+}
+function projectBusyMessage(worker){
+  return "لا يمكنك تشغيل مشروع آخر بينما هناك مهمة قائمة في المشروع «"+
+    (worker.title||worker.scope.projectId)+"». أوقف المهمة أو انتظر اكتمالها.";
+}
 function reserveExecution(agent) {
   // Reserve before set_model/prompt to close the admission race.
-  if(agent.active||executing.has(agent))
+  if(agent.active||agent.running||executing.has(agent))
     throw Object.assign(new Error("This project is already running a Pi request"),{status:409});
+  const other=liveAccountExecution(agent.scope.userId);
+  if(other&&other.id!==agent.id)
+    throw Object.assign(new Error(projectBusyMessage(other)),{status:409});
   if(executing.size>=MAX_ACTIVE_EXECUTIONS)
     throw Object.assign(new Error("Pi coding capacity reached; retry after the running task settles"),{status:429});
   executing.add(agent);
@@ -370,7 +384,8 @@ class SdkAgent {
     this.title=scope.projectName||scope.projectId;
     this.session=session;this.runtime=runtime;
     this.events=new Set();this.busy=false;this.active=false;this.closed=false;
-    this.last=Date.now();this.running=null;this.credentialProvider=null;this.settledObserved=false;
+    this.last=Date.now();this.running=null;this.runningModel=null;
+    this.credentialProvider=null;this.settledObserved=false;
     this.uiRequests=new Map();this.uiWidgets=new Map();
     this.unsub=session.subscribe(event=>this.consume(event));
   }
@@ -507,7 +522,30 @@ class SdkAgent {
       await this.session.setModel(model);
       return {};
     }
-    if(type==="abort"){await this.session.abort();return {};}
+    if(type==="get_queue")return {
+      pending:Number(this.session.pendingMessageCount)||0,
+      followUps:[...(this.session.getFollowUpMessages?.()||[])].slice(0,PI_QUEUE_LIMIT),
+      steering:[...(this.session.getSteeringMessages?.()||[])].slice(0,PI_QUEUE_LIMIT),
+      running:!!(this.active||this.running)
+    };
+    if(type==="queue_prompt"){
+      if(!this.active&&!this.running)
+        throw Object.assign(new Error("No running Pi task to queue behind"),{status:409});
+      if((Number(this.session.pendingMessageCount)||0)>=PI_QUEUE_LIMIT)
+        throw Object.assign(new Error("Pi project queue is full (10 messages)"),{status:429});
+      if(fields.mode==="steer")await this.session.steer(fields.message,fields.images||[]);
+      else await this.session.followUp(fields.message,fields.images||[]);
+      this.emitUI("queue_updated",{pending:Number(this.session.pendingMessageCount)||0});
+      return {queued:true,pending:Number(this.session.pendingMessageCount)||0};
+    }
+    if(type==="abort"){
+      // Explicit Stop cancels the current execution AND Pi's own queued
+      // steer/followUp messages. Navigating away never calls this command.
+      this.session.clearQueue();
+      await this.session.abort();
+      this.emitUI("queue_updated",{pending:0});
+      return {};
+    }
     if(type!=="prompt")throw Object.assign(new Error("Unsupported Pi SDK command"),{status:501});
     if(this.active||this.running)
       throw Object.assign(new Error("Project already has an active Pi run"),{status:409});
@@ -541,7 +579,8 @@ class SdkAgent {
       // Capacity stays reserved until the removal completes.
       try{await this.clearCredential();}
       catch{this.close();}
-      this.running=null;this.active=false;releaseExecution(this);
+      this.running=null;this.active=false;this.runningModel=null;
+      releaseExecution(this);
       if(!this.closed&&!this.settledObserved)this.consume({type:"agent_settled"});
     }).catch(()=>{});
     await admission;
@@ -950,6 +989,16 @@ const server=http.createServer(async(req,res)=>{
         return error(res,410,"Shared Pi credential endpoints retired. Verified account-owned connections must be managed by Gateway.");
       return error(res,404,"Pi account endpoint not found");
     }
+    // Read-only per-account execution status without instantiating another
+    // project worker or involving Gateway/Python on every chat action.
+    if(pathname==="/execution"&&req.method==="GET"){
+      const running=liveAccountExecution(s.userId);
+      return json(res,200,{running:!!running,
+        project_id:running?.scope.projectId||null,
+        workspace_id:running?.scope.workspaceId||null,
+        project_name:running?.title||null,
+        pending:running?Number(running.session?.pendingMessageCount)||0:0});
+    }
     // The old OpenCode client polls question/permission queue endpoints.
     // This Pi SDK integration does not create an HTTP approval queue; Pi
     // handles its configured extension/tool lifecycle internally. A queue
@@ -999,7 +1048,9 @@ const server=http.createServer(async(req,res)=>{
     }
     if(pathname==="/session" && req.method==="GET")return json(res,200,[{id:a.id,directory:s.directory,title:a.title}]);
     if(pathname==="/session" && req.method==="POST")return json(res,200,{id:a.id,directory:s.directory,title:a.title});
-    if(pathname==="/session/status")return json(res,200,{[a.id]:{type:a.active?"busy":"idle"}});
+    if(pathname==="/session/status")return json(res,200,{
+      [a.id]:{type:a.active||a.running?"busy":"idle",
+        pending:Number(a.session.pendingMessageCount)||0}});
     if(pathname==="/event") {
       res.writeHead(200,{"content-type":"text/event-stream","cache-control":"no-cache, no-store",
         connection:"keep-alive","x-accel-buffering":"no"});
@@ -1031,6 +1082,8 @@ const server=http.createServer(async(req,res)=>{
     }
     if(action==="todos" && req.method==="GET")
       return json(res,200,piNativeTodos((await a.command("get_messages"))?.messages||[]));
+    if(action==="queue"&&req.method==="GET")
+      return json(res,200,await a.command("get_queue"));
     if(action==="prompt_async" && req.method==="POST") {
       const b=await body(req);
       const {message,images}=piPromptParts(b.parts,s,a.id);
@@ -1041,11 +1094,30 @@ const server=http.createServer(async(req,res)=>{
       // One-time Gateway handoff already authorized this account's Pi session.
       // Prompts never fetch a credential or model policy from Python.
       const authorizedKey=nativeCredential(s,b.model.providerID,b.model.modelID);
+      // Only ONE project per account may execute. Busy projects may accept
+      // bounded native Pi followUps/steering; a different project is rejected.
+      const other=liveAccountExecution(s.userId);
+      if(other&&other.id!==a.id)
+        return error(res,409,projectBusyMessage(other),"not_submitted");
+      if(a.active||a.running||executing.has(a)){
+        if(a.runningModel?.providerID!==b.model.providerID||
+           a.runningModel?.modelID!==b.model.modelID)
+          return error(res,409,"رسائل الطابور تستخدم نفس النموذج الجاري. انتظر انتهاء المهمة لتغيير النموذج.","not_submitted");
+        if(b.agent)return error(res,409,"أوامر Pi التفاعلية لا تضاف لطابور التنفيذ الجاري.","not_submitted");
+        if(!["followUp","steer",undefined].includes(b.queueMode))
+          return error(res,422,"Invalid Pi queue mode","not_submitted");
+        promptDispatched=true;
+        const result=await a.command("queue_prompt",{
+          message,images,mode:b.queueMode||"followUp"
+        });
+        return json(res,200,result);
+      }
       reserveExecution(a);
       try {
         try{await a.setCredential(b.model.providerID,authorizedKey);}
         catch{throw Object.assign(new Error("Pi credential injection failed"),{status:502});}
         await a.command("set_model",{provider:b.model.providerID,modelId:b.model.modelID});
+        a.runningModel={providerID:b.model.providerID,modelID:b.model.modelID};
         // Keep the original Pi command/skill mechanism. Do not invent agents.
         let prompt=message;
         if(b.agent) {
@@ -1061,12 +1133,14 @@ const server=http.createServer(async(req,res)=>{
         const accepted=await a.command("prompt",{message:prompt,...(images.length?{images}:{})});
         // Pi can consume an extension command without starting a model run.
         // A started/queued prompt stays reserved until agent_settled or exit.
-        if(accepted?.disposition==="handled")releaseExecution(a);
+        if(accepted?.disposition==="handled"){
+          a.runningModel=null;releaseExecution(a);
+        }
         res.writeHead(204,{"cache-control":"no-store"});res.end();return;
       } catch(e) {
         // Never release an actively running request just because its RPC ack
         // was lost; agent_settled/exit owns that release.
-        if(!a.active)releaseExecution(a);
+        if(!a.active&&!a.running){a.runningModel=null;releaseExecution(a);}
         throw e;
       }
     }
