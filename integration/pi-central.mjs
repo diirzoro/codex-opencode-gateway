@@ -231,6 +231,59 @@ class Agent {
   }
 }
 
+// Official Pi extension pattern (inline, replaceable): never a second service.
+// A separately installed todo tool takes precedence over this fallback.
+function piTodoExtension(Type){
+  return {name:"todo",replaceable:true,factory:pi=>{
+    let todos=[],nextId=1;
+    const snapshot=()=>todos.map(item=>({...item}));
+    const recover=ctx=>{
+      todos=[];nextId=1;
+      for(const entry of ctx.sessionManager.getBranch()){
+        if(entry.type!=="message"||entry.message?.role!=="toolResult"||
+           entry.message.toolName!=="todo")continue;
+        const details=entry.message.details;
+        if(!Array.isArray(details?.todos))continue;
+        todos=details.todos.slice(0,32).filter(x=>x&&Number.isInteger(x.id)&&
+          typeof x.text==="string").map(x=>({id:x.id,text:x.text.slice(0,220),done:x.done===true}));
+        nextId=Number.isInteger(details.nextId)?details.nextId:
+          Math.max(0,...todos.map(x=>x.id))+1;
+      }
+    };
+    pi.on("session_start",async(_,ctx)=>recover(ctx));
+    pi.on("session_tree",async(_,ctx)=>recover(ctx));
+    pi.registerTool({
+      name:"todo",label:"Project Todos",
+      description:"Track project implementation tasks in Pi session history. Actions: add, list, toggle, clear. Add planned steps and toggle only after real progress.",
+      parameters:Type.Object({
+        action:Type.Union(["add","list","toggle","clear"].map(value=>Type.Literal(value))),
+        text:Type.Optional(Type.String({maxLength:220})),
+        id:Type.Optional(Type.Number())
+      }),
+      execute:async(_callId,args)=>{
+        let output="No changes";
+        switch(args.action){
+          case "add":{
+            const text=String(args.text||"").trim();
+            if(!text||text.length>220||todos.length>=32){output="Todo text missing or limit reached";break;}
+            const item={id:nextId++,text,done:false};todos.push(item);
+            output="Added task #"+item.id;break;
+          }
+          case "toggle":{
+            const item=todos.find(x=>x.id===args.id);
+            if(!item){output="Task not found";break;}
+            item.done=!item.done;output="Task #"+item.id+(item.done?" completed":" reopened");
+            break;
+          }
+          case "clear":todos=[];nextId=1;output="Cleared tasks";break;
+          case "list":output=todos.length+" project tasks";break;
+        }
+        return {content:[{type:"text",text:output}],
+          details:{action:args.action,todos:snapshot(),nextId}};
+      }
+    });
+  }};
+}
 // In-process Pi SDK session: one isolated, in-memory credential runtime per
 // project, keeping the existing bridge/socket/routes and persistent Pi JSONL.
 class SdkAgent {
@@ -261,7 +314,16 @@ class SdkAgent {
     // Use the complete existing Pi installation for every account.
     // Pi SDK remains the only agent, tool, skill and extension executor.
     const settingsManager=sdk.SettingsManager.inMemory();
+    // Reuse installed todo extensions where present. Otherwise load the
+    // replacement-friendly Pi extension with native session tool results.
+    let todoFallback=[];
+    try{
+      const {Type}=await import("typebox");
+      if(Type?.Object&&Type?.Literal)
+        todoFallback=[piTodoExtension(Type)];
+    }catch{/* Keep existing Pi SDK tools if typebox is unavailable. */}
     const resourceLoader=new sdk.DefaultResourceLoader({
+      extensionFactories:todoFallback,
       cwd:scope.directory,agentDir:PI_AGENT_DIR,settingsManager,
       // Add project guidance to Pi's own native prompt rather than building
       // a second agent or inferring tool execution from assistant text.
@@ -271,8 +333,9 @@ class SdkAgent {
         "Do not print simulated tool_call/function=bash XML as a substitute for tools. "+
         "Never report a file as created until a native tool succeeds. "+
         "Report paths relative to the project directory, not absolute VPS paths. "+
-        "For multi-step tasks, show a concise Markdown checkbox plan and update "+
-        "the checkboxes only when the work has actually progressed. "+
+        "For multi-step tasks, use the installed Pi todo tool to track real progress "+
+        "and mark steps done only after tool execution. If todo is unavailable, "+
+        "show a Markdown checkbox plan and update it only after actual progress. "+
         "If a material language or file-format choice is missing, ask the user before proceeding.",
       noExtensions:false,noSkills:false,
       noPromptTemplates:false,noContextFiles:false
