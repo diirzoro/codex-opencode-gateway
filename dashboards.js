@@ -2116,6 +2116,10 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   window.workspaceSubmissionBlocked=()=>sending||queuing||Boolean(pendingSubmission)||
     (!window.nativeSession?.active()&&['submitted','waiting_approval'].includes(activeSession?.execution_status));
+  // Continue is a plain follow-up in the existing Pi session, not a second
+  // invocation of the agent's slash command. Re-applying that command can
+  // consume the selection without generating an assistant reply.
+  let choiceContinuation=false;
   // The inline Pi recommendation table uses the SAME existing composer submit.
   // Do not overwrite an unfinished user draft or include unrelated attachments.
   window.submitWorkspacePiChoice=async({owner,sessionId,text}={})=>{
@@ -2150,7 +2154,10 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     // Invoke the existing submit handler and await the real Native Pi receipt.
     // Dispatch-only would falsely show "continued" even after an HTTP failure.
     try{
-      const receipt=await form.onsubmit({preventDefault(){}});
+      choiceContinuation=true;
+      let receipt;
+      try{receipt=await form.onsubmit({preventDefault(){}});}
+      finally{choiceContinuation=false;}
       if(receipt?.accepted===true)return receipt;
       const uncertain=Boolean(window.nativeSession?.blocked(sessionId));
       if(!uncertain&&input.value===text){
@@ -2175,7 +2182,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       await window.promptProjectChoice?.();return;
     }
     if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
-    const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
+    const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=choiceContinuation?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
       // A second prompt is added through Pi's own followUp queue and never
