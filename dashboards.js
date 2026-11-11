@@ -2079,6 +2079,40 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   window.workspaceSubmissionBlocked=()=>sending||queuing||Boolean(pendingSubmission)||
     (!window.nativeSession?.active()&&['submitted','waiting_approval'].includes(activeSession?.execution_status));
+  // The inline Pi recommendation table uses the SAME existing composer submit.
+  // Do not overwrite an unfinished user draft or include unrelated attachments.
+  window.submitWorkspacePiChoice=({owner,sessionId,text}={})=>{
+    const error=(en,ar)=>({handedOff:false,reason:tr(en,ar)});
+    if(!window.nativeSession?.active()||!activeSession||
+       String(activeSession.id)!==String(sessionId)||
+       String(currentUser?.id)!==String(owner))
+      return error('Return to the original Pi conversation before continuing.',
+        'ارجع إلى محادثة Pi الأصلية قبل المتابعة.');
+    if(!workAccess||sending||queuing||pendingSubmission||anotherProjectRunning)
+      return error('Pi is not ready to receive this choice yet. Please retry.',
+        'Pi ليس جاهزًا لاستقبال الاختيار الآن. حاول مجددًا.');
+    if(attachments.some(item=>!item.cancelled))
+      return error('Send or remove the existing attachments first.',
+        'أرسل المرفقات الحالية أو أزلها أولًا.');
+    const input=q('promptInput'),form=q('promptForm');
+    if(input.value.trim())
+      return error('You have an unsent draft. Send or clear it before continuing.',
+        'لديك مسودة غير مرسلة. أرسلها أو امسحها قبل المتابعة.');
+    if(!String(text||'').trim()||!form?.requestSubmit)
+      return error('This choice cannot be submitted. Please retry.',
+        'تعذّر إرسال هذا الاختيار. حاول مجددًا.');
+    if(q('sendMessage').disabled)
+      return error('Select an available Pi provider and model, then retry.',
+        'اختر مزوّد Pi ونموذجًا متاحًا ثم حاول مجددًا.');
+    input.value=String(text).slice(0,2000);
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+    window.resizeWorkspaceComposer?.();
+    try{form.requestSubmit(q('sendMessage'));}
+    catch(error){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));
+      return {handedOff:false,reason:error.message};}
+    // Submission may still fail asynchronously; existing Pi UI reports receipt.
+    return {handedOff:true};
+  };
   q('promptForm').onsubmit=async event=>{
     event.preventDefault();if(sending||queuing||pendingSubmission)return;
     if(anotherProjectRunning){
