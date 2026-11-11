@@ -856,7 +856,7 @@ async function promptProjectChoice(){
   document.body.append(dialog);
  }
  dialog.querySelector('h2').textContent=lang==='ar'?'اختر مشروعًا للبدء':'Choose a project to continue';
- dialog.showModal();
+ if(!dialog.open)dialog.showModal();
  const list=dialog.querySelector('#workspaceProjectChoices');
  if(projectChoicePending)return projectChoicePending;
  list.replaceChildren(textElement('p',lang==='ar'?'جارٍ تحميل مشاريعك…':'Loading your projects…'));
@@ -1089,6 +1089,16 @@ async function refreshMessages(){
    if(row.id)node.dataset.messageId=row.id;
    const hasText=presentation.hasText;
    const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text);node.append(content);
+   // Never promote a model's textual claim into a verified file operation.
+   // Real Pi toolCall/toolResult activity is displayed separately.
+   if(nativeIncremental&&row.role==='assistant'&&hasText&&!presentation.activity.length&&
+      /(?:successfully (?:wrote|created)|i (?:wrote|created) (?:the )?file|تم (?:إنشاء|كتابة) الملف)/i.test(row.text)){
+     const unverified=textElement('small',
+       lang==='ar'?'لم يُسجّل Pi تنفيذ أداة لهذه الرسالة؛ تحقق من ملفات المشروع.':
+       'No Pi tool execution was recorded for this message. Check the project files.',
+       'agent-tool-unverified');
+     node.append(unverified);
+   }
    if(nativeIncremental&&!hasText)content.hidden=true;
    if(row.role==='assistant'&&hasText)foldLongAssistantMessage(node,content,row.text,cached?.node?.dataset.answerExpanded==='true'||(!cached&&['submitted','waiting_approval'].includes(activeSession.execution_status)));
    if(row.role==='user')foldLongUserMessage(node,content,row.text||'',expandedUserMessages.has(String(row.id)));
