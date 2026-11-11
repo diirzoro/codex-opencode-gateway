@@ -835,8 +835,15 @@
     if(owner()!==user||epoch!==sendEpoch||(sendGenerations.get(id)||0)!==sendGeneration)return;
     
     uncertain.delete(id);try{sessionStorage.removeItem(storageKey('uncertain',id));}catch{}
-    if((statusEvents.get(id)||0)===seenStatus)statuses.set(id,'submitted');
-    if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'submitted';
+    if(receipt?.handled===true){
+      // Pi SDK returned "handled": an extension intercepted this input and
+      // did NOT start the model. Do not leave the chat stuck in "submitted".
+      statuses.set(id,'idle');
+      if(activeSession?.id===id)activeSession.execution_status='idle';
+    }else{
+      if((statusEvents.get(id)||0)===seenStatus)statuses.set(id,'submitted');
+      if(activeSession?.id===id)activeSession.execution_status=statuses.get(id)||'submitted';
+    }
     // Pi continues on the server after navigation or browser disconnect.
     void window.refreshWorkspaceQueue?.();
     return {queued:receipt?.queued===true,handled:receipt?.handled===true,
