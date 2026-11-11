@@ -1029,8 +1029,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
             reader.readAsDataURL(file);
           });
           if(!valid())continue;
+          // FileReader uses the browser MIME (sometimes empty or wrong);
+          // the security preflight verified the actual file type.
+          if(!/^data:[^;,]*;base64,/i.test(dataUrl))
+            throw Error('Unsupported attachment encoding');
+          const nativeDataUrl=dataUrl.replace(/^data:[^;,]*;base64,/i,
+            'data:'+checked.mime+';base64,');
           data={path:'__native_inline__/'+crypto.randomUUID()+'/'+file.name,
-            url:dataUrl,size:file.size,mime:checked.mime,name:file.name};
+            url:nativeDataUrl,size:file.size,mime:checked.mime,name:file.name};
           item.nativeInline=true;
           if(!valid())continue;item.path=data.path;item.url=data.url;item.size=data.size;item.type=data.mime||item.type;item.state='ready';
           if(data.mime==='application/pdf')submissionStatus.textContent=tr(
@@ -2161,7 +2167,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       await window.promptProjectChoice?.();return;
     }
     if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
-    const prompt=q('promptInput').value.trim(),provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
+    const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
       // A second prompt is added through Pi's own followUp queue and never
