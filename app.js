@@ -1124,11 +1124,15 @@ function renderPiOptionCards(host,answer,messageId){
   if(key)piChoiceDrafts.delete(key);
   panel.hidden=true;
  };
- continueButton.onclick=()=>{
+ let requestPending=false;
+ continueButton.onclick=async()=>{
+  if(requestPending||savedStatus==='requested')return;
   const checked=radios.find(r=>r.checked);
   if(!checked)return;
   const custom=checked.value==='custom',value=custom?customText.value.trim():options[Number(checked.value)]?.value;
   if(!value){status.textContent=lang==='ar'?'اكتب اقتراحك أولًا.':'Write your idea first.';return;}
+  // This is a new USER turn in the SAME Pi session. It must resume the
+  // conversation, not merely fill the composer or acknowledge the choice.
   const prompt=custom?
    (lang==='ar'?'هذا اقتراحي الخاص: ':'My own idea is: ')+value+
      (lang==='ar'?'\nتابع الطلب السابق وفق هذا الاقتراح، مع احترام تعليماتي.':
@@ -1136,20 +1140,37 @@ function renderPiOptionCards(host,answer,messageId){
    (lang==='ar'?'أختار الحل التالي من توصياتك: ':'I choose this option from your recommendations: ')+value+
      (lang==='ar'?'\nتابع الطلب السابق وفق هذا الخيار، مع احترام تعليماتي.':
      '\nContinue the previous request using this option and existing constraints.');
-  const handoff=window.submitWorkspacePiChoice?.({owner:account,sessionId,text:prompt});
-  if(!handoff?.handedOff){
-   status.textContent=handoff?.reason||(lang==='ar'?
-    'تعذر الإرسال. اختر المشروع والنموذج، ثم حاول مجددًا.':
-    'Could not send. Select your project and model, then retry.');
+  requestPending=true;continueButton.disabled=true;cancelButton.disabled=true;
+  status.textContent=lang==='ar'?'جارٍ إرسال اختيارك إلى Pi...':'Sending your selection to Pi...';
+  let result;
+  try{result=await window.submitWorkspacePiChoice?.({owner:account,sessionId,text:prompt});}
+  catch(error){result={accepted:false,reason:error.message};}
+  requestPending=false;
+  if(result?.accepted===true){
+   savedStatus='requested';
+   if(storeKey)try{sessionStorage.setItem(storeKey,'requested');}catch{}
+   if(key)piChoiceDrafts.delete(key);
+   for(const radio of radios)radio.disabled=true;
+   customText.disabled=true;cancelButton.disabled=true;continueButton.disabled=true;
+   status.textContent=result.queued?
+    (lang==='ar'?'استلم Pi اختيارك وأضافه إلى الطابور، وسيكمل المحادثة تلقائيًا.':
+      'Pi queued your choice and will continue this conversation automatically.'):
+    (lang==='ar'?'استلم Pi اختيارك، وسيكمل العمل في هذه المحادثة.':
+      'Pi accepted your choice and will continue in this conversation.');
    return;
   }
-  savedStatus='requested';
-  if(storeKey)try{sessionStorage.setItem(storeKey,'requested');}catch{}
-  for(const radio of radios)radio.disabled=true;
-  customText.disabled=true;cancelButton.disabled=true;continueButton.disabled=true;
-  status.textContent=lang==='ar'?
-   'تم تمرير اختيارك إلى إرسال Pi. راجع حالة الطلب في المحادثة.':
-   'Your choice was handed to Pi submission. Check its status in the conversation.';
+  if(result?.uncertain){
+   // An uncertain receipt must NOT be resent blindly: Pi may already have it.
+   continueButton.disabled=true;cancelButton.disabled=false;
+   status.textContent=(result.reason||'')+(lang==='ar'?
+    ' — تحقق من الاستلام باستخدام استعادة الجلسة قبل إعادة المحاولة.':
+    ' — Recover the Pi session receipt before trying again.');
+   return;
+  }
+  cancelButton.disabled=false;continueButton.disabled=false;
+  status.textContent=result?.reason||(lang==='ar'?
+   'لم يؤكد Pi استلام الاختيار؛ يمكنك المحاولة مجددًا.':
+   'Pi did not confirm receipt. You can retry.');
  };
  actions.append(cancelButton,continueButton);panel.append(actions,status);
  if(savedStatus==='requested'){
