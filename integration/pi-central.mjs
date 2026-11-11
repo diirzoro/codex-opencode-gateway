@@ -1327,6 +1327,7 @@ const server=http.createServer(async(req,res)=>{
         await a.command("set_model",{provider:b.model.providerID,modelId:b.model.modelID});
         if(images.length&&Array.isArray(a.session.model?.input)&&
            !a.session.model.input.includes("image")){
+          try{await a.clearCredential();}catch{a.close();}
           releaseExecution(a);
           return error(res,422,"Selected Pi model does not support image input; select a vision model","not_submitted");
         }
