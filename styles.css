@@ -1706,3 +1706,12 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 .workspace-project-option:hover,.workspace-project-option:focus-visible{border-color:var(--primary)}
 .workspace-project-option small{color:var(--muted);font-size:11px;flex:none}
 .workspace-project-chooser-actions{display:flex;flex-wrap:wrap;gap:9px;justify-content:flex-end}
+
+/* Compact explicit format choices use the existing composer, not a new service. */
+#workspacePage .composer-format-picker{position:relative;display:inline-flex;align-items:center;min-width:0}
+#workspacePage .composer-format-picker>summary{list-style:none;cursor:pointer;font-size:12px;border:1px solid var(--line);background:var(--panel2);border-radius:9px;padding:7px 9px;color:var(--text);user-select:none;white-space:nowrap}
+#workspacePage .composer-format-picker>summary::-webkit-details-marker{display:none}
+#workspacePage .composer-format-picker[open]>summary{border-color:var(--primary)}
+#workspacePage .composer-format-options{position:absolute;z-index:30;inset-inline-start:0;bottom:calc(100% + 6px);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;min-width:210px;max-width:min(80vw,280px);padding:10px;border:1px solid var(--line);border-radius:11px;background:var(--panel);box-shadow:0 9px 28px rgba(15,23,42,.15)}
+#workspacePage .composer-format-options button{border:1px solid var(--line);border-radius:7px;background:var(--panel2);color:var(--text);min-height:34px;padding:6px 9px;font-size:12px;cursor:pointer}
+#workspacePage .composer-format-options button:hover,#workspacePage .composer-format-options button:focus-visible{border-color:var(--primary)}

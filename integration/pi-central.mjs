@@ -263,6 +263,17 @@ class SdkAgent {
     const settingsManager=sdk.SettingsManager.inMemory();
     const resourceLoader=new sdk.DefaultResourceLoader({
       cwd:scope.directory,agentDir:PI_AGENT_DIR,settingsManager,
+      // Add project guidance to Pi's own native prompt rather than building
+      // a second agent or inferring tool execution from assistant text.
+      systemPromptOverride:base=>base+
+        "\nProject workspace: "+scope.directory+
+        "\nUse Pi's registered read/write/edit/bash tools for actual file changes. "+
+        "Do not print simulated tool_call/function=bash XML as a substitute for tools. "+
+        "Never report a file as created until a native tool succeeds. "+
+        "Report paths relative to the project directory, not absolute VPS paths. "+
+        "For multi-step tasks, show a concise Markdown checkbox plan and update "+
+        "the checkboxes only when the work has actually progressed. "+
+        "If a material language or file-format choice is missing, ask the user before proceeding.",
       noExtensions:false,noSkills:false,
       noPromptTemplates:false,noContextFiles:false
     });

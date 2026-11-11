@@ -1520,7 +1520,34 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const selectIcons=['<circle cx="12" cy="7" r="3"/><path d="M5 21v-3a7 7 0 0 1 14 0v3"/>','<path d="M7 18a5 5 0 0 1-1-10 6 6 0 0 1 11-1 5.5 5.5 0 0 1 1 11Z"/>','<path d="m12 3 9 5v8l-9 5-9-5V8Z M3 8l9 5 9-5M12 13v8"/>'];
   [agent,q('providerSelect'),q('modelSelect')].forEach((select,index)=>{const label=textElement('label','','composer-select');label.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">'+selectIcons[index]+'</svg>';label.append(select);picks.append(label);});
   picks.append(nativeVariant);
-  utilities.append(attach);projectPanelBrand.append(q('chatGithub'),q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
+  utilities.append(attach);
+  // Composer-only format choice. Explicitly adds the user's preference to
+  // their visible prompt; it does not impersonate an extension UI request.
+  const formatOptions=document.createElement('details');
+  formatOptions.className='composer-format-picker';
+  const formatTitle=document.createElement('summary');
+  formatTitle.textContent=tr('Format','الصيغة');
+  formatTitle.setAttribute('aria-label',tr('Choose a file format','اختر نوع الملف'));
+  const formatMenu=document.createElement('div');
+  formatMenu.className='composer-format-options';
+  for(const format of ['HTML','JavaScript','CSS','JSON','Python']){
+    const option=document.createElement('button');option.type='button';
+    option.textContent=format;option.title=tr('Add ','إضافة ')+format+
+      tr(' to the task request',' إلى طلب العمل');
+    option.onclick=()=>{
+      const input=q('promptInput');
+      const detail=lang==='ar'?'استخدم صيغة '+format+' للملف المطلوب.':
+        'Use '+format+' for the requested file.';
+      input.value=(input.value.trimEnd()?input.value.trimEnd()+'\n':'')+detail;
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      window.resizeWorkspaceComposer?.();
+      formatOptions.open=false;input.focus();
+    };
+    formatMenu.append(option);
+  }
+  formatOptions.append(formatTitle,formatMenu);
+  utilities.append(formatOptions);
+  projectPanelBrand.append(q('chatGithub'),q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
   const choices=textElement('button','','icon-btn composer-choice-toggle');choices.type='button';choices.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
   choices.onclick=()=>{const open=picks.classList.toggle('open');choices.setAttribute('aria-expanded',String(open));};
   controls.replaceChildren(utilities,choices,picks,actions,retryModels);
