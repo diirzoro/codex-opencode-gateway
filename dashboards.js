@@ -951,6 +951,11 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   q('providerSelect').setAttribute('aria-label','Provider');q('modelSelect').setAttribute('aria-label','Model');
   const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Pi supports PNG/JPEG/WebP, PDF, TXT and MD up to 8 MB. PDF requires native Pi tools.','Pi يدعم PNG وJPEG وWebP وPDF وTXT وMD حتى 8 ميجابايت. قراءة PDF تتطلب أدوات Pi.');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);
   const attachmentList=textElement('div','','composer-attachments');attachmentList.id='composerAttachments';attachmentList.setAttribute('aria-live','polite');q('promptInput').before(attachmentList);
+  const supportedPiFiles=textElement('small',tr(
+    'Pi attachments: PNG, JPEG, WebP images; PDF; TXT or MD (max 8 MB). Image support depends on model; PDF requires Pi tools.',
+    'مرفقات Pi: صور PNG وJPEG وWebP وملفات PDF وTXT وMD (حتى 8 ميجابايت). دعم الصور حسب النموذج، وقراءة PDF بأدوات Pi.'),
+    'pi-attachment-format-hint');
+  attachmentList.before(supportedPiFiles);
   let attachments=[];let attachmentRevision=0;
   const releasePreview=item=>{if(item.preview){URL.revokeObjectURL(item.preview);item.preview=null;}};
   async function cancelUpload(item){
