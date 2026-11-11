@@ -695,6 +695,10 @@
     }else executionLockBanner.textContent='';
     updateSend();
   });
+  window.addEventListener('authentication-cleared',()=>{
+    anotherProjectRunning=false;executionLockBanner.hidden=true;
+    executionLockBanner.textContent='';
+  });
   setInterval(()=>{
     if(anotherProjectRunning&&currentUser&&
       document.getElementById('workspacePage')?.classList.contains('active'))
@@ -708,6 +712,7 @@
   cleanContext.onclick=async()=>{
     if(!activeSession||!window.nativeSession?.active())return;
     const projectName=activeProject?.name||activeSession.title||'Project';
+    const targetSession=activeSession.id,targetProject=activeProject?.id,targetUser=currentUser?.id;
     const dialog=document.createElement('dialog');dialog.className='workspace-project-chooser';
     const heading=document.createElement('h2');
     heading.textContent=tr('Start a clean project context?','بدء سياق نظيف للمشروع؟');
@@ -723,7 +728,11 @@
     confirm.onclick=async()=>{
       confirm.disabled=cancel.disabled=true;
       try{
-        await window.nativeSession.resetContext(activeSession.id);
+        if(activeSession?.id!==targetSession||activeProject?.id!==targetProject||
+           currentUser?.id!==targetUser)
+          throw Error(tr('The selected project changed. Open the confirmation again.',
+            'تغيّر المشروع المحدد. افتح نافذة التأكيد مجددًا.'));
+        await window.nativeSession.resetContext(targetSession);
         dialog.close();window.resetWorkspaceQueue?.();window.resetWorkspaceQuestions?.();
         await refreshMessages();await window.refreshWorkspaceTodos?.(true);
         submissionStatus.textContent=tr('Clean context ready. Project files were preserved.',
