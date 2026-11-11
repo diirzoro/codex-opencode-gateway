@@ -6,6 +6,7 @@ from typing import Literal
 from fastapi.responses import FileResponse
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -318,7 +319,7 @@ async def pi_attachment_preflight(workspace_id:uuid.UUID,request:Request,
     # Starlette's UploadFile can be spooled to disk; enforce a real size cap.
     raw=await file.read(attachment_reader.PI_UPLOAD_MAX_BYTES+1)
     try:
-        return attachment_reader.pi_upload_preflight(file.filename,raw)
+        return await run_in_threadpool(attachment_reader.pi_upload_preflight,file.filename,raw)
     finally:
         await file.close()
 
