@@ -706,7 +706,7 @@
   },8000);
   const cleanContext=document.createElement('button');
   cleanContext.type='button';cleanContext.className='button ghost small workspace-clean-context';
-  cleanContext.textContent=tr('New clean context','بدء سياق نظيف');
+  cleanContext.textContent=tr('Archive · New chat','أرشفة · محادثة جديدة');
   cleanContext.title=tr('Archive the previous Pi chat and start fresh within this project',
     'أرشفة سجل Pi السابق وبدء سياق جديد داخل المشروع نفسه');
   cleanContext.onclick=async()=>{
@@ -715,13 +715,13 @@
     const targetSession=activeSession.id,targetProject=activeProject?.id,targetUser=currentUser?.id;
     const dialog=document.createElement('dialog');dialog.className='workspace-project-chooser';
     const heading=document.createElement('h2');
-    heading.textContent=tr('Start a clean project context?','بدء سياق نظيف للمشروع؟');
+    heading.textContent=tr('Archive this conversation and start a new one?','أرشفة هذه المحادثة وبدء محادثة جديدة؟');
     const detail=document.createElement('p');
     detail.textContent=tr('Project: '+projectName+'. The previous conversation is archived. Project files remain untouched. Any running task must be stopped first.',
       'المشروع: '+projectName+'. سيُؤرشف سجل المحادثة السابق وتبقى ملفات المشروع دون تغيير. يجب إيقاف أي مهمة قائمة أولًا.');
     const actions=document.createElement('div');actions.className='workspace-project-chooser-actions';
     const confirm=document.createElement('button');confirm.type='button';
-    confirm.className='button danger';confirm.textContent=tr('Confirm new context','تأكيد بدء سياق جديد');
+    confirm.className='button';confirm.textContent=tr('Archive and start new chat','أرشفة وبدء محادثة جديدة');
     const cancel=document.createElement('button');cancel.type='button';
     cancel.className='button ghost';cancel.textContent=tr('Cancel','إلغاء');
     cancel.onclick=()=>dialog.close();
@@ -735,8 +735,8 @@
         await window.nativeSession.resetContext(targetSession);
         dialog.close();window.resetWorkspaceQueue?.();window.resetWorkspaceQuestions?.();
         await refreshMessages();await window.refreshWorkspaceTodos?.(true);
-        submissionStatus.textContent=tr('Clean context ready. Project files were preserved.',
-          'بدأ سياق نظيف. ملفات المشروع محفوظة.');
+        submissionStatus.textContent=tr('Previous chat archived. New conversation ready; project files preserved.',
+          'تمت أرشفة المحادثة وبدء محادثة جديدة. ملفات المشروع محفوظة.');
       }catch(error){toast(error.message);confirm.disabled=cancel.disabled=false;}
     };
     actions.append(cancel,confirm);dialog.append(heading,detail,actions);
