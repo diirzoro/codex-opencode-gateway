@@ -1679,6 +1679,83 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const choices=textElement('button','','icon-btn composer-choice-toggle');choices.type='button';choices.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
   choices.onclick=()=>{const open=picks.classList.toggle('open');choices.setAttribute('aria-expanded',String(open));};
   controls.replaceChildren(utilities,choices,picks,actions,retryModels);
+  // Pi-authored options are an optional panel by the composer, never fixed suggestions.
+  const piSuggestions=document.createElement('section');
+  piSuggestions.className='pi-composer-recommendations';piSuggestions.hidden=true;
+  q('promptForm').before(piSuggestions);
+  let suggestionKey='',dismissedKey='';
+  function parsePiChoices(answer){
+    const raw=String(answer||'');if(!raw||raw.length>24000)return null;
+    let value=null;
+    const structured=raw.match(/```pi[_-]choices\s*\n([\s\S]*?)```/i);
+    if(structured)try{
+      const data=JSON.parse(structured[1]);
+      if(Array.isArray(data.options))value={question:String(data.question||'').slice(0,280),
+        options:data.options.slice(0,6).map(item=>({
+          title:String(item.title||item.label||'').slice(0,100),
+          description:String(item.description||item.reason||'').slice(0,240),
+          value:String(item.value||item.title||item.label||'').slice(0,240),
+          recommended:item.recommended===true
+        })).filter(item=>item.title&&item.value)};
+    }catch{}
+    if(!value||value.options.length<2){
+      if(!/(?:اختر|هل تفضل|هل تريد|خيارات|اللغة|موصى|choose|which|prefer|recommended|options|technolog|framework|language)/i.test(raw.slice(0,1600)))return null;
+      const options=[];
+      for(const line of raw.split(/\r?\n/)){
+        const m=line.match(/^\s*(?:(?:#{2,5}\s*)?\d+[.)]|[-*•])\s+(.+?)\s*$/);
+        if(!m||options.length>=7)continue;
+        const item=m[1].replace(/\*\*/g,'').trim();if(!item||item.length>160)continue;
+        const pieces=item.split(/\s+(?:—|–|:)\s+/,2),title=pieces[0].replace(/\s*\([^)]*(?:موصى|recommended)[^)]*\)/ig,'').trim();
+        if(title.length>90||!title)continue;
+        options.push({title,description:pieces[1]||'',value:title,recommended:/موصى|recommended/i.test(item)});
+      }
+      if(options.length<2||options.length>6)return null;
+      value={question:(raw.split(/\r?\n/).find(x=>/[؟?]\s*$/.test(x))||'').slice(0,280),options};
+    }
+    return value?.options?.length>=2?value:null;
+  }
+  window.updateWorkspacePiRecommendations=({sessionId,owner,messageId,text:answer}={})=>{
+    const valid=sessionId&&owner&&activeSession?.id===sessionId&&currentUser?.id===owner;
+    const key=valid?String(owner)+':'+sessionId+':'+String(messageId||''):'';
+    const data=valid&&answer?parsePiChoices(answer):null;
+    if(!data||key===dismissedKey){piSuggestions.hidden=true;suggestionKey='';return;}
+    const signature=key+':'+JSON.stringify(data);
+    if(signature===suggestionKey&&!piSuggestions.hidden)return;
+    suggestionKey=signature;piSuggestions.replaceChildren();
+    const header=textElement('div','','pi-composer-suggestion-heading');
+    header.append(textElement('strong',tr('Pi recommendations','توصيات Pi')));
+    const close=document.createElement('button');close.type='button';close.className='button ghost small';
+    close.textContent='×';close.setAttribute('aria-label',tr('Dismiss','إخفاء'));
+    close.onclick=()=>{dismissedKey=key;piSuggestions.hidden=true;};header.append(close);
+    const question=textElement('p',data.question||tr('Choose an option','اختر أحد الخيارات'));
+    const options=textElement('div','','pi-composer-option-list');
+    const name='pi-choice-'+String(messageId||'').replace(/[^a-z0-9]/gi,'').slice(0,50);
+    const radios=[];
+    data.options.forEach((item,i)=>{
+      const label=textElement('label','','pi-composer-option'),radio=document.createElement('input');
+      radio.type='radio';radio.name=name;radio.value=String(i);
+      radio.checked=item.recommended||(!data.options.some(x=>x.recommended)&&i===0);
+      radios.push(radio);
+      const body=textElement('span','','pi-composer-option-body');
+      body.append(textElement('strong',item.title));
+      if(item.description)body.append(textElement('small',item.description));
+      label.append(radio,body);
+      if(item.recommended)label.append(textElement('span',tr('Recommended','موصى به'),'pi-composer-recommended'));
+      options.append(label);
+    });
+    const choose=document.createElement('button');choose.type='button';choose.className='button small';
+    choose.textContent=tr('Use selected choice','استخدم الخيار المحدد');
+    choose.onclick=()=>{
+      if(activeSession?.id!==sessionId||currentUser?.id!==owner)return;
+      const selected=radios.findIndex(input=>input.checked);if(selected<0)return;
+      const input=q('promptInput');
+      input.value=(input.value.trimEnd()?input.value.trimEnd()+'\n':'')+
+        tr('I choose ','أختار ')+data.options[selected].value+'.';
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      window.resizeWorkspaceComposer?.();input.focus();dismissedKey=key;piSuggestions.hidden=true;
+    };
+    piSuggestions.append(header,question,options,choose);piSuggestions.hidden=false;
+  };
   document.addEventListener('click',event=>{if(!picks.contains(event.target)&&!choices.contains(event.target)){picks.classList.remove('open');choices.setAttribute('aria-expanded','false');}});
   controls.addEventListener('keydown',event=>{if(event.key==='Escape'){picks.classList.remove('open');choices.setAttribute('aria-expanded','false');choices.focus();}});
   window.addEventListener('workspace-provider-disconnected',event=>{
