@@ -1248,12 +1248,13 @@ const server=http.createServer(async(req,res)=>{
     if(pathname==="/session" && req.method==="POST")return json(res,200,{id:a.id,directory:s.directory,title:a.title});
     if(pathname==="/session/status"){
       const pending=Number(a.session.pendingMessageCount)||0;
-      if(!a.active&&!a.running&&!a.queueContinuationActive&&
+      if(!a.running&&!a.queueContinuationActive&&
          a.session.isIdle===true&&pending===0){
-        // Reap orphaned temporary attachments from earlier completed runs.
-        // Originals in the project and archive records are never removed.
+        // Pi SDK's isIdle is authoritative if an earlier SSE event left
+        // our UI/worker active flag stale. Never intervene in an SDK run.
+        a.active=false;releaseExecution(a);a.runningModel=null;
+        // Reap orphaned temporary attachments from completed runs only.
         cleanPiFinishedFiles(s,a.id);
-        if(executing.has(a)){releaseExecution(a);a.runningModel=null;}
       }
       return json(res,200,{[a.id]:{type:a.active||a.running?"busy":"idle",
         pending,model:a.runningModel||null}});
@@ -1406,9 +1407,9 @@ const server=http.createServer(async(req,res)=>{
         return error(res,409,projectBusyMessage(other),"not_submitted");
       // Only release a genuinely stale reservation: no SDK run, queue, or
       // streaming request exists. Do not interrupt a live provider retry.
-      if(a.session.isIdle===true&&!a.active&&!a.running&&!a.queueContinuationActive&&
-         Number(a.session.pendingMessageCount)===0&&executing.has(a)){
-        releaseExecution(a);a.runningModel=null;
+      if(a.session.isIdle===true&&!a.running&&!a.queueContinuationActive&&
+         Number(a.session.pendingMessageCount)===0){
+        a.active=false;releaseExecution(a);a.runningModel=null;
       }
       if(a.active||a.running||executing.has(a)){
         if(images.length&&Array.isArray(a.session.model?.input)&&
