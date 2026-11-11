@@ -1018,16 +1018,22 @@ function renderPiOptionCards(host,answer,messageId){
  if(!text||text.length>24000)return;
  const lines=text.split(/\r?\n/),topics=[];
  let nativeOptions=null,question='';
- const structured=text.match(/\x60{3}pi[_-]choices\s*\r?\n([\s\S]*?)\x60{3}/i);
- if(structured)try{
-  const data=JSON.parse(structured[1].trim());question=String(data.question||'').trim().slice(0,300);
-  if(Array.isArray(data.options))nativeOptions=data.options.slice(0,6).map(item=>({
-   title:String(item.title||item.label||'').trim().slice(0,110),
-   description:String(item.description||item.reason||'').trim().slice(0,180),
-   recommended:item.recommended===true,
-   value:String(item.value||item.title||item.label||'').trim().slice(0,220)
-  })).filter(item=>item.title&&item.value);
- }catch{/* Invalid optional Pi choices are not interpreted as instructions. */}
+ let structured=null;
+ for(const candidate of text.matchAll(/\x60{3}(?:pi[_-]choices|json)(?:[^\r\n]*)\r?\n([\s\S]*?)\x60{3}/gi)){
+  try{
+   const data=JSON.parse(candidate[1].trim());
+   if(!Array.isArray(data.options)||data.options.length<2)continue;
+   const parsed=data.options.slice(0,6).map(item=>({
+    title:String(item.title||item.label||'').trim().slice(0,110),
+    description:String(item.description||item.reason||'').trim().slice(0,180),
+    recommended:item.recommended===true,
+    value:String(item.value||item.title||item.label||'').trim().slice(0,220)
+   })).filter(item=>item.title&&item.value);
+   if(parsed.length<2)continue;
+   nativeOptions=parsed;question=String(data.question||'').trim().slice(0,300);
+   structured=candidate;break;
+  }catch{/* Ignore unrelated/invalid JSON: never make up selectable options. */}
+ }
  for(let i=0;i<lines.length;i++){
   const m=lines[i].match(/^\s*#{2,6}\s+(?:\*\*)?(\d+)[.)]\s+(.+?)\s*$/);
   if(m&&topics.length<10)topics.push({start:i,title:m[2].replace(/\*\*/g,"").trim().slice(0,110)});
@@ -1235,7 +1241,23 @@ function renderAgentText(host,value,messageId){
    const block=textElement('section','','message-code-block'),header=textElement('div','','message-code-header'),pre=document.createElement('pre'),code=document.createElement('code');
    const language=fence[2].trim().split(/\s/)[0].slice(0,40)||'text';
    if(/^pi[_-]choices$/i.test(language))continue;
-   header.append(textElement('span',language),feedAction('copy',body.join('\n')));code.textContent=body.join('\n');pre.dir='ltr';pre.append(code);block.append(header,pre);host.append(block);continue;
+   if(/^json$/i.test(language)){
+    try{
+     const value=JSON.parse(body.join('\n'));
+     if(Array.isArray(value?.options)&&value.options.length>=2&&
+        value.options.every(x=>typeof x?.title==='string'||typeof x?.label==='string'))
+       continue; // Pi's table metadata is not prose or an exposed script.
+    }catch{/* Ordinary JSON code stays available if it is not a choice block. */}
+   }
+   header.append(textElement('span',language),feedAction('copy',body.join('\n')));
+   code.textContent=body.join('\n');pre.dir='ltr';pre.append(code);block.append(header,pre);
+   if(body.length>30){
+    const folded=document.createElement('details');folded.className='message-code-folded';
+    const summary=document.createElement('summary');
+    summary.textContent=lang==='ar'?'عرض الكود التفصيلي ('+body.length+' سطرًا)':'Show code ('+body.length+' lines)';
+    folded.append(summary,block);host.append(folded);
+   }else host.append(block);
+   continue;
   }
   if(!lines[i].trim()){flush();continue;}
   if(/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(lines[i])){flush();host.append(document.createElement('hr'));continue;}
