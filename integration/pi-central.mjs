@@ -1154,9 +1154,9 @@ const server=http.createServer(async(req,res)=>{
       return json(res,200,piNativeTodos((await a.command("get_messages"))?.messages||[]));
     if(action==="queue"&&req.method==="GET")
       return json(res,200,await a.command("get_queue"));
-    // Archived conversations belong to this authenticated project only.
-    // Read-only archive browsing never touches source files or starts an AI run.
-    if(req.method==="GET"&&(action==="archives"||action.startsWith("archives/"))){
+    // Archived Pi conversations belong to this authenticated project only.
+    // Deletion is limited to a specifically confirmed archived JSONL file.
+    if(["GET","DELETE"].includes(req.method)&&(action==="archives"||action.startsWith("archives/"))){
       const archive=path.resolve(ROOT,"projects",s.userId,s.workspaceId,"history-archive");
       const parent=path.resolve(ROOT,"projects",s.userId,s.workspaceId);
       if(!archive.startsWith(parent+path.sep))
@@ -1167,6 +1167,7 @@ const server=http.createServer(async(req,res)=>{
         return error(res,403,"Unsafe conversation archive directory");
       const valid=name=>/^[0-9]{13}-[0-9a-f-]{36}\.jsonl$/i.test(name);
       if(action==="archives"){
+        if(req.method!=="GET")return error(res,405,"Cannot delete the archive directory");
         const items=readdirSync(archive,{withFileTypes:true})
           .filter(item=>item.isFile()&&valid(item.name))
           .sort((one,two)=>two.name.localeCompare(one.name)).slice(0,60)
@@ -1179,6 +1180,17 @@ const server=http.createServer(async(req,res)=>{
       const filename=path.join(archive,name);
       if(!existsSync(filename)||lstatSync(filename).isSymbolicLink()||
           !statSync(filename).isFile())return error(res,404,"Archived conversation not found");
+      if(req.method==="DELETE"){
+        const request=await body(req);
+        if(request?.confirm!=="DELETE_PI_ARCHIVED_CHAT"||request?.archive_id!==name)
+          return error(res,422,"Explicit archive file confirmation required");
+        // scope() authenticated the account and workspace; never accept a
+        // caller-supplied directory. Remove only this archive's regular file.
+        if(realpathSync(filename)!==filename)
+          return error(res,403,"Unsafe archived conversation path");
+        unlinkSync(filename);
+        return json(res,200,{deleted:true,id:name,permanent:true});
+      }
       if(statSync(filename).size>8*1024*1024)
         return error(res,413,"Archive is too large for browser preview; the original remains saved");
       const messages=[];
