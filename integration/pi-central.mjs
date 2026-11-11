@@ -354,7 +354,16 @@ class SdkAgent {
         "tool calls with the same arguments indefinitely. "+
         "Never simulate tool execution or claim files were created without "+
         "a successful tool result. Report relative paths within this project. "+
-        "For multi-step work, use the installed Pi todo tool when available."
+        "For multi-step work, use the installed Pi todo tool when available. "+
+        "When a user needs to choose among genuinely different technologies, "+
+        "languages, or design approaches, ask a concise question with two to "+
+        "five relevant options grounded in their request. Include one optional "+
+        "machine-readable fenced block tagged pi_choices, formatted as JSON: "+
+        "{\\\"question\\\":\\\"Which approach?\\\",\\\"options\\\":[{\\\"title\\\":\\\"Option A\\\",\\\"description\\\":\\\"Why\\\",\\\"value\\\":\\\"Option A\\\",\\\"recommended\\\":true}]}. "+
+        "The browser renders this as selectable cards beside the message "+
+        "composer. Recommend only a reasoned choice. Do not invent fixed "+
+        "options or ask this question for every task; follow direct instructions "+
+        "when the user has already chosen. Never fabricate tool calls."
       ],
       noExtensions:false,noSkills:false,
       noPromptTemplates:false,noContextFiles:false
