@@ -1799,3 +1799,9 @@ body:has(#workspacePage.active) .app-header{display:none!important}
  .client-pi-archive-row{grid-template-columns:1fr}
  .client-pi-archive-actions{justify-content:flex-start}
 }
+/* Native Pi attachment capability shown directly under the composer. */
+:root #workspacePage .pi-attachment-format-hint{
+  display:block;box-sizing:border-box;max-width:min(calc(100% - 28px),960px);
+  margin:4px auto 8px;font-size:11px;line-height:1.5;color:var(--muted);
+  overflow-wrap:anywhere;padding-inline:8px;
+}
