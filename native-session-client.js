@@ -566,11 +566,28 @@
         const m=p.message;
         if(m?.role==="assistant"){
           const content=Array.isArray(m.content)?m.content.filter(x=>x?.type==="text").map(x=>x.text||"").join(""):"";
-          if(content)piReply(id,content,true);
+          if(content.trim()){
+            piReply(id,content,true);
+            // A genuine text reply supersedes stale errors from prior runs.
+            if(activeSession?.id===id){
+              const status=document.getElementById("submissionStatus");
+              if(status){delete status.dataset.piProviderError;status.textContent="";}
+              const runtime=document.getElementById("runtimeStatus");
+              if(runtime&&/HTTP 413|rate limit|رصيد|فشل|تعذر|دون رد/i.test(runtime.textContent||""))
+                runtime.textContent="";
+            }
+          }
         }
         return;
       }
-      if(e.type==="pi.agent_start"){statuses.set(id,"submitted");return;}
+      if(e.type==="pi.agent_start"){
+        statuses.set(id,"submitted");
+        if(activeSession?.id===id){
+          const status=document.getElementById("submissionStatus");
+          if(status)delete status.dataset.piProviderError;
+        }
+        return;
+      }
       if(e.type==="pi.agent_settled"){
         const finalState=statuses.get(id)==="failed"?"failed":"idle";
         statuses.set(id,finalState);statusEvents.set(id,(statusEvents.get(id)||0)+1);
