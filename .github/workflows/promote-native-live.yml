@@ -1,0 +1,128 @@
+name: LIVE | Deploy Pi Gateway from master
+
+on:
+  workflow_dispatch:
+    inputs:
+      vps_username:
+        description: "Production VPS SSH user (must match the existing VPS_USER secret)"
+        required: true
+        default: "tahir"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-live-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    steps:
+      - name: Checkout pinned master revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate Pi Gateway release syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f integration/pi-central.mjs
+          test -f ops/native-direct/nginx-live.conf
+          bash -n scripts/live-pi-promote.sh
+          node --check integration/pi-central.mjs
+          node --check app.js
+          node --check native-session-client.js
+          node --check dashboards.js
+          python3 -m compileall -q backend/app backend/alembic
+
+      - name: Connect using existing protected VPS secrets
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ inputs.vps_username }}
+          EXPECTED_VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${VPS_HOST:?Missing VPS_HOST}"
+          : "${VPS_USER:?Missing SSH username}"
+          : "${EXPECTED_VPS_USER:?Missing VPS_USER secret}"
+          : "${VPS_SSH_KEY:?Missing VPS_SSH_KEY}"
+          : "${VPS_SUDO_PASSWORD:?Missing production VPS_SUDO_PASSWORD}"
+          [[ "$VPS_USER" == "$EXPECTED_VPS_USER" ]] || { echo "Production SSH username mismatch"; exit 1; }
+          [[ "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "Invalid SSH username"; exit 1; }
+          port="${VPS_SSH_PORT:-22}"
+          [[ "$port" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid SSH port"; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          if [[ -n "$VPS_SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            echo "VPS_SSH_KNOWN_HOSTS is not configured; checking the host key as in the prior LIVE workflow"
+            ssh-keyscan -p "$port" -H "$VPS_HOST" > "$HOME/.ssh/known_hosts"
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+          ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" 'test "$HOME" = /home/tahir && mkdir -p "$HOME/opencode-gateway-release"'
+
+      - name: Stage full master source without production secrets
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ inputs.vps_username }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${VPS_SSH_PORT:-22}"
+          rsync -az --delete \
+            --exclude='.git/' --exclude='.github/' \
+            --exclude='.env' --exclude='.env.*' --exclude='.venv/' \
+            --exclude='runtime/' --exclude='workspaces/' --exclude='state/' \
+            --exclude='sessions/' --exclude='uploads/' --exclude='secrets/' \
+            --exclude='receipts/' --exclude='logs/' --exclude='backups/' \
+            --exclude='releases/' --exclude='node_modules/' \
+            --exclude='*.pem' --exclude='*.key' --exclude='*.p12' --exclude='*.pfx' \
+            -e "ssh -p $port -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+            ./ "$VPS_USER@$VPS_HOST:/home/tahir/opencode-gateway-release/"
+
+      - name: Replace LIVE OpenCode source with Pi Gateway
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ inputs.vps_username }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          port="${VPS_SSH_PORT:-22}"
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          # One existing Pi service is shared by TEST and LIVE, never restarted
+          # or overwritten by this job. Only LIVE Gateway and LIVE Nginx change.
+          printf '%s\n' "$VPS_SUDO_PASSWORD" | \
+            ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" \
+            "LIVE_SUDO_PASS_STDIN=1 LIVE_PI_SOURCE_SHA=$TARGET_SHA bash /home/tahir/opencode-gateway-release/scripts/live-pi-promote.sh"
+
+      - name: Verify LIVE HTTP and Pi session boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 5 --retry-delay 2 --max-time 20 \
+            https://opencode-gateway.codes/api/health >/dev/null
+          code="$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' \
+            https://opencode-gateway.codes/native-direct/api/session)"
+          [[ "$code" == "401" ]] || { echo "Expected Pi auth boundary HTTP 401, received $code"; exit 1; }
+          echo "LIVE Gateway health and Pi authentication boundary passed"
+          echo "Authenticated AI prompts, payment and activation email need separate acceptance tests"
