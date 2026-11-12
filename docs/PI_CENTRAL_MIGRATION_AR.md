@@ -1531,3 +1531,25 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - **هذه تعديلات مصدر فقط حتى ينجح تشغيل Workflow LIVE الجديد**. لا تُعتبر جداول LIVE قد تغيرت بناءً على Commit في GitHub وحده.
 - تشغيل `LIVE | Deploy Pi Gateway from master` يدويًا من `master` الأحدث (ليس Re-run للتشغيل القديم المثبت على Commit قديم)؛ سيرفع الملف الجديد وينفذ ترحيل LIVE باستخدام اعتماد LIVE الحالي دون عرض كلمة المرور. يجب التحقق من ظهور `LIVE_PI_DATABASE_READY revision=0037_pi_gateway_ai_catalog tables=3` ثم نجاح فحص HTTP ونطاق Pi.
 - يمكن التحقق على VPS قراءة فقط من داخل بيئة LIVE بــ`alembic current`، و`SELECT current_database(), version_num FROM alembic_version` وقراءة أسماء الجداول. **لا تنفذ SQL القسم 17 المكتوب صراحة لـTEST على LIVE**.
+
+
+## 63. تدقيق قدرات Pi SDK وملكية ملفات المشروع — 12 نوفمبر 2026 — TEST SOURCE ONLY
+
+### الأدلة من VPS TEST (أرسلها المالك)
+- قارن `cmp -s` بين `/home/tahir/pi-test/pi-central.mjs` و`/home/tahir/opencode-gateway-test/integration/pi-central.mjs`: متطابقان قبل تعديل المصدر الجديد.
+- أظهر اختبار `node --check` نجاح الصياغة لملف Pi المثبّت.
+- أظهر استيراد SDK الحقيقي: `createAgentSession` و`DefaultResourceLoader` و`typebox.Type.Object` موجودة، وكذلك `createCodemodeExtension` و`createToolSearchExtension` و`createMcpExtension`، وكلها functions.
+- هذه حقائق قدرة الحزمة **لا تثبت تلقائيًا تسجيل** الإضافات الثلاث في جلسات Pi SDK، ولا تنوب عن اختبار النموذج والأدوات الفعلي.
+
+### استكمال المصدر على updates فقط
+- أضاف `integration/pi-central.mjs` إلى `DefaultResourceLoader.extensionFactories` المصنعين المثبتين فعلاً `createCodemodeExtension()` و`createToolSearchExtension()`. لم ينشئ خدمة أو API جديدًا؛ التنفيذ باقٍ لدى Pi الأصلي.
+- لتجنب كشف إعدادات MCP المشتركة لحسابات العملاء تحت UID خدمة Pi الواحدة، يستدعي `createMcpExtension()` فقط عند تحقق `scope.testOwner` الحالي (اختبار Owner المفرد و`PI_TEST_SINGLE_OWNER_TOOLS=1`). لا يُعلن MCP متاحًا لكل العملاء أو في LIVE قبل عزل مواردهم على مستوى نظام التشغيل. إن كان MCP يحتاج stdio command للخادم المكوّن سلفًا فهو سلوك Pi الأصلي وليس نشر خدمة إضافية من Gateway؛ يجب مراجعة تكوين MCP قبل تشغيله.
+- ظلت أداة `todo` القابلة للاستبدال والمهارات والقوالب و`getAllTools()/setActiveToolsByName()` وطلبات UI وQueue/Stop كما هي. تفعيل جميع الأدوات المثبتة **لا يعني** نجاحها دون صلاحيات ملفات/اتصال وخروج أوامر ناجح.
+- أضيفت تعليمات سياق المشروع ليراجع Pi مطالب بناء صفحات أو تطبيق، ويكتب الملفات داخل `scope.directory` المملوك، ولا يدعي العجز غير الحقيقي، ولا يعلن إنشاء ملف حتى تثبت كتابة وقراءة الملف بأدوات Pi.
+- فحصت صياغة المصدر المعدّل في JS وتحليل دوال Todo وإنشاء/إنجاز/استعادة مهامها من السجل: ناجح. **لم يُنشر المصدر الجديد على TEST أو يُعاد تشغيل Pi المشتركة في هذه الجولة؛ لم تُثبت أدوات MCP/CodeMode/ToolSearch على جلسة حيّة.**
+
+### ترتيب التنفيذ قبل مراجعة شكوى LIVE
+1. فحص أن ملفات TEST وPi المثبّتة عادت للتطابق بعد نشر مقصود، ومراجعة `systemctl` وسجل Pi بدون كشف أسرار. مصدر `updates` لا يحدّث الخدمة الجارية ذاتيًا.
+2. على مشروع تجريبي TEST واحد: فحص Todo أصلي `source=pi-tool`، ثلاث توصيات مع اختيار ومتابعة المحادثة نفسها، ثم `write/read/edit` ووجود ملف جديد في مجلد المشروع الفعلي بعد تحديث قائمة الملفات. افحص `codemode` و`tool_search` فعليًا قبل اعتماد نجاحها، وMCP للمالك المُخوّل فقط.
+3. **قيد أمان قائم:** الخدمة `pi-central.service` مشتركة بين TEST وLIVE؛ سكربت نشر TEST قد يعيد تشغيلها عند اختلاف ملف Pi. لا تُشغله على نحو غير منسّق مع LIVE. ولا تمنح أدوات Bash/MCP لعملاء متعددين دون إثبات عزل نظام التشغيل المذكور في `docs/PI_SECURITY_AUDIT_2026-11-11_AR.md`.
+4. بعد إتمام تحقق TEST فقط، عالج شكوى LIVE: ورد أن النموذج عرض نجاح كتابة `login.html` و`register.html` لكن الملفات لا تظهر. الاستدلال من نص النموذج أو واجهة النشاط غير كافٍ لإثبات مكان أو دوام الملفات. افحص أولًا قاعدة `project_native_session_bindings` للمشروع، مسار `native_directory`، ووجود الملف على القرص داخل `WORKSPACE_ROOT/<user>/<workspace>/repo`، ومسار قائمة الملفات؛ لا تمس جلسات Pi أو ملفات المستخدمين آليًا.
