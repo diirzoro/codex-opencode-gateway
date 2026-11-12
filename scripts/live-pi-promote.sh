@@ -138,8 +138,18 @@ PY
 )
 sudo_operator /usr/bin/systemctl restart opencode-gateway.service
 sudo_operator /usr/bin/systemctl is-active --quiet opencode-gateway.service
-curl -fsS --max-time 15 --retry 8 --retry-delay 2 \
-  --header 'Host: opencode-gateway.codes' http://127.0.0.1:8000/api/health >/dev/null
+# systemctl restart returns when the service is spawned, not when Uvicorn
+# has finished imports/startup and bound port 8000. Retry connection refusals
+# within a bounded window. A persistent failure stops before Nginx changes.
+if ! curl -fsS --max-time 10 --connect-timeout 3 --retry 15 \
+  --retry-delay 2 --retry-connrefused \
+  --header 'Host: opencode-gateway.codes' \
+  http://127.0.0.1:8000/api/health >/dev/null; then
+  echo 'LIVE Gateway did not become healthy on 127.0.0.1:8000; Nginx left unchanged' >&2
+  sudo_operator /usr/bin/systemctl show opencode-gateway.service \
+    -p ActiveState -p SubState -p Result -p ExecMainStatus --no-pager >&2 || true
+  exit 8
+fi
 
 # Replace only the existing LIVE Nginx snippet. Keep a temporary copy only
 # long enough to restore it if validation or reload fails.
