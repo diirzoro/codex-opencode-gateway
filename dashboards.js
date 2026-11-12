@@ -949,11 +949,11 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   nativeVariant.onchange=saveNativeSelection;
   q('providerSelect').setAttribute('aria-label','Provider');q('modelSelect').setAttribute('aria-label','Model');
-  const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Pi supports PNG/JPEG/WebP, PDF, TXT and MD up to 25 MB. PDF requires native Pi tools.','Pi يدعم PNG وJPEG وWebP وPDF وTXT وMD حتى 25 ميجابايت. قراءة PDF تتطلب أدوات Pi.');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);
+  const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Pi supports PNG/JPEG/WebP and PDF up to 25 MB combined; TXT/MD up to 256 KB each. PDF requires Pi tools.','Pi يدعم الصور وPDF حتى 25 ميجابايت إجمالًا، وTXT/MD حتى 256 كيلوبايت لكل ملف. قراءة PDF تتطلب أدوات Pi.');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);
   const attachmentList=textElement('div','','composer-attachments');attachmentList.id='composerAttachments';attachmentList.setAttribute('aria-live','polite');q('promptInput').before(attachmentList);
   const supportedPiFiles=textElement('small',tr(
-    'Pi attachments: PNG, JPEG, WebP images; PDF; TXT or MD (max 25 MB). Image support depends on model; PDF requires Pi tools.',
-    'مرفقات Pi: صور PNG وJPEG وWebP وملفات PDF وTXT وMD (حتى 25 ميجابايت). دعم الصور حسب النموذج، وقراءة PDF بأدوات Pi.'),
+    'Pi attachments: PNG/JPEG/WebP/PDF up to 25 MB total; TXT/MD up to 256 KB per file. Images need a compatible model; PDF requires Pi tools.',
+    'مرفقات Pi: صور PNG وJPEG وWebP وPDF حتى 25 ميجابايت إجمالًا، وTXT/MD حتى 256 كيلوبايت للملف. دعم الصور حسب النموذج، وقراءة PDF بأدوات Pi.'),
     'pi-attachment-format-hint');
   attachmentList.before(supportedPiFiles);
   let attachments=[];let attachmentRevision=0;
@@ -1009,8 +1009,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           .reduce((total,item)=>total+(Number(item.size)||0),0);
         if(!new Set(['png','jpg','jpeg','webp','pdf','txt','md']).has(extension)||
            !file.size||file.size+pendingBytes>25*1024*1024){
-          toast(tr('Pi supports PNG, JPEG, WebP, PDF, TXT and MD, up to 25 MB combined per message.',
-            'Pi يدعم PNG وJPEG وWebP وPDF وTXT وMD، بحد 25 ميجابايت إجمالًا لكل رسالة.'));continue;
+          toast(tr('Pi supports PNG/JPEG/WebP/PDF up to 25 MB combined per message; TXT/MD up to 256 KB per file.',
+            'Pi يدعم الصور وPDF بحد 25 ميجابايت إجمالًا لكل رسالة، وTXT/MD حتى 256 كيلوبايت لكل ملف.'));continue;
         }
         const item={name:file.name,size:file.size,type:file.type||'application/octet-stream',
           temporary,owner,workspaceId,state:'uploading',
