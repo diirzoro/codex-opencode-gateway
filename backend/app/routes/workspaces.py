@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
@@ -152,13 +153,22 @@ def bind_native_session(project_id:uuid.UUID,data:BindProjectNativeSession,
             raise HTTPException(409,"This project already has another persistent Native session")
         if current.native_session_id==data.native_session_id:
             return _native_binding_payload(current)
-        # Explicit one-way conversion of a TEST-only legacy OpenCode identifier.
-        # Never infer consent, never migrate LIVE, and never permit Pi -> OpenCode.
-        if (data.replace_legacy_opencode and native_sessions.deployment()=="test"
+        # Explicit, owned one-way OpenCode -> Pi conversion for both TEST
+        # and LIVE. The browser first fetches the one Pi session for this
+        # exact project directory and supplies its id. Never replace a
+        # non-legacy Pi binding, change workspace ownership, or create a
+        # duplicate conversation. Old Native history is not deleted here.
+        if (data.replace_legacy_opencode
+                and native_sessions.deployment() in {"test", "live"}
                 and current.native_session_id.startswith("ses_")
-                and data.native_session_id.startswith("pi_")):
+                and re.fullmatch(r"pi_[0-9a-f]{32}", data.native_session_id)):
             current.native_session_id=data.native_session_id
-            db.commit()
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                raise HTTPException(409,
+                    "Pi session is already bound to another project") from None
             return _native_binding_payload(current)
         raise HTTPException(409,"This project already has another persistent Native session")
     binding=ProjectNativeSessionBinding(project_id=project.id,user_id=user.id,
