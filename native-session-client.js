@@ -596,6 +596,10 @@
           if(stream!==source||!current(id,user))return;
           await refreshMessages();
           await window.refreshWorkspaceTodos?.(true);
+          // LIVE's project files may have been written while the browser's
+          // SSE connection was briefly unavailable. Re-read the owned Pi
+          // filesystem after completion, not just after tool events.
+          if(location.hostname==='opencode-gateway.codes')filesChanged();
           clearPiReply(id);
         }).catch(err=>{if(stream===source&&current(id,user))
           document.getElementById("runtimeStatus").textContent=err.message;});
@@ -661,7 +665,8 @@
       if(!current(id,user)||stream!==source)return;
       void synchronizeStatus(row,id,()=>current(id,user)&&stream===source)
         .catch(error=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent=error.message;});
-      if(opened)filesChanged();needsSnapshot=opened||!histories.has(id);
+      if(opened||location.hostname==='opencode-gateway.codes')filesChanged();
+      needsSnapshot=opened||!histories.has(id);
       opened=true;dirty={messages:true,status:true,controls:true,todos:true};schedule();
     };
     source.onerror=()=>{if(current(id,user)&&stream===source)$('#runtimeStatus').textContent='Reconnecting to native Pi';};
