@@ -1071,6 +1071,83 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   // Project files and preview share the single persistent Project conversation.
   let sessionRows=[],sessionListPending=null,sessionCreating=null,sending=false,queuing=false,queueCount=0,queueSignature='',queueRevision=0,historyRevision=0,pendingSubmission=null,cancelRequested=false,statusPending=null;
   const submissionStatus=textElement('p','','muted-small');submissionStatus.setAttribute('role','status');q('promptForm').before(submissionStatus);
+  // Visible project-level Pi features for LIVE only. Reuse the existing
+  // native session, Todo/queue endpoints, options renderer, and tools view.
+  // TEST's proven interaction flow and the shared Pi service are untouched.
+  if(location.hostname==='opencode-gateway.codes'){
+    const quick=document.createElement('nav');
+    quick.className='pi-project-actions';
+    quick.setAttribute('aria-label',tr('Pi project actions','إجراءات Pi للمشروع'));
+    const toolsHost=document.createElement('div');
+    toolsHost.className='pi-project-tools-view';
+    toolsHost.hidden=true;
+    // Move the SAME tool/skill panel rather than introducing a second
+    // capability discovery implementation or another backend service.
+    toolsHost.append(capabilityView);
+    q('promptForm').before(quick,toolsHost);
+    const ready=()=>{
+      if(!currentUser||!activeWorkspace||!activeSession||!window.nativeSession?.active()){
+        toast(tr('Open a project and its Pi conversation first.',
+          'افتح مشروعًا ومحادثة Pi المرتبطة به أولًا.'));
+        return false;
+      }
+      return true;
+    };
+    const action=(id,en,ar,run)=>{
+      const button=document.createElement('button');
+      button.type='button';button.id=id;button.className='button ghost small';
+      button.textContent=tr(en,ar);
+      button.onclick=async()=>{
+        if(!ready())return;
+        try{await run();}
+        catch(error){toast(error.message||tr('Action failed','تعذر تنفيذ الإجراء'));}
+      };
+      quick.append(button);
+      return button;
+    };
+    const draftRequest=(en,ar)=>{
+      const input=q('promptInput');
+      if(input.value.trim()){
+        toast(tr('Your existing draft is preserved. Send or clear it before requesting another action.',
+          'مسودتك الحالية محفوظة. أرسلها أو امسحها قبل طلب إجراء آخر.'));
+        input.focus();return;
+      }
+      input.value=tr(en,ar);
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      window.resizeWorkspaceComposer?.();
+      input.focus();
+      toast(tr('Review and send this request in the current Pi project conversation.',
+        'راجع الطلب ثم أرسله داخل محادثة Pi الحالية للمشروع.'));
+    };
+    action('pi-live-todos','Todo list','قائمة المهام',async()=>{
+      await window.refreshWorkspaceTodos?.(true);
+      const panel=q('workspaceTodoPanel');
+      if(panel){panel.hidden=false;panel.open=true;panel.scrollIntoView({block:'nearest'});}
+    });
+    action('pi-live-plan','Plan task','إنشاء خطة',()=>draftRequest(
+      'For the latest unfinished task in this project, inspect the relevant project files, then USE your installed native todo tool to create an ordered implementation checklist. Do not mark any step complete without actual tool results. If the task is unclear, ask one specific question. Keep all work in this project.',
+      'راجع آخر مهمة لم تكتمل في هذا المشروع وافحص الملفات المتعلقة بها، ثم استخدم أداة todo الأصلية الموجودة في Pi لإنشاء قائمة خطوات تنفيذ مرتبة. لا تعتبر أي خطوة مكتملة دون نتيجة أداة فعلية. إذا كانت المهمة غير واضحة اسأل سؤالًا واحدًا محددًا. أبقِ جميع الملفات ضمن هذا المشروع.'
+    ));
+    action('pi-live-recommendations','Recommendations','التوصيات',()=>draftRequest(
+      'For the latest unfinished task in THIS project, propose 2 to 5 practical ways to complete it. Explain the tradeoffs briefly, recommend exactly one, and include your interactive pi_choices options block so I can choose and press Continue in this same Pi conversation. Do not modify any files until I choose a solution.',
+      'بالنسبة إلى آخر مهمة غير مكتملة في هذا المشروع، اقترح من حلّين إلى خمسة حلول عملية لإنجازها. وضّح المزايا والقيود باختصار، وأوصِ بحل واحد، واعرض خياراتك باستخدام كتلة pi_choices التفاعلية لكي أختار وأضغط متابعة داخل محادثة Pi نفسها. لا تعدّل أي ملف حتى أختار الحل.'
+    ));
+    action('pi-live-queue','Queue','طابور المهام',async()=>{
+      nativeQueuePeek=true;
+      await refreshMessageQueue();
+      queueView.hidden=false;queueView.open=true;
+      queueView.scrollIntoView({block:'nearest'});
+    });
+    action('pi-live-tools','Tools & skills','الأدوات والمهارات',()=>{
+      toolsHost.hidden=!toolsHost.hidden;
+      if(!toolsHost.hidden){capabilityView.open=true;toolsHost.scrollIntoView({block:'nearest'});}
+    });
+    action('pi-live-files','Project files','ملفات المشروع',async()=>{
+      await loadFiles();
+      const tree=q('workspaceFilesTree');
+      if(tree)tree.scrollIntoView({block:'nearest'});
+    });
+  }
   const recoverConversation=btn('recoverNativeConversation','Recover Conversation','استعادة المحادثة',async()=>{
     const id=activeSession?.id,owner=currentUser?.id;if(!id||!window.nativeSession?.active())return;
     recoverConversation.disabled=true;
@@ -2000,6 +2077,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     };
   }
 
+  let nativeQueuePeek=false;
   const queueView=document.createElement('details');queueView.className='composer-message-queue';queueView.hidden=true;queueView.setAttribute('aria-label',tr('Queued messages','الرسائل المنتظرة'));attachmentList.before(queueView);
   let queuePolling=false;
   const queueCurrent=(owner,id)=>currentUser?.id===owner&&activeSession?.id===id;
@@ -2018,7 +2096,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         ];
         queueCount=Number(data.pending)||entries.length;
         queueView.replaceChildren();
-        queueView.hidden=!queueCount;
+        queueView.hidden=!queueCount&&!(nativeQueuePeek&&location.hostname==='opencode-gateway.codes');
+        if(!queueCount&&nativeQueuePeek&&location.hostname==='opencode-gateway.codes'){
+          queueView.append(textElement('summary',tr('Pi queue · 0','طابور Pi · 0')));
+          queueView.append(textElement('small',tr(
+            'No pending messages in this project. Messages queued during a running task appear here.',
+            'لا توجد رسائل منتظرة في هذا المشروع. تظهر هنا الرسائل التي تضاف أثناء تنفيذ مهمة.')));
+        }
         if(queueCount){
           queueView.append(textElement('summary',tr('Pi queue · ','طابور Pi · ')+queueCount));
           queueView.append(textElement('small',
@@ -2064,7 +2148,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }catch(error){/* Keep known queue entries on discovery failure; never resend. */}finally{queuePolling=false;}
   }
   window.refreshWorkspaceQueue=refreshMessageQueue;
-  window.resetWorkspaceQueue=()=>{queueRevision++;queueCount=0;queueSignature='';queueView.hidden=true;queueView.replaceChildren();};
+  window.resetWorkspaceQueue=()=>{queueRevision++;queueCount=0;queueSignature='';nativeQueuePeek=false;queueView.hidden=true;queueView.replaceChildren();};
   window.addEventListener('authentication-cleared',window.resetWorkspaceQueue);
   async function queueFollowup(payload,owner,id){
     if(queuing||!queueCurrent(owner,id))return;queuing=true;updateSend();
