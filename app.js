@@ -106,7 +106,10 @@ window.nativeDirectTest=(()=>{
     // model catalog. Allow transfer time over slower connections without
     // changing Pi's cache, requesting an external refresh, or adding
     // a Gateway registry. Other GET endpoints retain their original budget.
-    const timeout=method==='GET'&&path.startsWith('provider')?90000:method==='GET'?18000:30000;
+    const inlineUpload=method==='POST'&&path.endsWith('/prompt_async')&&
+      Array.isArray(value?.parts)&&value.parts.some(p=>p?.type==='file'&&
+        typeof p.url==='string'&&p.url.startsWith('data:'));
+    const timeout=inlineUpload?300000:method==='GET'&&path.startsWith('provider')?90000:method==='GET'?18000:30000;
     const deadline=AbortSignal.timeout(timeout);
     const effectiveSignal=signal?AbortSignal.any([signal,deadline]):deadline;
     const options={method,cache:'no-store',credentials:'same-origin',signal:effectiveSignal};
