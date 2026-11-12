@@ -850,15 +850,46 @@
     if(!capabilityView.open||!activeWorkspace||capabilityPending||capabilityWorkspace===activeWorkspace.id)return;
     const id=activeWorkspace.id,owner=currentUser?.id;capabilityPending=true;capabilityBody.textContent=tr('Loading workspace Pi tools and skills…','جارٍ تحميل أدوات ومهارات Pi للمساحة…');
     try{
-      const data=await api('/api/workspaces/'+id+'/runtime/capabilities?view=agent');
-      if(activeWorkspace?.id!==id||currentUser?.id!==owner)return;
-      capabilityBody.replaceChildren(text('p','Reported by this workspace runtime. Agent permissions and admin policy still apply; the agent chooses tools and skills during execution.','مُعلنة من بيئة هذه المساحة. تبقى صلاحيات الوكيل وسياسة الإدارة مطبّقة؛ يختار الوكيل الأدوات والمهارات أثناء التنفيذ.'));
-      const tools=textElement('p',tr('Tools: ','الأدوات: ')+(data.tools||[]).map(tool=>tool+(data.tool_policy?.[tool]===false?tr(' (Restricted)',' (مقيّد)'):'')).join(', '));
-      const skills=textElement('p',tr('Skills: ','المهارات: ')+(data.skills||[]).map(skill=>skill.name).join(', '));capabilityBody.append(tools,skills);
-      if(!data.tools?.length)tools.textContent=tr('No tools reported by Pi.','لم يعلن Pi عن أدوات.');
-      if(!data.skills?.length)skills.textContent=tr('No skills reported by Pi.','لم يعلن Pi عن مهارات.');
-      for(const error of Object.values(data.errors||{}))capabilityBody.append(textElement('p',error.detail));
-      if(!Object.keys(data.errors||{}).length)capabilityWorkspace=id;
+      if(location.hostname==='opencode-gateway.codes'&&window.nativeSession?.active()){
+        // The historical Gateway runtime/capabilities route is absent on Pi
+        // LIVE. Use the already-running Pi Native /agent command discovery.
+        const workspace=await api('/api/workspaces/'+encodeURIComponent(id));
+        if(workspace?.id!==id||typeof workspace.native_directory!=='string')
+          throw Error(tr('Owned Pi project directory unavailable','مجلد مشروع Pi المملوك غير متاح'));
+        const commands=await window.nativeDirectTest.direct('agent',{
+          directory:workspace.native_directory
+        });
+        if(activeWorkspace?.id!==id||currentUser?.id!==owner)return;
+        if(!Array.isArray(commands))throw Error('Invalid Pi installed-command inventory');
+        capabilityBody.replaceChildren(text('p',
+          'Pi native tools run in this project. The installed coding agent includes read, write, edit and bash. Actual tool execution depends on permissions and project access.',
+          'أدوات Pi الأصلية تعمل ضمن هذا المشروع. يتضمن وكيل البرمجة المثبت read وwrite وedit وbash، ويعتمد التنفيذ الفعلي على الصلاحيات والوصول للمشروع.'));
+        const items=commands.filter(row=>row&&typeof row.name==='string');
+        const skills=items.filter(row=>row.source==='skill');
+        const extensions=items.filter(row=>row.source==='extension');
+        const prompts=items.filter(row=>row.source==='prompt');
+        capabilityBody.append(
+          textElement('p',tr('Core tools: read, write, edit, bash; Todo is available when the installed Pi extension registers it.',
+            'الأدوات الأساسية: read وwrite وedit وbash؛ تظهر Todo عندما تسجّل إضافة Pi المثبتة أداتها.')),
+          textElement('p',tr('Installed skills: ','المهارات المثبتة: ')+(skills.map(row=>row.name).join(', ')||
+            tr('None reported','لم يُبلّغ عن مهارات'))),
+          textElement('p',tr('Extension commands: ','أوامر الإضافات: ')+(extensions.map(row=>row.name).join(', ')||
+            tr('None reported','لم يُبلّغ عن أوامر إضافية'))),
+          textElement('p',tr('Prompt templates: ','قوالب الأوامر: ')+(prompts.map(row=>row.name).join(', ')||
+            tr('None reported','لم يُبلّغ عن قوالب')))
+        );
+        capabilityWorkspace=id;
+      }else{
+        const data=await api('/api/workspaces/'+id+'/runtime/capabilities?view=agent');
+        if(activeWorkspace?.id!==id||currentUser?.id!==owner)return;
+        capabilityBody.replaceChildren(text('p','Reported by this workspace runtime. Agent permissions and admin policy still apply; the agent chooses tools and skills during execution.','مُعلنة من بيئة هذه المساحة. تبقى صلاحيات الوكيل وسياسة الإدارة مطبّقة؛ يختار الوكيل الأدوات والمهارات أثناء التنفيذ.'));
+        const tools=textElement('p',tr('Tools: ','الأدوات: ')+(data.tools||[]).map(tool=>tool+(data.tool_policy?.[tool]===false?tr(' (Restricted)',' (مقيّد)'):'')).join(', '));
+        const skills=textElement('p',tr('Skills: ','المهارات: ')+(data.skills||[]).map(skill=>skill.name).join(', '));capabilityBody.append(tools,skills);
+        if(!data.tools?.length)tools.textContent=tr('No tools reported by Pi.','لم يعلن Pi عن أدوات.');
+        if(!data.skills?.length)skills.textContent=tr('No skills reported by Pi.','لم يعلن Pi عن مهارات.');
+        for(const error of Object.values(data.errors||{}))capabilityBody.append(textElement('p',error.detail));
+        if(!Object.keys(data.errors||{}).length)capabilityWorkspace=id;
+      }
     }catch(error){if(activeWorkspace?.id===id&&currentUser?.id===owner)capabilityBody.textContent=error.message;}
     finally{capabilityPending=false;}
   });
