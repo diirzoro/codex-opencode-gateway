@@ -135,6 +135,22 @@ PY
   cd "$APP/backend"
   ../.venv/bin/python -m alembic upgrade head
   ../.venv/bin/python -m alembic current
+  # Verify that Pi's three dedicated tables are truly present in LIVE,
+  # not merely that the historical 0036 Alembic head was applied.
+  ../.venv/bin/python - <<'PY'
+from sqlalchemy import inspect, text
+from app.database import engine
+required = {"ai_provider_catalog", "ai_provider_models", "ai_user_connections"}
+with engine.connect() as connection:
+    database = connection.execute(text("SELECT current_database()")).scalar_one()
+    revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    tables = set(inspect(connection).get_table_names())
+if database != "opencode_gateway" or revision != "0037_pi_gateway_ai_catalog":
+    raise SystemExit("LIVE Pi database or Alembic revision mismatch")
+if not required.issubset(tables):
+    raise SystemExit("LIVE Pi catalog tables missing after migration")
+print("LIVE_PI_DATABASE_READY revision=0037_pi_gateway_ai_catalog tables=3")
+PY
 )
 sudo_operator /usr/bin/systemctl restart opencode-gateway.service
 sudo_operator /usr/bin/systemctl is-active --quiet opencode-gateway.service
