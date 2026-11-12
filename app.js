@@ -331,9 +331,15 @@ window.nativeDirectTest=(()=>{
 })();
 
 const api=async(path,options={})=>{
- // On TEST, file and VCS read operations go directly to Pi Native.
- // Python Gateway contributes only existing administrative workspace metadata.
- if(location.hostname==='test.opencode-gateway.codes'){
+ // TEST retains its existing native routing. LIVE project file reads now use
+ // the SAME Pi Native /file endpoint as the selected conversation, not the
+ // old Gateway file explorer path. LIVE Git mutations and every other API
+ // remain unchanged. Native validates the exact owned project directory.
+ const requestPath=new URL(path,location.origin).pathname;
+ const livePiFileRead=location.hostname==='opencode-gateway.codes' &&
+   (options.method||'GET').toUpperCase()==='GET' &&
+   /^\/api\/workspaces\/[0-9a-f-]{36}\/files(?:\/content)?$/i.test(requestPath);
+ if(location.hostname==='test.opencode-gateway.codes'||livePiFileRead){
    const target=new URL(path,location.origin);
    const git=target.pathname.match(/^\/api\/workspaces\/([0-9a-f-]{36})\/git\/(status|commit|push|sync)$/i);
    const ownedDirectory=async workspace=>{
