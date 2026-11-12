@@ -161,8 +161,8 @@ def get_policy(db) -> PlatformPolicy:
 
 
 # Gateway-only AI discovery/catalog and verified customer BYOK records.
-# Applied manually to the existing TEST PostgreSQL database after reviewing
-# the SQL in Section 17 of docs/PI_CENTRAL_MIGRATION_AR.md; no DDL at import.
+# Created or validated in each isolated Gateway PostgreSQL database by Alembic
+# revision 0037. Never create tables at module import time.
 class AiProviderCatalog(Base):
     __tablename__ = "ai_provider_catalog"
     id: Mapped[str] = mapped_column(String(120), primary_key=True)
