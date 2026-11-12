@@ -1042,7 +1042,7 @@ async function refreshWorkspaceTodos(force=false){
     panel.hidden=false;
     panel.querySelector('summary').textContent=lang==='ar'?'مهام المشروع · تعذر التحديث':'Project Todo · refresh failed';
     panel.querySelector('ol').replaceChildren(Object.assign(document.createElement('li'),{
-      textContent=lang==='ar'?'تعذر قراءة مهام Pi؛ المحادثة محفوظة. حاول مجددًا.':'Could not read Pi task status. Conversation preserved; try again.'
+      textContent:lang==='ar'?'تعذر قراءة مهام Pi؛ المحادثة محفوظة. حاول مجددًا.':'Could not read Pi task status. Conversation preserved; try again.'
     }));
   }
  }
