@@ -407,6 +407,7 @@ class SdkAgent {
     this.events=new Set();this.busy=false;this.active=false;this.closed=false;
     this.last=Date.now();this.running=null;this.runningModel=null;
     this.credentialProvider=null;this.settledObserved=false;
+    this.runSawAssistantText=false;
     this.keepQueueOnStop=false;this.queueContinuationActive=false;
     this.uiRequests=new Map();this.uiWidgets=new Map();
     this.unsub=session.subscribe(event=>this.consume(event));
@@ -500,9 +501,13 @@ class SdkAgent {
     if(this.closed)return;
     this.last=Date.now();
     if(event.type==="agent_start"){
-      this.active=true;
+      this.active=true;this.runSawAssistantText=false;
       console.info("[Pi TEST] model run started",this.id.slice(0,15));
     }
+    if(event.type==="message_end"&&event.message?.role==="assistant"&&
+       Array.isArray(event.message.content)&&event.message.content.some(part=>
+         part?.type==="text"&&String(part.text||"").trim()))
+      this.runSawAssistantText=true;
     if(event.type==="agent_settled"){
       this.active=false;this.settledObserved=true;
       console.info("[Pi TEST] model run settled",this.id.slice(0,15),
@@ -539,7 +544,7 @@ class SdkAgent {
           const hasText=assistants.some(message=>Array.isArray(message.content)&&
             message.content.some(part=>part?.type==="text"&&String(part.text||"").trim()));
           const failed=assistants.some(message=>message.stopReason==="error"||message.errorMessage);
-          if(!hasText&&!failed)this.emitUI("run_outcome",{
+          if(!this.runSawAssistantText&&!hasText&&!failed)this.emitUI("run_outcome",{
             kind:"no_text",pending:Number(this.session.pendingMessageCount)||0
           });
         }
