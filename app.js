@@ -1342,10 +1342,18 @@ async function refreshMessages(){
   const nextNodes=[],seen=new Set();let previousPrompt='',previousAttachments=[];
   const displayRows=nativeIncremental?compactNativeToolMessages(rows):rows;
   const latestAssistant=displayRows.filter(row=>row.role==='assistant').at(-1);
+  // Native Pi may add a tool-only/empty assistant record after a real answer.
+  // It must never turn an answered user turn into a false "no reply" failure.
+  const lastUserIndex=displayRows.findLastIndex(row=>row.role==='user');
+  const currentTurnHasText=displayRows.slice(lastUserIndex+1).some(row=>
+    row.role==='assistant'&&Boolean(String(row.text||'').trim()));
   for(const row of displayRows){
    if(row.id&&seen.has(row.id))continue;if(row.id)seen.add(row.id);
    if(row.role==='user'){previousPrompt=row.text;previousAttachments=row.attachments||[];}
-   const latest=row===latestAssistant,presentation=workspaceMessagePresentation(row,latest,latest?activeSession.execution_status:null);if(presentation.omit)continue;
+   const latest=row===latestAssistant,presentation=workspaceMessagePresentation(row,latest,latest?activeSession.execution_status:null);
+   if(latest&&currentTurnHasText&&presentation.state==='completed'&&!presentation.activity.length&&!presentation.hasText)
+     continue; // Do not append an empty final bubble after a real answer.
+   if(presentation.omit)continue;
    const nodeSignature=JSON.stringify([row,presentation,previousPrompt,previousAttachments,window.workspaceSubmissionBlocked?.()||false]);
    const cached=nativeIncremental&&feed.nativeNodes.get(row.id);
    if(cached?.signature===nodeSignature){nextNodes.push(cached.node);continue;}
@@ -1372,13 +1380,13 @@ async function refreshMessages(){
    if(row.role==='user')foldLongUserMessage(node,content,row.text||'',expandedUserMessages.has(String(row.id)));
    if(row.role==='assistant'&&!hasText&&presentation.feedback){const state=presentation.state;
     const labels={waiting_approval:['Waiting for your approval…','بانتظار موافقتك…'],failed:['The agent could not finish this request. Review the activity below before retrying.','تعذر على الوكيل إكمال الطلب. راجع النشاط أدناه قبل إعادة المحاولة.'],cancelled:['Execution stopped.','تم إيقاف التنفيذ.'],working:['The agent is working…','الوكيل يعمل الآن…'],completed:['Tool step completed.','اكتملت خطوة الأدوات.']};
-    if(latest&&state==='completed')labels.completed=['Pi ended this run without a text reply. Check actual tool results and use Recover Conversation before resending.','أنهى Pi التشغيل دون رد نصي. افحص نتائج الأدوات واستخدم «استعادة المحادثة» قبل إعادة إرسال الطلب.'];
+    if(latest&&state==='completed'&&!currentTurnHasText)labels.completed=['Pi ended this run without a text reply. Check actual tool results and use Recover Conversation before resending.','أنهى Pi التشغيل دون رد نصي. افحص نتائج الأدوات واستخدم «استعادة المحادثة» قبل إعادة إرسال الطلب.'];
     if(Array.isArray(previousAttachments)&&previousAttachments.length){
       labels.failed=[
         'Pi could not complete the file-reading request. Check actual Pi tool results; model or tool support may be unavailable. Do not assume the file was read.',
         'لم يتمكن Pi من إكمال قراءة المرفق. راجع نتائج أدوات Pi الحقيقية؛ قد لا يدعم النموذج أو الأداة هذا النوع. لا تفترض أنه قرأ الملف.'
       ];
-      if(latest&&state==='completed')labels.completed=[
+      if(latest&&state==='completed'&&!currentTurnHasText)labels.completed=[
         'Pi did not provide a readable response to the attachment. Check the tool results before assuming its contents were inspected.',
         'لم يقدم Pi ردًا مقروءًا على المرفق؛ افحص نتائج الأدوات قبل افتراض أنه فحص المحتوى.'
       ];
