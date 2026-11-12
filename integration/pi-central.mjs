@@ -786,8 +786,8 @@ async function agent(s) {
   try{return await creatingSession;}
   finally{if(creating.get(id)===creatingSession)creating.delete(id);}
 }
-async function body(req) {
-  let s="";for await(const part of req){s+=part;if(s.length>12*1024*1024)throw Object.assign(new Error("Body too large"),{status:413});}
+async function body(req,maxBytes=12*1024*1024) {
+  let s="";for await(const part of req){s+=part;if(s.length>maxBytes)throw Object.assign(new Error("Body too large"),{status:413});}
   try{return s?JSON.parse(s):{};}catch{throw Object.assign(new Error("Invalid JSON"),{status:400});}
 }
 function cleanPiStagedDirectories(scope,sessionId,staged=[]){
@@ -824,6 +824,7 @@ function piPromptParts(rawParts, scope, sessionId) {
   // Pi workspace and referenced by path for Pi's native tools to inspect.
   const parts=Array.isArray(rawParts)?rawParts:[];
   const messages=[], images=[], staged=[];
+  let totalInlineBytes=0;
   try{
   for(const p of parts) {
     if(p?.type==="text") {
@@ -848,8 +849,11 @@ function piPromptParts(rawParts, scope, sessionId) {
     if(!match)throw Object.assign(new Error("Unsupported file data. Upload an existing workspace file or an inline attachment."),{status:422});
     const mime=match[1].toLowerCase();
     const data=Buffer.from(match[2],"base64");
-    if(data.length>8*1024*1024)
-      throw Object.assign(new Error("Attachment exceeds 8 MB"),{status:413});
+    if(data.length>25*1024*1024)
+      throw Object.assign(new Error("Attachment exceeds 25 MB"),{status:413});
+    totalInlineBytes+=data.length;
+    if(totalInlineBytes>25*1024*1024)
+      throw Object.assign(new Error("Attachments exceed 25 MB combined per message"),{status:413});
     const failAttachment=message=>{
       throw Object.assign(new Error(message),{status:422,receipt:"not_submitted"});
     };
@@ -1406,7 +1410,8 @@ const server=http.createServer(async(req,res)=>{
       finally{if(creating.get(id)===job)creating.delete(id);}
     }
     if(action==="prompt_async" && req.method==="POST") {
-      const b=await body(req);
+      // 25 MiB of files expands to ~33.4 MiB as Base64; other routes keep 12 MiB.
+      const b=await body(req,40*1024*1024);
       const parsed=piPromptParts(b.parts,s,a.id);
       const {message,images}=parsed;
       unacceptedUpload={scope:s,sessionId:a.id,staged:parsed.staged};
