@@ -112,7 +112,7 @@ PI_UPLOAD_TYPES={
     '.webp':'image/webp','.pdf':'application/pdf',
     '.txt':'text/plain','.md':'text/plain',
 }
-PI_UPLOAD_MAX_BYTES=8*1024*1024
+PI_UPLOAD_MAX_BYTES=25*1024*1024
 PI_UPLOAD_MAX_TEXT_BYTES=256*1024
 
 
@@ -131,7 +131,7 @@ def pi_upload_preflight(name,raw):
     if not mime:
         raise HTTPException(422,'Pi accepts PNG/JPEG/WebP images, PDF documents, or TXT/MD text. Executables, scripts and other formats are blocked.')
     if not raw or len(raw)>PI_UPLOAD_MAX_BYTES:
-        raise HTTPException(413,'Attachment must be nonempty and at most 8 MB')
+        raise HTTPException(413,'Attachment must be nonempty and at most 25 MB')
     if raw.startswith((b'MZ',b'\x7fELF',b'PK\x03\x04',b'#!')):
         raise HTTPException(422,'Executable, script, or archive disguised as an attachment')
     if mime=='image/png':
