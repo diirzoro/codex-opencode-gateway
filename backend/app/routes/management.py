@@ -455,7 +455,7 @@ def _ai_pi_supported_providers(db):
     provider_ids = saved.get("provider_ids")
     if not isinstance(provider_ids, list) or not provider_ids:
         raise HTTPException(503,
-            "Pi provider inventory has not been saved yet; TEST maintenance will retry")
+            "Pi provider inventory has not been saved yet; Gateway maintenance will retry")
     ids = {pid for pid in provider_ids if isinstance(pid, str)
            and 0 < len(pid) <= 120}
     rows = list(db.scalars(select(AiProviderCatalog).where(
@@ -477,7 +477,7 @@ def _ai_schema(db):
         return
     existing = set(_ai_inspect(db.bind).get_table_names())
     if not set(_AI_TABLES).issubset(existing):
-        raise HTTPException(503, "TEST AI catalog schema is not installed. Apply the reviewed manual PostgreSQL migration before enabling provider connections.")
+        raise HTTPException(503, "Pi AI catalog schema is not installed. Apply Alembic migration 0037 before enabling provider connections.")
     _AI_SCHEMA_OK_UNTIL = current + 60.0
 
 
@@ -1443,7 +1443,7 @@ def ai_platform_set_provider(provider_id: str, data: AiPlatformDefaultIn,
 
 
 def _ai_catalog_refresh_if_due(*, force=False):
-    """Refresh missing or 14-day-old Pi metadata in existing TEST PostgreSQL.
+    """Refresh missing or 14-day-old Pi metadata in the current Gateway PostgreSQL.
 
     Runs from existing Gateway maintenance; never during Pi inference, chats,
     file operations or normal account reads. A failed refresh keeps the last
@@ -1451,10 +1451,12 @@ def _ai_catalog_refresh_if_due(*, force=False):
     """
     from ..database import SessionLocal
     with SessionLocal() as db:
-        # This automatic catalog is TEST-only. Never query Pi or write a
-        # production catalog if this source is promoted in a later release.
-        if getattr(getattr(db.bind, "url", None), "database", None) != "opencode_gateway_test":
-            return True
+        # The same Pi service provides public model metadata to two separate
+        # Gateway databases. Always write into this Gateway's own database.
+        if getattr(getattr(db.bind, "url", None), "database", None) not in {
+            "opencode_gateway", "opencode_gateway_test"
+        }:
+            return False
         try:
             _ai_schema(db)
             # The Pi-backed PROVIDER NAMES are refreshed once every 14 days;
@@ -1571,7 +1573,7 @@ def _ai_catalog_refresh_if_due(*, force=False):
             policy = db.scalar(select(PlatformPolicy).where(
                 PlatformPolicy.id == 1).with_for_update())
             if policy is None:
-                raise RuntimeError("Existing TEST platform policy is unavailable")
+                raise RuntimeError("Existing Gateway platform policy is unavailable")
             try:
                 rules = json.loads(policy.allowed_providers or "[]")
             except (ValueError, TypeError):
@@ -1579,7 +1581,7 @@ def _ai_catalog_refresh_if_due(*, force=False):
             if isinstance(rules, list):
                 rules = {"allowed": rules, "hidden": []}
             if not isinstance(rules, dict):
-                raise ValueError("Invalid existing TEST provider policy")
+                raise ValueError("Invalid existing Gateway provider policy")
             rules["pi_registry"] = {"synced_at": stamped.isoformat(),
                                     "provider_ids": sorted(valid)}
             policy.allowed_providers = json.dumps(rules, separators=(",", ":"))
@@ -1592,7 +1594,7 @@ def _ai_catalog_refresh_if_due(*, force=False):
             status = (exc.response.status_code
                       if isinstance(exc, _ai_httpx.HTTPStatusError) else None)
             logging.getLogger(__name__).warning(
-                "TEST AI catalog synchronization postponed (%s, upstream_http=%s)",
+                "Gateway AI catalog synchronization postponed (%s, upstream_http=%s)",
                 type(exc).__name__, status if status is not None else "-")
             return False
 
