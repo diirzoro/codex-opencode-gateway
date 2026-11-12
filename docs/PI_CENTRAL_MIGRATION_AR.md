@@ -1513,3 +1513,21 @@ SELECT conrelid::regclass, conname FROM pg_constraint
 - **تعديل Nginx في GitHub لا يعدل التكوين الحي**: يجب فحص إعداد TEST الفعلي فقط وتطبيق `client_max_body_size 40m;` في موقع Pi المختص، واختبار Nginx قبل إعادة تحميله دون لمس LIVE.
 - **مهم:** توجد أيضًا وجهة Gateway لفحص `/api/workspaces/{id}/attachments/pi-preflight`. يجب اختبار أن حد الطلب في Nginx الخاص بهذه الوجهة يقبل مرفقات 25 MiB؛ إعداد موقع Pi وحده لا يضمن قبول الفحص الأولي.
 - لا أرقام موثوقة لــRAM/مساحة القرص في VPS من قراءة GitHub؛ تُقاس هذه من VPS قراءة فقط قبل أي خطة دمج `updates` مع `master` أو تجهيز LIVE. مشكلة Preview ستُراجع كمهمة مستقلة بعد هذا التغيير، دون تعديلات حاليًا.
+
+
+## 62. إصلاح ترحيل قاعدة بيانات Pi في LIVE وTEST — 12 نوفمبر 2026 — SOURCE UPDATED
+
+### العطل المؤكد بعد نشر LIVE
+- سجل GitHub Actions `43177326390` سجّل نجاح `alembic upgrade head` حتى `0036_native_only_provider_credentials` فقط، لأن جداول Pi الثلاثة كانت مُسندة إلى SQL يدوي لقاعدة TEST ضمن القسم 17، وليست جزءًا من سلسلة Alembic. بذلك لم ينشئ النشر الأول جداول Pi في LIVE، رغم اكتمال تاريخ Alembic حتى 0036.
+- عند فتح LIVE ظهر `TEST AI catalog schema is not installed` في اتصالات المزوّدين و`Pi session handoff HTTP 503`. المسار `/api/opencode/pi-bootstrap` يستدعي `_ai_schema` قبل الاتصال بـPi؛ نقص الجداول يسبب 503 حتى إن كانت خدمة Pi سليمة. خطأ handoff قد يبقى لأسباب أخرى، لذلك لا يثبت إصلاح DB وحده نجاح التبادل الكامل.
+
+### الإصلاح البرمجي في updates وmaster
+1. ملف Alembic جديد `backend/alembic/versions/0037_pi_gateway_ai_catalog.py`، امتداد مباشر للترحيل 0036. يُنشئ الجداول `ai_provider_catalog` و`ai_provider_models` و`ai_user_connections` والفهارس والمفاتيح والعلاقات المطلوبة في **قاعدة البيئة المتصل بها فقط** (`opencode_gateway_test` أو `opencode_gateway`). لا ينقل بيانات TEST إلى LIVE، ولا يغير جداول الدفع أو البريد أو المستخدمين، ولا يضيف خدمة أخرى.
+2. إذا كانت جداول TEST الثلاثة موجودة من SQL القسم 17، يتحقق الترحيل من الأعمدة والمفاتيح والفهارس والعلاقات ولا يعيد إنشاءها ولا يحذف بياناتها. يرفض البناء الجزئي أو غير المتوافق بدل محاولة تغييره صامتًا. يُمنع downgrade التدميري.
+3. `management.py` يشير الآن إلى Migration 0037 بدل الخطأ التاريخي الذي يذكر TEST وحده، ويتيح مهمة مزامنة أسماء مزوّدي Pi الموجودة في Gateway لكل من TEST وLIVE مع الإبقاء على كل قاعدة بيانات مستقلة. مهمة Gateway للصيانة موجودة بالفعل، ولا تتدخل في تنفيذ Pi للمحادثات.
+4. `scripts/live-pi-promote.sh` ينفذ `alembic upgrade head` ثم **يتأكد صراحة** من `current_database() = opencode_gateway` و`alembic_version = 0037_pi_gateway_ai_catalog` ووجود الجداول الثلاثة، قبل إعادة تشغيل Gateway وتغيير Nginx. لا تُطبع أسرار.
+
+### حالة التنفيذ المطلوبة
+- **هذه تعديلات مصدر فقط حتى ينجح تشغيل Workflow LIVE الجديد**. لا تُعتبر جداول LIVE قد تغيرت بناءً على Commit في GitHub وحده.
+- تشغيل `LIVE | Deploy Pi Gateway from master` يدويًا من `master` الأحدث (ليس Re-run للتشغيل القديم المثبت على Commit قديم)؛ سيرفع الملف الجديد وينفذ ترحيل LIVE باستخدام اعتماد LIVE الحالي دون عرض كلمة المرور. يجب التحقق من ظهور `LIVE_PI_DATABASE_READY revision=0037_pi_gateway_ai_catalog tables=3` ثم نجاح فحص HTTP ونطاق Pi.
+- يمكن التحقق على VPS قراءة فقط من داخل بيئة LIVE بــ`alembic current`، و`SELECT current_database(), version_num FROM alembic_version` وقراءة أسماء الجداول. **لا تنفذ SQL القسم 17 المكتوب صراحة لـTEST على LIVE**.
