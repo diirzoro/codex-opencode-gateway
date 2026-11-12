@@ -807,7 +807,8 @@
     let receipt=null;
     try{receipt=await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
       messageID,model:{providerID,modelID},queueMode:'followUp',
-      ...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,timeout:30000});}
+      ...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,
+      timeout:files.some(f=>typeof f.url==='string'&&f.url.startsWith('data:'))?300000:30000});}
     catch(error){
       // A user-initiated Stop/attachment cancellation MUST release the
       // original submission immediately. A message-history GET can itself
