@@ -338,22 +338,8 @@ class SdkAgent {
       if(Type?.Object&&Type?.Literal)
         todoFallback=[piTodoExtension(Type)];
     }catch{/* Keep existing Pi SDK tools if typebox is unavailable. */}
-    // Unlike the Pi CLI, the SDK does not automatically register these
-    // already-installed built-in extensions. Use the installed factories
-    // in this SAME in-process Pi session; no extra Node service, Gateway
-    // agent, or Python tool executor is created.
-    //
-    // MCP may expose operators' shared credentials or run configured stdio
-    // servers. Do not make it accessible to arbitrary accounts on the
-    // shared-service UID. Enable it only for the existing TEST owner flag.
-    const sdkExtensions=[
-      sdk.createCodemodeExtension(),
-      sdk.createToolSearchExtension(),
-      ...(scope.testOwner?[sdk.createMcpExtension()]:[]),
-      ...todoFallback
-    ];
     const resourceLoader=new sdk.DefaultResourceLoader({
-      extensionFactories:sdkExtensions,
+      extensionFactories:todoFallback,
       cwd:scope.directory,agentDir:PI_AGENT_DIR,settingsManager,
       // appendSystemPrompt is supported by the installed Pi ResourceLoader.
       // The previous systemPromptOverride setting was not applied by Pi SDK.
@@ -361,16 +347,6 @@ class SdkAgent {
         "Current authenticated project name: "+
           (scope.projectName||"not provided")+".\n"+
         "Current project directory: "+scope.directory+".\n"+
-        "You are a coding agent that CAN build complete applications in this "+
-        "selected project using the installed read, write, edit, bash and "+
-        "other permitted Pi tools. If the user asks to create pages or an "+
-        "app, implement the requested project files here; do not incorrectly "+
-        "claim you cannot create applications. Never write under /tmp or "+
-        "another project's directory as a substitute for this project unless "+
-        "the user explicitly requests that location. Verify files exist "+
-        "under the current project directory with tools before saying they "+
-        "were created. If a write or check fails, report the failure. "+
-
         "If asked for the current project name, answer from the name above "+
         "without running read, bash, ls, or filesystem discovery. If the name "+
         "was not provided, say so instead of searching for it.\n"+
