@@ -6,7 +6,7 @@ transfers activate after administrative receipt review. Selection never pays.
 from datetime import datetime, timezone,timedelta
 import uuid
 from math import ceil
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -209,8 +209,12 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
         host=(__import__('urllib.parse',fromlist=['urlsplit']).urlsplit(details['details'].get('payment_url') or '').hostname or '').lower()
         if not details['details'].get('payment_url') or host=='example.com' or host.endswith(('.invalid','.test','.example','.local','.localhost')):
             raise HTTPException(503,'The payment provider for this method is not connected. Administration must configure a real processor checkout link. No payment was made.')
-    if details['details'].get('checkout_mode')=='paypal' and not paypal.configured():
-        raise HTTPException(503,'PayPal provider is not connected. Ask administration to configure the merchant account.')
+    if details['details'].get('checkout_mode')=='paypal':
+        from ..services.stripe_live_checkout import paypal_visible
+        if not paypal_visible(db):
+            raise HTTPException(409, 'PayPal is hidden for new checkouts by platform administration')
+        if not paypal.configured():
+            raise HTTPException(503,'PayPal provider is not connected. Ask administration to configure the merchant account.')
     if plan.price_cents<=0 or plan.duration_days<=0: raise HTTPException(422,'Plan requires valid paid price and duration')
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.user_id==user.id,PaymentOrder.plan_id==plan.id,PaymentOrder.method_id==method.id,PaymentOrder.status.in_(['awaiting_payment','pending_review'])))
     if row is None:
@@ -403,6 +407,8 @@ def activate_order(db,row,actor_id,reference):
 def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
+    if row.method_label=='Stripe' or (row.provider_order_id or '').startswith(('cs_live_','cs_test_')):
+        raise HTTPException(409,'Stripe orders cannot be captured through PayPal')
     if not row.provider_order_id:raise HTTPException(409,'This is not a PayPal API payment')
     if row.status in {'paid','sandbox_paid'}:return order_payload(row)
     if row.status in {'cancelled','rejected','failed'}:
@@ -450,15 +456,50 @@ def stripe_test_checkout_status(
 
 @router.get('/stripe/status')
 def stripe_status(user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
-    """Safe customer-visible Stripe test readiness, without credentials."""
+    """Customer-safe readiness; Stripe keys never leave the backend."""
     from ..services.stripe_test_checkout import test_credentials
-    from ..services import credentials
+    from ..services import credentials, stripe_live_checkout
     cfg=test_credentials(db)
     ready=bool(credentials.available() and cfg.get('mode')=='test'
         and str(cfg.get('secret_key') or '').startswith('sk_test_')
         and str(cfg.get('publishable_key') or '').startswith('pk_test_'))
-    return {'provider':'stripe','environment':cfg.get('mode') or 'not_configured',
-            'test_checkout_available':ready,'live_checkout_available':False}
+    live=stripe_live_checkout.status(db)
+    return {'provider':'stripe','environment':'live' if live['live_checkout_enabled'] else cfg.get('mode') or 'not_configured',
+            'test_checkout_available':ready and not live['live_checkout_enabled'],
+            'live_checkout_available':live['live_checkout_enabled'],
+            'paypal_customer_visible':live['paypal_customer_visible']}
+
+
+class StripeLiveCheckoutInput(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    plan_id:int=Field(ge=1)
+
+
+@router.post('/stripe/checkout')
+def start_stripe_live_checkout(
+    data:StripeLiveCheckoutInput,user:User=Depends(require_billing_user),
+    db:Session=Depends(get_db),
+):
+    from ..config import settings
+    from ..services.stripe_live_checkout import start_checkout
+    return start_checkout(db,user,data.plan_id,origin=settings.public_base_url)
+
+
+@router.get('/stripe/checkout/{session_id}')
+def stripe_live_checkout_status(
+    session_id:str,user:User=Depends(require_billing_user),
+    db:Session=Depends(get_db),
+):
+    from ..services.stripe_live_checkout import customer_status
+    return customer_status(db,user,session_id)
+
+
+@router.post('/webhooks/stripe')
+async def stripe_live_webhook(request:Request,db:Session=Depends(get_db)):
+    """Stripe-signed server event; no browser authentication or client trust."""
+    from ..services.stripe_live_checkout import process_webhook
+    raw=await request.body()
+    return process_webhook(db,raw,request.headers.get('stripe-signature',''))
 
 
 @router.get('/paypal/status')
