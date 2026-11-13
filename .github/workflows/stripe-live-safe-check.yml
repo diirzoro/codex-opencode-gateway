@@ -1,0 +1,43 @@
+name: Stripe LIVE | Offline safety checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [updates]
+    paths:
+      - backend/app/services/stripe_live_checkout.py
+      - backend/app/services/paypal.py
+      - backend/app/services/payment_gateway_config.py
+      - backend/app/routes/billing.py
+      - backend/app/routes/payment_gateways.py
+      - backend/app/routes/management.py
+      - backend/app/main.py
+      - backend/tests/test_stripe_live_checkout.py
+      - dashboards.js
+      - enhancements.js
+      - .github/workflows/stripe-live-safe-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax validation (no VPS connection)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q backend/app
+          node --check dashboards.js
+          node --check enhancements.js
+      - name: Install backend testing requirements
+        run: python3 -m pip install --disable-pip-version-check -q -r backend/requirements.txt
+      - name: Verify Stripe signature and payment matching (no real charges)
+        env:
+          PYTHONPATH: backend
+          PUBLIC_BASE_URL: https://opencode-gateway.codes
+          APP_PORT: "8000"
+        run: pytest -q backend/tests/test_stripe_live_checkout.py
