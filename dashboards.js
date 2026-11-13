@@ -2446,19 +2446,28 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     try{
       stripeStatus=await api('/api/billing/stripe/status',{cache:'no-store'});
     }catch(error){stripeStatusError=error;}
-    if(stripeStatus?.test_checkout_available){
+    if(stripeStatus?.live_checkout_available){
+      methods.unshift({id:'stripe-live',kind:'stripe',label:'Stripe',
+        available:true,details:{checkout_mode:'stripe_live'}});
+    }else if(stripeStatus?.test_checkout_available){
       methods.push({id:'stripe-test',kind:'stripe',label:'Stripe (Test)',
         available:true,details:{checkout_mode:'stripe_test'}});
     }
-    if(!methods.some(m=>m.details.checkout_mode==='paypal'))methods.push({id:'unavailable-paypal',kind:'paypal',label:'PayPal',available:false,details:{checkout_mode:'paypal'}});
+    if(stripeStatus?.paypal_customer_visible===false){
+      methods=methods.filter(m=>m.kind!=='paypal'&&m.details?.checkout_mode!=='paypal');
+    }else if(!methods.some(m=>m.details.checkout_mode==='paypal')){
+      methods.push({id:'unavailable-paypal',kind:'paypal',label:'PayPal',available:false,details:{checkout_mode:'paypal'}});
+    }
     const reasonCopy={provider_not_connected:tr('Provider is not connected','المزود غير متصل'),processor_not_connected:tr('Payment processor is not connected','معالج الدفع غير متصل'),details_not_configured:tr('Receiving details are not configured','بيانات الاستلام غير مهيأة')};const PAY_ICONS={paypal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5.8h5.9c2 0 3.3 1.2 3.1 3-.3 2.3-2.1 3.8-4.4 3.8H9.4L8.4 18h-2.6l1-6.4H5L7 5.8Z"/><path d="m12.6 8.6 1.4 1.2c1.8-1.2 4-.3 4.5 1.9.5 2.3-1.2 4.2-3.4 4.2h-1.7l-.5 3.1h-2.4l1.2-7.4h1.6"/></svg>',googlepay:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12a7 7 0 1 1-2.1-4.9"/><path d="M18.2 7.5H11.6"/><path d="M19.6 8.2 17 11.2"/></svg>',binance:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M12 3.5 19.5 7.8v8.4L12 20.5l-7.5-4.3V7.8L12 3.5Z"/><path d="M12 8.8 15 10.5v3L12 15.2 9 13.5v-3l3-1.7Z"/><path d="M9.5 8.5h5"/></svg>',bank:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M3 10h18M5 10l7-6 7 6M6.5 14h1.8v3.5H6.5Zm4.6 0h1.8v3.5h-1.8Zm4.6 0h1.8v3.5h-1.8Z"/></svg>',wallet:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a1 1 0 0 0-1-1h-4m-6-5h6"/></svg>'};PAY_ICONS.stripe=PAY_ICONS.googlepay;const payIcon=kind=>{const s=document.createElement('span');s.className='pay-icon';s.setAttribute('aria-hidden','true');s.innerHTML=PAY_ICONS[kind]||PAY_ICONS.wallet;return s;};
     const dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog checkout-dialog';dialog.setAttribute('aria-label',tr('Subscription checkout','دفع الاشتراك'));
     dialog.append(title('Subscribe / Payment','الاشتراك / الدفع'),btn('checkoutClose','Close','إغلاق',()=>dialog.close()));
     if(methodsError)dialog.append(textElement('p',
-      tr('Payment methods could not load: ','تعذر تحميل وسائل الدفع: ')+methodsError.message,
+      tr('Other payment methods are temporarily unavailable. Stripe availability is checked separately.',
+        'تعذر عرض وسائل الدفع الأخرى مؤقتًا. يُفحص توفر Stripe بشكل مستقل.'),
       'api-message show error'));
     if(stripeStatusError)dialog.append(textElement('p',
-      tr('Stripe status could not load: ','تعذر تحميل حالة Stripe: ')+stripeStatusError.message,
+      tr('Stripe checkout availability could not be verified; try again shortly.',
+        'تعذر التحقق من توفر الدفع عبر Stripe، حاول مرة أخرى.'),
       'api-message show error'));
     const choices=textElement('div','','checkout-plans');for(const p of plans.filter(p=>p.active!==false)){
       const choiceLabel=(window.planDisplayName?window.planDisplayName(p):p.name)+' · '+(window.planDisplayPrice?window.planDisplayPrice(p):(p.currency+' '+(p.price_cents/100).toFixed(2)))+' · '+(window.planDisplayTerm?window.planDisplayTerm(p):(p.duration_days+' days'));const choice=btn('checkoutPlan-'+p.id,choiceLabel,choiceLabel,()=>{dialog.close();beginCheckout(p.id);});choice.setAttribute('aria-pressed',String(p.id===planId));choices.append(choice);
@@ -2520,6 +2529,27 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         }catch(error){host.replaceChildren();go2.hidden=false;body.append(text('p','PayPal buttons could not load. Continue through the official payment page.','تعذر تحميل أزرار PayPal. يمكنك المتابعة إلى صفحة الدفع الرسمية.','checkout-lead'));}})();
       }
     };
+    const renderStripeLiveForm=method=>{
+      body.replaceChildren(
+        textElement('strong',tr('Stripe secure card payment','دفع Stripe الآمن بالبطاقة')),
+        text('p','You will be redirected to Stripe to complete the REAL payment. The subscription activates only after the server verifies payment with Stripe.',
+          'ستنتقل إلى Stripe لإكمال الدفع الحقيقي. يتفعّل الاشتراك فقط بعد تحقق الخادم من الدفع لدى Stripe.','checkout-lead')
+      );
+      const launch=btn('stripeLiveCheckout','Pay securely with Stripe','الدفع الآمن عبر Stripe',async()=>{
+        launch.disabled=true;
+        try{
+          const response=await api('/api/billing/stripe/checkout',{
+            method:'POST',body:JSON.stringify({plan_id:planId})});
+          const url=new URL(response.checkout_url);
+          if(url.protocol!=='https:'||
+              !['checkout.stripe.com','checkout.stripe.dev'].includes(url.hostname)||
+              !/^cs_live_/.test(String(response.session_id||'')))
+            throw Error(tr('Stripe returned an invalid LIVE checkout','استجابة الدفع الحقيقي من Stripe غير صالحة'));
+          window.location.assign(url.href);
+        }catch(error){showError(error);launch.disabled=false;}
+      });
+      body.append(launch);
+    };
     const renderStripeTestForm=method=>{
       // TEST-only Stripe hosted checkout. Do not ask for PayPal/bank payer
       // details, or create a Gateway PaymentOrder/paid entitlement.
@@ -2574,7 +2604,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const method=methods.find(m=>m.id===select.value);
       if(!method){toast(tr('Choose a payment method first.','اختر وسيلة الدفع أولاً.'));return;}
       rows.hidden=true;choices.hidden=true;go.hidden=true;noteWrap.hidden=true;
-      if(method.details.checkout_mode==='stripe_test')renderStripeTestForm(method);
+      if(method.details.checkout_mode==='stripe_live')renderStripeLiveForm(method);
+      else if(method.details.checkout_mode==='stripe_test')renderStripeTestForm(method);
       else if(['paypal','link'].includes(method.details.checkout_mode))renderProviderForm(method);
       else renderManualForm(method);
     });go.disabled=!methods.length;
@@ -2582,6 +2613,38 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     dialog.append(rows,select,noteWrap,go,body,textElement('small',tr('Payment for: ','الدفع لحساب: ')+(currentUser||window.reactivationAccount).email),text('p','Accepted payments cannot be cancelled or refunded.','المدفوعات المقبولة غير قابلة للإلغاء أو الاسترداد.','refund-policy'));
     document.body.append(dialog);dialog.onclose=()=>dialog.remove();dialog.showModal();
   }
+  // A redirect is NOT proof of payment. Ask the authenticated Gateway to
+  // fetch the original LIVE session from Stripe and reconcile its real status.
+  authReady.then(async()=>{
+    const params=new URLSearchParams(location.search),state=params.get('stripe_live');
+    if(!state)return;
+    const sid=params.get('session_id')||'';
+    history.replaceState(null,'',location.pathname);
+    if(state==='cancel'){
+      toast(tr('Stripe checkout cancelled; no new subscription was activated.',
+        'أُلغي دفع Stripe؛ لم يُفعّل اشتراك جديد.'));
+      return;
+    }
+    if(!currentUser){
+      toast(tr('Sign in to verify the Stripe payment.', 'سجّل الدخول للتحقق من دفع Stripe.'));
+      return;
+    }
+    if(!/^cs_live_[A-Za-z0-9_]{5,90}$/.test(sid)){
+      toast(tr('Invalid Stripe receipt reference.', 'مرجع Stripe غير صالح.'));
+      return;
+    }
+    try{
+      const status=await api('/api/billing/stripe/checkout/'+encodeURIComponent(sid),{cache:'no-store'});
+      if(status.subscription_activated){
+        toast(tr('Stripe payment verified; subscription activated.',
+          'تم التحقق من دفع Stripe وتفعيل الاشتراك.'));
+        await refreshCustomerBilling();
+      }else toast(tr('Payment is still pending Stripe verification. Check your billing history.',
+        'الدفع بانتظار تأكيد Stripe؛ راجع سجل الدفع.'));
+    }catch(error){toast(tr('Stripe verification is pending. Check billing or contact support.',
+      'التحقق من Stripe لم يكتمل. راجع الفوترة أو تواصل مع الدعم.'));}
+  }).catch(()=>{});
+
   // Stripe TEST diagnostic never creates an active paid entitlement.
   authReady.then(async()=>{
     const params=new URLSearchParams(location.search);
