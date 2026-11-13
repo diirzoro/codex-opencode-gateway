@@ -120,7 +120,24 @@ def verify_live_account(db):
         raise HTTPException(502, "Stripe account verification failed")
     if account.get("charges_enabled") is not True:
         raise HTTPException(409, "Stripe account is not enabled to accept LIVE charges")
-    return {"account_verified": True, "charges_enabled": True, "account_id": account["id"]}
+    # Do not advertise LIVE charges unless Stripe has an active destination for
+    # the exact Gateway production webhook endpoint. The signing secret must
+    # still be copied separately from that Stripe endpoint into Admin.
+    endpoints = _call(profile["secret_key"], "GET", "webhook_endpoints?limit=100")
+    targets = endpoints.get("data", [])
+    url = "https://opencode-gateway.codes/api/billing/webhooks/stripe"
+    def supports_checkout(item):
+        events = item.get("enabled_events") or []
+        return "*" in events or ("checkout.session.completed" in events and
+                                 "checkout.session.async_payment_succeeded" in events)
+    if not any(isinstance(item, dict) and item.get("url") == url
+               and item.get("status") == "enabled" and supports_checkout(item)
+               for item in targets if isinstance(targets, list)):
+        raise HTTPException(409,
+            "Register an enabled Stripe LIVE webhook for the published Gateway HTTPS endpoint, "
+            "including completed and async-succeeded checkout events, before enabling charges")
+    return {"account_verified": True, "charges_enabled": True,
+            "webhook_registered": True, "account_id": account["id"]}
 
 
 def configure(db, actor_id, *, enabled, show_paypal):
