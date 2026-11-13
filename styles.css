@@ -1825,38 +1825,3 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 :root #workspacePage .message-code-folded>.message-code-block{
  margin:0;border:0;border-top:1px solid var(--line);border-radius:0
 }
-
-
-/* LIVE: project-scoped shortcuts for the same native Pi session.
-   TEST continues with its already proven task/queue/options presentation. */
-#workspacePage .pi-project-actions{
- order:8;flex:0 0 auto;display:flex;align-items:center;gap:7px;
- width:calc(100% - 40px);max-width:var(--chat-width,960px);
- min-width:0;margin:8px auto 0;padding:1px 1px 4px;
- overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:thin;
-}
-#workspacePage .pi-project-actions .button{
- flex:0 0 auto;min-height:34px;padding:6px 11px;
- border:1px solid var(--line);border-radius:999px;
- white-space:nowrap;font-size:12px;background:var(--panel);color:var(--text);
-}
-#workspacePage .pi-project-actions .button:is(:hover,:focus-visible){
- border-color:var(--primary);background:var(--control-fill);
-}
-#workspacePage .pi-project-tools-view{
- order:8;flex:0 0 auto;width:calc(100% - 40px);
- max-width:var(--chat-width,960px);min-width:0;max-height:220px;
- margin:0 auto;padding:8px 12px;border:1px solid var(--line);
- border-radius:10px;background:var(--panel);overflow:auto;
-}
-#workspacePage .pi-project-tools-view[hidden]{display:none}
-#workspacePage .pi-project-tools-view .agent-capabilities>summary{
- font-size:13px;font-weight:650;color:var(--text);cursor:pointer;
-}
-#workspacePage .pi-project-tools-view .agent-capabilities p{
- font-size:12px;line-height:1.6;margin:6px 0;overflow-wrap:anywhere;
-}
-@media(max-width:600px){
- #workspacePage .pi-project-actions,
- #workspacePage .pi-project-tools-view{width:calc(100% - 24px)}
-}
