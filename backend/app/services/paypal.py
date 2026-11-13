@@ -37,6 +37,24 @@ def configured(db=None):
     return bool(cfg['client_id'] and cfg['client_secret'] and cfg['merchant_id'])
 
 
+def verify_connection(db=None):
+    """Read-only OAuth check for admin activation; no payment is created."""
+    cfg=admin_config(db)
+    if not configured(db):
+        raise HTTPException(409, 'Complete PayPal merchant_id, client_id and client_secret in Admin')
+    base='https://api-m.sandbox.paypal.com' if cfg['environment']=='sandbox' else 'https://api-m.paypal.com'
+    try:
+        with httpx.Client(timeout=15,follow_redirects=False,trust_env=False) as client:
+            result=client.post(base+'/v1/oauth2/token',
+                auth=(cfg['client_id'],cfg['client_secret']),
+                data={'grant_type':'client_credentials'})
+        if result.status_code!=200 or not result.json().get('access_token'):
+            raise HTTPException(422,'PayPal rejected the stored merchant API credentials')
+    except (httpx.HTTPError,ValueError):
+        raise HTTPException(503,'PayPal merchant verification is unavailable') from None
+    return {'verified':True,'environment':cfg['environment']}
+
+
 def request(method,path,body=None,request_id=None,negative=False,db=None):
     cfg=admin_config(db)
     if not configured(db):raise HTTPException(503,'PayPal provider is not connected. Configure the merchant account in Admin.')
