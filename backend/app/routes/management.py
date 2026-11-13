@@ -299,7 +299,7 @@ def receiving(plan_id:int|None=Query(default=None,ge=1),include_unavailable:bool
         if allowed_countries and (not user_code or user_code not in allowed_countries): continue
         if plan is not None and (details.get('currency')!=plan.currency or details.get('plan_id') not in (None,plan.id)): continue
         reason=None
-        if mode=='paypal' and not paypal.configured(): reason='provider_not_connected'
+        if mode=='paypal' and not paypal.configured(db): reason='provider_not_connected'
         elif mode=='link':
             host=(urlsplit(details.get('payment_url') or '').hostname or '').lower()
             if not details.get('payment_url') or not details.get('plan_id') or host=='example.com' or host.endswith(('.invalid','.test','.example','.local','.localhost')): reason='processor_not_connected'
