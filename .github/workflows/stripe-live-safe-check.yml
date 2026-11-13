@@ -38,6 +38,7 @@ jobs:
       - name: Verify Stripe signature and payment matching (no real charges)
         env:
           PYTHONPATH: backend
+          DATABASE_URL: postgresql+psycopg://ci_user:ci_password@127.0.0.1:5432/ci_only
           PUBLIC_BASE_URL: https://opencode-gateway.codes
           APP_PORT: "8000"
         run: pytest -q backend/tests/test_stripe_live_checkout.py
