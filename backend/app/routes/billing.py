@@ -268,7 +268,7 @@ def cancellation_status(order_id:uuid.UUID,user:User=Depends(require_billing_use
     allowed=row.status in {'awaiting_payment','pending_review','failed','rejected'} and not row.provider_capture_id and not row.paid_at
     provider_status=None
     if allowed and row.provider_order_id:
-        provider_status=paypal.show_order(row).get('status')
+        provider_status=paypal.show_order(row,db=db).get('status')
         allowed=provider_status in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED'}
     return {'can_cancel':allowed,'provider_status':provider_status}
 
