@@ -293,7 +293,7 @@ def receiving(plan_id:int|None=Query(default=None,ge=1),include_unavailable:bool
     for row in db.scalars(select(BillingMethod).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True))):
         payload=method_payload(row); details=payload['details']; mode=details.get('checkout_mode','manual')
         from ..services.stripe_live_checkout import paypal_visible
-        if mode=='paypal' and not paypal_visible(db):
+        if (mode=='paypal' or row.kind=='paypal') and not paypal_visible(db):
             continue
         allowed_countries=[c.upper() for c in (details.get('available_country_codes') or [])]
         if allowed_countries and (not user_code or user_code not in allowed_countries): continue
