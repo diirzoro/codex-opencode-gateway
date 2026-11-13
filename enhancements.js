@@ -2277,7 +2277,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     ['api',tr('API integration (credentials only)','API (حفظ بيانات الربط فقط)')]
   ];
   const environments=[['test',tr('Test / Sandbox','تجريبي / Sandbox')],
-                      ['live',tr('Live credentials — storage only','مفاتيح حقيقية — تخزين فقط')]];
+                      ['live',tr('LIVE credentials — requires separate activation','مفاتيح حقيقية — تتطلب تفعيلًا مستقلاً')]];
   const fieldKinds=[
     ['text',tr('Text / identifier','نص / معرّف')],
     ['secret',tr('Secret / API key','مفتاح سري / API')],
@@ -2302,7 +2302,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     {code:'paypal',name:'PayPal',label:'PayPal',slug:'paypal',
      category:'processor',mode:'api',fields:[['merchant_id','Merchant ID','text'],['client_id','Client ID','text'],['client_secret','Client secret','secret'],['webhook_id','Webhook ID','text']]},
     {code:'stripe',name:'Stripe',label:'Stripe',slug:'stripe',
-     category:'processor',mode:'api',fields:[['publishable_key','Publishable key','text'],['secret_key','API secret key','secret'],['webhook_secret','Webhook signing secret','secret']]},
+     category:'processor',mode:'api',fields:[['publishable_key','Publishable key (pk_live_)','text'],['secret_key','API secret key (sk_live_)','secret'],['webhook_secret','LIVE webhook signing secret (whsec_)','secret']]},
     {code:'cryptomus',name:'Cryptomus',label:'Cryptomus',slug:'cryptomus',
      category:'crypto',mode:'api',fields:[['merchant_id','Merchant ID','text'],['payment_api_key','Payment API key','secret'],['payout_api_key','Payout API key (optional)','secret']]},
     {code:'bank',name:tr('Bank transfer template','نموذج حساب بنكي'),label:'',slug:'',
@@ -2343,6 +2343,68 @@ window.renderGithubConfirmation=function(root,status,refresh){
     add.id='dynamicProviderAdd';
     toolbar.append(picker.wrap,add);
     host.append(toolbar);
+    // Production payment controls are part of the EXISTING Admin Dashboard.
+    // Saving an API profile alone never enables REAL charges.
+    if(location.hostname==='opencode-gateway.codes'){
+      const settings=el('section','','dynamic-provider-card');
+      settings.setAttribute('aria-label',tr('Customer payment controls','إدارة الدفع للعملاء'));
+      host.append(settings);
+      (async()=>{
+        try{
+          const state=await api('/api/admin/payment-gateways/stripe/live/status',{cache:'no-store'});
+          if(sequence!==revision)return;
+          settings.replaceChildren(
+            el('h3',tr('Stripe LIVE & PayPal visibility','Stripe الحقيقي وإظهار PayPal')),
+            el('p',tr('Configure the Stripe LIVE profile above with pk_live_, sk_live_ and the webhook signing secret whsec_ first. Saving fields never starts real payments.',
+              'احفظ ملف Stripe الحقيقي أعلاه بمفاتيح pk_live_ وsk_live_ وسر توقيع Webhook الذي يبدأ بـ whsec_. مجرد حفظ الحقول لا يبدأ التحصيل.')),
+            el('p',tr('Stripe LIVE: ','Stripe الحقيقي: ')+(state.live_checkout_enabled?
+              tr('Enabled','مفعّل'):tr('Disabled','غير مفعّل'))+
+              ' · '+tr('LIVE credentials: ','مفاتيح LIVE: ')+(state.live_keys_configured?
+                tr('Configured','محفوظة'):tr('Incomplete','غير مكتملة'))),
+            el('p',tr('PayPal visible to customers: ','إظهار PayPal للعملاء: ')+
+              (state.paypal_customer_visible?tr('Yes','نعم'):tr('No','لا'))),
+            el('p',tr('Webhook endpoint: ','عنوان Webhook: ')+state.webhook_url)
+          );
+          const help=el('p',tr(
+            'In your Stripe Dashboard, register this HTTPS endpoint for checkout.session.completed and checkout.session.async_payment_succeeded; paste its LIVE signing secret in the Stripe profile. Only verified Stripe payments activate access. New checkout is one-time, not automatic renewal.',
+            'من لوحة Stripe أنشئ Webhook لهذا العنوان، واختر checkout.session.completed وcheckout.session.async_payment_succeeded، ثم الصق سر التوقيع الحقيقي في ملف Stripe. لا يُفعّل الاشتراك إلا بعد تحقق Stripe. الدفع لمرة واحدة وليس تجديدًا تلقائيًا.'
+          ),'dynamic-provider-hint');
+          settings.append(help);
+          const actions=el('div','','dynamic-provider-actions');settings.append(actions);
+          const change=async(enabled,showPayPal)=>{
+            if(enabled){
+              if(!state.live_keys_configured)
+                throw Error(tr('Complete Stripe LIVE keys first','أكمل مفاتيح Stripe الحقيقية أولاً'));
+              if(typeof window.confirmAction==='function' &&
+                !await window.confirmAction(tr(
+                  'Enable REAL Stripe charges? Customers may be charged actual money. PayPal visibility will follow your selection.',
+                  'تفعيل مدفوعات Stripe الحقيقية؟ قد تُخصم أموال فعلية من العملاء. سيُطبّق اختيارك لإظهار PayPal.'
+                )))return;
+            }
+            await api('/api/admin/payment-gateways/stripe/live',{
+              method:'PUT',body:JSON.stringify({enabled,show_paypal:showPayPal})});
+            await load();
+          };
+          const activate=button(tr('Enable Stripe LIVE · hide PayPal','تفعيل Stripe الحقيقي وإخفاء PayPal'),
+            async()=>{activate.disabled=true;try{await change(true,false);}catch(error){settings.append(el('p',error.message,'api-message'));activate.disabled=false;}},
+            'button small');
+          activate.disabled=state.live_checkout_enabled||!state.live_keys_configured;
+          actions.append(activate);
+          const disable=button(tr('Disable new Stripe checkouts','إيقاف طلبات Stripe الجديدة'),
+            async()=>{disable.disabled=true;try{await change(false,state.paypal_customer_visible);}catch(error){settings.append(el('p',error.message,'api-message'));disable.disabled=false;}},
+            'button ghost small');
+          disable.disabled=!state.live_checkout_enabled;actions.append(disable);
+          const paypalToggle=button(state.paypal_customer_visible?
+            tr('Hide PayPal from customers','إخفاء PayPal عن العملاء'):
+            tr('Show PayPal to customers','إظهار PayPal للعملاء'),
+            async()=>{paypalToggle.disabled=true;try{await change(state.live_checkout_enabled,!state.paypal_customer_visible);}catch(error){settings.append(el('p',error.message,'api-message'));paypalToggle.disabled=false;}},
+            'button ghost small');
+          actions.append(paypalToggle);
+        }catch(error){if(sequence===revision)settings.replaceChildren(el('p',
+          tr('Unable to load payment settings: ','تعذر تحميل إعدادات الدفع: ')+(typeof error.message==='string'?error.message:'Unknown error'),
+          'api-message'));}
+      })();
+    }
     const detail=el('div','','dynamic-provider-cards');
     host.append(detail);
     function showSelected(){
