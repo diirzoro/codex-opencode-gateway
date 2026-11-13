@@ -125,6 +125,8 @@ def verify_live_account(db):
     # still be copied separately from that Stripe endpoint into Admin.
     endpoints = _call(profile["secret_key"], "GET", "webhook_endpoints?limit=100")
     targets = endpoints.get("data", [])
+    if not isinstance(targets, list):
+        raise HTTPException(502, "Invalid Stripe webhook destination inventory")
     url = "https://opencode-gateway.codes/api/billing/webhooks/stripe"
     def supports_checkout(item):
         events = item.get("enabled_events") or []
@@ -132,7 +134,7 @@ def verify_live_account(db):
                                  "checkout.session.async_payment_succeeded" in events)
     if not any(isinstance(item, dict) and item.get("url") == url
                and item.get("status") == "enabled" and supports_checkout(item)
-               for item in targets if isinstance(targets, list)):
+               for item in targets):
         raise HTTPException(409,
             "Register an enabled Stripe LIVE webhook for the published Gateway HTTPS endpoint, "
             "including completed and async-succeeded checkout events, before enabling charges")
@@ -153,6 +155,8 @@ def configure(db, actor_id, *, enabled, show_paypal):
         fingerprint = str(_policy(db).get("live_fingerprint") or "")
     if show_paypal and not paypal_visible(db):
         from . import paypal
+        if paypal.admin_config(db)["environment"] != "live":
+            raise HTTPException(409, "Only PayPal LIVE merchant credentials may be shown to production customers")
         paypal.verify_connection(db)
     payment_gateway_config.save(
         db, "stripe", actor_id, {
