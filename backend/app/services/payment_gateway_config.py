@@ -62,9 +62,10 @@ def public(db, provider, *, origin):
                 if provider == "stripe" else data.get("merchant_id") and data.get("payment_api_key")
             )
         ),
-        "checkout_enabled": False,
+        "checkout_enabled": bool(data.get("checkout_enabled", False)) if provider == "stripe" else False,
+        "paypal_customer_visible": bool(data.get("paypal_customer_visible", True)) if provider == "stripe" else True,
         "payouts_enabled": False,
-        "webhook_enabled": False,
+        "webhook_enabled": bool(data.get("checkout_enabled", False) and data.get("live_fingerprint")) if provider == "stripe" else False,
         "webhook_url_planned": origin.rstrip("/") + "/api/billing/webhooks/" + provider,
         **visible,
         **secrets,
@@ -87,6 +88,12 @@ def save(db, provider, actor_id, data, *, origin):
         candidate = data.get(field)
         if candidate:  # Blank input preserves the previous encrypted credential.
             values[field] = candidate
+    # Platform-owned Stripe deployment toggles live in the EXISTING encrypted
+    # config record. Never insert API keys into public BillingMethod.details.
+    if provider == "stripe":
+        for field in ("checkout_enabled", "paypal_customer_visible", "live_fingerprint"):
+            if field in data:
+                values[field] = data[field]
     db.execute(text("""
         INSERT INTO payment_gateway_settings(provider, encrypted_data, updated_by)
         VALUES (:provider, :encrypted, :actor)
