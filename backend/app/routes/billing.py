@@ -213,12 +213,12 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
         from ..services.stripe_live_checkout import paypal_visible
         if not paypal_visible(db):
             raise HTTPException(409, 'PayPal is hidden for new checkouts by platform administration')
-        if not paypal.configured():
+        if not paypal.configured(db):
             raise HTTPException(503,'PayPal provider is not connected. Ask administration to configure the merchant account.')
     if plan.price_cents<=0 or plan.duration_days<=0: raise HTTPException(422,'Plan requires valid paid price and duration')
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.user_id==user.id,PaymentOrder.plan_id==plan.id,PaymentOrder.method_id==method.id,PaymentOrder.status.in_(['awaiting_payment','pending_review'])))
     if row is None:
-        row=PaymentOrder(user_id=user.id,plan_id=plan.id,method_id=method.id,plan_name=plan.name,method_label=method.label,amount_cents=plan.price_cents,currency=plan.currency,duration_days=plan.duration_days,provider_environment=paypal.settings.paypal_environment if details['details'].get('checkout_mode')=='paypal' else None,billing_note=data.billing_note or None,payer_name=data.payer_name or user.username,payer_email=data.payer_email or user.email,payer_country=country.name if country else data.payer_country or None,payer_region=region.name if region else None,payer_city=city.name if city else None)
+        row=PaymentOrder(user_id=user.id,plan_id=plan.id,method_id=method.id,plan_name=plan.name,method_label=method.label,amount_cents=plan.price_cents,currency=plan.currency,duration_days=plan.duration_days,provider_environment=paypal.admin_config(db)['environment'] if details['details'].get('checkout_mode')=='paypal' else None,billing_note=data.billing_note or None,payer_name=data.payer_name or user.username,payer_email=data.payer_email or user.email,payer_country=country.name if country else data.payer_country or None,payer_region=region.name if region else None,payer_city=city.name if city else None)
         db.add(row);db.commit();db.refresh(row)
     elif row.status=='awaiting_payment' and not row.provider_order_id:
         row.payer_name=data.payer_name or user.username;row.payer_email=data.payer_email or user.email
@@ -229,15 +229,15 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
     if details['details'].get('checkout_mode')=='paypal':
         row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==row.id).with_for_update())
         if row.provider_order_id:
-            payload=paypal.show_order(row)
+            payload=paypal.show_order(row,db=db)
             if payload.get('status') in {'APPROVED','COMPLETED'}:return {'order':order_payload(row),'method':details,'automatic_processing':True,'approval_url':None,'message':'Payment is awaiting server verification. Confirm it to reconcile.'}
         else:
-            payload=paypal.create_order(row)
+            payload=paypal.create_order(row,db=db)
             provider_id=payload.get('id','')
             import re
             if not re.fullmatch(r'[A-Z0-9]{5,100}',provider_id):raise HTTPException(502,'PayPal returned an invalid order')
-            row.provider_order_id=provider_id;row.provider_environment=paypal.settings.paypal_environment
-        url=paypal.approval_url(payload);db.commit()
+            row.provider_order_id=provider_id;row.provider_environment=paypal.admin_config(db)['environment']
+        url=paypal.approval_url(payload,db=db);db.commit()
         return {'order':order_payload(row),'method':details,'automatic_processing':True,'approval_url':url,'message':'Approve payment on PayPal, then confirm payment here. Only verified completed captures activate subscriptions.'}
     return {'order':order_payload(row),'method':details,'payment_url':details['details'].get('payment_url') if details['details'].get('checkout_mode')=='link' else None,'automatic_processing':False,'message':'Complete payment, then submit its reference. Administration must verify receipt before activation.'}
 @router.get('/orders')
@@ -281,7 +281,7 @@ def cancel_order(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:S
     if row.status not in {'awaiting_payment','pending_review','failed','rejected','cancelled'}:
         raise HTTPException(409,'This payment cannot be cancelled after acceptance')
     if row.provider_order_id:
-        payload=paypal.show_order(row)
+        payload=paypal.show_order(row,db=db)
         if payload.get('status') not in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED'}:
             raise HTTPException(409,'This PayPal order is approved or completed. Confirm its payment status before cancelling; no refund has been issued.')
     row.status='cancelled'
@@ -412,11 +412,11 @@ def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_billing_user),db
     if not row.provider_order_id:raise HTTPException(409,'This is not a PayPal API payment')
     if row.status in {'paid','sandbox_paid'}:return order_payload(row)
     if row.status in {'cancelled','rejected','failed'}:
-        payload=paypal.show_order(row)
+        payload=paypal.show_order(row,db=db)
         if payload.get('status')!='COMPLETED':raise HTTPException(409,'This payment request was cancelled. Start a new checkout; no new charge was made.')
     else:
-        payload=paypal.capture_order(row)
-    capture_id=paypal.verified_capture(row,payload)
+        payload=paypal.capture_order(row,db=db)
+    capture_id=paypal.verified_capture(row,payload,db=db)
     row.provider_capture_id=capture_id
     if row.provider_environment=='sandbox':
         row.status='sandbox_paid';row.payment_reference=capture_id
@@ -503,5 +503,5 @@ async def stripe_live_webhook(request:Request,db:Session=Depends(get_db)):
 
 
 @router.get('/paypal/status')
-def paypal_status(user:User=Depends(require_billing_user)):
-    return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','sdk_available':bool(paypal.settings.paypal_client_id),'client_id':paypal.settings.paypal_client_id}
+def paypal_status(user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
+    return {'configured':paypal.configured(db),'environment':paypal.admin_config(db)['environment'],'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','sdk_available':bool(paypal.settings.paypal_client_id),'client_id':paypal.settings.paypal_client_id}
