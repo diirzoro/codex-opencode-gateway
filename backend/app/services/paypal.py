@@ -17,7 +17,9 @@ def admin_config(db=None):
         from . import payment_provider_profiles as profiles
         if profiles.schema_ready(db):
             row=profiles._one(db,'paypal')
-            if row is not None and row['connection_mode']=='api':
+            if (row is not None and row['connection_mode']=='api'
+                    and (settings.public_base_url.rstrip('/')!='https://opencode-gateway.codes'
+                         or row['environment']=='live')):
                 fields={item['key']:item['value'] for item in profiles._decode(row['encrypted_fields'])}
                 if all(fields.get(key) for key in ('client_id','client_secret','merchant_id')):
                     return {'environment':'sandbox' if row['environment']=='test' else 'live',
