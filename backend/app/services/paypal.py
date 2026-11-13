@@ -19,11 +19,12 @@ def admin_config(db=None):
             row=profiles._one(db,'paypal')
             if row is not None and row['connection_mode']=='api':
                 fields={item['key']:item['value'] for item in profiles._decode(row['encrypted_fields'])}
-                return {'environment':'sandbox' if row['environment']=='test' else 'live',
-                        'client_id':fields.get('client_id',''),
-                        'client_secret':fields.get('client_secret',''),
-                        'merchant_id':fields.get('merchant_id',''),
-                        'source':'admin_dynamic'}
+                if all(fields.get(key) for key in ('client_id','client_secret','merchant_id')):
+                    return {'environment':'sandbox' if row['environment']=='test' else 'live',
+                            'client_id':fields['client_id'],
+                            'client_secret':fields['client_secret'],
+                            'merchant_id':fields['merchant_id'],
+                            'source':'admin_dynamic'}
     return {'environment':settings.paypal_environment,
             'client_id':settings.paypal_client_id or '',
             'client_secret':settings.paypal_client_secret or '',
