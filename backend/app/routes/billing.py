@@ -362,7 +362,7 @@ class AdminConfirm(BaseModel):
 def confirm_payment(order_id:uuid.UUID,data:AdminConfirm,user:User=Depends(require_admin),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
-    if row.provider_environment:raise HTTPException(409,'PayPal payments cannot be manually confirmed')
+    if row.provider_environment:raise HTTPException(409,'Online processor payments require provider verification and cannot be manually confirmed')
     if row.status=='paid':return order_payload(row)
     if row.status!='pending_review':raise HTTPException(409,'A submitted payment reference is required before review')
     activate_order(db,row,user.id,data.reference)
@@ -371,7 +371,7 @@ def confirm_payment(order_id:uuid.UUID,data:AdminConfirm,user:User=Depends(requi
 def reject_payment(order_id:uuid.UUID,data:RejectRequest,user:User=Depends(require_admin),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
-    if row.provider_environment:raise HTTPException(409,'PayPal payments cannot be manually rejected')
+    if row.provider_environment:raise HTTPException(409,'Online processor payments require provider verification and cannot be manually rejected')
     if row.status in {'paid','rejected'}:return order_payload(row)
     if row.status!='pending_review':raise HTTPException(409,'Only payments under review can be rejected')
     row.status='rejected';row.reject_reason=data.reason;row.reviewed_by=user.id
