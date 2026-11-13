@@ -154,10 +154,32 @@ def configure(db, actor_id, *, enabled, show_paypal):
     else:
         fingerprint = str(_policy(db).get("live_fingerprint") or "")
     if show_paypal and not paypal_visible(db):
-        from . import paypal
+        from . import paypal, billing_methods
+        from ..models import BillingMethod
+        from ..routes.management import MethodInput, method_values, validate_receiving_method
         if paypal.admin_config(db)["environment"] != "live":
             raise HTTPException(409, "Only PayPal LIVE merchant credentials may be shown to production customers")
         paypal.verify_connection(db)
+        # PayPal can be configured completely from Admin: when its LIVE OAuth
+        # keys verify, create the EXISTING global BillingMethod type if absent.
+        # Do not edit unrelated bank/wallet methods or historical orders.
+        existing = None
+        query = select(BillingMethod).where(BillingMethod.user_id.is_(None),
+                                           BillingMethod.kind == "paypal")
+        if db.bind.dialect.name == "postgresql":
+            query = query.with_for_update()
+        for candidate in db.scalars(query):
+            info = billing_methods.method_payload(candidate)
+            if info.get("details", {}).get("checkout_mode") == "paypal":
+                existing = candidate
+                break
+        if existing is None:
+            new_method = MethodInput(kind="paypal", label="PayPal", currency="USD",
+                                     checkout_mode="paypal", enabled=True)
+            validate_receiving_method(db, new_method, True)
+            db.add(BillingMethod(user_id=None, **method_values(new_method)))
+        elif not existing.enabled:
+            existing.enabled = True
     payment_gateway_config.save(
         db, "stripe", actor_id, {
             "checkout_enabled": bool(enabled),
