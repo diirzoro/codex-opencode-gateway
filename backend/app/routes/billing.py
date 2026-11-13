@@ -504,4 +504,4 @@ async def stripe_live_webhook(request:Request,db:Session=Depends(get_db)):
 
 @router.get('/paypal/status')
 def paypal_status(user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
-    return {'configured':paypal.configured(db),'environment':paypal.admin_config(db)['environment'],'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','sdk_available':bool(paypal.settings.paypal_client_id),'client_id':paypal.settings.paypal_client_id}
+    return {'configured':paypal.configured(db),'environment':paypal.admin_config(db)['environment'],'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','sdk_available':bool(paypal.admin_config(db)['client_id']),'client_id':paypal.admin_config(db)['client_id']}
