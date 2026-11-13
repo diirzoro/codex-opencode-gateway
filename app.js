@@ -989,7 +989,6 @@ function workspaceLatestVisibility(feed){
 let todoLastCheck=0,todoRequest=null,todoSessionKey='',todoEpoch=0;
 async function refreshWorkspaceTodos(force=false){
  if(window.nativeSession?.active()&&!force)return;
- const livePi=location.hostname==='opencode-gateway.codes';
  const sessionId=activeSession?.id,ownerId=currentUser?.id;
  let panel=document.getElementById('workspaceTodoPanel');
  if(!panel){
@@ -1001,9 +1000,6 @@ async function refreshWorkspaceTodos(force=false){
  const key=String(ownerId||'')+':'+String(sessionId||'');
  if(key!==todoSessionKey){todoSessionKey=key;todoEpoch++;todoLastCheck=0;panel.hidden=true;panel.open=false;panel.querySelector('ol')?.replaceChildren();}
  if(!sessionId||!ownerId)return;
- // LIVE always exposes the selected project's Todo panel. A missing Pi tool
- // receipt is shown honestly as an empty plan, never as completed work.
- if(livePi){panel.hidden=false;panel.open=true;}
  if(!force&&Date.now()-todoLastCheck<8000)return;
  if(todoRequest?.key===key&&todoRequest.epoch===todoEpoch)return;
  const token={key,epoch:todoEpoch};todoLastCheck=Date.now();todoRequest=token;
@@ -1012,21 +1008,11 @@ async function refreshWorkspaceTodos(force=false){
   if(todoSessionKey!==key||todoEpoch!==token.epoch||activeSession?.id!==sessionId||currentUser?.id!==ownerId)return;
   const rows=Array.isArray(data.items)?data.items:[];
   const firstAppearance=panel.hidden;
-  panel.hidden=livePi?false:!data.supported||!rows.length;
+  panel.hidden=!data.supported||!rows.length;
   if(panel.hidden)return;
-  if(firstAppearance||livePi)panel.open=true;
+  if(firstAppearance)panel.open=true;
   const finished=rows.filter(x=>x.status==='completed').length;
   const verified=data.source==='pi-tool';
-  if(livePi&&!rows.length){
-    panel.querySelector('summary').textContent=lang==='ar'?'مهام المشروع · 0':'Project Todo · 0';
-    const list=panel.querySelector('ol');list.replaceChildren();
-    const item=document.createElement('li');
-    item.textContent=lang==='ar'?
-      'لا توجد مهام محفوظة لدى Pi في هذه المحادثة بعد. اطلب خطة عبر زر «إنشاء خطة»؛ لن تُعرض مهام تجريبية.':
-      'Pi has no saved tasks in this conversation yet. Use “Plan task” to request a real plan; no sample tasks are shown.';
-    list.append(item);
-    return;
-  }
   panel.querySelector('summary').textContent=
    (verified?(lang==='ar'?'مهام Pi الفعلية':'Pi tasks'):(lang==='ar'?'خطة Pi المكتوبة':'Pi plan checklist'))+
    ' · '+finished+'/'+rows.length+' '+(verified?(lang==='ar'?'مكتمل':'completed'):(lang==='ar'?'مُعلّم كمكتمل':'marked complete'));
@@ -1035,17 +1021,7 @@ async function refreshWorkspaceTodos(force=false){
    const li=document.createElement('li');li.textContent=item.content;li.className='todo-'+item.status;const state=document.createElement('small');state.textContent=' · '+({pending:lang==='ar'?'بانتظار التنفيذ':'Pending',in_progress:lang==='ar'?'قيد التنفيذ':'In progress',completed:lang==='ar'?'مكتمل':'Completed',cancelled:lang==='ar'?'أُلغي':'Cancelled'}[item.status]||'');li.append(state);
    list.append(li);
   }
- }catch(error){
-  // A failed native read must not make LIVE's project task panel disappear.
-  if(livePi&&todoSessionKey===key&&todoEpoch===token.epoch&&
-     activeSession?.id===sessionId&&currentUser?.id===ownerId){
-    panel.hidden=false;
-    panel.querySelector('summary').textContent=lang==='ar'?'مهام المشروع · تعذر التحديث':'Project Todo · refresh failed';
-    panel.querySelector('ol').replaceChildren(Object.assign(document.createElement('li'),{
-      textContent:lang==='ar'?'تعذر قراءة مهام Pi؛ المحادثة محفوظة. حاول مجددًا.':'Could not read Pi task status. Conversation preserved; try again.'
-    }));
-  }
- }
+ }catch(error){/* Keep the composer responsive when optional task discovery fails. */}
  finally{if(todoRequest===token)todoRequest=null;}
 }
 // Keep selections while Pi history refreshes a message; never persist free text.
