@@ -125,11 +125,18 @@ def verify_live_account(db):
 
 def configure(db, actor_id, *, enabled, show_paypal):
     profile = _profile(db)
+    previously_enabled = live_ready(db)
     if enabled:
-        verify_live_account(db)
+        # Verify the Stripe merchant on first activation. PayPal visibility
+        # changes should not unnecessarily revalidate an already-active account.
+        if not previously_enabled:
+            verify_live_account(db)
         fingerprint = _fingerprint(profile)
     else:
         fingerprint = str(_policy(db).get("live_fingerprint") or "")
+    if show_paypal and not paypal_visible(db):
+        from . import paypal
+        paypal.verify_connection(db)
     payment_gateway_config.save(
         db, "stripe", actor_id, {
             "checkout_enabled": bool(enabled),
