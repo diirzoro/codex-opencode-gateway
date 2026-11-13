@@ -1,6 +1,7 @@
-"""Admin-only draft configuration for future Stripe and Cryptomus integrations.
+"""Admin-managed encrypted provider configuration and explicit Stripe LIVE activation.
 
-No payment/capture/refund/payout/webhook endpoints are enabled here.
+Stripe LIVE processing is isolated in stripe_live_checkout; other dynamic API
+profiles remain configuration-only until their own verified adapters exist.
 """
 from typing import Literal
 from typing import Annotated
@@ -94,6 +95,35 @@ def verify_stripe_connection(
     from ..services.stripe_connection_probe import verify_connection
     _cache_safe(response)
     return verify_connection(db)
+
+
+class StripeLiveControl(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    show_paypal: bool = False
+
+
+@router.get("/stripe/live/status")
+def stripe_live_admin_status(
+    response: Response, _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    from ..services.stripe_live_checkout import status
+    _cache_safe(response)
+    return status(db)
+
+
+@router.put("/stripe/live")
+def stripe_live_admin_control(
+    data: StripeLiveControl, response: Response,
+    user: User = Depends(require_admin), db: Session = Depends(get_db),
+):
+    """Explicit, admin-only activation of verified LIVE checkout.
+    Disabling new checkout keeps historical orders and webhooks intact.
+    """
+    from ..services.stripe_live_checkout import configure
+    _cache_safe(response)
+    return configure(db, user.id, enabled=data.enabled, show_paypal=data.show_paypal)
 
 
 @router.post("/stripe/test-checkout")
