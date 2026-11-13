@@ -209,7 +209,7 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
         host=(__import__('urllib.parse',fromlist=['urlsplit']).urlsplit(details['details'].get('payment_url') or '').hostname or '').lower()
         if not details['details'].get('payment_url') or host=='example.com' or host.endswith(('.invalid','.test','.example','.local','.localhost')):
             raise HTTPException(503,'The payment provider for this method is not connected. Administration must configure a real processor checkout link. No payment was made.')
-    if details['details'].get('checkout_mode')=='paypal':
+    if details['details'].get('checkout_mode')=='paypal' or method.kind=='paypal':
         from ..services.stripe_live_checkout import paypal_visible
         if not paypal_visible(db):
             raise HTTPException(409, 'PayPal is hidden for new checkouts by platform administration')
@@ -462,7 +462,8 @@ def stripe_status(user:User=Depends(require_billing_user),db:Session=Depends(get
     cfg=test_credentials(db)
     ready=bool(credentials.available() and cfg.get('mode')=='test'
         and str(cfg.get('secret_key') or '').startswith('sk_test_')
-        and str(cfg.get('publishable_key') or '').startswith('pk_test_'))
+        and str(cfg.get('publishable_key') or '').startswith('pk_test_')
+        and not stripe_live_checkout._profile(db))
     live=stripe_live_checkout.status(db)
     return {'provider':'stripe','environment':'live' if live['live_checkout_enabled'] else cfg.get('mode') or 'not_configured',
             'test_checkout_available':ready and not live['live_checkout_enabled'],
