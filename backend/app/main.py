@@ -81,7 +81,7 @@ def health(): return {"status": "ok"}
 frontend = Path(__file__).resolve().parents[2]
 
 # Server-to-server callbacks that are authenticated by signature, not cookies.
-_CROSS_SITE_EXEMPT = {"/api/github/webhook"}
+_CROSS_SITE_EXEMPT = {"/api/github/webhook", "/api/billing/webhooks/stripe"}
 
 @app.middleware("http")
 async def browser_boundary(request: Request, call_next):
