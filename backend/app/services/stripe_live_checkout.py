@@ -194,8 +194,26 @@ def reconcile(db, payload):
         raise HTTPException(422, "Invalid Stripe LIVE session")
     row = db.scalar(select(PaymentOrder).where(
         PaymentOrder.provider_order_id == session_id).with_for_update())
-    if not row:
-        raise HTTPException(404, "Stripe payment order not found")
+    if row is None:
+        # Stripe can finish a charge if our process exits between receiving
+        # Checkout's response and saving its session ID. Recover ONLY from
+        # the authenticated Stripe session's server-generated metadata.
+        raw_order_id = (payload.get("metadata") or {}).get("order_id")
+        try:
+            order_id = uuid.UUID(str(raw_order_id))
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(404, "Stripe payment order not found") from None
+        row = db.scalar(select(PaymentOrder).where(
+            PaymentOrder.id == order_id,
+            PaymentOrder.provider_order_id.is_(None)).with_for_update())
+        if row is None or row.method_label != "Stripe" or row.provider_environment != "live":
+            raise HTTPException(404, "Stripe payment order not found")
+        # Do not assign the session ID until all order fields match Stripe.
+        candidate = row.provider_order_id
+        row.provider_order_id = session_id
+        if not _validate_stripe_session(payload, row):
+            row.provider_order_id = candidate
+            raise HTTPException(409, "Stripe receipt does not match the original order")
     if row.provider_environment != "live" or row.method_label != "Stripe":
         raise HTTPException(409, "Not a Stripe LIVE payment")
     if row.status == "paid":
