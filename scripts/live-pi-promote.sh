@@ -140,16 +140,20 @@ PY
   ../.venv/bin/python - <<'PY'
 from sqlalchemy import inspect, text
 from app.database import engine
-required = {"ai_provider_catalog", "ai_provider_models", "ai_user_connections"}
+required = {"ai_provider_catalog", "ai_provider_models", "ai_user_connections",
+            "admin_finance_notes", "admin_report_presets"}
 with engine.connect() as connection:
     database = connection.execute(text("SELECT current_database()")).scalar_one()
     revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
     tables = set(inspect(connection).get_table_names())
-if database != "opencode_gateway" or revision != "0037_pi_gateway_ai_catalog":
+    subscription_columns = {c["name"] for c in inspect(connection).get_columns("subscriptions")}
+if database != "opencode_gateway" or revision != "0038_admin_finance_crud":
     raise SystemExit("LIVE Pi database or Alembic revision mismatch")
 if not required.issubset(tables):
     raise SystemExit("LIVE Pi catalog tables missing after migration")
-print("LIVE_PI_DATABASE_READY revision=0037_pi_gateway_ai_catalog tables=3")
+if "admin_suspended_at" not in subscription_columns:
+    raise SystemExit("LIVE admin subscription suspension column missing")
+print("LIVE_PI_DATABASE_READY revision=0038_admin_finance_crud tables=5")
 PY
 )
 sudo_operator /usr/bin/systemctl restart opencode-gateway.service
