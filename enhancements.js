@@ -1939,8 +1939,252 @@ window.renderGithubConfirmation=function(root,status,refresh){
   CLIENT_LOADERS.security=function(){return window.renderManagement(document.getElementById('clientSecurityPanel'),'security');};
   const accountLoader=CLIENT_LOADERS.account;
   CLIENT_LOADERS.account=async function(){await accountLoader();const host=managementHost(document.querySelector('[data-client-panel="account"]'),'clientAccountActivity');await window.renderManagement(host,'logs');const lifecycle=managementHost(document.querySelector('[data-client-panel="account"]'),'clientAccountLifecycle');if(lifecycle.parentElement.tagName!=='DETAILS'){const details=textElement('details','','account-sensitive');details.append(textElement('summary',tr('Suspend or request deletion','تعليق الحساب أو طلب حذفه')));lifecycle.before(details);details.append(lifecycle);}await window.renderManagement(lifecycle,'lifecycle');const signout=document.querySelector('[data-client-panel=account] .account-signout');if(signout)document.querySelector('[data-client-panel=account]').append(signout);};
+
+  // Administrative finance CRUD; uses existing billing/profiles APIs and the
+  // existing authenticated admin routes. Never modifies customer checkout UI.
+  let afShowArchived=false,afReportsShowArchived=false;
+  const afBtn=(name,run,cls='button ghost small')=>{
+    const b=el('button',cls,name);b.type='button';
+    b.onclick=async()=>{b.disabled=true;try{await run();}catch(error){toast(error.message||String(error));}finally{b.disabled=false;}};
+    return b;
+  };
+  const afInput=(root,title,value='',kind='text')=>{
+    const input=document.createElement(kind==='textarea'?'textarea':'input');
+    if(kind!=='textarea')input.type=kind;
+    input.value=value===undefined||value===null?'':String(value);
+    root.append(labeled(title,input));return input;
+  };
+  const afActionBar=()=>el('div','manage-actions');
+  const afReload=()=>ADMIN_LOADERS.billing();
+  const afConfirm=(en,ar)=>window.confirmAction(tr(en,ar));
+  const afNotesMap=rows=>new Map(rows.map(n=>[n.target_type+':'+n.target_id,n]));
+  function afNoteEditor(kind,id,existing){
+    const item=existing||{},body=el('div');
+    const note=afInput(body,tr('Internal admin note','ملاحظة الأدمن الداخلية'),item.note||'','textarea');
+    note.maxLength=1000;note.rows=4;
+    const label=el('label','checkbox-row'),archive=document.createElement('input');
+    archive.type='checkbox';archive.checked=Boolean(item.archived_at);
+    label.append(archive,el('span','',tr('Archive this row in admin only (no payment changes)','أرشفة السطر في الأدمن فقط دون تغيير الدفع')));
+    body.append(label);
+    const save=afBtn(tr('Save note / archive','حفظ الملاحظة / الأرشفة'),async()=>{
+      await api('/api/admin/finance/notes/'+kind+'/'+id,{method:'PUT',body:JSON.stringify({note:note.value.trim(),archived:archive.checked})});
+      modal.close();await afReload();
+    },'button small');
+    const erase=afBtn(tr('Delete note only','حذف الملاحظة فقط'),async()=>{
+      if(!await afConfirm('Delete this admin note only? The financial record remains.','حذف الملاحظة الإدارية فقط؟ السجل المالي سيبقى.'))return;
+      await api('/api/admin/finance/notes/'+kind+'/'+id,{method:'DELETE',body:JSON.stringify({confirmation:'DELETE NOTE'})});
+      modal.close();await afReload();
+    });
+    openModal(tr('Admin note and archive','ملاحظات وأرشفة الأدمن'),body,[save,erase]);
+  }
+  async function afRenderBilling(){
+    if(!['admin','owner'].includes(currentUser?.role))return;
+    const panel=document.querySelector('[data-admin-panel="billing"]');
+    if(!panel)return;
+    const annotations=afNotesMap(await api('/api/admin/finance/notes',{cache:'no-store'}));
+    const subs=document.getElementById('adminSubscriptionsBody');
+    if(subs){
+      const head=subs.closest('table').querySelector('thead tr');
+      if(head&&!head.querySelector('[data-af-actions]')){
+        const th=el('th','',tr('Actions','الإجراءات'));th.dataset.afActions='yes';head.append(th);
+      }
+      for(const trRow of subs.querySelectorAll('tr')){
+        const id=trRow.dataset.financeId;if(!id)continue;
+        const note=annotations.get('subscription:'+id);
+        trRow.hidden=Boolean(note?.archived_at)&&!afShowArchived;
+        const actions=afActionBar(),cell=el('td');
+        actions.append(afBtn(tr('View / note / archive','عرض / ملاحظة / أرشفة'),()=>afNoteEditor('subscription',id,note)));
+        const suspended=trRow.dataset.financeSuspended==='true';
+        actions.append(afBtn(suspended?tr('Resume access','استئناف الاشتراك'):tr('Suspend access','تعليق الاشتراك'),async()=>{
+          if(!await afConfirm(suspended?'Restore this customer subscription access?':'Suspend this customer subscription access without changing the paid end date?',
+            suspended?'هل تريد استئناف صلاحية الاشتراك؟':'هل تريد تعليق صلاحية الاشتراك دون تغيير تاريخ انتهاء الفترة المدفوعة؟'))return;
+          await api('/api/admin/finance/subscriptions/'+id+'/suspend',{
+            method:'POST',body:JSON.stringify({suspended:!suspended,confirmation:suspended?'RESUME':'SUSPEND'})});
+          await afReload();
+        }));
+        if(!['active'].includes(trRow.dataset.financeStatus)){
+          actions.append(afBtn(tr('Delete empty record','حذف السجل الفارغ'),async()=>{
+            if(!await afConfirm('Permanently remove this subscription ONLY if it has no active trial or any payment history?',
+              'تأكيد حذف الاشتراك نهائيًا بشرط عدم وجود تجربة سارية أو أي سجل دفع؟'))return;
+            await api('/api/admin/finance/subscriptions/'+id,{
+              method:'DELETE',body:JSON.stringify({confirmation:'DELETE EMPTY SUBSCRIPTION'})});
+            await afReload();
+          }));
+        }
+        cell.append(actions);trRow.append(cell);
+      }
+      let toggle=panel.querySelector('#afBillingArchiveToggle');
+      if(!toggle){
+        toggle=afBtn('',async()=>{afShowArchived=!afShowArchived;await afReload();});
+        toggle.id='afBillingArchiveToggle';
+        subs.closest('.admin-section').querySelector('header')?.append(toggle);
+      }
+      toggle.textContent=afShowArchived?tr('Hide archived','إخفاء المؤرشف'):tr('Show archived','عرض المؤرشف');
+    }
+    const ordersBox=document.getElementById('adminTransactions');
+    if(ordersBox){
+      const details=await api('/api/billing/admin/orders',{cache:'no-store'});
+      const lookup=new Map(details.map(item=>[String(item.id),item]));
+      for(const row of ordersBox.querySelectorAll('article[data-finance-id]')){
+        const id=row.dataset.financeId,order=lookup.get(id),note=annotations.get('order:'+id);
+        row.hidden=Boolean(note?.archived_at)&&!afShowArchived;
+        const actions=afActionBar();
+        actions.append(afBtn(tr('Note / archive','ملاحظة / أرشفة'),()=>afNoteEditor('order',id,note)));
+        if(order){
+          actions.append(afBtn(tr('Review','مراجعة'),()=>{
+            const summary=kv([
+              [tr('Customer','العميل'),order.email||'—'],
+              [tr('Status','الحالة'),order.status],
+              [tr('Plan','الخطة'),order.plan_name],
+              [tr('Method','الوسيلة'),order.method_label],
+              [tr('Amount','المبلغ'),order.currency+' '+(order.amount_cents/100).toFixed(2)],
+              [tr('Reference','المرجع'),order.payment_reference||'—'],
+              [tr('Provider ID','معرف المزود'),order.provider_order_id||'—'],
+              [tr('Sender','المرسل'),order.sender_name||'—']
+            ]);
+            if(order.has_receipt){
+              const link=el('a','button ghost small',tr('View receipt','عرض الإيصال'));
+              link.href='/api/billing/orders/'+encodeURIComponent(id)+'/receipt';
+              link.target='_blank';link.rel='noopener noreferrer';summary.append(link);
+            }
+            openModal(tr('Payment details','تفاصيل الدفع'),summary);
+          }));
+          if(order.status==='pending_review'&&!order.provider_environment&&!order.provider_order_id){
+            actions.append(afBtn(tr('Verify and accept','تحقق ثم اعتماد'),async()=>{
+              const ref=await window.requestInput(tr('Enter the payment reference you independently verified','أدخل مرجع الدفع الذي تحققت من استلامه'),order.payment_reference||'');
+              if(ref===null)return;
+              if(ref.trim().length<3||ref.trim().length>200)throw Error(tr('Reference must contain 3–200 characters','المرجع يجب أن يكون بين 3 و200 حرف'));
+              if(!await afConfirm('I verified the funds were actually received. Activate the purchased period?',
+                'أؤكد استلام المال فعليًا. هل تريد تفعيل الفترة المدفوعة؟'))return;
+              await api('/api/billing/admin/orders/'+id+'/confirm',{method:'POST',body:JSON.stringify({reference:ref.trim()})});
+              await afReload();
+            },'button small'));
+            actions.append(afBtn(tr('Reject','رفض'),async()=>{
+              const why=await window.requestInput(tr('Reason for rejecting the receipt','سبب رفض الإيصال'),'');
+              if(why===null)return;
+              if(why.trim().length<3||why.trim().length>500)throw Error(tr('Enter a valid reason','أدخل سببًا صحيحًا'));
+              if(!await afConfirm('Reject this unverified manual payment?','تأكيد رفض هذا الدفع اليدوي غير الموثق؟'))return;
+              await api('/api/billing/admin/orders/'+id+'/reject',{method:'POST',body:JSON.stringify({reason:why.trim()})});
+              await afReload();
+            }));
+          }
+          if(['failed','cancelled','rejected'].includes(order.status)&&!order.provider_order_id&&!order.provider_capture_id&&!order.payment_reference&&!order.has_receipt&&!order.paid_at){
+            actions.append(afBtn(tr('Delete empty draft','حذف المسودة الفارغة'),async()=>{
+              if(!await afConfirm('Permanently delete this unverified, unused order draft?','تأكيد نهائي لحذف مسودة طلب الدفع الفارغة؟'))return;
+              await api('/api/admin/finance/orders/'+id,{method:'DELETE',body:JSON.stringify({confirmation:'DELETE EMPTY ORDER'})});
+              await afReload();
+            }));
+          }
+        }
+        row.append(actions);
+      }
+    }
+    await afRenderMethods(panel);
+  }
+  function afMethodPayload(method,enabled){
+    const d=method.details||{};
+    return {
+      kind:method.kind,label:method.label,
+      account_name:d.account_name||'',account_reference:d.account_reference||'',
+      bank_name:d.bank_name||'',iban:d.iban||'',branch:d.branch||'',
+      network:d.network||'',currency:d.currency||'USD',
+      instructions:d.instructions||'',checkout_mode:d.checkout_mode||'manual',
+      payment_url:d.payment_url||'',plan_id:d.plan_id||null,
+      available_country_codes:d.available_country_codes||[],
+      enabled:enabled===undefined?Boolean(method.enabled):enabled
+    };
+  }
+  async function afRenderMethods(panel){
+    let box=panel.querySelector('#afAdminPaymentMethods');
+    if(!box){box=el('section','admin-section');box.id='afAdminPaymentMethods';panel.append(box);}
+    box.replaceChildren(el('h2','',tr('Payment methods and banks — Admin','إدارة البنوك وطرق الدفع — الأدمن')),
+      el('p','lead',tr('Create bank/wallet drafts, edit, enable or disable methods. Delete only unused disabled methods. Dynamic Stripe/PayPal configurations stay in the existing provider editor.',
+      'إضافة البنوك والمحافظ وتعديلها وتفعيلها وتعطيلها؛ الحذف النهائي فقط للوسائل المعطلة غير المستخدمة. إعدادات Stripe وPayPal الديناميكية تبقى في نموذجها الحالي.')));
+    const toolbar=afActionBar();
+    toolbar.append(afBtn(tr('+ Add bank / wallet','+ إضافة بنك / محفظة'),()=>afMethodEditor(null,()=>afRenderMethods(panel)),'button small'));
+    box.append(toolbar);
+    const methods=await api('/api/admin/finance/methods',{cache:'no-store'});
+    if(!methods.length)box.append(el('p','',tr('No saved methods','لا توجد وسائل محفوظة')));
+    for(const method of methods){
+      const row=el('div','manage-row'),info=el('div');
+      info.append(el('strong','',method.label),
+        el('p','',method.kind+' · '+(method.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل'))+' · '+method.historical_orders+' '+tr('orders','طلبات')));
+      row.append(info);
+      const actions=afActionBar();
+      if(method.dynamic_profile){
+        actions.append(el('span','',tr('Manage from Dynamic Providers above','الإدارة من قسم المزودين الديناميكيين بالأعلى')));
+      }else{
+        actions.append(afBtn(tr('Edit','تعديل'),()=>afMethodEditor(method,()=>afRenderMethods(panel))));
+        actions.append(afBtn(method.enabled?tr('Disable / hide','تعطيل / إخفاء'):tr('Enable','تفعيل'),async()=>{
+          if(!await afConfirm(method.enabled?'Hide this method from new customer checkouts?':'Enable this payment method for customers?',
+            method.enabled?'إخفاء هذه الوسيلة عن عمليات الدفع الجديدة؟':'تفعيل هذه الوسيلة للعملاء؟'))return;
+          await api('/api/billing/methods/'+method.id+'?platform=true',{
+            method:'PUT',body:JSON.stringify(afMethodPayload(method,!method.enabled))});
+          await afRenderMethods(panel);
+        }));
+        if(!method.enabled&&!method.historical_orders){
+          actions.append(afBtn(tr('Delete permanently','حذف نهائي'),async()=>{
+            if(!await afConfirm('Permanently delete unused payment method: '+method.label+'?',
+              'تأكيد نهائي لحذف طريقة الدفع غير المستخدمة: '+method.label+'؟'))return;
+            await api('/api/admin/finance/methods/'+method.id,{
+              method:'DELETE',body:JSON.stringify({confirmation:'DELETE UNUSED METHOD'})});
+            await afRenderMethods(panel);
+          }));
+        }
+      }
+      row.append(actions);box.append(row);
+    }
+  }
+  function afMethodEditor(method,reload){
+    const existing=method?afMethodPayload(method):afMethodPayload({kind:'bank',label:'',enabled:false,details:{}});
+    const body=el('div');
+    const name=afInput(body,tr('Payment method name','اسم وسيلة الدفع'),existing.label);
+    const kind=document.createElement('select');
+    for(const option of ['bank','wallet','paypal','googlepay','binance','other'])kind.add(new Option(option,option));
+    kind.value=existing.kind;
+    body.append(labeled(tr('Type','النوع'),kind));
+    const mode=document.createElement('select');
+    for(const option of ['manual','link','paypal'])mode.add(new Option(option,option));
+    mode.value=existing.checkout_mode;
+    body.append(labeled(tr('Checkout mode','نمط الدفع'),mode));
+    const fields={};
+    for(const [key,en,ar] of [
+      ['account_name','Account holder','صاحب الحساب'],
+      ['account_reference','Account / receiving reference','رقم الحساب / الاستلام'],
+      ['bank_name','Bank name','اسم البنك'],
+      ['iban','IBAN','الآيبان'],['branch','Branch','الفرع'],
+      ['currency','Currency','العملة'],['network','Network','الشبكة'],
+      ['instructions','Customer payment instructions','تعليمات الدفع للعميل'],
+      ['payment_url','HTTPS checkout URL','رابط الدفع HTTPS'],
+      ['plan_id','Plan ID for hosted link','رقم الخطة للرابط'],
+      ['available_country_codes','Country codes CSV','الدول المسموحة مفصولة بفواصل']
+    ]){
+      const raw=key==='available_country_codes'?(existing[key]||[]).join(','):existing[key]||'';
+      fields[key]=afInput(body,tr(en,ar),raw,key==='instructions'?'textarea':'text');
+    }
+    name.maxLength=100;fields.instructions.maxLength=1000;
+    const chk=document.createElement('input');chk.type='checkbox';chk.checked=Boolean(existing.enabled);
+    const label=el('label','checkbox-row');label.append(chk,el('span','',tr('Enabled for new customer checkout','تفعيل للعملاء الجدد')));body.append(label);
+    const save=afBtn(tr('Save payment method','حفظ طريقة الدفع'),async()=>{
+      if(!name.value.trim())throw Error(tr('Method name is required','اسم الوسيلة مطلوب'));
+      const get=key=>fields[key].value.trim();
+      const payload={kind:kind.value,label:name.value.trim(),checkout_mode:mode.value,
+        account_name:get('account_name'),account_reference:get('account_reference'),
+        bank_name:get('bank_name'),iban:get('iban'),branch:get('branch'),
+        currency:get('currency').toUpperCase()||'USD',
+        network:get('network'),instructions:get('instructions'),payment_url:get('payment_url'),
+        plan_id:get('plan_id')?Number(get('plan_id')):null,
+        available_country_codes:get('available_country_codes').split(',').map(x=>x.trim().toUpperCase()).filter(Boolean),
+        enabled:chk.checked};
+      await api('/api/billing/methods'+(method?'/'+method.id:'')+'?platform=true',{
+        method:method?'PUT':'POST',body:JSON.stringify(payload)});
+      modal.close();await reload();
+    },'button small');
+    openModal(method?tr('Edit method','تعديل الوسيلة'):tr('Add bank / wallet','إضافة بنك / محفظة'),body,[save]);
+  }
+
   const adminBillingLoader=ADMIN_LOADERS.billing;
-  ADMIN_LOADERS.billing=async function(){await adminBillingLoader();await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="billing"]'),'adminBillingMethods'),'billing',true);};
+  ADMIN_LOADERS.billing=async function(){await adminBillingLoader();await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="billing"]'),'adminBillingMethods'),'billing',true);await afRenderBilling();};
   const nativePolicyLoader=ADMIN_LOADERS.policy;
   ADMIN_LOADERS.policy=async function(){
     await nativePolicyLoader();
