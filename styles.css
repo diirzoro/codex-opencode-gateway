@@ -1825,3 +1825,78 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 :root #workspacePage .message-code-folded>.message-code-block{
  margin:0;border:0;border-top:1px solid var(--line);border-radius:0
 }
+
+
+/* Unified existing Admin finance views. No customer billing or Pi layout changes. */
+[data-admin-panel="billing"] #dynamicPaymentProviders,
+[data-admin-panel="billing"] #afPaidCustomers,
+[data-admin-panel="reports"] #afSavedReports{
+  padding:clamp(14px,2vw,24px);margin-block:16px;min-width:0;
+  border:1px solid var(--line);border-radius:15px;background:var(--panel)
+}
+#dynamicPaymentProviders .admin-payment-catalog-toolbar{
+ display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin:16px 0 12px
+}
+#dynamicPaymentProviders .admin-payment-catalog-toolbar input[type=search]{
+ flex:2 1 210px;min-width:150px
+}
+#dynamicPaymentProviders .admin-payment-catalog-toolbar select{
+ flex:1 1 170px;min-width:120px
+}
+#dynamicPaymentProviders .admin-payment-catalog{
+ display:grid;gap:9px;min-width:0
+}
+#dynamicPaymentProviders .admin-payment-entry{
+ display:flex;justify-content:space-between;align-items:center;gap:12px;
+ padding:14px;border:1px solid var(--line);border-radius:12px;
+ background:var(--panel2);min-width:0;flex-wrap:wrap
+}
+#dynamicPaymentProviders .admin-payment-entry-info{
+ display:grid;gap:5px;flex:1 1 160px;min-width:0
+}
+#dynamicPaymentProviders .admin-payment-entry-info strong{
+ font-size:14px;overflow-wrap:anywhere
+}
+#dynamicPaymentProviders .admin-payment-entry-info small{
+ font-size:12px;color:var(--muted)
+}
+#dynamicPaymentProviders .admin-payment-entry-actions,
+[data-admin-panel="billing"] .manage-actions,
+[data-admin-panel="reports"] .manage-actions{
+ display:flex;gap:7px;align-items:center;flex-wrap:wrap
+}
+#dynamicPaymentProviders .admin-payment-entry-actions button{
+ min-height:35px;font-size:12px;white-space:normal
+}
+#dynamicPaymentProviders .dynamic-provider-cards:not([hidden]){
+ margin-top:16px;border-top:1px solid var(--line);padding-top:14px
+}
+#dynamicPaymentProviders .dynamic-provider-cards[hidden]{display:none!important}
+#adminSubscriptionsBody td:last-child{min-width:175px}
+#adminSubscriptionsBody td:last-child .button{
+ font-size:11px;padding:7px 9px;min-height:32px;white-space:normal
+}
+#adminTransactions .manage-row{
+ border-bottom:1px solid var(--line);padding:14px 8px;display:grid;gap:7px
+}
+#adminTransactions .manage-row strong,
+#adminTransactions .manage-row span{overflow-wrap:anywhere}
+#afPaidCustomers .table-wrap,#afSavedReports .table-wrap{overflow-x:auto}
+#afSavedReports .manage-row{
+ display:flex;align-items:center;justify-content:space-between;
+ flex-wrap:wrap;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)
+}
+#afSavedReports .manage-row>div:first-child{
+ min-width:150px;display:grid;gap:5px
+}
+#afSavedReports .manage-row p{margin:0;color:var(--muted);font-size:12px}
+@media(max-width:660px){
+ #dynamicPaymentProviders .admin-payment-entry-actions{
+  width:100%;justify-content:flex-start
+ }
+ #dynamicPaymentProviders .admin-payment-catalog-toolbar>*{
+  max-width:100%;flex:1 1 100%
+ }
+ #afSavedReports .manage-row .manage-actions{width:100%}
+ #adminSubscriptionsBody td:last-child{min-width:160px}
+}
