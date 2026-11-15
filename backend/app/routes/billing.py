@@ -56,7 +56,7 @@ def subscription_payload(db, user) -> dict:
     paid_end = row.current_period_end
     if paid_end is not None and paid_end.tzinfo is None:
         paid_end = paid_end.replace(tzinfo=timezone.utc)
-    paid_active = bool(row.status == 'active' and row.plan_id and paid_end and paid_end > now)
+    paid_active = bool(not row.admin_suspended_at and row.status == 'active' and row.plan_id and paid_end and paid_end > now)
     paid_remaining = max(0, ceil((paid_end - now).total_seconds() / 86400)) if paid_end else 0
     plans = [plan_payload(p) for p in db.scalars(select(Plan).where(Plan.active.is_(True), ~Plan.code.in_(LEGACY_PLAN_CODES)).order_by(Plan.sort_order, Plan.id))]
     access = access_payload(db, user)
@@ -64,7 +64,7 @@ def subscription_payload(db, user) -> dict:
         "plan": plan_payload(user.plan),
         "selected_plan": plan_payload(db.get(Plan, row.plan_id)) if row.plan_id else None,
         "trial": {"started_at": user.trial_started_at, "ends_at": user.trial_ends_at, "remaining_days": access["core_trial"]["remaining_days"], "active": access["core_trial"]["active"]},
-        "subscription": {"status": row.status, "started_at": row.started_at, "current_period_end": row.current_period_end, "cancelled_at": row.cancelled_at, "auto_renew": bool(row.auto_renew)},
+        "subscription": {"status": row.status, "started_at": row.started_at, "current_period_end": row.current_period_end, "cancelled_at": row.cancelled_at, "admin_suspended_at": row.admin_suspended_at, "auto_renew": bool(row.auto_renew)},
         "plans": plans,
         "paid_entitlement": {"active": paid_active, "ends_at": paid_end,
                              "remaining_days": paid_remaining if paid_active else 0,
