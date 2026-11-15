@@ -2306,6 +2306,113 @@ window.renderGithubConfirmation=function(root,status,refresh){
 
   const adminBillingLoader=ADMIN_LOADERS.billing;
   ADMIN_LOADERS.billing=async function(){await adminBillingLoader();await afRenderBilling();};
+
+  // Existing Reports tab: CRUD applies to saved report filters only.
+  // Verified transaction/revenue entries remain authoritative and read-only.
+  let afShowArchivedReports=false;
+  const afCsv=(value)=>{
+    let v=String(value===null||value===undefined?'':value);
+    if(/^\s*[=+@-]/.test(v))v="'"+v;
+    return '"'+v.replace(/"/g,'""')+'"';
+  };
+  async function afReportPreview(report){
+    const data=await api('/api/admin/finance/reports/'+encodeURIComponent(report.id)+'/results',{cache:'no-store'});
+    const body=el('div');
+    body.append(el('p','',tr('Verified revenue: ','إيرادات مؤكدة: ')+(data.verified_revenue||[])
+      .map(item=>item.currency+' '+(item.amount_cents/100).toFixed(2)).join(' · ')));
+    if(data.truncated)body.append(el('p','api-message',
+      tr('Showing first 500 payments. Narrow date filters for a complete export.',
+         'يظهر أول 500 طلب دفع. ضيّق الفترة للحصول على تصدير كامل.')));
+    const wrap=el('div','table-wrap'),table=el('table'),head=el('thead'),header=el('tr');
+    for(const label of [tr('Customer','العميل'),tr('Plan','الخطة'),tr('Method','الوسيلة'),tr('Amount','المبلغ'),tr('Status','الحالة'),tr('Date','التاريخ')])header.append(el('th','',label));
+    head.append(header);table.append(head);
+    const tbody=el('tbody');
+    for(const record of (data.items||[]).slice(0,100)){
+      const row=el('tr');
+      for(const value of [record.email,record.plan_name,record.method_label,
+        record.currency+' '+(record.amount_cents/100).toFixed(2),
+        record.status,record.created_at||'—'])row.append(el('td','',value));
+      tbody.append(row);
+    }
+    table.append(tbody);wrap.append(table);body.append(wrap);
+    const exportBtn=afBtn(tr('Export CSV','تصدير CSV'),()=>{
+      const headings=['Email','Plan','Method','Amount cents','Currency','Status','Created','Paid'];
+      const dataRows=(data.items||[]).map(i=>[i.email,i.plan_name,i.method_label,
+        i.amount_cents,i.currency,i.status,i.created_at,i.paid_at]);
+      const csv=[headings,...dataRows].map(row=>row.map(afCsv).join(',')).join('\r\n');
+      const blob=new Blob(['\ufeff',csv],{type:'text/csv;charset=utf-8'});
+      const url=URL.createObjectURL(blob),a=el('a');
+      a.href=url;a.download='pi-gateway-finance.csv';document.body.append(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    },'button small');
+    openModal(report.name,body,[exportBtn]);
+  }
+  function afReportEditor(report,refresh){
+    const root=el('div');
+    const title=afInput(root,tr('Report name','اسم التقرير'),report?.name||'');title.maxLength=120;title.required=true;
+    const status=document.createElement('select');
+    for(const value of ['all','awaiting_payment','pending_review','paid','sandbox_paid','cancelled','failed','rejected'])
+      status.add(new Option(value,value));
+    status.value=report?.status||'all';root.append(labeled(tr('Payment status','حالة الدفع'),status));
+    const search=afInput(root,tr('Customer / plan / method','العميل / الخطة / الوسيلة'),report?.search||'');search.maxLength=120;
+    const from=afInput(root,tr('From date','من تاريخ'),report?.from_date||'','date');
+    const to=afInput(root,tr('To date','إلى تاريخ'),report?.to_date||'','date');
+    const save=afBtn(tr('Save report','حفظ التقرير'),async()=>{
+      if(!title.reportValidity())return;
+      await api('/api/admin/finance/reports'+(report?'/'+report.id:''),{
+        method:report?'PUT':'POST',body:JSON.stringify({name:title.value.trim(),
+          status:status.value,search:search.value.trim(),from_date:from.value||null,
+          to_date:to.value||null})});
+      modal.close();await refresh();
+    },'button small');
+    openModal(report?tr('Edit report','تعديل التقرير'):tr('New report','تقرير جديد'),root,[save]);
+  }
+  async function afRenderReports(){
+    if(!['admin','owner'].includes(currentUser?.role))return;
+    const panel=document.querySelector('[data-admin-panel="reports"]');
+    if(!panel)return;
+    let container=panel.querySelector('#afSavedReports');
+    if(!container){container=el('section','admin-section');container.id='afSavedReports';panel.append(container);}
+    container.replaceChildren(el('h2','',tr('Saved financial reports','التقارير المالية المحفوظة')));
+    container.append(el('p','lead',tr(
+      'Manage saved report filters, preview and export. Verified transactions and revenue cannot be rewritten.',
+      'إدارة فلاتر التقارير ومعاينتها وتصديرها. لا يمكن تغيير العمليات والإيرادات المؤكدة.')));
+    const tools=afActionBar();
+    tools.append(afBtn(tr('+ New report','+ تقرير جديد'),()=>afReportEditor(null,afRenderReports),'button small'));
+    tools.append(afBtn(afShowArchivedReports?tr('Hide archived','إخفاء المؤرشف'):tr('Show archived','عرض المؤرشف'),
+      async()=>{afShowArchivedReports=!afShowArchivedReports;await afRenderReports();}));
+    container.append(tools);
+    const reports=await api('/api/admin/finance/reports',{cache:'no-store'});
+    const shown=reports.filter(item=>afShowArchivedReports||!item.archived_at);
+    if(!shown.length)container.append(el('p','',tr('No saved reports','لا توجد تقارير محفوظة')));
+    for(const report of shown){
+      const row=el('article','manage-row'),info=el('div');
+      info.append(el('strong','',report.name),el('p','',
+        report.status+' · '+(report.from_date||'—')+' — '+(report.to_date||'—')));
+      const actions=afActionBar();
+      actions.append(afBtn(tr('Preview / export','معاينة / تصدير'),()=>afReportPreview(report)));
+      actions.append(afBtn(tr('Edit','تعديل'),()=>afReportEditor(report,afRenderReports)));
+      actions.append(afBtn(report.archived_at?tr('Restore','استعادة'):tr('Archive','أرشفة'),async()=>{
+        const archived=!report.archived_at;
+        if(!await afConfirm(archived?'Archive this saved report filter?':'Restore this report?',
+          archived?'تأكيد أرشفة إعداد التقرير؟':'تأكيد استعادة التقرير؟'))return;
+        await api('/api/admin/finance/reports/'+report.id+'/archive',{method:'POST',
+          body:JSON.stringify({suspended:archived,confirmation:archived?'ARCHIVE':'RESTORE'})});
+        await afRenderReports();
+      }));
+      if(report.archived_at)actions.append(afBtn(tr('Delete filter','حذف إعداد التقرير'),async()=>{
+        if(!await afConfirm('Delete only this saved report filter? Payment history will remain.',
+          'تأكيد حذف إعداد التقرير فقط؟ ستبقى جميع المدفوعات محفوظة.'))return;
+        await api('/api/admin/finance/reports/'+report.id,{method:'DELETE',
+          body:JSON.stringify({confirmation:'DELETE REPORT'})});
+        await afRenderReports();
+      }));
+      row.append(info,actions);container.append(row);
+    }
+  }
+  const afPreviousReports=ADMIN_LOADERS.reports;
+  ADMIN_LOADERS.reports=async function(){await afPreviousReports();await afRenderReports();};
+
   const nativePolicyLoader=ADMIN_LOADERS.policy;
   ADMIN_LOADERS.policy=async function(){
     await nativePolicyLoader();
