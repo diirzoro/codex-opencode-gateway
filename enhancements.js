@@ -2687,31 +2687,62 @@ window.renderGithubConfirmation=function(root,status,refresh){
     i.type='text';i.value=value;i.maxLength=maxLength;i.autocomplete='off';wrap.append(i);
     return {wrap,input:i};
   }
+
   async function load(){
     const sequence=++revision;
-    if(!['admin','owner'].includes(typeof currentUser==='undefined'?'':currentUser?.role))return;
-    host.replaceChildren(el('h2',tr('Flexible payment & bank connections','إدارة البنوك وخدمات الدفع الديناميكية')),
-      el('p',tr('Add any bank or provider and define the fields it requires. Save Merchant ID, API/security keys, IBAN or custom fields from here. This is encrypted configuration only; it does NOT charge customers, enable a webhook or change existing payment methods.',
-        'أضف أي بنك أو مزوّد وحدد الحقول التي يتطلبها. احفظ Merchant ID ومفاتيح API والتوقيع وIBAN أو أي حقول أخرى من هنا. هذه إعدادات مشفّرة فقط ولا تُحصّل من العملاء أو تُفعّل Webhook أو تغيّر وسائل الدفع الحالية.')));
-    let data;
-    try{ data=await api('/api/admin/payment-gateways/profiles',{cache:'no-store'}); }
-    catch(err){if(sequence===revision)host.append(el('p',err.message,'api-message'));return;}
+    if(!['admin','owner'].includes(currentUser?.role))return;
+    host.replaceChildren(el('h2',tr('Payment methods & banks','طرق الدفع والبنوك')),
+      el('p',tr('One catalogue for bank accounts, wallets, processors and drafts. Payment settings are not a substitute for a verified payment connection. No saved transaction is deleted by disabling a method.',
+       'جميع البنوك والمحافظ ومزودي الدفع والمسودات في قائمة إدارة واحدة. حفظ بيانات الربط لا يعني تشغيل التحصيل تلقائيًا، وتعطيل الوسيلة لا يحذف المدفوعات السابقة.')));
+    let data,catalogue,legacy;
+    try{
+      [data,catalogue,legacy]=await Promise.all([
+        api('/api/admin/payment-gateways/profiles',{cache:'no-store'}),
+        api('/api/admin/payment-gateways/method-catalog',{cache:'no-store'}),
+        api('/api/admin/finance/methods',{cache:'no-store'})
+      ]);
+    }catch(error){
+      if(sequence===revision)host.append(el('p',error.message,'api-message'));
+      return;
+    }
     if(sequence!==revision)return;
-    const toolbar=el('div','','dynamic-provider-toolbar');
-    const picker=selectInput(tr('Choose an existing bank or payment service','اختر بنكًا أو خدمة دفع محفوظة'),
-      [['',tr('Select a provider','اختر الشركة / البنك')],...data.profiles.map(p=>[p.slug,p.label])],
-      data.profiles.some(p=>p.slug===activeSlug)?activeSlug:(data.profiles[0]?.slug||''));
-    picker.input.id='dynamicProviderSelect';
-    activeSlug=picker.input.value;
-    const add=button(tr('+ Add new provider','+ إضافة جديد'),()=>editor(null),'button small');
+    const entries=catalogue.methods||[];
+    const profileMap=new Map((data.profiles||[]).map(p=>[p.slug,p]));
+    const legacyMap=new Map((legacy||[]).map(p=>[p.id,p]));
+    const toolbar=el('div','','admin-payment-catalog-toolbar');
+    const search=el('input');search.type='search';
+    search.placeholder=tr('Search payment methods and banks','بحث في جميع وسائل الدفع والبنوك');
+    search.setAttribute('aria-label',search.placeholder);
+    const state=el('select');
+    for(const [key,title] of [
+      ['all',tr('All methods','كل الوسائل')],
+      ['enabled',tr('Enabled for customers','مفعلة للعملاء')],
+      ['disabled',tr('Disabled / drafts','معطلة / مسودات')]
+    ]){const option=el('option',title);option.value=key;state.append(option);}
+    const add=button(tr('+ Add payment provider','+ إضافة وسيلة دفع'),()=>editor(null),'button small');
     add.id='dynamicProviderAdd';
-    toolbar.append(picker.wrap,add);
-    host.append(toolbar);
+    const addBank=button(tr('+ Add bank / wallet','+ إضافة بنك / محفظة'),()=>{
+      if(!window.adminFinanceLegacyUI?.add)return;
+      window.adminFinanceLegacyUI.add(load);
+    },'button ghost small');
+    toolbar.append(search,state,add,addBank);host.append(toolbar);
+    const count=el('p','','dynamic-provider-hint'),list=el('div','','admin-payment-catalog');
+    host.append(count,list);
     const detail=el('div','','dynamic-provider-cards');
-    host.append(detail);
+    detail.hidden=true;host.append(detail);
+    const statusText=entry=>
+      entry.customer_checkout_enabled?tr('Enabled for new customers','مفعلة للعملاء'):
+      entry.status==='configured_unverified'?tr('Configured, not verified','إعداد محفوظ غير موثق'):
+      entry.status==='draft'?tr('Draft','مسودة'):
+      entry.status==='disabled_existing'?tr('Disabled','معطلة'):
+      tr('Saved — inactive','محفوظة — غير مفعلة');
+    const run=async(buttonNode,work)=>{
+      buttonNode.disabled=true;
+      try{await work();}catch(err){host.append(el('p',err.message||String(err),'api-message'));}
+      finally{buttonNode.disabled=false;}
+    };
     function showSelected(){
       detail.replaceChildren();
-      activeSlug=picker.input.value;
       const profile=data.profiles.find(p=>p.slug===activeSlug);
       if(!profile){
         detail.append(el('div',tr('Select a saved provider, or add any new bank or service.',
@@ -2805,11 +2836,75 @@ window.renderGithubConfirmation=function(root,status,refresh){
       card.append(actions);
       detail.append(card);
     }
-    picker.input.addEventListener('change',showSelected);
-    showSelected();
 
+    function render(){
+      list.replaceChildren();
+      const q=search.value.trim().toLowerCase();
+      const filtered=entries.filter(entry=>{
+        if(state.value==='enabled'&&!entry.customer_checkout_enabled)return false;
+        if(state.value==='disabled'&&entry.customer_checkout_enabled)return false;
+        return !q||[entry.label,entry.category,entry.slug,entry.connection_mode].some(v=>
+          String(v||'').toLowerCase().includes(q));
+      });
+      count.textContent=tr('Methods displayed: ','الوسائل المعروضة: ')+filtered.length+' / '+entries.length;
+      if(!filtered.length){list.append(el('p',tr('No matching methods','لا توجد وسائل مطابقة'),'dynamic-provider-empty'));return;}
+      for(const entry of filtered){
+        const row=el('article','','admin-payment-entry');
+        const info=el('div','','admin-payment-entry-info');
+        info.append(el('strong',entry.label),
+          el('small',(entry.category||'other')+' · '+(entry.source==='legacy'?
+            tr('Existing bank / method','وسيلة محفوظة سابقًا'):
+            tr('Dynamic profile','بيانات مزوّد ديناميكية'))),
+          el('span',statusText(entry),'dynamic-provider-status'));
+        const actions=el('div','','admin-payment-entry-actions');
+        const profile=entry.source==='dynamic'?profileMap.get(entry.slug):null;
+        const method=entry.source==='legacy'?legacyMap.get(entry.method_id):null;
+        if(profile){
+          actions.append(button(tr('Preview / tools','معاينة / أدوات'),()=>{
+            activeSlug=profile.slug;detail.hidden=false;showSelected();
+            detail.scrollIntoView({behavior:'smooth',block:'nearest'});
+          },'button ghost small'));
+          actions.append(button(tr('Edit','تعديل'),()=>editor(profile),'button ghost small'));
+          if(profile.publication?.published){
+            const disable=button(tr('Suspend','تعليق'),()=>run(disable,async()=>{
+              if(!await window.confirmAction(tr('Suspend this checkout for new orders? Paid records remain.',
+                'تعليق هذه الوسيلة للطلبات الجديدة؟ تبقى المدفوعات القديمة محفوظة.')))return;
+              await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+'/publish',{method:'DELETE'});
+              detail.hidden=true;await load();
+            }),'button ghost small');
+            actions.append(disable);
+          }else if(profile.connection_mode!=='api'){
+            actions.append(button(tr('Configure / enable','إعداد / تفعيل'),()=>publishDialog(profile),'button ghost small'));
+          }
+          const remove=button(tr('Delete','حذف'),()=>run(remove,async()=>{
+            if(!await window.confirmAction(tr('Delete this provider draft? Previously paid orders and historic methods remain.',
+              'حذف مسودة هذا المزوّد؟ تبقى عمليات الدفع السابقة محفوظة.')))return;
+            await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug),{method:'DELETE'});
+            if(activeSlug===profile.slug){activeSlug='';detail.hidden=true;}await load();
+          }),'button ghost small');
+          actions.append(remove);
+        }else if(method&&!method.dynamic_profile){
+          actions.append(button(tr('Preview','معاينة'),()=>window.adminFinanceLegacyUI?.preview(method),'button ghost small'));
+          actions.append(button(tr('Edit','تعديل'),()=>window.adminFinanceLegacyUI?.edit(method,load),'button ghost small'));
+          const toggle=button(method.enabled?tr('Suspend','تعليق'):tr('Enable','تفعيل'),
+            ()=>run(toggle,()=>window.adminFinanceLegacyUI.toggle(method,load)),'button ghost small');
+          actions.append(toggle);
+          if(!method.enabled&&!method.historical_orders){
+            const remove=button(tr('Delete','حذف'),()=>run(remove,
+              ()=>window.adminFinanceLegacyUI.remove(method,load)),'button ghost small');
+            actions.append(remove);
+          }
+        }else{
+          actions.append(el('small',tr('Historical linked method — protected','وسيلة مرتبطة محفوظة تاريخيًا')));
+        }
+        row.append(info,actions);list.append(row);
+      }
+    }
+    search.oninput=render;state.onchange=render;render();
+    if(activeSlug&&profileMap.has(activeSlug)){
+      detail.hidden=false;showSelected();
+    }
   }
-
 
   async function publishDialog(profile){
     const popup=el('dialog','','dynamic-provider-dialog dynamic-provider-publish-dialog');
