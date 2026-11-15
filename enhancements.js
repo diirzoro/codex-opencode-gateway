@@ -2170,6 +2170,39 @@ window.renderGithubConfirmation=function(root,status,refresh){
     search.oninput=draw;status.onchange=draw;draw();
   }
 
+
+  async function afRenderPaidCustomers(panel){
+    let host=panel.querySelector('#afPaidCustomers');
+    if(!host){host=el('section','admin-section');host.id='afPaidCustomers';panel.append(host);}
+    host.replaceChildren(el('h2','',tr('Verified paying customers','العملاء المشتركون الذين دفعوا')));
+    const data=await api('/api/admin/billing/transactions',{cache:'no-store'});
+    const grouped=new Map();
+    for(const payment of data.items||[]){
+      if(payment.status!=='paid')continue;
+      const key=payment.user_id||payment.email;
+      const item=grouped.get(key)||{email:payment.email,orders:0,currencies:{},last:null};
+      item.orders++;
+      item.currencies[payment.currency]=(item.currencies[payment.currency]||0)+payment.amount_cents;
+      const date=payment.paid_at||payment.created_at;
+      if(!item.last||new Date(date)>new Date(item.last))item.last=date;
+      grouped.set(key,item);
+    }
+    if(!grouped.size){host.append(el('p','',tr('No verified paying customers yet','لا توجد مدفوعات مؤكدة حتى الآن')));return;}
+    const tools=afActionBar(),search=afInput(tools,tr('Search paying customers','البحث عن عميل مشترك'),'','search');
+    search.placeholder=tr('Customer email','بريد العميل');host.append(tools);
+    const holder=el('div','table-wrap'),table=el('table'),thead=el('thead'),header=el('tr');
+    for(const name of [tr('Customer','العميل'),tr('Paid orders','عدد الدفعات'),tr('Verified total','إجمالي المدفوع'),tr('Last payment','آخر دفع')])header.append(el('th','',name));
+    thead.append(header);table.append(thead);
+    const tbody=el('tbody');
+    for(const item of grouped.values()){
+      const row=el('tr');row.dataset.searchEmail=item.email.toLowerCase();
+      for(const val of [item.email,item.orders,Object.entries(item.currencies).map(([currency,cents])=>currency+' '+(cents/100).toFixed(2)).join(' · '),item.last?fmtDate(item.last):'—'])row.append(el('td','',val));
+      tbody.append(row);
+    }
+    search.oninput=()=>{const term=search.value.trim().toLowerCase();for(const row of tbody.rows)row.hidden=!row.dataset.searchEmail.includes(term)};
+    table.append(tbody);holder.append(table);host.append(holder);
+    host.append(el('p','lead',tr('Verified paid records only; test and unpaid orders excluded. Historical data is retained.','المدفوعات الحقيقية المؤكدة فقط؛ عمليات الاختبار وغير المسددة مستبعدة. تبقى السجلات التاريخية محفوظة.')));
+  }
   function afMethodPayload(method,enabled){
     const d=method.details||{};
     return {
