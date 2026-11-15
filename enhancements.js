@@ -2079,8 +2079,97 @@ window.renderGithubConfirmation=function(root,status,refresh){
         row.append(actions);
       }
     }
-    await afRenderPaidCustomers(panel);
+    await afRenderPaidCustomers(panel,annotations);
   }
+
+  async function afRenderPaidCustomers(panel,annotations){
+    const subscribers=await api('/api/admin/subscriptions',{cache:'no-store'});
+    const paid=subscribers.filter(row=>row.verified_payment_count>0);
+    let host=panel.querySelector('#afPayingCustomers');
+    if(!host){
+      host=el('section','admin-section');host.id='afPayingCustomers';
+      const transactions=document.getElementById('adminTransactions')?.closest('.admin-section');
+      if(transactions)transactions.before(host);else panel.append(host);
+    }
+    const header=el('header'),heading=el('div');
+    heading.append(el('small','',tr('VERIFIED PAYMENTS','المدفوعات المؤكدة')),
+      el('h2','',tr('Paying subscribers','العملاء الذين سددوا الاشتراك')));
+    header.append(heading);host.replaceChildren(header);
+    const summary=el('p','lead',tr('Clients with at least one verified paid order, including expired subscriptions. Test and unverified payments are excluded.',
+      'العملاء الذين لديهم عملية دفع مؤكدة واحدة على الأقل، بما في ذلك الاشتراكات المنتهية. لا تُحسب المدفوعات التجريبية أو غير المؤكدة.'));
+    host.append(summary);
+    const toolbar=afActionBar();
+    const search=document.createElement('input');search.type='search';
+    search.placeholder=tr('Search paying customers','بحث بين العملاء الذين دفعوا');
+    search.setAttribute('aria-label',search.placeholder);
+    const status=document.createElement('select');
+    for(const [value,label] of [['all',tr('All paying','كل الدافعين')],['active',tr('Active only','نشط فقط')],['suspended',tr('Suspended','المعلق')],['expired',tr('Expired / other','منتهي / غير نشط')]])
+      status.add(new Option(label,value));
+    toolbar.append(search,status);host.append(toolbar);
+    const table=el('table'),thead=el('thead'),head=el('tr');
+    for(const label of [tr('Customer','العميل'),tr('Plan','الخطة'),
+      tr('Subscription','الاشتراك'),tr('Verified paid','إجمالي المدفوع'),
+      tr('Last payment','آخر دفع'),tr('Valid until','صالح حتى'),
+      tr('Actions','إجراءات')])head.append(el('th','',label));
+    thead.append(head);table.append(thead);
+    const tbody=el('tbody');table.append(tbody);
+    const wrap=el('div','table-wrap');wrap.append(table);host.append(wrap);
+    const caption=el('p','lead');host.append(caption);
+    const now=Date.now();
+    function isPaidActive(p){
+      return !p.admin_suspended_at&&p.status==='active'
+        &&p.current_period_end && new Date(p.current_period_end).getTime()>now;
+    }
+    function draw(){
+      tbody.replaceChildren();
+      const q=search.value.trim().toLowerCase();
+      const filtered=paid.filter(p=>{
+        if(annotations.get('subscription:'+p.id)?.archived_at&&!afShowArchived)return false;
+        const active=isPaidActive(p),suspended=Boolean(p.admin_suspended_at);
+        if(status.value==='active'&&!active)return false;
+        if(status.value==='suspended'&&!suspended)return false;
+        if(status.value==='expired'&&(active||suspended))return false;
+        return !q||[p.owner,p.owner_email,p.plan].some(v=>String(v||'').toLowerCase().includes(q));
+      });
+      for(const customer of filtered){
+        const row=el('tr'),valid=isPaidActive(customer);
+        const state=customer.admin_suspended_at?tr('Suspended','معلق')
+          :valid?tr('Active','نشط'):tr('Expired / inactive','منتهي / غير نشط');
+        const total=(customer.verified_totals||[]).map(
+          t=>t.currency+' '+(t.amount_cents/100).toFixed(2)).join(' · ')||'—';
+        for(const value of [
+          (customer.owner||'—')+' · '+(customer.owner_email||'—'),
+          customer.plan||'—',state,total,
+          customer.last_paid_at?fmtDate(customer.last_paid_at):'—',
+          customer.current_period_end?fmtDate(customer.current_period_end):'—'
+        ])row.append(el('td','',value));
+        const action=el('td'),buttons=afActionBar();
+        buttons.append(afBtn(tr('View','عرض'),()=>{
+          openModal(tr('Verified paying customer','عميل دفع بالفعل'),kv([
+            [tr('Customer','العميل'),customer.owner||'—'],
+            [tr('Email','البريد'),customer.owner_email||'—'],
+            [tr('Plan','الخطة'),customer.plan||'—'],
+            [tr('Subscription status','حالة الاشتراك'),state],
+            [tr('Verified payments','دفعات مؤكدة'),customer.verified_payment_count],
+            [tr('Total by currency','الإجمالي لكل عملة'),total],
+            [tr('Last payment','آخر دفع'),customer.last_paid_at?fmtDate(customer.last_paid_at):'—'],
+            [tr('Valid until','تاريخ الانتهاء'),customer.current_period_end?fmtDate(customer.current_period_end):'—']
+          ]));
+        }));
+        buttons.append(afBtn(tr('Manage','إدارة'),()=>afNoteEditor('subscription',customer.id,
+          annotations.get('subscription:'+customer.id))));
+        action.append(buttons);row.append(action);tbody.append(row);
+      }
+      caption.textContent=tr('Showing ','المعروض ')+filtered.length+' / '+paid.length+
+        tr(' verified paying customers',' من العملاء الذين دفعوا بشكل موثق');
+      if(!filtered.length){
+        const trRow=el('tr'),td=el('td','',tr('No matching paying customers','لا يوجد عملاء مطابقون'));
+        td.colSpan=7;trRow.append(td);tbody.append(trRow);
+      }
+    }
+    search.oninput=draw;status.onchange=draw;draw();
+  }
+
   function afMethodPayload(method,enabled){
     const d=method.details||{};
     return {
