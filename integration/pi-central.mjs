@@ -327,23 +327,22 @@ class SdkAgent {
     const manager=existing.length?
       sdk.SessionManager.open(existing[0].path):
       sdk.SessionManager.create(scope.directory,sessionDir);
-    // Use the complete existing Pi installation for every account.
-    // Pi SDK remains the only agent, tool, skill and extension executor.
+    // Emergency containment: this SDK executes inside the credential-bearing
+    // shared Node process. cwd is not an OS security boundary. Until workers
+    // have independently verified process/filesystem isolation, no customer
+    // (including owners) may enable native or extension execution tools.
     const settingsManager=sdk.SettingsManager.inMemory();
-    // Reuse installed todo extensions where present. Otherwise load the
-    // replacement-friendly Pi extension with native session tool results.
-    let todoFallback=[];
-    try{
-      const {Type}=await import("typebox");
-      if(Type?.Object&&Type?.Literal)
-        todoFallback=[piTodoExtension(Type)];
-    }catch{/* Keep existing Pi SDK tools if typebox is unavailable. */}
     const resourceLoader=new sdk.DefaultResourceLoader({
-      extensionFactories:todoFallback,
+      extensionFactories:[],
       cwd:scope.directory,agentDir:PI_AGENT_DIR,settingsManager,
       // appendSystemPrompt is supported by the installed Pi ResourceLoader.
       // The previous systemPromptOverride setting was not applied by Pi SDK.
       appendSystemPrompt:[
+        "Security containment is active: execution and filesystem tools are "+
+        "disabled because this worker has no project sandbox. You can discuss "+
+        "code and supplied text, but cannot read or modify project files, run "+
+        "commands, or inspect uploads by path. State this limitation when "+
+        "relevant and never claim to have executed a tool.\n"+
         "Current authenticated project name: "+
           (scope.projectName||"not provided")+".\n"+
         "Current project directory: "+scope.directory+".\n"+
@@ -377,20 +376,26 @@ class SdkAgent {
         "actual input or tool results show successful reading. If reading "+
         "fails, explain the limitation clearly; do not fabricate tool calls."
       ],
-      noExtensions:false,noSkills:false,
-      noPromptTemplates:false,noContextFiles:false
+      noExtensions:true,noSkills:true,
+      noPromptTemplates:true,noContextFiles:true
     });
     await resourceLoader.reload();
     const {session}=await sdk.createAgentSession({
       cwd:scope.directory,agentDir:PI_AGENT_DIR,
       modelRuntime:runtime,sessionManager:manager,settingsManager,
-      resourceLoader,noTools:false
+      resourceLoader,noTools:true
     });
-    // Activate every tool already registered in Pi, including the seven
-    // built-ins and installed extension tools. No new tools or APIs are added.
-    if(typeof session.getAllTools==="function"&&
-       typeof session.setActiveToolsByName==="function")
-      session.setActiveToolsByName(session.getAllTools().map(tool=>tool.name));
+    // Fail closed even if a different SDK version registers tools implicitly.
+    // Do not offer an environment-variable or owner-role bypass.
+    if(typeof session.setActiveToolsByName!=="function"){
+      try{session.dispose?.();}catch{}
+      throw Object.assign(new Error("Pi execution disabled: tool containment unavailable"),{status:503});
+    }
+    try{session.setActiveToolsByName([]);}
+    catch{
+      try{session.dispose?.();}catch{}
+      throw Object.assign(new Error("Pi execution disabled: tool containment failed"),{status:503});
+    }
     const agent=new SdkAgent(scope,session,runtime);
     // Bind the SDK's existing extension UI channel to the same Pi session.
     // Dialog requests are handled by the existing Workspace question form.
@@ -761,8 +766,8 @@ async function agent(s) {
   const id=projectIdFor(s);
   const current=pool.get(id);
   if(current&&!current.closed){
-    // Tool availability is no longer role-dependent; reuse this project's
-    // existing Pi SDK session without closing or resetting conversations.
+    // Only reuse a worker created by this process's tool-free SDK factory.
+    // Deployment must restart the bridge to retire pre-containment workers.
     return current;
   }
   const pending=creating.get(id);
