@@ -383,7 +383,7 @@ def admin_subscriptions(_: User = Depends(require_admin), db: Session = Depends(
     for sub in db.scalars(select(Subscription).order_by(Subscription.created_at.desc())):
         owner = owners.get(sub.user_id)
         output.append({"id": str(sub.id), "owner": owner.username if owner else None, "owner_email": owner.email if owner else None,
-                       "plan": plans[sub.plan_id].name if (sub.plan_id in plans) else None, "status": sub.status,
+                       "plan": plans[sub.plan_id].name if (sub.plan_id in plans) else None, "status": sub.status, "admin_suspended_at": sub.admin_suspended_at,
                        "started_at": sub.started_at, "current_period_end": sub.current_period_end, "cancelled_at": sub.cancelled_at})
     return output
 
