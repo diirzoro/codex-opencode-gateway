@@ -379,10 +379,30 @@ def admin_workspaces(_: User = Depends(require_admin), db: Session = Depends(get
 def admin_subscriptions(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     owners = _user_index(db)
     plans = {p.id: p for p in db.scalars(select(Plan))}
+    # Reuse verified payment history to identify paying clients; never infer
+    # payment from a selected plan or from Stripe/PayPal test orders.
+    paid_stats = {}
+    for uid, currency, count, amount, last_paid in db.execute(
+        select(PaymentOrder.user_id, PaymentOrder.currency,
+               func.count(PaymentOrder.id), func.sum(PaymentOrder.amount_cents),
+               func.max(PaymentOrder.paid_at))
+        .where(PaymentOrder.status == "paid")
+        .group_by(PaymentOrder.user_id, PaymentOrder.currency)
+    ):
+        info = paid_stats.setdefault(uid, {"verified_payment_count": 0,
+                                           "verified_totals": [],
+                                           "last_paid_at": None})
+        info["verified_payment_count"] += int(count or 0)
+        info["verified_totals"].append({"currency": currency,
+                                         "amount_cents": int(amount or 0)})
+        if last_paid and (info["last_paid_at"] is None
+                          or last_paid > info["last_paid_at"]):
+            info["last_paid_at"] = last_paid
     output = []
     for sub in db.scalars(select(Subscription).order_by(Subscription.created_at.desc())):
         owner = owners.get(sub.user_id)
-        output.append({"id": str(sub.id), "owner": owner.username if owner else None, "owner_email": owner.email if owner else None,
+        output.append({"id": str(sub.id), "user_id": str(sub.user_id), "owner": owner.username if owner else None, "owner_email": owner.email if owner else None,
+                       **paid_stats.get(sub.user_id, {"verified_payment_count": 0, "verified_totals": [], "last_paid_at": None}),
                        "plan": plans[sub.plan_id].name if (sub.plan_id in plans) else None, "status": sub.status, "admin_suspended_at": sub.admin_suspended_at,
                        "started_at": sub.started_at, "current_period_end": sub.current_period_end, "cancelled_at": sub.cancelled_at})
     return output
