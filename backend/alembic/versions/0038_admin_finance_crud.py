@@ -13,6 +13,7 @@ depends_on = None
 
 
 def upgrade():
+    op.add_column("subscriptions", sa.Column("admin_suspended_at", sa.DateTime(timezone=True), nullable=True))
     op.create_table(
         "admin_finance_notes",
         sa.Column("target_type", sa.String(16), primary_key=True),
@@ -38,5 +39,6 @@ def upgrade():
 
 
 def downgrade():
+    op.drop_column("subscriptions", "admin_suspended_at")
     op.drop_table("admin_report_presets")
     op.drop_table("admin_finance_notes")
