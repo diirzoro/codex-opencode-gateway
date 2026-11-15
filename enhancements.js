@@ -520,14 +520,14 @@ window.renderGithubConfirmation=function(root,status,refresh){
     var subs = await api('/api/admin/subscriptions');
     var body = document.getElementById('adminSubscriptionsBody'); if (body) {
       body.replaceChildren();
-      subs.forEach(function (s) { var tr3 = document.createElement('tr'); adminCells(tr3, [s.owner, s.owner_email, s.plan || tr('Not assigned', 'غير محدد'), statusText(s.status), s.started_at ? fmtDate(s.started_at) : '—', s.current_period_end ? fmtDate(s.current_period_end) : '—', s.cancelled_at ? fmtDate(s.cancelled_at) : '—']); body.append(tr3); });
+      subs.forEach(function (s) { var tr3 = document.createElement('tr'); tr3.dataset.financeId=s.id;tr3.dataset.financeStatus=s.status;tr3.dataset.financeSuspended=String(Boolean(s.admin_suspended_at)); adminCells(tr3, [s.owner, s.owner_email, s.plan || tr('Not assigned', 'غير محدد'), statusText(s.status), s.started_at ? fmtDate(s.started_at) : '—', s.current_period_end ? fmtDate(s.current_period_end) : '—', s.cancelled_at ? fmtDate(s.cancelled_at) : '—']); body.append(tr3); });
     }
     var tx = await api('/api/admin/billing/transactions'); var txBox = document.getElementById('adminTransactions');
     if (txBox) {
       txBox.replaceChildren();
       if (!tx.items || !tx.items.length) txBox.append(textElement('p', tr('No payment orders yet.', 'لا توجد طلبات دفع بعد.')));
       else tx.items.forEach(function (item) {
-        var row = textElement('article', '', 'manage-row');
+        var row = textElement('article', '', 'manage-row');row.dataset.financeId=item.id;row.dataset.financeStatus=item.status;
         row.append(textElement('strong', item.plan_name + ' · ' + item.currency + ' ' + (item.amount_cents / 100).toFixed(2)));
         row.append(textElement('span', item.email + ' · ' + item.method_label + ' · ' + statusText(item.status)));
         if (item.payment_reference) row.append(textElement('small', tr('Receipt reference: ', 'مرجع الإيصال: ') + item.payment_reference));
@@ -1873,9 +1873,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
 
   async function gridBilling() {
     await loadAdminBilling();
-    enhanceGrid(document.getElementById('adminSubscriptionsBody'), {
-      readonly: tr('Subscription records are created by the billing service.', ' سجلات الاشتراكات ينشئها خدمة الفوترة.'),
-    });
+    enhanceGrid(document.getElementById('adminSubscriptionsBody'));
+
   }
 
   var prevOverview = ADMIN_LOADERS.overview;
