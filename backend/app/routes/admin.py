@@ -451,6 +451,379 @@ def admin_reports(_: User = Depends(require_admin), db: Session = Depends(get_db
         "visitors": {"available": False, "label": "Not available yet"},
     }
 
+
+# Administrative CRUD for existing subscription, order, receiving method and
+# report views. Confirmed revenue and provider captures remain immutable.
+class AdminFinanceNote(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    note: str = Field(default="", max_length=1000)
+    archived: bool = False
+
+
+class AdminFinanceConfirm(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: str = Field(min_length=3, max_length=60)
+
+
+class AdminFinanceSuspend(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    suspended: bool
+    confirmation: str
+
+
+class AdminReportDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: str = Field(min_length=2, max_length=120)
+    status: Literal["all", "awaiting_payment", "pending_review", "paid",
+                    "sandbox_paid", "cancelled", "failed", "rejected"] = "all"
+    search: str = Field(default="", max_length=120)
+    from_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    to_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _finance_audit(db, actor, action, customer=None):
+    from ..models import AccountAudit
+    db.add(AccountAudit(actor_id=actor.id,
+                        subject_id=customer or actor.id, action=action))
+
+
+def _finance_target(db, kind, item_id):
+    from ..models import Subscription, PaymentOrder
+    model = Subscription if kind == "subscription" else PaymentOrder
+    row = db.get(model, item_id)
+    if not row:
+        raise HTTPException(404, "Financial record not found")
+    return row
+
+
+def _finance_preset(db, report_id, lock=False):
+    from sqlalchemy import text
+    statement = ("SELECT id,name,filters_json,created_by,archived_at,"
+                 "created_at,updated_at FROM admin_report_presets WHERE id=:id")
+    row = db.execute(text(statement + (" FOR UPDATE" if lock else "")),
+                     {"id": str(report_id)}).mappings().first()
+    if row is None:
+        raise HTTPException(404, "Saved report not found")
+    return row
+
+
+def _finance_public_preset(row):
+    return {"id": row["id"], "name": row["name"],
+            **json.loads(row["filters_json"]), "created_by": row["created_by"],
+            "archived_at": row["archived_at"], "created_at": row["created_at"],
+            "updated_at": row["updated_at"]}
+
+
+def _finance_validate_report(data):
+    from datetime import date
+    try:
+        start = date.fromisoformat(data.from_date) if data.from_date else None
+        end = date.fromisoformat(data.to_date) if data.to_date else None
+    except ValueError:
+        raise HTTPException(422, "Invalid calendar date") from None
+    if start and end and start > end:
+        raise HTTPException(422, "End date precedes start date")
+    return data.model_dump(exclude={"name"})
+
+
+@router.get("/finance/notes")
+def finance_notes(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    from sqlalchemy import text
+    results = db.execute(text(
+        "SELECT target_type,target_id,note,archived_at,updated_at "
+        "FROM admin_finance_notes ORDER BY updated_at DESC LIMIT 2000"
+    )).mappings()
+    return [dict(row) for row in results]
+
+
+@router.put("/finance/notes/{kind}/{item_id}")
+def finance_save_note(kind: Literal["subscription", "order"],
+                      item_id: _uuid.UUID, data: AdminFinanceNote,
+                      actor: User = Depends(require_admin),
+                      db: Session = Depends(get_db)):
+    from sqlalchemy import text
+    record = _finance_target(db, kind, item_id)
+    db.execute(text(
+        "INSERT INTO admin_finance_notes "
+        "(target_type,target_id,note,archived_at,updated_by) "
+        "VALUES (:kind,:id,:note,:archived,:actor) "
+        "ON CONFLICT (target_type,target_id) DO UPDATE SET "
+        "note=excluded.note,archived_at=excluded.archived_at,"
+        "updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP"
+    ), {"kind": kind, "id": str(item_id), "note": data.note,
+        "archived": datetime.now(timezone.utc) if data.archived else None,
+        "actor": str(actor.id)})
+    _finance_audit(db, actor, "finance.note_saved", record.user_id)
+    db.commit()
+    return {"kind": kind, "id": str(item_id), "archived": data.archived,
+            "note": data.note}
+
+
+@router.delete("/finance/notes/{kind}/{item_id}", status_code=204)
+def finance_delete_note(kind: Literal["subscription", "order"],
+                        item_id: _uuid.UUID, data: AdminFinanceConfirm,
+                        actor: User = Depends(require_admin),
+                        db: Session = Depends(get_db)):
+    from fastapi import Response
+    from sqlalchemy import text
+    if data.confirmation != "DELETE NOTE":
+        raise HTTPException(422, "Exact note deletion confirmation required")
+    record = _finance_target(db, kind, item_id)
+    db.execute(text(
+        "DELETE FROM admin_finance_notes WHERE target_type=:kind "
+        "AND target_id=:id"
+    ), {"kind": kind, "id": str(item_id)})
+    _finance_audit(db, actor, "finance.note_deleted", record.user_id)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/finance/subscriptions/{sub_id}/suspend")
+def finance_suspend_subscription(sub_id: _uuid.UUID, data: AdminFinanceSuspend,
+                                 actor: User = Depends(require_admin),
+                                 db: Session = Depends(get_db)):
+    expected = "SUSPEND" if data.suspended else "RESUME"
+    if data.confirmation != expected:
+        raise HTTPException(422, "Exact suspension confirmation required")
+    row = db.scalar(select(Subscription).where(
+        Subscription.id == sub_id).with_for_update())
+    if row is None:
+        raise HTTPException(404, "Subscription not found")
+    customer = db.get(User, row.user_id)
+    if customer and customer.role in {"owner", "admin"}:
+        raise HTTPException(403, "Administrative accounts are managed separately")
+    row.admin_suspended_at = datetime.now(timezone.utc) if data.suspended else None
+    _finance_audit(db, actor, "finance.subscription_suspended" if data.suspended
+                   else "finance.subscription_resumed", row.user_id)
+    db.commit()
+    return {"id": str(row.id), "suspended": bool(row.admin_suspended_at),
+            "ends_at": row.current_period_end, "status": row.status}
+
+
+@router.delete("/finance/subscriptions/{sub_id}", status_code=204)
+def finance_delete_empty_subscription(sub_id: _uuid.UUID,
+                                      data: AdminFinanceConfirm,
+                                      actor: User = Depends(require_admin),
+                                      db: Session = Depends(get_db)):
+    from fastapi import Response
+    from sqlalchemy import text
+    if data.confirmation != "DELETE EMPTY SUBSCRIPTION":
+        raise HTTPException(422, "Exact subscription deletion confirmation required")
+    row = db.scalar(select(Subscription).where(
+        Subscription.id == sub_id).with_for_update())
+    if row is None:
+        raise HTTPException(404, "Subscription not found")
+    customer = db.get(User, row.user_id)
+    if (db.scalar(select(PaymentOrder.id).where(
+            PaymentOrder.user_id == row.user_id).limit(1))
+            or row.current_period_end or row.status == "active"
+            or (customer and customer.trial_ends_at
+                and customer.trial_ends_at > datetime.now(timezone.utc))):
+        raise HTTPException(409, "Subscription has trial or payment history; archive instead")
+    db.execute(text("DELETE FROM admin_finance_notes "
+                    "WHERE target_type='subscription' AND target_id=:id"),
+               {"id": str(sub_id)})
+    db.delete(row)
+    _finance_audit(db, actor, "finance.empty_subscription_deleted", row.user_id)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.delete("/finance/orders/{order_id}", status_code=204)
+def finance_delete_empty_order(order_id: _uuid.UUID, data: AdminFinanceConfirm,
+                               actor: User = Depends(require_admin),
+                               db: Session = Depends(get_db)):
+    from fastapi import Response
+    from sqlalchemy import text
+    if data.confirmation != "DELETE EMPTY ORDER":
+        raise HTTPException(422, "Exact payment deletion confirmation required")
+    row = db.scalar(select(PaymentOrder).where(
+        PaymentOrder.id == order_id).with_for_update())
+    if row is None:
+        raise HTTPException(404, "Payment not found")
+    if (row.status not in {"failed", "cancelled", "rejected"}
+            or row.paid_at or row.provider_order_id or row.provider_capture_id
+            or row.receipt_path or row.payment_reference
+            or row.confirmation_reference):
+        raise HTTPException(409, "Payment evidence exists; archive instead")
+    db.execute(text("DELETE FROM admin_finance_notes WHERE "
+                    "target_type='order' AND target_id=:id"),
+               {"id": str(order_id)})
+    customer_id = row.user_id
+    db.delete(row)
+    _finance_audit(db, actor, "finance.empty_order_deleted", customer_id)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.get("/finance/methods")
+def finance_methods(_: User = Depends(require_admin),
+                    db: Session = Depends(get_db)):
+    from ..models.management import BillingMethod
+    from ..services.billing_methods import method_payload
+    items = db.scalars(select(BillingMethod).where(
+        BillingMethod.user_id.is_(None)).order_by(BillingMethod.label))
+    result = []
+    for method in items:
+        info = method_payload(method)
+        result.append({**info,
+                       "dynamic_profile": bool(info["details"].get("_gateway_profile_slug")),
+                       "historical_orders": _count(db, PaymentOrder,
+                                                   PaymentOrder.method_id == method.id)})
+    return result
+
+
+@router.delete("/finance/methods/{method_id}", status_code=204)
+def finance_delete_unused_method(method_id: _uuid.UUID, data: AdminFinanceConfirm,
+                                 actor: User = Depends(require_admin),
+                                 db: Session = Depends(get_db)):
+    from fastapi import Response
+    from ..models.management import BillingMethod
+    from ..services.billing_methods import method_payload
+    if data.confirmation != "DELETE UNUSED METHOD":
+        raise HTTPException(422, "Exact method deletion confirmation required")
+    row = db.scalar(select(BillingMethod).where(
+        BillingMethod.id == method_id, BillingMethod.user_id.is_(None))
+        .with_for_update())
+    if row is None:
+        raise HTTPException(404, "Payment method not found")
+    if method_payload(row)["details"].get("_gateway_profile_slug"):
+        raise HTTPException(409, "Dynamic provider must be managed in its existing section")
+    if row.enabled or _count(db, PaymentOrder, PaymentOrder.method_id == method_id):
+        raise HTTPException(409, "Disable method and preserve referenced payment history")
+    db.delete(row)
+    _finance_audit(db, actor, "finance.method_deleted")
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.get("/finance/reports")
+def finance_reports(_: User = Depends(require_admin),
+                    db: Session = Depends(get_db)):
+    from sqlalchemy import text
+    rows = db.execute(text(
+        "SELECT id,name,filters_json,created_by,archived_at,created_at,updated_at "
+        "FROM admin_report_presets ORDER BY created_at DESC LIMIT 200"
+    )).mappings()
+    return [_finance_public_preset(row) for row in rows]
+
+
+@router.post("/finance/reports", status_code=201)
+def finance_create_report(data: AdminReportDraft, actor: User = Depends(require_admin),
+                          db: Session = Depends(get_db)):
+    from sqlalchemy import text
+    filters = _finance_validate_report(data)
+    report_id = str(_uuid.uuid4())
+    db.execute(text(
+        "INSERT INTO admin_report_presets(id,name,filters_json,created_by) "
+        "VALUES (:id,:name,:filters,:actor)"
+    ), {"id": report_id, "name": data.name,
+        "filters": json.dumps(filters), "actor": str(actor.id)})
+    _finance_audit(db, actor, "finance.report_created")
+    db.commit()
+    return _finance_public_preset(_finance_preset(db, report_id))
+
+
+@router.put("/finance/reports/{report_id}")
+def finance_update_report(report_id: _uuid.UUID, data: AdminReportDraft,
+                          actor: User = Depends(require_admin),
+                          db: Session = Depends(get_db)):
+    from sqlalchemy import text
+    filters = _finance_validate_report(data)
+    _finance_preset(db, report_id, lock=True)
+    db.execute(text(
+        "UPDATE admin_report_presets SET name=:name,filters_json=:filters,"
+        "updated_at=CURRENT_TIMESTAMP WHERE id=:id"
+    ), {"id": str(report_id), "name": data.name, "filters": json.dumps(filters)})
+    _finance_audit(db, actor, "finance.report_updated")
+    db.commit()
+    return _finance_public_preset(_finance_preset(db, report_id))
+
+
+@router.post("/finance/reports/{report_id}/archive")
+def finance_archive_report(report_id: _uuid.UUID, data: AdminFinanceSuspend,
+                           actor: User = Depends(require_admin),
+                           db: Session = Depends(get_db)):
+    from sqlalchemy import text
+    expected = "ARCHIVE" if data.suspended else "RESTORE"
+    if data.confirmation != expected:
+        raise HTTPException(422, "Exact report archive confirmation required")
+    _finance_preset(db, report_id, lock=True)
+    db.execute(text(
+        "UPDATE admin_report_presets SET archived_at=:at,"
+        "updated_at=CURRENT_TIMESTAMP WHERE id=:id"
+    ), {"id": str(report_id),
+        "at": datetime.now(timezone.utc) if data.suspended else None})
+    _finance_audit(db, actor, "finance.report_archived" if data.suspended
+                   else "finance.report_restored")
+    db.commit()
+    return _finance_public_preset(_finance_preset(db, report_id))
+
+
+@router.delete("/finance/reports/{report_id}", status_code=204)
+def finance_delete_report(report_id: _uuid.UUID, data: AdminFinanceConfirm,
+                          actor: User = Depends(require_admin),
+                          db: Session = Depends(get_db)):
+    from fastapi import Response
+    from sqlalchemy import text
+    if data.confirmation != "DELETE REPORT":
+        raise HTTPException(422, "Exact report deletion confirmation required")
+    row = _finance_preset(db, report_id, lock=True)
+    if row["archived_at"] is None:
+        raise HTTPException(409, "Archive report preset before deleting")
+    db.execute(text("DELETE FROM admin_report_presets WHERE id=:id"),
+               {"id": str(report_id)})
+    _finance_audit(db, actor, "finance.report_deleted")
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.get("/finance/reports/{report_id}/results")
+def finance_report_results(report_id: _uuid.UUID,
+                           _: User = Depends(require_admin),
+                           db: Session = Depends(get_db)):
+    from datetime import date, time
+    from sqlalchemy import or_
+    preset = _finance_preset(db, report_id)
+    f = json.loads(preset["filters_json"])
+    terms = []
+    if f.get("status") != "all":
+        terms.append(PaymentOrder.status == f["status"])
+    if f.get("from_date"):
+        start = datetime.combine(date.fromisoformat(f["from_date"]),
+                                 time.min, tzinfo=timezone.utc)
+        terms.append(PaymentOrder.created_at >= start)
+    if f.get("to_date"):
+        stop = datetime.combine(date.fromisoformat(f["to_date"]) + timedelta(days=1),
+                                time.min, tzinfo=timezone.utc)
+        terms.append(PaymentOrder.created_at < stop)
+    if f.get("search"):
+        q = "%" + f["search"].strip() + "%"
+        terms.append(or_(User.email.ilike(q), PaymentOrder.plan_name.ilike(q),
+                         PaymentOrder.method_label.ilike(q)))
+    rows = db.execute(select(PaymentOrder, User.email).join(
+        User, User.id == PaymentOrder.user_id).where(*terms)
+        .order_by(PaymentOrder.created_at.desc()).limit(501)).all()
+    totals = db.execute(select(PaymentOrder.currency,
+                               func.sum(PaymentOrder.amount_cents)).join(
+        User, User.id == PaymentOrder.user_id).where(
+            *terms, PaymentOrder.status == "paid"
+        ).group_by(PaymentOrder.currency).order_by(PaymentOrder.currency)).all()
+    return {
+        "preset": _finance_public_preset(preset),
+        "items": [
+            {"id": str(item.id), "email": email, "plan_name": item.plan_name,
+             "method_label": item.method_label, "amount_cents": item.amount_cents,
+             "currency": item.currency, "status": item.status,
+             "created_at": item.created_at, "paid_at": item.paid_at}
+            for item, email in rows[:500]],
+        "truncated": len(rows) > 500,
+        "verified_revenue": [
+            {"currency": currency, "amount_cents": int(amount or 0)}
+            for currency, amount in totals]
+    }
+
+
 @router.get("/plans")
 def list_plans(include_retired: bool = False, _: User = Depends(require_admin), db: Session = Depends(get_db)):
     # Keep legacy plan rows for historical subscriptions, but remove them from
