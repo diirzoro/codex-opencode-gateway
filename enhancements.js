@@ -2079,7 +2079,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
         row.append(actions);
       }
     }
-    await afRenderMethods(panel);
+    await afRenderPaidCustomers(panel);
   }
   function afMethodPayload(method,enabled){
     const d=method.details||{};
@@ -2094,47 +2094,46 @@ window.renderGithubConfirmation=function(root,status,refresh){
       enabled:enabled===undefined?Boolean(method.enabled):enabled
     };
   }
-  async function afRenderMethods(panel){
-    let box=panel.querySelector('#afAdminPaymentMethods');
-    if(!box){box=el('section','admin-section');box.id='afAdminPaymentMethods';panel.append(box);}
-    box.replaceChildren(el('h2','',tr('Payment methods and banks — Admin','إدارة البنوك وطرق الدفع — الأدمن')),
-      el('p','lead',tr('Create bank/wallet drafts, edit, enable or disable methods. Delete only unused disabled methods. Dynamic Stripe/PayPal configurations stay in the existing provider editor.',
-      'إضافة البنوك والمحافظ وتعديلها وتفعيلها وتعطيلها؛ الحذف النهائي فقط للوسائل المعطلة غير المستخدمة. إعدادات Stripe وPayPal الديناميكية تبقى في نموذجها الحالي.')));
-    const toolbar=afActionBar();
-    toolbar.append(afBtn(tr('+ Add bank / wallet','+ إضافة بنك / محفظة'),()=>afMethodEditor(null,()=>afRenderMethods(panel)),'button small'));
-    box.append(toolbar);
-    const methods=await api('/api/admin/finance/methods',{cache:'no-store'});
-    if(!methods.length)box.append(el('p','',tr('No saved methods','لا توجد وسائل محفوظة')));
-    for(const method of methods){
-      const row=el('div','manage-row'),info=el('div');
-      info.append(el('strong','',method.label),
-        el('p','',method.kind+' · '+(method.enabled?tr('Enabled','مفعّل'):tr('Disabled','معطّل'))+' · '+method.historical_orders+' '+tr('orders','طلبات')));
-      row.append(info);
-      const actions=afActionBar();
-      if(method.dynamic_profile){
-        actions.append(el('span','',tr('Manage from Dynamic Providers above','الإدارة من قسم المزودين الديناميكيين بالأعلى')));
-      }else{
-        actions.append(afBtn(tr('Edit','تعديل'),()=>afMethodEditor(method,()=>afRenderMethods(panel))));
-        actions.append(afBtn(method.enabled?tr('Disable / hide','تعطيل / إخفاء'):tr('Enable','تفعيل'),async()=>{
-          if(!await afConfirm(method.enabled?'Hide this method from new customer checkouts?':'Enable this payment method for customers?',
-            method.enabled?'إخفاء هذه الوسيلة عن عمليات الدفع الجديدة؟':'تفعيل هذه الوسيلة للعملاء؟'))return;
-          await api('/api/billing/methods/'+method.id+'?platform=true',{
-            method:'PUT',body:JSON.stringify(afMethodPayload(method,!method.enabled))});
-          await afRenderMethods(panel);
-        }));
-        if(!method.enabled&&!method.historical_orders){
-          actions.append(afBtn(tr('Delete permanently','حذف نهائي'),async()=>{
-            if(!await afConfirm('Permanently delete unused payment method: '+method.label+'?',
-              'تأكيد نهائي لحذف طريقة الدفع غير المستخدمة: '+method.label+'؟'))return;
-            await api('/api/admin/finance/methods/'+method.id,{
-              method:'DELETE',body:JSON.stringify({confirmation:'DELETE UNUSED METHOD'})});
-            await afRenderMethods(panel);
-          }));
-        }
-      }
-      row.append(actions);box.append(row);
+
+  // Keep every saved payment method in the ONE existing provider catalogue.
+  // The controls below use pre-existing platform method endpoints.
+  window.adminFinanceLegacyUI={
+    add(refresh){afMethodEditor(null,refresh);},
+    edit(method,refresh){afMethodEditor(method,refresh);},
+    preview(method){
+      const d=method.details||{},masked=value=>{
+        const txt=String(value||'');return txt?'••••'+txt.slice(-4):'—';
+      };
+      openModal(tr('Payment method preview','معاينة وسيلة الدفع'),kv([
+        [tr('Method','الطريقة'),method.label],
+        [tr('Type','النوع'),method.kind],
+        [tr('Status','الحالة'),method.enabled?tr('Enabled','مفعلة'):tr('Disabled','معطلة')],
+        [tr('Bank','البنك'),d.bank_name||'—'],
+        [tr('Account holder','صاحب الحساب'),d.account_name||'—'],
+        [tr('Reference, masked','المرجع مخفي'),masked(d.account_reference)],
+        [tr('IBAN, masked','الآيبان مخفي'),masked(d.iban)],
+        [tr('Currency','العملة'),d.currency||'USD'],
+        [tr('Instructions','التعليمات'),d.instructions||'—'],
+        [tr('Historical orders','طلبات سابقة'),method.historical_orders||0]
+      ]));
+    },
+    async toggle(method,refresh){
+      if(!await afConfirm(method.enabled?'Hide this payment method from new customers?':'Enable this payment method for customers?',
+        method.enabled?'إخفاء وسيلة الدفع عن العملاء الجدد؟':'تفعيل وسيلة الدفع للعملاء؟'))return;
+      await api('/api/billing/methods/'+method.id+'?platform=true',{
+        method:'PUT',body:JSON.stringify(afMethodPayload(method,!method.enabled))});
+      await refresh();
+    },
+    async remove(method,refresh){
+      if(method.enabled||method.historical_orders)throw Error(tr(
+        'Only disabled unused methods may be removed','يُحذف فقط ما كان معطلاً ولم يستخدم في أي طلب دفع'));
+      if(!await afConfirm('Permanently delete unused method '+method.label+'?',
+        'تأكيد نهائي لحذف وسيلة الدفع غير المستخدمة: '+method.label+'؟'))return;
+      await api('/api/admin/finance/methods/'+method.id,{
+        method:'DELETE',body:JSON.stringify({confirmation:'DELETE UNUSED METHOD'})});
+      await refresh();
     }
-  }
+  };
   function afMethodEditor(method,reload){
     const existing=method?afMethodPayload(method):afMethodPayload({kind:'bank',label:'',enabled:false,details:{}});
     const body=el('div');
@@ -2184,7 +2183,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
   }
 
   const adminBillingLoader=ADMIN_LOADERS.billing;
-  ADMIN_LOADERS.billing=async function(){await adminBillingLoader();await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="billing"]'),'adminBillingMethods'),'billing',true);await afRenderBilling();};
+  ADMIN_LOADERS.billing=async function(){await adminBillingLoader();await afRenderBilling();};
   const nativePolicyLoader=ADMIN_LOADERS.policy;
   ADMIN_LOADERS.policy=async function(){
     await nativePolicyLoader();
