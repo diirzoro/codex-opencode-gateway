@@ -32,7 +32,8 @@ def _profile(db):
     if not row or row["environment"] != "live" or row["connection_mode"] != "api":
         return {}
     fields = payment_provider_profiles._decode(row["encrypted_fields"])
-    return {item["key"]: item["value"] for item in fields}
+    return {**{item["key"]: item["value"] for item in fields},
+            '_admin_suspended': bool(row.get('admin_suspended'))}
 
 
 def _policy(db):
@@ -61,6 +62,7 @@ def live_ready(db):
     profile, policy = _profile(db), _policy(db)
     return bool(
         credentials.available()
+        and not profile.get('_admin_suspended')
         and _valid(profile)
         and policy.get("checkout_enabled") is True
         and hmac.compare_digest(str(policy.get("live_fingerprint") or ""), _fingerprint(profile))

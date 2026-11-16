@@ -56,7 +56,7 @@ def subscription_payload(db, user) -> dict:
     paid_end = row.current_period_end
     if paid_end is not None and paid_end.tzinfo is None:
         paid_end = paid_end.replace(tzinfo=timezone.utc)
-    paid_active = bool(row.status == 'active' and row.plan_id and paid_end and paid_end > now)
+    paid_active = bool(not row.admin_suspended_at and row.status == 'active' and row.plan_id and paid_end and paid_end > now)
     paid_remaining = max(0, ceil((paid_end - now).total_seconds() / 86400)) if paid_end else 0
     plans = [plan_payload(p) for p in db.scalars(select(Plan).where(Plan.active.is_(True), ~Plan.code.in_(LEGACY_PLAN_CODES)).order_by(Plan.sort_order, Plan.id))]
     access = access_payload(db, user)
@@ -64,7 +64,7 @@ def subscription_payload(db, user) -> dict:
         "plan": plan_payload(user.plan),
         "selected_plan": plan_payload(db.get(Plan, row.plan_id)) if row.plan_id else None,
         "trial": {"started_at": user.trial_started_at, "ends_at": user.trial_ends_at, "remaining_days": access["core_trial"]["remaining_days"], "active": access["core_trial"]["active"]},
-        "subscription": {"status": row.status, "started_at": row.started_at, "current_period_end": row.current_period_end, "cancelled_at": row.cancelled_at, "auto_renew": bool(row.auto_renew)},
+        "subscription": {"status": row.status, "started_at": row.started_at, "current_period_end": row.current_period_end, "cancelled_at": row.cancelled_at, "admin_suspended_at": row.admin_suspended_at, "auto_renew": bool(row.auto_renew)},
         "plans": plans,
         "paid_entitlement": {"active": paid_active, "ends_at": paid_end,
                              "remaining_days": paid_remaining if paid_active else 0,
@@ -276,6 +276,9 @@ def cancellation_status(order_id:uuid.UUID,user:User=Depends(require_billing_use
 def cancel_order(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
+    return cancel_unpaid_order(db,row,user)
+
+def cancel_unpaid_order(db,row,actor):
     if row.status in {'paid','sandbox_paid'} or row.provider_capture_id or row.paid_at:raise HTTPException(409,'Accepted payments cannot be cancelled or refunded')
     if row.status=='cancelled':return order_payload(row)
     if row.status not in {'awaiting_payment','pending_review','failed','rejected','cancelled'}:
@@ -285,7 +288,7 @@ def cancel_order(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:S
         if payload.get('status') not in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED'}:
             raise HTTPException(409,'This PayPal order is approved or completed. Confirm its payment status before cancelling; no refund has been issued.')
     row.status='cancelled'
-    db.add(AccountAudit(actor_id=user.id,subject_id=user.id,action='billing.payment_cancelled'))
+    db.add(AccountAudit(actor_id=actor.id,subject_id=row.user_id,action='billing.payment_cancelled'))
     db.commit();return order_payload(row)
 
 @router.delete('/orders/{order_id}',status_code=204)
@@ -352,6 +355,18 @@ def download_receipt(order_id:uuid.UUID,user:User=Depends(require_billing_user),
     return FileResponse(row.receipt_path)
 
 # Administrative review is a manual receipt check, never a simulated provider webhook.
+class AdminCancel(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    confirmation:str
+
+@router.post('/admin/orders/{order_id}/cancel')
+def admin_cancel_order(order_id:uuid.UUID,data:AdminCancel,user:User=Depends(require_admin),db:Session=Depends(get_db)):
+    if data.confirmation!='CANCEL UNPAID ORDER':
+        raise HTTPException(422,'Exact cancellation confirmation required')
+    row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id).with_for_update())
+    if not row:raise HTTPException(404,'Payment order not found')
+    return cancel_unpaid_order(db,row,user)
+
 @router.get('/admin/orders')
 def admin_orders(user:User=Depends(require_admin),db:Session=Depends(get_db)):
     return [{**order_payload(row),'email':db.get(User,row.user_id).email} for row in db.scalars(select(PaymentOrder).order_by(PaymentOrder.created_at.desc()).limit(200))]

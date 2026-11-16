@@ -47,6 +47,7 @@ def _public(row):
         "slug": row["slug"], "label": row["label"],
         "category": row["category"], "connection_mode": row["connection_mode"],
         "environment": row["environment"],
+        "admin_suspended": bool(row.get('admin_suspended')),
         "fields": [{
             "key": item["key"], "label": item["label"],
             "kind": item["kind"], "required": bool(item["required"]),
@@ -70,7 +71,7 @@ def _one(db, slug, *, lock=False):
     suffix = " FOR UPDATE" if lock and db.bind.dialect.name == "postgresql" else ""
     row = db.execute(text(
         "SELECT slug,label,category,connection_mode,environment,"
-        "encrypted_fields,updated_at FROM payment_provider_profiles "
+        "encrypted_fields,updated_at,admin_suspended FROM payment_provider_profiles "
         "WHERE slug=:slug" + suffix
     ), {"slug": slug}).mappings().first()
     return dict(row) if row else None
@@ -80,7 +81,7 @@ def list_profiles(db):
     _require_ready(db)
     rows = db.execute(text(
         "SELECT slug,label,category,connection_mode,environment,"
-        "encrypted_fields,updated_at FROM payment_provider_profiles ORDER BY label,slug"
+        "encrypted_fields,updated_at,admin_suspended FROM payment_provider_profiles ORDER BY label,slug"
     )).mappings()
     from . import payment_profile_publications
     result=[]
@@ -171,6 +172,21 @@ def save_profile(db, actor_id, data, *, create):
         ), params)
     db.commit()
     return _public(_one(db, data.slug))
+
+
+def set_suspended(db, slug, suspended, actor_id):
+    _require_ready(db)
+    if _one(db, slug, lock=True) is None:
+        raise HTTPException(404, 'Provider profile not found')
+    from . import payment_profile_publications
+    from ..models import AccountAudit
+    if suspended:
+        payment_profile_publications.disable_on_edit(db, slug)
+    db.execute(text('UPDATE payment_provider_profiles SET admin_suspended=:suspended, updated_by=:actor, updated_at=CURRENT_TIMESTAMP WHERE slug=:slug'),
+               {'suspended': suspended, 'actor': actor_id, 'slug': slug})
+    db.add(AccountAudit(actor_id=actor_id, action='billing.provider_suspended' if suspended else 'billing.provider_resumed'))
+    db.commit()
+    return _public(_one(db, slug))
 
 
 def delete_profile(db, slug):

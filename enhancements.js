@@ -508,6 +508,22 @@ window.renderGithubConfirmation=function(root,status,refresh){
     return entry.promise;
   }
 
+  function financeStatusLabel(value) {
+    const labels={awaiting_payment:['Awaiting payment','بانتظار الدفع'],pending_review:['Pending review','بانتظار المراجعة'],paid:['Paid','مدفوع'],sandbox_paid:['Test payment','دفع تجريبي'],failed:['Failed','فشل'],cancelled:['Cancelled','ملغى'],rejected:['Rejected','مرفوض']};
+    return labels[value]?tr(...labels[value]):statusText(value);
+  }
+  function financeStatusBadge(value) {
+    const badge=textElement('span',financeStatusLabel(value),'finance-status');
+    badge.dataset.status=value;return badge;
+  }
+  function financeTable(headers,label) {
+    const wrap=textElement('div','','table-wrap finance-table-wrap'),table=document.createElement('table');
+    table.className='finance-table';table.setAttribute('aria-label',label);
+    const head=document.createElement('thead'),row=document.createElement('tr');
+    for(const label of headers){const cell=textElement('th',label);cell.scope='col';row.append(cell);}
+    head.append(row);const body=document.createElement('tbody');table.append(head,body);wrap.append(table);
+    return {wrap,body};
+  }
   async function loadAdminBilling() {
     var summary = await api('/api/admin/billing/summary');
     var box = document.getElementById('adminBillingSummary'); if (box) {
@@ -520,19 +536,23 @@ window.renderGithubConfirmation=function(root,status,refresh){
     var subs = await api('/api/admin/subscriptions');
     var body = document.getElementById('adminSubscriptionsBody'); if (body) {
       body.replaceChildren();
-      subs.forEach(function (s) { var tr3 = document.createElement('tr'); adminCells(tr3, [s.owner, s.owner_email, s.plan || tr('Not assigned', 'غير محدد'), statusText(s.status), s.started_at ? fmtDate(s.started_at) : '—', s.current_period_end ? fmtDate(s.current_period_end) : '—', s.cancelled_at ? fmtDate(s.cancelled_at) : '—']); body.append(tr3); });
+      subs.forEach(function (s) { var tr3 = document.createElement('tr'); tr3.dataset.financeId=s.id;tr3.dataset.financeStatus=s.status;tr3.dataset.financeSuspended=String(Boolean(s.admin_suspended_at)); adminCells(tr3, [s.owner, s.owner_email, s.plan || tr('Not assigned', 'غير محدد'), statusText(s.status), s.started_at ? fmtDate(s.started_at) : '—', s.current_period_end ? fmtDate(s.current_period_end) : '—', s.cancelled_at ? fmtDate(s.cancelled_at) : '—']); body.append(tr3); });
     }
     var tx = await api('/api/admin/billing/transactions'); var txBox = document.getElementById('adminTransactions');
     if (txBox) {
-      txBox.replaceChildren();
-      if (!tx.items || !tx.items.length) txBox.append(textElement('p', tr('No payment orders yet.', 'لا توجد طلبات دفع بعد.')));
-      else tx.items.forEach(function (item) {
-        var row = textElement('article', '', 'manage-row');
-        row.append(textElement('strong', item.plan_name + ' · ' + item.currency + ' ' + (item.amount_cents / 100).toFixed(2)));
-        row.append(textElement('span', item.email + ' · ' + item.method_label + ' · ' + statusText(item.status)));
-        if (item.payment_reference) row.append(textElement('small', tr('Receipt reference: ', 'مرجع الإيصال: ') + item.payment_reference));
-        txBox.append(row);
-      });
+      const view=financeTable([tr('Order','الطلب'),tr('Customer','العميل'),tr('Plan','الخطة'),tr('Payment method','وسيلة الدفع'),tr('Amount','المبلغ'),tr('Status','الحالة'),tr('Created','تاريخ الطلب'),tr('Actions','الإجراءات')],tr('Payment transactions','معاملات الدفع'));
+      txBox.replaceChildren(view.wrap);
+      for(const item of tx.items||[]){
+        const row=document.createElement('tr');row.dataset.financeId=item.id;row.dataset.financeStatus=item.status;
+        row.dataset.financeSearch=[item.id,item.email,item.plan_name,item.method_label,item.payment_reference].filter(Boolean).join(' ').toLowerCase();
+        const id=textElement('td',String(item.id).slice(0,8),'finance-reference');id.title=item.id;id.dir='ltr';row.append(id);
+        const customer=textElement('td',item.email||'—','finance-customer');customer.dir='auto';row.append(customer);
+        row.append(textElement('td',item.plan_name||'—'),textElement('td',item.method_label||'—'));
+        const amount=textElement('td',(item.currency||'')+' '+(item.amount_cents/100).toFixed(2),'finance-amount');amount.dir='ltr';row.append(amount);
+        const state=document.createElement('td');state.append(financeStatusBadge(item.status));row.append(state);
+        row.append(textElement('td',item.created_at?fmtDate(item.created_at):'—','finance-date'));
+        const actions=document.createElement('td');actions.dataset.financeActions='';row.append(actions);view.body.append(row);
+      }
     }
     var rev = document.getElementById('adminRevenue'); if (rev) {
       rev.replaceChildren();
@@ -1873,9 +1893,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
 
   async function gridBilling() {
     await loadAdminBilling();
-    enhanceGrid(document.getElementById('adminSubscriptionsBody'), {
-      readonly: tr('Subscription records are created by the billing service.', ' سجلات الاشتراكات ينشئها خدمة الفوترة.'),
-    });
+    enhanceGrid(document.getElementById('adminSubscriptionsBody'));
+
   }
 
   var prevOverview = ADMIN_LOADERS.overview;
@@ -1940,8 +1959,538 @@ window.renderGithubConfirmation=function(root,status,refresh){
   CLIENT_LOADERS.security=function(){return window.renderManagement(document.getElementById('clientSecurityPanel'),'security');};
   const accountLoader=CLIENT_LOADERS.account;
   CLIENT_LOADERS.account=async function(){await accountLoader();const host=managementHost(document.querySelector('[data-client-panel="account"]'),'clientAccountActivity');await window.renderManagement(host,'logs');const lifecycle=managementHost(document.querySelector('[data-client-panel="account"]'),'clientAccountLifecycle');if(lifecycle.parentElement.tagName!=='DETAILS'){const details=textElement('details','','account-sensitive');details.append(textElement('summary',tr('Suspend or request deletion','تعليق الحساب أو طلب حذفه')));lifecycle.before(details);details.append(lifecycle);}await window.renderManagement(lifecycle,'lifecycle');const signout=document.querySelector('[data-client-panel=account] .account-signout');if(signout)document.querySelector('[data-client-panel=account]').append(signout);};
+
+  // Administrative finance CRUD; uses existing billing/profiles APIs and the
+  // existing authenticated admin routes. Never modifies customer checkout UI.
+  let afShowArchived=false,afReportsShowArchived=false;
+  const afOrderView={query:'',status:'all',page:1,size:10};
+  const afBtn=(name,run,cls='button ghost small')=>{
+    const b=el('button',cls,name);b.type='button';
+    b.onclick=async()=>{b.disabled=true;try{await run();}catch(error){toast(error.message||String(error));}finally{b.disabled=false;}};
+    return b;
+  };
+  const afInput=(root,title,value='',kind='text')=>{
+    const input=document.createElement(kind==='textarea'?'textarea':'input');
+    if(kind!=='textarea')input.type=kind;
+    input.value=value===undefined||value===null?'':String(value);
+    root.append(labeled(title,input));return input;
+  };
+  const afActionBar=()=>el('div','manage-actions');
+  const afUnavailable=(label,reason)=>{
+    const button=afBtn(label,()=>openModal(label,el('p','',reason)));
+    button.classList.add('finance-unavailable');button.title=reason;
+    button.setAttribute('aria-label',label+' — '+reason);
+    return button;
+  };
+  const afReload=()=>ADMIN_LOADERS.billing();
+  const afConfirm=(en,ar)=>window.confirmAction(tr(en,ar));
+  async function afToggleSubscription(id,suspended){
+    if(!await afConfirm(suspended?'Restore this customer subscription access?':'Suspend this customer subscription access without changing the paid end date?',
+      suspended?'هل تريد تنشيط صلاحية الاشتراك؟':'هل تريد تعليق صلاحية الاشتراك دون تغيير تاريخ انتهاء الفترة المدفوعة؟'))return;
+    await api('/api/admin/finance/subscriptions/'+id+'/suspend',{
+      method:'POST',body:JSON.stringify({suspended:!suspended,confirmation:suspended?'RESUME':'SUSPEND'})});
+    await afReload();
+  }
+  const afNotesMap=rows=>new Map(rows.map(n=>[n.target_type+':'+n.target_id,n]));
+  function afNoteEditor(kind,id,existing){
+    const item=existing||{},body=el('div');
+    const note=afInput(body,tr('Internal admin note','ملاحظة الأدمن الداخلية'),item.note||'','textarea');
+    note.maxLength=1000;note.rows=4;
+    const label=el('label','checkbox-row'),archive=document.createElement('input');
+    archive.type='checkbox';archive.checked=Boolean(item.archived_at);
+    label.append(archive,el('span','',tr('Archive this row in admin only (no payment changes)','أرشفة السطر في الأدمن فقط دون تغيير الدفع')));
+    body.append(label);
+    const save=afBtn(tr('Save note / archive','حفظ الملاحظة / الأرشفة'),async()=>{
+      await api('/api/admin/finance/notes/'+kind+'/'+id,{method:'PUT',body:JSON.stringify({note:note.value.trim(),archived:archive.checked})});
+      modal.close();await afReload();
+    },'button small');
+    const erase=afBtn(tr('Delete note only','حذف الملاحظة فقط'),async()=>{
+      if(!await afConfirm('Delete this admin note only? The financial record remains.','حذف الملاحظة الإدارية فقط؟ السجل المالي سيبقى.'))return;
+      await api('/api/admin/finance/notes/'+kind+'/'+id,{method:'DELETE',body:JSON.stringify({confirmation:'DELETE NOTE'})});
+      modal.close();await afReload();
+    });
+    openModal(tr('Admin note and archive','ملاحظات وأرشفة الأدمن'),body,[save,erase]);
+  }
+  async function afRenderBilling(){
+    if(!['admin','owner'].includes(currentUser?.role))return;
+    const panel=document.querySelector('[data-admin-panel="billing"]');
+    if(!panel)return;
+    const annotations=afNotesMap(await api('/api/admin/finance/notes',{cache:'no-store'}));
+    const subs=document.getElementById('adminSubscriptionsBody');
+    if(subs){
+      const subscriptionDetails=await api('/api/admin/subscriptions',{cache:'no-store'});
+      const subscriptionLookup=new Map(subscriptionDetails.map(item=>[String(item.id),item]));
+      const head=subs.closest('table').querySelector('thead tr');
+      if(head&&!head.querySelector('[data-af-actions]')){
+        const th=el('th','',tr('Actions','الإجراءات'));th.dataset.afActions='yes';head.append(th);
+      }
+      for(const trRow of subs.querySelectorAll('tr')){
+        const id=trRow.dataset.financeId;if(!id)continue;
+        const note=annotations.get('subscription:'+id);
+        trRow.hidden=Boolean(note?.archived_at)&&!afShowArchived;
+        const actions=afActionBar(),cell=el('td');
+        actions.append(afBtn(tr('Preview','معاينة'),()=>{
+          const item=subscriptionLookup.get(id)||{};
+          openModal(tr('Subscription details','تفاصيل الاشتراك'),kv([
+            [tr('Customer','العميل'),item.owner||'—'],[tr('Email','البريد'),item.owner_email||'—'],
+            [tr('Plan','الخطة'),item.plan||'—'],[tr('Status','الحالة'),financeStatusLabel(item.status)],
+            [tr('Valid until','تاريخ الانتهاء'),item.current_period_end?fmtDate(item.current_period_end):'—'],
+            [tr('Verified payments','دفعات مؤكدة'),item.verified_payment_count||0]
+          ]));
+        }));
+        actions.append(afBtn(tr('View / note / archive','عرض / ملاحظة / أرشفة'),()=>afNoteEditor('subscription',id,note)));
+        const suspended=trRow.dataset.financeSuspended==='true';
+        actions.append(afBtn(suspended?tr('Resume access','تنشيط الاشتراك'):tr('Suspend access','تعليق الاشتراك'),()=>afToggleSubscription(id,suspended)));
+        if(!['active'].includes(trRow.dataset.financeStatus)){
+          actions.append(afBtn(tr('Delete empty record','حذف السجل الفارغ'),async()=>{
+            if(!await afConfirm('Permanently remove this subscription ONLY if it has no active trial or any payment history?',
+              'تأكيد حذف الاشتراك نهائيًا بشرط عدم وجود تجربة سارية أو أي سجل دفع؟'))return;
+            await api('/api/admin/finance/subscriptions/'+id,{
+              method:'DELETE',body:JSON.stringify({confirmation:'DELETE EMPTY SUBSCRIPTION'})});
+            await afReload();
+          }));
+        }
+        cell.append(actions);trRow.append(cell);
+      }
+      let toggle=panel.querySelector('#afBillingArchiveToggle');
+      if(!toggle){
+        toggle=afBtn('',async()=>{afShowArchived=!afShowArchived;await afReload();});
+        toggle.id='afBillingArchiveToggle';
+        subs.closest('.admin-section').querySelector('header')?.append(toggle);
+      }
+      toggle.textContent=afShowArchived?tr('Hide archived','إخفاء المؤرشف'):tr('Show archived','عرض المؤرشف');
+    }
+    const ordersBox=document.getElementById('adminTransactions');
+    if(ordersBox){
+      const details=await api('/api/billing/admin/orders',{cache:'no-store'});
+      const lookup=new Map(details.map(item=>[String(item.id),item]));
+      for(const row of ordersBox.querySelectorAll('tr[data-finance-id]')){
+        const id=row.dataset.financeId,order=lookup.get(id),note=annotations.get('order:'+id);
+        row.dataset.financeArchived=String(Boolean(note?.archived_at));
+        row.hidden=Boolean(note?.archived_at)&&!afShowArchived;
+        const actions=afActionBar();
+        actions.append(afBtn(tr('Note / archive','ملاحظة / أرشفة'),()=>afNoteEditor('order',id,note)));
+        if(order){
+          actions.append(afBtn(tr('Preview','معاينة'),()=>{
+            const summary=kv([
+              [tr('Customer','العميل'),order.email||'—'],
+              [tr('Status','الحالة'),order.status],
+              [tr('Plan','الخطة'),order.plan_name],
+              [tr('Method','الوسيلة'),order.method_label],
+              [tr('Amount','المبلغ'),order.currency+' '+(order.amount_cents/100).toFixed(2)],
+              [tr('Reference','المرجع'),order.payment_reference||'—'],
+              [tr('Provider ID','معرف المزود'),order.provider_order_id||'—'],
+              [tr('Sender','المرسل'),order.sender_name||'—']
+            ]);
+            for(const [name,value] of [
+              [tr('Created','تاريخ الطلب'),order.created_at?fmtDate(order.created_at):null],
+              [tr('Paid at','تاريخ الدفع'),order.paid_at?fmtDate(order.paid_at):null],
+              [tr('Sender email','بريد المرسل'),order.sender_email],
+              [tr('Sender bank','بنك المرسل'),order.sender_bank],
+              [tr('Sender account','حساب المرسل'),order.sender_account],
+              [tr('Payer','الدافع'),order.payer_name],
+              [tr('Transfer date','تاريخ التحويل'),order.transfer_date],
+              [tr('Amount sent','المبلغ المرسل'),order.amount_sent_cents?order.currency+' '+(order.amount_sent_cents/100).toFixed(2):null],
+              [tr('Billing note','ملاحظة الدفع'),order.billing_note],
+              [tr('Rejection reason','سبب الرفض'),order.reject_reason]
+            ])if(value)summary.append(kv([[name,value]]));
+            if(order.has_receipt){
+              const link=el('a','button ghost small',tr('View receipt','عرض الإيصال'));
+              link.href='/api/billing/orders/'+encodeURIComponent(id)+'/receipt';
+              link.target='_blank';link.rel='noopener noreferrer';summary.append(link);
+            }
+            openModal(tr('Payment details','تفاصيل الدفع'),summary);
+          }));
+          if(order.status==='pending_review'&&!order.provider_environment&&!order.provider_order_id){
+            actions.append(afBtn(tr('Verify and accept','تحقق ثم اعتماد'),async()=>{
+              const ref=await window.requestInput(tr('Enter the payment reference you independently verified','أدخل مرجع الدفع الذي تحققت من استلامه'),order.payment_reference||'');
+              if(ref===null)return;
+              if(ref.trim().length<3||ref.trim().length>200)throw Error(tr('Reference must contain 3–200 characters','المرجع يجب أن يكون بين 3 و200 حرف'));
+              if(!await afConfirm('I verified the funds were actually received. Activate the purchased period?',
+                'أؤكد استلام المال فعليًا. هل تريد تفعيل الفترة المدفوعة؟'))return;
+              await api('/api/billing/admin/orders/'+id+'/confirm',{method:'POST',body:JSON.stringify({reference:ref.trim()})});
+              await afReload();
+            },'button small'));
+            actions.append(afBtn(tr('Reject','رفض'),async()=>{
+              const why=await window.requestInput(tr('Reason for rejecting the receipt','سبب رفض الإيصال'),'');
+              if(why===null)return;
+              if(why.trim().length<3||why.trim().length>500)throw Error(tr('Enter a valid reason','أدخل سببًا صحيحًا'));
+              if(!await afConfirm('Reject this unverified manual payment?','تأكيد رفض هذا الدفع اليدوي غير الموثق؟'))return;
+              await api('/api/billing/admin/orders/'+id+'/reject',{method:'POST',body:JSON.stringify({reason:why.trim()})});
+              await afReload();
+            }));
+          }else{
+            const reason=order.provider_environment||order.provider_order_id
+              ?tr('Provider payments require verification by the payment provider; manual approval is unavailable.','يتطلب هذا الدفع تحقق مزود الدفع؛ لا يمكن اعتماده يدويًا.')
+              :tr('Accept or reject becomes available after the customer submits payment evidence for review.','يتاح القبول أو الرفض بعد إرسال العميل إثبات الدفع للمراجعة.');
+            actions.append(afUnavailable(tr('Accept / reject','قبول / رفض'),reason));
+          }
+          if(['awaiting_payment','pending_review','failed','rejected'].includes(order.status)&&!order.paid_at&&!order.provider_capture_id){
+            actions.append(afBtn(tr('Cancel','إلغاء'),async()=>{
+              if(!await afConfirm('Cancel this unpaid order? Provider status is checked before cancellation. No refund is issued.',
+                'تأكيد إلغاء طلب الدفع غير المسدد؟ يتم التحقق من حالة المزود أولًا؛ هذا الإجراء لا يُصدر استردادًا.'))return;
+              await api('/api/billing/admin/orders/'+id+'/cancel',{method:'POST',body:JSON.stringify({confirmation:'CANCEL UNPAID ORDER'})});
+              await afReload();
+            }));
+          }else{
+            actions.append(afUnavailable(tr('Cancel','إلغاء'),tr('Only unpaid, uncaptured orders can be cancelled.','الإلغاء متاح فقط للطلبات غير المسددة التي لم يتم تحصيلها.')));
+          }
+          if(['failed','cancelled','rejected'].includes(order.status)&&!order.provider_order_id&&!order.provider_capture_id&&!order.payment_reference&&!order.has_receipt&&!order.paid_at){
+            actions.append(afBtn(tr('Delete empty draft','حذف المسودة الفارغة'),async()=>{
+              if(!await afConfirm('Permanently delete this unverified, unused order draft?','تأكيد نهائي لحذف مسودة طلب الدفع الفارغة؟'))return;
+              await api('/api/admin/finance/orders/'+id,{method:'DELETE',body:JSON.stringify({confirmation:'DELETE EMPTY ORDER'})});
+              await afReload();
+            }));
+          }else{
+            actions.append(afUnavailable(tr('Delete','حذف'),tr('Payment evidence and provider records must be retained. Use archive to hide this record. Only empty cancelled, failed or rejected drafts can be permanently deleted after confirmation.',
+              'تُحفظ أدلة الدفع وسجلات المزود. استخدم الأرشفة لإخفاء السجل. الحذف النهائي مع التأكيد متاح فقط للمسودات الفارغة الملغاة أو الفاشلة أو المرفوضة.')));
+          }
+        }
+        row.querySelector('[data-finance-actions]').replaceChildren(actions);
+      }
+      afOrderControls(ordersBox);
+    }
+    await afRenderPaidCustomers(panel,annotations);
+  }
+
+  async function afRenderPaidCustomers(panel,annotations){
+    const subscribers=await api('/api/admin/subscriptions',{cache:'no-store'});
+    const paid=subscribers.filter(row=>row.verified_payment_count>0);
+    let host=panel.querySelector('#afPayingCustomers');
+    if(!host){
+      host=el('section','admin-section');host.id='afPayingCustomers';
+      const transactions=document.getElementById('adminTransactions')?.closest('.admin-section');
+      if(transactions)transactions.before(host);else panel.append(host);
+    }
+    const header=el('header'),heading=el('div');
+    heading.append(el('small','',tr('VERIFIED PAYMENTS','المدفوعات المؤكدة')),
+      el('h2','',tr('Paying subscribers','العملاء الذين سددوا الاشتراك')));
+    header.append(heading);host.replaceChildren(header);
+    const summary=el('p','lead',tr('Clients with at least one verified paid order, including expired subscriptions. Test and unverified payments are excluded.',
+      'العملاء الذين لديهم عملية دفع مؤكدة واحدة على الأقل، بما في ذلك الاشتراكات المنتهية. لا تُحسب المدفوعات التجريبية أو غير المؤكدة.'));
+    host.append(summary);
+    const toolbar=afActionBar();
+    const search=document.createElement('input');search.type='search';
+    search.placeholder=tr('Search paying customers','بحث بين العملاء الذين دفعوا');
+    search.setAttribute('aria-label',search.placeholder);
+    const status=document.createElement('select');
+    for(const [value,label] of [['all',tr('All paying','كل الدافعين')],['active',tr('Active only','نشط فقط')],['suspended',tr('Suspended','المعلق')],['expired',tr('Expired / other','منتهي / غير نشط')]])
+      status.add(new Option(label,value));
+    toolbar.append(search,status);host.append(toolbar);
+    const table=el('table'),thead=el('thead'),head=el('tr');
+    for(const label of [tr('Customer','العميل'),tr('Plan','الخطة'),
+      tr('Subscription','الاشتراك'),tr('Verified paid','إجمالي المدفوع'),
+      tr('Last payment','آخر دفع'),tr('Valid until','صالح حتى'),
+      tr('Actions','إجراءات')])head.append(el('th','',label));
+    thead.append(head);table.append(thead);
+    const tbody=el('tbody');table.append(tbody);
+    const wrap=el('div','table-wrap');wrap.append(table);host.append(wrap);
+    const caption=el('p','lead');host.append(caption);
+    const now=Date.now();
+    function isPaidActive(p){
+      return !p.admin_suspended_at&&p.status==='active'
+        &&p.current_period_end && new Date(p.current_period_end).getTime()>now;
+    }
+    function draw(){
+      tbody.replaceChildren();
+      const q=search.value.trim().toLowerCase();
+      const filtered=paid.filter(p=>{
+        if(annotations.get('subscription:'+p.id)?.archived_at&&!afShowArchived)return false;
+        const active=isPaidActive(p),suspended=Boolean(p.admin_suspended_at);
+        if(status.value==='active'&&!active)return false;
+        if(status.value==='suspended'&&!suspended)return false;
+        if(status.value==='expired'&&(active||suspended))return false;
+        return !q||[p.owner,p.owner_email,p.plan].some(v=>String(v||'').toLowerCase().includes(q));
+      });
+      for(const customer of filtered){
+        const row=el('tr'),valid=isPaidActive(customer);
+        const state=customer.admin_suspended_at?tr('Suspended','معلق')
+          :valid?tr('Active','نشط'):tr('Expired / inactive','منتهي / غير نشط');
+        const total=(customer.verified_totals||[]).map(
+          t=>t.currency+' '+(t.amount_cents/100).toFixed(2)).join(' · ')||'—';
+        for(const value of [
+          (customer.owner||'—')+' · '+(customer.owner_email||'—'),
+          customer.plan||'—',state,total,
+          customer.last_paid_at?fmtDate(customer.last_paid_at):'—',
+          customer.current_period_end?fmtDate(customer.current_period_end):'—'
+        ])row.append(el('td','',value));
+        const action=el('td'),buttons=afActionBar();
+        buttons.append(afBtn(tr('View','عرض'),()=>{
+          openModal(tr('Verified paying customer','عميل دفع بالفعل'),kv([
+            [tr('Customer','العميل'),customer.owner||'—'],
+            [tr('Email','البريد'),customer.owner_email||'—'],
+            [tr('Plan','الخطة'),customer.plan||'—'],
+            [tr('Subscription status','حالة الاشتراك'),state],
+            [tr('Verified payments','دفعات مؤكدة'),customer.verified_payment_count],
+            [tr('Total by currency','الإجمالي لكل عملة'),total],
+            [tr('Last payment','آخر دفع'),customer.last_paid_at?fmtDate(customer.last_paid_at):'—'],
+            [tr('Valid until','تاريخ الانتهاء'),customer.current_period_end?fmtDate(customer.current_period_end):'—']
+          ]));
+        }));
+        buttons.append(afBtn(tr('Manage','إدارة'),()=>afNoteEditor('subscription',customer.id,
+          annotations.get('subscription:'+customer.id))));
+        buttons.append(afBtn(customer.admin_suspended_at?tr('Resume','تنشيط'):tr('Suspend','تعليق'),
+          ()=>afToggleSubscription(customer.id,Boolean(customer.admin_suspended_at))));
+        buttons.append(afUnavailable(tr('Delete','حذف'),tr('This customer has verified payment history. Archive the subscription from Manage to hide it while retaining its payment records.',
+          'هذا العميل لديه سجل دفع موثق. يمكنك أرشفة الاشتراك من إدارة لإخفائه مع حفظ سجلات الدفع.')));
+        action.append(buttons);row.append(action);tbody.append(row);
+      }
+      caption.textContent=tr('Showing ','المعروض ')+filtered.length+' / '+paid.length+
+        tr(' verified paying customers',' من العملاء الذين دفعوا بشكل موثق');
+      if(!filtered.length){
+        const trRow=el('tr'),td=el('td','',tr('No matching paying customers','لا يوجد عملاء مطابقون'));
+        td.colSpan=7;trRow.append(td);tbody.append(trRow);
+      }
+    }
+    search.oninput=draw;status.onchange=draw;draw();
+  }
+
+
+  function afOrderControls(host){
+    host.querySelector('[data-finance-toolbar]')?.remove();
+    host.querySelector('[data-finance-pager]')?.remove();
+    const rows=[...host.querySelectorAll('tr[data-finance-id]')],tbody=host.querySelector('tbody');
+    if(!tbody)return;
+    const tools=el('div','finance-toolbar');tools.dataset.financeToolbar='';
+    const search=document.createElement('input');search.type='search';search.value=afOrderView.query;
+    search.placeholder=tr('Search customer, order or payment reference','ابحث بالعميل أو الطلب أو مرجع الدفع');search.setAttribute('aria-label',search.placeholder);
+    const state=document.createElement('select');state.setAttribute('aria-label',tr('Payment status','حالة الدفع'));
+    for(const value of ['all','awaiting_payment','pending_review','paid','sandbox_paid','cancelled','failed','rejected'])state.add(new Option(value==='all'?tr('All statuses','كل الحالات'):financeStatusLabel(value),value));
+    state.value=afOrderView.status;
+    const size=document.createElement('select');size.setAttribute('aria-label',tr('Rows per page','عدد الصفوف في الصفحة'));
+    for(const value of [10,25,50])size.add(new Option(value+tr(' rows',' صفوف'),String(value)));size.value=String(afOrderView.size);
+    tools.append(search,state,size);host.prepend(tools);
+    const pager=el('div','finance-pagination');pager.dataset.financePager='';
+    const count=el('span');count.setAttribute('role','status');count.setAttribute('aria-live','polite');
+    const prev=el('button','button ghost small',tr('Previous','السابق'));
+    const next=el('button','button ghost small',tr('Next','التالي'));
+    prev.type=next.type='button';prev.onclick=()=>{afOrderView.page--;draw();};next.onclick=()=>{afOrderView.page++;draw();};
+    pager.append(count,prev,next);host.append(pager);
+    const empty=el('tr'),cell=el('td','finance-empty');cell.colSpan=8;empty.append(cell);tbody.append(empty);
+    function draw(){
+      const filtered=rows.filter(row=>(!annotationsFor(row))&&(afOrderView.status==='all'||row.dataset.financeStatus===afOrderView.status)&&row.dataset.financeSearch.includes(afOrderView.query.trim().toLowerCase()));
+      const pages=Math.max(1,Math.ceil(filtered.length/afOrderView.size));afOrderView.page=Math.max(1,Math.min(pages,afOrderView.page));
+      const start=(afOrderView.page-1)*afOrderView.size,visible=new Set(filtered.slice(start,start+afOrderView.size));
+      for(const row of rows)row.hidden=!visible.has(row);
+      empty.hidden=filtered.length>0;cell.textContent=rows.length?tr('No matching payments','لا توجد مدفوعات مطابقة'):tr('No payment orders yet','لا توجد طلبات دفع بعد');
+      count.textContent=(filtered.length?start+1:0)+'–'+Math.min(start+afOrderView.size,filtered.length)+' / '+filtered.length+tr(' payments',' عملية')+' · '+afOrderView.page+' / '+pages;
+      prev.disabled=afOrderView.page===1;next.disabled=afOrderView.page===pages;
+    }
+    function annotationsFor(row){return row.dataset.financeArchived==='true'&&!afShowArchived;}
+    search.oninput=()=>{afOrderView.query=search.value;afOrderView.page=1;draw();};
+    state.onchange=()=>{afOrderView.status=state.value;afOrderView.page=1;draw();};
+    size.onchange=()=>{afOrderView.size=Number(size.value);afOrderView.page=1;draw();};draw();
+  }
+  function afMethodPayload(method,enabled){
+    const d=method.details||{};
+    return {
+      kind:method.kind,label:method.label,
+      account_name:d.account_name||'',account_reference:d.account_reference||'',
+      bank_name:d.bank_name||'',iban:d.iban||'',branch:d.branch||'',
+      network:d.network||'',currency:d.currency||'USD',
+      instructions:d.instructions||'',checkout_mode:d.checkout_mode||'manual',
+      payment_url:d.payment_url||'',plan_id:d.plan_id||null,
+      available_country_codes:d.available_country_codes||[],
+      enabled:enabled===undefined?Boolean(method.enabled):enabled
+    };
+  }
+
+  // Keep every saved payment method in the ONE existing provider catalogue.
+  // The controls below use pre-existing platform method endpoints.
+  window.adminFinanceLegacyUI={
+    add(refresh){afMethodEditor(null,refresh);},
+    edit(method,refresh){afMethodEditor(method,refresh);},
+    preview(method){
+      const d=method.details||{},masked=value=>{
+        const txt=String(value||'');return txt?'••••'+txt.slice(-4):'—';
+      };
+      openModal(tr('Payment method preview','معاينة وسيلة الدفع'),kv([
+        [tr('Method','الطريقة'),method.label],
+        [tr('Type','النوع'),method.kind],
+        [tr('Status','الحالة'),method.enabled?tr('Enabled','مفعلة'):tr('Disabled','معطلة')],
+        [tr('Bank','البنك'),d.bank_name||'—'],
+        [tr('Account holder','صاحب الحساب'),d.account_name||'—'],
+        [tr('Reference, masked','المرجع مخفي'),masked(d.account_reference)],
+        [tr('IBAN, masked','الآيبان مخفي'),masked(d.iban)],
+        [tr('Currency','العملة'),d.currency||'USD'],
+        [tr('Instructions','التعليمات'),d.instructions||'—'],
+        [tr('Historical orders','طلبات سابقة'),method.historical_orders||0]
+      ]));
+    },
+    async toggle(method,refresh){
+      if(!await afConfirm(method.enabled?'Hide this payment method from new customers?':'Enable this payment method for customers?',
+        method.enabled?'إخفاء وسيلة الدفع عن العملاء الجدد؟':'تفعيل وسيلة الدفع للعملاء؟'))return;
+      await api('/api/billing/methods/'+method.id+'?platform=true',{
+        method:'PUT',body:JSON.stringify(afMethodPayload(method,!method.enabled))});
+      await refresh();
+    },
+    async remove(method,refresh){
+      if(!await afConfirm('Delete payment method '+method.label+'? It will no longer accept new orders. Existing payment transactions and their recorded method names remain.',
+        'تأكيد حذف وسيلة الدفع '+method.label+'؟ لن تقبل طلبات جديدة. تبقى المعاملات السابقة وأسماء وسائلها المسجلة محفوظة.'))return;
+      await api('/api/billing/methods/'+method.id+'?platform=true',{method:'DELETE'});
+      await refresh();
+    }
+  };
+  function afMethodEditor(method,reload){
+    const existing=method?afMethodPayload(method):afMethodPayload({kind:'bank',label:'',enabled:false,details:{}});
+    const body=el('div');
+    const name=afInput(body,tr('Payment method name','اسم وسيلة الدفع'),existing.label);
+    const kind=document.createElement('select');
+    for(const option of ['bank','wallet','paypal','googlepay','binance','other'])kind.add(new Option(option,option));
+    kind.value=existing.kind;
+    body.append(labeled(tr('Type','النوع'),kind));
+    const mode=document.createElement('select');
+    for(const option of ['manual','link','paypal'])mode.add(new Option(option,option));
+    mode.value=existing.checkout_mode;
+    body.append(labeled(tr('Checkout mode','نمط الدفع'),mode));
+    const fields={};
+    for(const [key,en,ar] of [
+      ['account_name','Account holder','صاحب الحساب'],
+      ['account_reference','Account / receiving reference','رقم الحساب / الاستلام'],
+      ['bank_name','Bank name','اسم البنك'],
+      ['iban','IBAN','الآيبان'],['branch','Branch','الفرع'],
+      ['currency','Currency','العملة'],['network','Network','الشبكة'],
+      ['instructions','Customer payment instructions','تعليمات الدفع للعميل'],
+      ['payment_url','HTTPS checkout URL','رابط الدفع HTTPS'],
+      ['plan_id','Plan ID for hosted link','رقم الخطة للرابط'],
+      ['available_country_codes','Country codes CSV','الدول المسموحة مفصولة بفواصل']
+    ]){
+      const raw=key==='available_country_codes'?(existing[key]||[]).join(','):existing[key]||'';
+      fields[key]=afInput(body,tr(en,ar),raw,key==='instructions'?'textarea':'text');
+    }
+    name.maxLength=100;fields.instructions.maxLength=1000;
+    const chk=document.createElement('input');chk.type='checkbox';chk.checked=Boolean(existing.enabled);
+    const label=el('label','checkbox-row');label.append(chk,el('span','',tr('Enabled for new customer checkout','تفعيل للعملاء الجدد')));body.append(label);
+    const save=afBtn(tr('Save payment method','حفظ طريقة الدفع'),async()=>{
+      if(!name.value.trim())throw Error(tr('Method name is required','اسم الوسيلة مطلوب'));
+      const get=key=>fields[key].value.trim();
+      const payload={kind:kind.value,label:name.value.trim(),checkout_mode:mode.value,
+        account_name:get('account_name'),account_reference:get('account_reference'),
+        bank_name:get('bank_name'),iban:get('iban'),branch:get('branch'),
+        currency:get('currency').toUpperCase()||'USD',
+        network:get('network'),instructions:get('instructions'),payment_url:get('payment_url'),
+        plan_id:get('plan_id')?Number(get('plan_id')):null,
+        available_country_codes:get('available_country_codes').split(',').map(x=>x.trim().toUpperCase()).filter(Boolean),
+        enabled:chk.checked};
+      await api('/api/billing/methods'+(method?'/'+method.id:'')+'?platform=true',{
+        method:method?'PUT':'POST',body:JSON.stringify(payload)});
+      modal.close();await reload();
+    },'button small');
+    openModal(method?tr('Edit method','تعديل الوسيلة'):tr('Add bank / wallet','إضافة بنك / محفظة'),body,[save]);
+  }
+
   const adminBillingLoader=ADMIN_LOADERS.billing;
-  ADMIN_LOADERS.billing=async function(){await adminBillingLoader();await window.renderManagement(managementHost(document.querySelector('[data-admin-panel="billing"]'),'adminBillingMethods'),'billing',true);};
+  ADMIN_LOADERS.billing=async function(){
+    await adminBillingLoader();
+    await Promise.all([afRenderBilling(),window.loadAdminPaymentCatalogue?.()]);
+  };
+
+  // Existing Reports tab: CRUD applies to saved report filters only.
+  // Verified transaction/revenue entries remain authoritative and read-only.
+  let afShowArchivedReports=false;
+  const afCsv=(value)=>{
+    let v=String(value===null||value===undefined?'':value);
+    if(/^\s*[=+@-]/.test(v))v="'"+v;
+    return '"'+v.replace(/"/g,'""')+'"';
+  };
+  async function afReportPreview(report){
+    const data=await api('/api/admin/finance/reports/'+encodeURIComponent(report.id)+'/results',{cache:'no-store'});
+    const body=el('div');
+    body.append(el('p','',tr('Verified revenue: ','إيرادات مؤكدة: ')+(data.verified_revenue||[])
+      .map(item=>item.currency+' '+(item.amount_cents/100).toFixed(2)).join(' · ')));
+    if(data.truncated)body.append(el('p','api-message',
+      tr('Showing first 500 payments. Narrow date filters for a complete export.',
+         'يظهر أول 500 طلب دفع. ضيّق الفترة للحصول على تصدير كامل.')));
+    const wrap=el('div','table-wrap'),table=el('table'),head=el('thead'),header=el('tr');
+    for(const label of [tr('Customer','العميل'),tr('Plan','الخطة'),tr('Method','الوسيلة'),tr('Amount','المبلغ'),tr('Status','الحالة'),tr('Date','التاريخ')])header.append(el('th','',label));
+    head.append(header);table.append(head);
+    const tbody=el('tbody');
+    for(const record of (data.items||[]).slice(0,100)){
+      const row=el('tr');
+      for(const value of [record.email,record.plan_name,record.method_label,
+        record.currency+' '+(record.amount_cents/100).toFixed(2),
+        record.status,record.created_at||'—'])row.append(el('td','',value));
+      tbody.append(row);
+    }
+    table.append(tbody);wrap.append(table);body.append(wrap);
+    const exportBtn=afBtn(tr('Export CSV','تصدير CSV'),()=>{
+      const headings=['Email','Plan','Method','Amount cents','Currency','Status','Created','Paid'];
+      const dataRows=(data.items||[]).map(i=>[i.email,i.plan_name,i.method_label,
+        i.amount_cents,i.currency,i.status,i.created_at,i.paid_at]);
+      const csv=[headings,...dataRows].map(row=>row.map(afCsv).join(',')).join('\r\n');
+      const blob=new Blob(['\ufeff',csv],{type:'text/csv;charset=utf-8'});
+      const url=URL.createObjectURL(blob),a=el('a');
+      a.href=url;a.download='pi-gateway-finance.csv';document.body.append(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    },'button small');
+    openModal(report.name,body,[exportBtn]);
+  }
+  function afReportEditor(report,refresh){
+    const root=el('div');
+    const title=afInput(root,tr('Report name','اسم التقرير'),report?.name||'');title.maxLength=120;title.required=true;
+    const status=document.createElement('select');
+    for(const value of ['all','awaiting_payment','pending_review','paid','sandbox_paid','cancelled','failed','rejected'])
+      status.add(new Option(value,value));
+    status.value=report?.status||'all';root.append(labeled(tr('Payment status','حالة الدفع'),status));
+    const search=afInput(root,tr('Customer / plan / method','العميل / الخطة / الوسيلة'),report?.search||'');search.maxLength=120;
+    const from=afInput(root,tr('From date','من تاريخ'),report?.from_date||'','date');
+    const to=afInput(root,tr('To date','إلى تاريخ'),report?.to_date||'','date');
+    const save=afBtn(tr('Save report','حفظ التقرير'),async()=>{
+      if(!title.reportValidity())return;
+      await api('/api/admin/finance/reports'+(report?'/'+report.id:''),{
+        method:report?'PUT':'POST',body:JSON.stringify({name:title.value.trim(),
+          status:status.value,search:search.value.trim(),from_date:from.value||null,
+          to_date:to.value||null})});
+      modal.close();await refresh();
+    },'button small');
+    openModal(report?tr('Edit report','تعديل التقرير'):tr('New report','تقرير جديد'),root,[save]);
+  }
+  async function afRenderReports(){
+    if(!['admin','owner'].includes(currentUser?.role))return;
+    const panel=document.querySelector('[data-admin-panel="reports"]');
+    if(!panel)return;
+    let container=panel.querySelector('#afSavedReports');
+    if(!container){container=el('section','admin-section');container.id='afSavedReports';panel.append(container);}
+    container.replaceChildren(el('h2','',tr('Saved financial reports','التقارير المالية المحفوظة')));
+    container.append(el('p','lead',tr(
+      'Manage saved report filters, preview and export. Verified transactions and revenue cannot be rewritten.',
+      'إدارة فلاتر التقارير ومعاينتها وتصديرها. لا يمكن تغيير العمليات والإيرادات المؤكدة.')));
+    const tools=afActionBar();
+    tools.append(afBtn(tr('+ New report','+ تقرير جديد'),()=>afReportEditor(null,afRenderReports),'button small'));
+    tools.append(afBtn(afShowArchivedReports?tr('Hide archived','إخفاء المؤرشف'):tr('Show archived','عرض المؤرشف'),
+      async()=>{afShowArchivedReports=!afShowArchivedReports;await afRenderReports();}));
+    container.append(tools);
+    const reports=await api('/api/admin/finance/reports',{cache:'no-store'});
+    const shown=reports.filter(item=>afShowArchivedReports||!item.archived_at);
+    if(!shown.length)container.append(el('p','',tr('No saved reports','لا توجد تقارير محفوظة')));
+    for(const report of shown){
+      const row=el('article','manage-row'),info=el('div');
+      info.append(el('strong','',report.name),el('p','',
+        report.status+' · '+(report.from_date||'—')+' — '+(report.to_date||'—')));
+      const actions=afActionBar();
+      actions.append(afBtn(tr('Preview / export','معاينة / تصدير'),()=>afReportPreview(report)));
+      actions.append(afBtn(tr('Edit','تعديل'),()=>afReportEditor(report,afRenderReports)));
+      actions.append(afBtn(report.archived_at?tr('Restore','استعادة'):tr('Archive','أرشفة'),async()=>{
+        const archived=!report.archived_at;
+        if(!await afConfirm(archived?'Archive this saved report filter?':'Restore this report?',
+          archived?'تأكيد أرشفة إعداد التقرير؟':'تأكيد استعادة التقرير؟'))return;
+        await api('/api/admin/finance/reports/'+report.id+'/archive',{method:'POST',
+          body:JSON.stringify({suspended:archived,confirmation:archived?'ARCHIVE':'RESTORE'})});
+        await afRenderReports();
+      }));
+      if(report.archived_at)actions.append(afBtn(tr('Delete filter','حذف إعداد التقرير'),async()=>{
+        if(!await afConfirm('Delete only this saved report filter? Payment history will remain.',
+          'تأكيد حذف إعداد التقرير فقط؟ ستبقى جميع المدفوعات محفوظة.'))return;
+        await api('/api/admin/finance/reports/'+report.id,{method:'DELETE',
+          body:JSON.stringify({confirmation:'DELETE REPORT'})});
+        await afRenderReports();
+      }));
+      row.append(info,actions);container.append(row);
+    }
+  }
+  const afPreviousReports=ADMIN_LOADERS.reports;
+  ADMIN_LOADERS.reports=async function(){await afPreviousReports();await afRenderReports();};
+
   const nativePolicyLoader=ADMIN_LOADERS.policy;
   ADMIN_LOADERS.policy=async function(){
     await nativePolicyLoader();
@@ -2323,26 +2872,47 @@ window.renderGithubConfirmation=function(root,status,refresh){
     i.type='text';i.value=value;i.maxLength=maxLength;i.autocomplete='off';wrap.append(i);
     return {wrap,input:i};
   }
+
   async function load(){
     const sequence=++revision;
-    if(!['admin','owner'].includes(typeof currentUser==='undefined'?'':currentUser?.role))return;
-    host.replaceChildren(el('h2',tr('Flexible payment & bank connections','إدارة البنوك وخدمات الدفع الديناميكية')),
-      el('p',tr('Add any bank or provider and define the fields it requires. Save Merchant ID, API/security keys, IBAN or custom fields from here. This is encrypted configuration only; it does NOT charge customers, enable a webhook or change existing payment methods.',
-        'أضف أي بنك أو مزوّد وحدد الحقول التي يتطلبها. احفظ Merchant ID ومفاتيح API والتوقيع وIBAN أو أي حقول أخرى من هنا. هذه إعدادات مشفّرة فقط ولا تُحصّل من العملاء أو تُفعّل Webhook أو تغيّر وسائل الدفع الحالية.')));
-    let data;
-    try{ data=await api('/api/admin/payment-gateways/profiles',{cache:'no-store'}); }
-    catch(err){if(sequence===revision)host.append(el('p',err.message,'api-message'));return;}
+    if(!['admin','owner'].includes(currentUser?.role))return;
+    host.replaceChildren(el('h2',tr('Payment methods & banks','طرق الدفع والبنوك')),
+      el('p',tr('One catalogue for bank accounts, wallets, processors and drafts. Payment settings are not a substitute for a verified payment connection. No saved transaction is deleted by disabling a method.',
+       'جميع البنوك والمحافظ ومزودي الدفع والمسودات في قائمة إدارة واحدة. حفظ بيانات الربط لا يعني تشغيل التحصيل تلقائيًا، وتعطيل الوسيلة لا يحذف المدفوعات السابقة.')));
+    let data,catalogue,legacy;
+    try{
+      [data,catalogue,legacy]=await Promise.all([
+        api('/api/admin/payment-gateways/profiles',{cache:'no-store'}),
+        api('/api/admin/payment-gateways/method-catalog',{cache:'no-store'}),
+        api('/api/admin/finance/methods',{cache:'no-store'})
+      ]);
+    }catch(error){
+      if(sequence===revision)host.append(el('p',error.message,'api-message'));
+      return;
+    }
     if(sequence!==revision)return;
-    const toolbar=el('div','','dynamic-provider-toolbar');
-    const picker=selectInput(tr('Choose an existing bank or payment service','اختر بنكًا أو خدمة دفع محفوظة'),
-      [['',tr('Select a provider','اختر الشركة / البنك')],...data.profiles.map(p=>[p.slug,p.label])],
-      data.profiles.some(p=>p.slug===activeSlug)?activeSlug:(data.profiles[0]?.slug||''));
-    picker.input.id='dynamicProviderSelect';
-    activeSlug=picker.input.value;
-    const add=button(tr('+ Add new provider','+ إضافة جديد'),()=>editor(null),'button small');
+    const entries=catalogue.methods||[];
+    const profileMap=new Map((data.profiles||[]).map(p=>[p.slug,p]));
+    const legacyMap=new Map((legacy||[]).map(p=>[p.id,p]));
+    const toolbar=el('div','','admin-payment-catalog-toolbar');
+    const search=el('input');search.type='search';
+    search.placeholder=tr('Search payment methods and banks','بحث في جميع وسائل الدفع والبنوك');
+    search.setAttribute('aria-label',search.placeholder);
+    const state=el('select');
+    for(const [key,title] of [
+      ['all',tr('All methods','كل الوسائل')],
+      ['enabled',tr('Enabled for customers','مفعلة للعملاء')],
+      ['disabled',tr('Disabled / drafts','معطلة / مسودات')]
+    ]){const option=el('option',title);option.value=key;state.append(option);}
+    const add=button(tr('+ Add payment provider','+ إضافة وسيلة دفع'),()=>editor(null),'button small');
     add.id='dynamicProviderAdd';
-    toolbar.append(picker.wrap,add);
-    host.append(toolbar);
+    const addBank=button(tr('+ Add bank / wallet','+ إضافة بنك / محفظة'),()=>{
+      if(!window.adminFinanceLegacyUI?.add)return;
+      window.adminFinanceLegacyUI.add(load);
+    },'button ghost small');
+    toolbar.append(search,state,add,addBank);host.append(toolbar);
+    const count=el('p','','dynamic-provider-hint'),list=el('div','','admin-payment-catalog');
+    host.append(count,list);
     // Production payment controls are part of the EXISTING Admin Dashboard.
     // Saving an API profile alone never enables REAL charges.
     if(location.hostname==='opencode-gateway.codes'){
@@ -2406,10 +2976,21 @@ window.renderGithubConfirmation=function(root,status,refresh){
       })();
     }
     const detail=el('div','','dynamic-provider-cards');
-    host.append(detail);
+    detail.hidden=true;host.append(detail);
+    const statusText=entry=>
+      entry.status==='suspended'?tr('Suspended','معلقة'):
+      entry.customer_checkout_enabled?tr('Enabled for new customers','مفعلة للعملاء'):
+      entry.status==='configured_unverified'?tr('Configured, not verified','إعداد محفوظ غير موثق'):
+      entry.status==='draft'?tr('Draft','مسودة'):
+      entry.status==='disabled_existing'?tr('Disabled','معطلة'):
+      tr('Saved — inactive','محفوظة — غير مفعلة');
+    const run=async(buttonNode,work)=>{
+      buttonNode.disabled=true;
+      try{await work();}catch(err){host.append(el('p',err.message||String(err),'api-message'));}
+      finally{buttonNode.disabled=false;}
+    };
     function showSelected(){
       detail.replaceChildren();
-      activeSlug=picker.input.value;
       const profile=data.profiles.find(p=>p.slug===activeSlug);
       if(!profile){
         detail.append(el('div',tr('Select a saved provider, or add any new bank or service.',
@@ -2503,11 +3084,92 @@ window.renderGithubConfirmation=function(root,status,refresh){
       card.append(actions);
       detail.append(card);
     }
-    picker.input.addEventListener('change',showSelected);
-    showSelected();
 
+    function render(){
+      list.replaceChildren();
+      const q=search.value.trim().toLowerCase();
+      const filtered=entries.filter(entry=>{
+        if(state.value==='enabled'&&!entry.customer_checkout_enabled)return false;
+        if(state.value==='disabled'&&entry.customer_checkout_enabled)return false;
+        return !q||[entry.label,entry.category,entry.slug,entry.connection_mode].some(v=>
+          String(v||'').toLowerCase().includes(q));
+      });
+      count.textContent=tr('Methods displayed: ','الوسائل المعروضة: ')+filtered.length+' / '+entries.length;
+      const wrap=el('div','','table-wrap finance-table-wrap'),table=el('table','','finance-table finance-methods-table');
+      table.setAttribute('aria-label',tr('Payment methods and bank connections','وسائل الدفع والبنوك المربوطة'));
+      const thead=el('thead'),head=el('tr');
+      for(const label of [tr('Payment method / bank','وسيلة الدفع / البنك'),tr('Type','النوع'),tr('Connection','طريقة الربط'),tr('Environment','البيئة'),tr('Status','الحالة'),tr('Actions','الإجراءات')]){
+        const th=el('th',label);th.scope='col';head.append(th);
+      }
+      thead.append(head);const tbody=el('tbody');table.append(thead,tbody);wrap.append(table);list.append(wrap);
+      if(!filtered.length){const row=el('tr'),cell=el('td',tr('No matching methods','لا توجد وسائل مطابقة'),'finance-empty');cell.colSpan=6;row.append(cell);tbody.append(row);return;}
+      for(const entry of filtered){
+        const row=el('tr');
+        const info=el('td','','finance-method-name');info.append(el('strong',entry.label));
+        const category=categories.find(([value])=>value===entry.category)?.[1]||entry.category||'—';
+        const mode=entry.source==='legacy'?tr('Existing method','وسيلة سابقة'):
+          entry.connection_mode==='api'?'API':entry.connection_mode==='manual'?tr('Manual transfer','تحويل يدوي'):tr('Hosted link','رابط دفع');
+        const badge=el('span',statusText(entry),'finance-status');badge.dataset.status=entry.customer_checkout_enabled?'paid':'disabled';
+        const stateCell=el('td');stateCell.append(badge);
+        row.append(info,el('td',category),el('td',mode),el('td',entry.environment==='live'?tr('Live','حقيقي'):entry.environment==='test'?tr('Test','تجريبي'):'—'),stateCell);
+        const actions=el('div','','admin-payment-entry-actions');
+        const profile=entry.source==='dynamic'?profileMap.get(entry.slug):null;
+        const method=entry.source==='legacy'?legacyMap.get(entry.method_id):null;
+        if(profile){
+          actions.append(button(tr('Preview / tools','معاينة / أدوات'),()=>{
+            activeSlug=profile.slug;detail.hidden=false;showSelected();
+            detail.scrollIntoView({behavior:'smooth',block:'nearest'});
+          },'button ghost small'));
+          actions.append(button(tr('Edit','تعديل'),()=>editor(profile),'button ghost small'));
+          const suspend=button(profile.admin_suspended?tr('Resume','تنشيط'):tr('Suspend','تعليق'),()=>run(suspend,async()=>{
+            if(!await window.confirmAction(profile.admin_suspended
+              ?tr('Resume this saved provider? This does not enable real charges or publish customer checkout.','تنشيط ملف المزود؟ لا يفعّل هذا تحصيل أموال حقيقية أو ينشر الدفع للعملاء.')
+              :tr('Suspend this provider and stop new checkouts? Existing payments remain.','تعليق هذا المزود وإيقاف طلبات الدفع الجديدة؟ تبقى المعاملات السابقة محفوظة.')))return;
+            await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+'/suspension',{
+              method:'POST',body:JSON.stringify({suspended:!profile.admin_suspended})});
+            await load();
+          }),'button ghost small');
+          actions.append(suspend);
+          if(profile.publication?.published){
+            const disable=button(tr('Suspend','تعليق'),()=>run(disable,async()=>{
+              if(!await window.confirmAction(tr('Suspend this checkout for new orders? Paid records remain.',
+                'تعليق هذه الوسيلة للطلبات الجديدة؟ تبقى المدفوعات القديمة محفوظة.')))return;
+              await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+'/publish',{method:'DELETE'});
+              detail.hidden=true;await load();
+            }),'button ghost small');
+            actions.append(disable);
+          }else if(profile.connection_mode!=='api'){
+            actions.append(button(tr('Configure / enable','إعداد / تفعيل'),()=>publishDialog(profile),'button ghost small'));
+          }
+          const remove=button(tr('Delete','حذف'),()=>run(remove,async()=>{
+            if(!await window.confirmAction(tr('Delete this provider draft? Previously paid orders and historic methods remain.',
+              'حذف مسودة هذا المزوّد؟ تبقى عمليات الدفع السابقة محفوظة.')))return;
+            await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug),{method:'DELETE'});
+            if(activeSlug===profile.slug){activeSlug='';detail.hidden=true;}await load();
+          }),'button ghost small');
+          actions.append(remove);
+        }else if(method&&!method.dynamic_profile){
+          actions.append(button(tr('Preview','معاينة'),()=>window.adminFinanceLegacyUI?.preview(method),'button ghost small'));
+          actions.append(button(tr('Edit','تعديل'),()=>window.adminFinanceLegacyUI?.edit(method,load),'button ghost small'));
+          const toggle=button(method.enabled?tr('Suspend','تعليق'):tr('Enable','تفعيل'),
+            ()=>run(toggle,()=>window.adminFinanceLegacyUI.toggle(method,load)),'button ghost small');
+          actions.append(toggle);
+          {
+            const remove=button(tr('Delete','حذف'),()=>run(remove,
+              ()=>window.adminFinanceLegacyUI.remove(method,load)),'button ghost small');
+            actions.append(remove);
+          }
+        }else{
+          actions.append(el('small',tr('Historical linked method — protected','وسيلة مرتبطة محفوظة تاريخيًا')));
+        }
+        const actionCell=el('td');actionCell.append(actions);row.append(actionCell);tbody.append(row);
+      }
+    }
+    search.oninput=render;state.onchange=render;render();
+    if(activeSlug&&profileMap.has(activeSlug)){
+      detail.hidden=false;showSelected();
+    }
   }
-
 
   async function publishDialog(profile){
     const popup=el('dialog','','dynamic-provider-dialog dynamic-provider-publish-dialog');
@@ -2700,6 +3362,6 @@ window.renderGithubConfirmation=function(root,status,refresh){
       }catch(error){feedback.textContent=error.message;save.disabled=false;}
     });
   }
-  billingTab.addEventListener('click',()=>load().catch(()=>{}));
+  window.loadAdminPaymentCatalogue=load;
   if(panel.classList.contains('active'))load().catch(()=>{});
 })();

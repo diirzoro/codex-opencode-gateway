@@ -461,7 +461,11 @@ const api=async(path,options={})=>{
   if(response.status===401&&!options.allowAnonymous&&currentUser)clearAuthenticatedState();
   const readable=response.status===413?
     (lang==='ar'?'رفض الخادم حجم المرفق (HTTP 413) قبل إرسال الطلب إلى Pi؛ ليس ذلك دليلًا على عدم دعم PDF.':'Server rejected the attachment size (HTTP 413) before Pi received it; PDF support has not been tested.'):
-    Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):(body.detail||'Request failed');
+    Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):
+    (body.detail&&typeof body.detail==='object')?
+      [body.detail.provider,body.detail.provider_code,body.detail.http_status?('HTTP '+body.detail.http_status):'']
+        .filter(v=>typeof v==='string'&&/^[a-zA-Z0-9_ .-]{1,110}$/.test(v)).join(' · ')||('Request failed (HTTP '+response.status+')'):
+      (body.detail||'Request failed');
   const error=new Error(readable);error.status=response.status;
   throw error;
  }

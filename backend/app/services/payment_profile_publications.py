@@ -70,7 +70,7 @@ def management_catalog(db):
             "connection_mode": item["connection_mode"],
             "environment": item["environment"],
             "configured": item["configured"],
-            "status": "enabled_manual" if publication["published"] else (
+            "status": "suspended" if item.get('admin_suspended') else "enabled_manual" if publication["published"] else (
                 "configured_unverified" if item["configured"] else "draft"
             ),
             "customer_checkout_enabled": bool(publication["published"]),
@@ -81,6 +81,8 @@ def management_catalog(db):
         select(BillingMethod).where(BillingMethod.user_id.is_(None))
     ):
         if str(method.id) in linked_ids:
+            continue
+        if json.loads(credentials.decrypt(method.details)).get('_gateway_profile_deleted'):
             continue
         # Historical methods remain visible without duplicating dynamic entries.
         # Their confidential receiving details must never be serialized here.
@@ -110,7 +112,16 @@ def disable_on_edit(db, slug):
 
 def forget_profile(db, slug):
     """Leave linked method disabled for audit and historical invoice references."""
-    disable_on_edit(db, slug)
+    from sqlalchemy import text
+    method = _linked_method(db, slug, lock=True)
+    if method is not None:
+        method.enabled = False
+        details = json.loads(credentials.decrypt(method.details))
+        details['_gateway_profile_deleted'] = True
+        method.details = credentials.encrypt(json.dumps(details))
+        db.flush()
+    db.execute(text('DELETE FROM payment_profile_publications WHERE profile_slug=:slug'),
+               {'slug': slug})
 
 
 def _tagged_method_values(data, slug):
@@ -125,6 +136,8 @@ def publish(db, slug, actor_id, *, currency, instructions, plan_id=None, availab
     row = profiles._one(db, slug, lock=True)
     if not row:
         raise HTTPException(404, "Unknown provider profile")
+    if row.get('admin_suspended'):
+        raise HTTPException(409, 'Resume this provider before enabling checkout')
     if row["connection_mode"] == "api":
         raise HTTPException(409,
             "Saving merchant API credentials is NOT a payment connection. "

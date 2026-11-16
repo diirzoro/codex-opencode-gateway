@@ -16,7 +16,8 @@ def access_payload(db, user, *, now=None):
     now = now or datetime.now(timezone.utc)
     core_end = aware(user.trial_ends_at)
     row = db.scalar(select(Subscription).where(Subscription.user_id == user.id))
-    paid = bool(row and row.status == "active" and row.plan_id and aware(row.current_period_end) and aware(row.current_period_end) > now)
+    suspended = bool(row and row.admin_suspended_at)
+    paid = bool(row and not suspended and row.status == "active" and row.plan_id and aware(row.current_period_end) and aware(row.current_period_end) > now)
     admin = user.role in {"admin", "owner"}
     core = admin or paid or bool(core_end and core_end > now)
     advanced = core
@@ -34,6 +35,10 @@ def access_payload(db, user, *, now=None):
         core = admin
         advanced = admin
         reason = "administration" if admin else "subscription_required"
+    if suspended and not admin:
+        core = False
+        advanced = False
+        reason = "subscription_suspended"
     end = aware(row.current_period_end) if paid_history and row and row.current_period_end else core_end
     # Account retention is independent of workspace-file/cache lifetimes. This
     # marks archival rather than deletion of customer/billing relationships.
@@ -53,7 +58,7 @@ def access_payload(db, user, *, now=None):
         "paid_access": {"active": paid, "ends_at": aware(row.current_period_end) if paid else None,
                         "remaining_days": days(aware(row.current_period_end)) if paid else 0,
                         "plan_id": row.plan_id if paid else None},
-        "core_trial": {"started_at": user.trial_started_at, "ends_at": core_end, "remaining_days": 0 if paid_history else days(core_end), "active": bool(not paid_history and core_end > now)},
+        "core_trial": {"started_at": user.trial_started_at, "ends_at": core_end, "remaining_days": 0 if paid_history else days(core_end), "active": bool(not suspended and not paid_history and core_end and core_end > now)},
         "advanced_trial": {"started_at": None, "ends_at": None,
                            "remaining_days": 0, "duration_days": 0, "state": "disabled"},
     }
