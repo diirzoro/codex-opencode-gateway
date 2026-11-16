@@ -5,6 +5,18 @@ import httpx
 from fastapi import HTTPException
 from . import payment_gateway_config
 
+def _safe_diagnostic_message(value):
+    """TEST-only developer hint: redact values, credentials and identifiers."""
+    value = str(value or '')[:2000]
+    value = re.sub(r'(?:sk|rk|pk)_(?:test|live)_[^\s,;]+', '[credential]', value)
+    value = re.sub(r'https?://\S+', '[url]', value)
+    value = re.sub(r'[\w.+-]+@[\w.-]+', '[email]', value)
+    value = re.sub(r'\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b', '[identifier]', value)
+    value = re.sub(r'\b(?:acct|cus|cs|pi|pm|req|ch|sub|price|prod|tok|ba|card)_[A-Za-z0-9_]+', '[identifier]', value)
+    value = re.sub(r"(['\"`]).*?\1", '[value]', value)
+    value = re.sub(r'\b\w{40,}\b|\d{6,}', '[value]', value)
+    return re.sub(r'[^a-zA-Z0-9 .,:;()\[\]/_=-]', ' ', value)[:320]
+
 def test_credentials(db):
     """Resolve saved dynamic Stripe test profile first; fall back to legacy settings."""
     from . import payment_provider_profiles as profiles
@@ -44,9 +56,21 @@ def _stripe_call(db, method, path, data=None):
         code = code if re.fullmatch(r"[a-z_]{1,100}", code) else "request_rejected"
         param = str(error.get('param') or '')
         param = param if re.fullmatch(r'[A-Za-z0-9_\[\].]{1,100}', param) else ''
+        message = str(error.get('message') or '').lower()
+        reason = ''
+        if any(term in message for term in ('business name', 'account name', 'account or business')):
+            reason = 'account_business_name_required'
+        elif 'payment method' in message and any(term in message for term in ('activate', 'configured', 'no valid', 'enabled')):
+            reason = 'account_payment_methods_required'
+        elif any(term in message for term in ('terms of service', 'accept the terms')):
+            reason = 'account_terms_acceptance_required'
+        elif any(term in message for term in ('business profile', 'business_profile', 'activate your account', 'complete your account')):
+            reason = 'account_setup_required'
         raise HTTPException(422 if reply.status_code < 500 else 502,
                             {"provider": "stripe", "http_status": reply.status_code,
                              "provider_code": code, "provider_param": param,
+                             "provider_reason": reason,
+                             "provider_hint": _safe_diagnostic_message(error.get('message')),
                              "request_reached_stripe": True})
     return payload
 
@@ -61,6 +85,9 @@ def create_diagnostic_checkout(db, origin, plan_id=None, user_id=None):
         raise HTTPException(409, "The active gateway_100 USD plan is required for this diagnostic")
     data = {
         "mode": "payment",
+        # A payment diagnostic must not inherit account-wide merchant-of-record
+        # tax/product requirements. This is scoped to this TEST session only.
+        "managed_payments[enabled]": "false",
         "line_items[0][price_data][currency]": plan.currency.lower(),
         "line_items[0][price_data][unit_amount]": str(plan.price_cents),
         "line_items[0][price_data][product_data][name]": "OpenCode Gateway test checkout - no entitlement",
