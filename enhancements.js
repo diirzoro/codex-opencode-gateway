@@ -508,6 +508,22 @@ window.renderGithubConfirmation=function(root,status,refresh){
     return entry.promise;
   }
 
+  function financeStatusLabel(value) {
+    const labels={awaiting_payment:['Awaiting payment','بانتظار الدفع'],pending_review:['Pending review','بانتظار المراجعة'],paid:['Paid','مدفوع'],sandbox_paid:['Test payment','دفع تجريبي'],failed:['Failed','فشل'],cancelled:['Cancelled','ملغى'],rejected:['Rejected','مرفوض']};
+    return labels[value]?tr(...labels[value]):statusText(value);
+  }
+  function financeStatusBadge(value) {
+    const badge=textElement('span',financeStatusLabel(value),'finance-status');
+    badge.dataset.status=value;return badge;
+  }
+  function financeTable(headers,label) {
+    const wrap=textElement('div','','table-wrap finance-table-wrap'),table=document.createElement('table');
+    table.className='finance-table';table.setAttribute('aria-label',label);
+    const head=document.createElement('thead'),row=document.createElement('tr');
+    for(const label of headers){const cell=textElement('th',label);cell.scope='col';row.append(cell);}
+    head.append(row);const body=document.createElement('tbody');table.append(head,body);wrap.append(table);
+    return {wrap,body};
+  }
   async function loadAdminBilling() {
     var summary = await api('/api/admin/billing/summary');
     var box = document.getElementById('adminBillingSummary'); if (box) {
@@ -524,15 +540,19 @@ window.renderGithubConfirmation=function(root,status,refresh){
     }
     var tx = await api('/api/admin/billing/transactions'); var txBox = document.getElementById('adminTransactions');
     if (txBox) {
-      txBox.replaceChildren();
-      if (!tx.items || !tx.items.length) txBox.append(textElement('p', tr('No payment orders yet.', 'لا توجد طلبات دفع بعد.')));
-      else tx.items.forEach(function (item) {
-        var row = textElement('article', '', 'manage-row');row.dataset.financeId=item.id;row.dataset.financeStatus=item.status;
-        row.append(textElement('strong', item.plan_name + ' · ' + item.currency + ' ' + (item.amount_cents / 100).toFixed(2)));
-        row.append(textElement('span', item.email + ' · ' + item.method_label + ' · ' + statusText(item.status)));
-        if (item.payment_reference) row.append(textElement('small', tr('Receipt reference: ', 'مرجع الإيصال: ') + item.payment_reference));
-        txBox.append(row);
-      });
+      const view=financeTable([tr('Order','الطلب'),tr('Customer','العميل'),tr('Plan','الخطة'),tr('Payment method','وسيلة الدفع'),tr('Amount','المبلغ'),tr('Status','الحالة'),tr('Created','تاريخ الطلب'),tr('Actions','الإجراءات')],tr('Payment transactions','معاملات الدفع'));
+      txBox.replaceChildren(view.wrap);
+      for(const item of tx.items||[]){
+        const row=document.createElement('tr');row.dataset.financeId=item.id;row.dataset.financeStatus=item.status;
+        row.dataset.financeSearch=[item.id,item.email,item.plan_name,item.method_label,item.payment_reference].filter(Boolean).join(' ').toLowerCase();
+        const id=textElement('td',String(item.id).slice(0,8),'finance-reference');id.title=item.id;id.dir='ltr';row.append(id);
+        const customer=textElement('td',item.email||'—','finance-customer');customer.dir='auto';row.append(customer);
+        row.append(textElement('td',item.plan_name||'—'),textElement('td',item.method_label||'—'));
+        const amount=textElement('td',(item.currency||'')+' '+(item.amount_cents/100).toFixed(2),'finance-amount');amount.dir='ltr';row.append(amount);
+        const state=document.createElement('td');state.append(financeStatusBadge(item.status));row.append(state);
+        row.append(textElement('td',item.created_at?fmtDate(item.created_at):'—','finance-date'));
+        const actions=document.createElement('td');actions.dataset.financeActions='';row.append(actions);view.body.append(row);
+      }
     }
     var rev = document.getElementById('adminRevenue'); if (rev) {
       rev.replaceChildren();
@@ -1943,6 +1963,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
   // Administrative finance CRUD; uses existing billing/profiles APIs and the
   // existing authenticated admin routes. Never modifies customer checkout UI.
   let afShowArchived=false,afReportsShowArchived=false;
+  const afOrderView={query:'',status:'all',page:1,size:10};
   const afBtn=(name,run,cls='button ghost small')=>{
     const b=el('button',cls,name);b.type='button';
     b.onclick=async()=>{b.disabled=true;try{await run();}catch(error){toast(error.message||String(error));}finally{b.disabled=false;}};
@@ -2025,8 +2046,9 @@ window.renderGithubConfirmation=function(root,status,refresh){
     if(ordersBox){
       const details=await api('/api/billing/admin/orders',{cache:'no-store'});
       const lookup=new Map(details.map(item=>[String(item.id),item]));
-      for(const row of ordersBox.querySelectorAll('article[data-finance-id]')){
+      for(const row of ordersBox.querySelectorAll('tr[data-finance-id]')){
         const id=row.dataset.financeId,order=lookup.get(id),note=annotations.get('order:'+id);
+        row.dataset.financeArchived=String(Boolean(note?.archived_at));
         row.hidden=Boolean(note?.archived_at)&&!afShowArchived;
         const actions=afActionBar();
         actions.append(afBtn(tr('Note / archive','ملاحظة / أرشفة'),()=>afNoteEditor('order',id,note)));
@@ -2042,6 +2064,18 @@ window.renderGithubConfirmation=function(root,status,refresh){
               [tr('Provider ID','معرف المزود'),order.provider_order_id||'—'],
               [tr('Sender','المرسل'),order.sender_name||'—']
             ]);
+            for(const [name,value] of [
+              [tr('Created','تاريخ الطلب'),order.created_at?fmtDate(order.created_at):null],
+              [tr('Paid at','تاريخ الدفع'),order.paid_at?fmtDate(order.paid_at):null],
+              [tr('Sender email','بريد المرسل'),order.sender_email],
+              [tr('Sender bank','بنك المرسل'),order.sender_bank],
+              [tr('Sender account','حساب المرسل'),order.sender_account],
+              [tr('Payer','الدافع'),order.payer_name],
+              [tr('Transfer date','تاريخ التحويل'),order.transfer_date],
+              [tr('Amount sent','المبلغ المرسل'),order.amount_sent_cents?order.currency+' '+(order.amount_sent_cents/100).toFixed(2):null],
+              [tr('Billing note','ملاحظة الدفع'),order.billing_note],
+              [tr('Rejection reason','سبب الرفض'),order.reject_reason]
+            ])if(value)summary.append(kv([[name,value]]));
             if(order.has_receipt){
               const link=el('a','button ghost small',tr('View receipt','عرض الإيصال'));
               link.href='/api/billing/orders/'+encodeURIComponent(id)+'/receipt';
@@ -2076,8 +2110,9 @@ window.renderGithubConfirmation=function(root,status,refresh){
             }));
           }
         }
-        row.append(actions);
+        row.querySelector('[data-finance-actions]').replaceChildren(actions);
       }
+      afOrderControls(ordersBox);
     }
     await afRenderPaidCustomers(panel,annotations);
   }
@@ -2171,37 +2206,40 @@ window.renderGithubConfirmation=function(root,status,refresh){
   }
 
 
-  async function afRenderPaidCustomers(panel){
-    let host=panel.querySelector('#afPaidCustomers');
-    if(!host){host=el('section','admin-section');host.id='afPaidCustomers';panel.append(host);}
-    host.replaceChildren(el('h2','',tr('Verified paying customers','العملاء المشتركون الذين دفعوا')));
-    const data=await api('/api/admin/billing/transactions',{cache:'no-store'});
-    const grouped=new Map();
-    for(const payment of data.items||[]){
-      if(payment.status!=='paid')continue;
-      const key=payment.user_id||payment.email;
-      const item=grouped.get(key)||{email:payment.email,orders:0,currencies:{},last:null};
-      item.orders++;
-      item.currencies[payment.currency]=(item.currencies[payment.currency]||0)+payment.amount_cents;
-      const date=payment.paid_at||payment.created_at;
-      if(!item.last||new Date(date)>new Date(item.last))item.last=date;
-      grouped.set(key,item);
+  function afOrderControls(host){
+    host.querySelector('[data-finance-toolbar]')?.remove();
+    host.querySelector('[data-finance-pager]')?.remove();
+    const rows=[...host.querySelectorAll('tr[data-finance-id]')],tbody=host.querySelector('tbody');
+    if(!tbody)return;
+    const tools=el('div','finance-toolbar');tools.dataset.financeToolbar='';
+    const search=document.createElement('input');search.type='search';search.value=afOrderView.query;
+    search.placeholder=tr('Search customer, order or payment reference','ابحث بالعميل أو الطلب أو مرجع الدفع');search.setAttribute('aria-label',search.placeholder);
+    const state=document.createElement('select');state.setAttribute('aria-label',tr('Payment status','حالة الدفع'));
+    for(const value of ['all','awaiting_payment','pending_review','paid','sandbox_paid','cancelled','failed','rejected'])state.add(new Option(value==='all'?tr('All statuses','كل الحالات'):financeStatusLabel(value),value));
+    state.value=afOrderView.status;
+    const size=document.createElement('select');size.setAttribute('aria-label',tr('Rows per page','عدد الصفوف في الصفحة'));
+    for(const value of [10,25,50])size.add(new Option(value+tr(' rows',' صفوف'),String(value)));size.value=String(afOrderView.size);
+    tools.append(search,state,size);host.prepend(tools);
+    const pager=el('div','finance-pagination');pager.dataset.financePager='';
+    const count=el('span');count.setAttribute('role','status');count.setAttribute('aria-live','polite');
+    const prev=el('button','button ghost small',tr('Previous','السابق'));
+    const next=el('button','button ghost small',tr('Next','التالي'));
+    prev.type=next.type='button';prev.onclick=()=>{afOrderView.page--;draw();};next.onclick=()=>{afOrderView.page++;draw();};
+    pager.append(count,prev,next);host.append(pager);
+    const empty=el('tr'),cell=el('td','finance-empty');cell.colSpan=8;empty.append(cell);tbody.append(empty);
+    function draw(){
+      const filtered=rows.filter(row=>(!annotationsFor(row))&&(afOrderView.status==='all'||row.dataset.financeStatus===afOrderView.status)&&row.dataset.financeSearch.includes(afOrderView.query.trim().toLowerCase()));
+      const pages=Math.max(1,Math.ceil(filtered.length/afOrderView.size));afOrderView.page=Math.max(1,Math.min(pages,afOrderView.page));
+      const start=(afOrderView.page-1)*afOrderView.size,visible=new Set(filtered.slice(start,start+afOrderView.size));
+      for(const row of rows)row.hidden=!visible.has(row);
+      empty.hidden=filtered.length>0;cell.textContent=rows.length?tr('No matching payments','لا توجد مدفوعات مطابقة'):tr('No payment orders yet','لا توجد طلبات دفع بعد');
+      count.textContent=(filtered.length?start+1:0)+'–'+Math.min(start+afOrderView.size,filtered.length)+' / '+filtered.length+tr(' payments',' عملية')+' · '+afOrderView.page+' / '+pages;
+      prev.disabled=afOrderView.page===1;next.disabled=afOrderView.page===pages;
     }
-    if(!grouped.size){host.append(el('p','',tr('No verified paying customers yet','لا توجد مدفوعات مؤكدة حتى الآن')));return;}
-    const tools=afActionBar(),search=afInput(tools,tr('Search paying customers','البحث عن عميل مشترك'),'','search');
-    search.placeholder=tr('Customer email','بريد العميل');host.append(tools);
-    const holder=el('div','table-wrap'),table=el('table'),thead=el('thead'),header=el('tr');
-    for(const name of [tr('Customer','العميل'),tr('Paid orders','عدد الدفعات'),tr('Verified total','إجمالي المدفوع'),tr('Last payment','آخر دفع')])header.append(el('th','',name));
-    thead.append(header);table.append(thead);
-    const tbody=el('tbody');
-    for(const item of grouped.values()){
-      const row=el('tr');row.dataset.searchEmail=item.email.toLowerCase();
-      for(const val of [item.email,item.orders,Object.entries(item.currencies).map(([currency,cents])=>currency+' '+(cents/100).toFixed(2)).join(' · '),item.last?fmtDate(item.last):'—'])row.append(el('td','',val));
-      tbody.append(row);
-    }
-    search.oninput=()=>{const term=search.value.trim().toLowerCase();for(const row of tbody.rows)row.hidden=!row.dataset.searchEmail.includes(term)};
-    table.append(tbody);holder.append(table);host.append(holder);
-    host.append(el('p','lead',tr('Verified paid records only; test and unpaid orders excluded. Historical data is retained.','المدفوعات الحقيقية المؤكدة فقط؛ عمليات الاختبار وغير المسددة مستبعدة. تبقى السجلات التاريخية محفوظة.')));
+    function annotationsFor(row){return row.dataset.financeArchived==='true'&&!afShowArchived;}
+    search.oninput=()=>{afOrderView.query=search.value;afOrderView.page=1;draw();};
+    state.onchange=()=>{afOrderView.status=state.value;afOrderView.page=1;draw();};
+    size.onchange=()=>{afOrderView.size=Number(size.value);afOrderView.page=1;draw();};draw();
   }
   function afMethodPayload(method,enabled){
     const d=method.details||{};
@@ -2954,15 +2992,23 @@ window.renderGithubConfirmation=function(root,status,refresh){
           String(v||'').toLowerCase().includes(q));
       });
       count.textContent=tr('Methods displayed: ','الوسائل المعروضة: ')+filtered.length+' / '+entries.length;
-      if(!filtered.length){list.append(el('p',tr('No matching methods','لا توجد وسائل مطابقة'),'dynamic-provider-empty'));return;}
+      const wrap=el('div','','table-wrap finance-table-wrap'),table=el('table','','finance-table finance-methods-table');
+      table.setAttribute('aria-label',tr('Payment methods and bank connections','وسائل الدفع والبنوك المربوطة'));
+      const thead=el('thead'),head=el('tr');
+      for(const label of [tr('Payment method / bank','وسيلة الدفع / البنك'),tr('Type','النوع'),tr('Connection','طريقة الربط'),tr('Environment','البيئة'),tr('Status','الحالة'),tr('Actions','الإجراءات')]){
+        const th=el('th',label);th.scope='col';head.append(th);
+      }
+      thead.append(head);const tbody=el('tbody');table.append(thead,tbody);wrap.append(table);list.append(wrap);
+      if(!filtered.length){const row=el('tr'),cell=el('td',tr('No matching methods','لا توجد وسائل مطابقة'),'finance-empty');cell.colSpan=6;row.append(cell);tbody.append(row);return;}
       for(const entry of filtered){
-        const row=el('article','','admin-payment-entry');
-        const info=el('div','','admin-payment-entry-info');
-        info.append(el('strong',entry.label),
-          el('small',(entry.category||'other')+' · '+(entry.source==='legacy'?
-            tr('Existing bank / method','وسيلة محفوظة سابقًا'):
-            tr('Dynamic profile','بيانات مزوّد ديناميكية'))),
-          el('span',statusText(entry),'dynamic-provider-status'));
+        const row=el('tr');
+        const info=el('td','','finance-method-name');info.append(el('strong',entry.label));
+        const category=categories.find(([value])=>value===entry.category)?.[1]||entry.category||'—';
+        const mode=entry.source==='legacy'?tr('Existing method','وسيلة سابقة'):
+          entry.connection_mode==='api'?'API':entry.connection_mode==='manual'?tr('Manual transfer','تحويل يدوي'):tr('Hosted link','رابط دفع');
+        const badge=el('span',statusText(entry),'finance-status');badge.dataset.status=entry.customer_checkout_enabled?'paid':'disabled';
+        const stateCell=el('td');stateCell.append(badge);
+        row.append(info,el('td',category),el('td',mode),el('td',entry.environment==='live'?tr('Live','حقيقي'):entry.environment==='test'?tr('Test','تجريبي'):'—'),stateCell);
         const actions=el('div','','admin-payment-entry-actions');
         const profile=entry.source==='dynamic'?profileMap.get(entry.slug):null;
         const method=entry.source==='legacy'?legacyMap.get(entry.method_id):null;
@@ -3004,7 +3050,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
         }else{
           actions.append(el('small',tr('Historical linked method — protected','وسيلة مرتبطة محفوظة تاريخيًا')));
         }
-        row.append(info,actions);list.append(row);
+        const actionCell=el('td');actionCell.append(actions);row.append(actionCell);tbody.append(row);
       }
     }
     search.oninput=render;state.onchange=render;render();
