@@ -16,21 +16,27 @@ import uuid
 import json
 import os
 import logging
+import time
+import signal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import RLock
+from threading import RLock, Event, Thread
 
 from .preview_docker_provisioner import DockerProvisioner, PreviewProvisioningError
 from .preview_worker_archive import extract_into_sandbox
 from .preview_container_spec import ContainerSpec
 from .preview_launch_profiles import PROFILES, LaunchProfile
 from .preview_diagnostics import MESSAGES
+from .preview_host_probe import read_host_telemetry
+from .preview_host_gate import permit_preview
+from .preview_scheduling import DYNAMIC_IDLE_TIMEOUT_SECONDS
 
 MAX_BODY = 72 * 1024 * 1024
 JOB_NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}' + chr(36))
 LOCK = RLock()
 JOBS = {}
 LOGGER = logging.getLogger('preview.worker')
+MAX_RUNTIME_SECONDS = 900
 
 
 def register_local_job(job_id: str, image: str, argv: tuple[str, ...]):
@@ -51,12 +57,80 @@ def register_local_job(job_id: str, image: str, argv: tuple[str, ...]):
 class WorkerServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
-    def __init__(self, addr, token: str, provisioner=None):
+    def __init__(self, addr, token: str, provisioner=None, *, clock=time.monotonic,
+                 jobs=None, admission=None):
         if len(token) < 32:
             raise ValueError("Worker token must contain at least 32 characters")
         super().__init__(addr, WorkerHandler)
         self.token = token
         self.provisioner = provisioner or DockerProvisioner()
+        self.jobs = JOBS if jobs is None else jobs
+        self.clock = clock
+        self.admission = admission or self._host_admission
+        self.reconciled = False
+        self.reaper_stop = Event()
+        self.reaper = Thread(target=self._reap_loop, name='preview-expiry', daemon=True)
+        self.reaper.start()
+
+    def _host_admission(self):
+        try:
+            telemetry = read_host_telemetry(storage=Path('/var/lib/preview-worker/jobs'),
+                                           active_previews=0, trusted_collector=True)
+            return permit_preview(telemetry)['admitted']
+        except (OSError, ValueError):
+            return False
+
+    def reconcile_orphans(self):
+        """Before any new launch, stop only labelled sandboxes left by a restart."""
+        if self.reconciled:
+            return
+        known = {job.get('container_id') for job in self.jobs.values()}
+        for job_id, cid in self.provisioner.managed_containers():
+            if cid not in known:
+                self.provisioner.stop(cid, job_id)
+        self.reconciled = True
+
+    def stop_job(self, job_id, job, reason):
+        job['state'] = 'stopping'
+        job['stop_reason'] = reason
+        cid = job.get('container_id')
+        if cid:
+            # Keep the allocation occupied until Docker confirms cleanup.
+            self.provisioner.stop(cid, job_id)
+        job.update(state='stopped', container_id=None, stop_reason=reason)
+
+    def reap_expired(self):
+        with LOCK:
+            now = self.clock()
+            for job_id, job in self.jobs.items():
+                if not job.get('container_id'):
+                    continue
+                started = job.get('started_monotonic')
+                active = job.get('activity_monotonic')
+                reason = ('runtime_limit' if started is None or now-started >= MAX_RUNTIME_SECONDS
+                          else 'idle_timeout' if active is None or now-active >= DYNAMIC_IDLE_TIMEOUT_SECONDS
+                          else None)
+                if reason or job.get('state') == 'stopping':
+                    try:
+                        self.stop_job(job_id, job, reason or job.get('stop_reason', 'cleanup_retry'))
+                    except PreviewProvisioningError:
+                        LOGGER.warning('Preview cleanup pending; allocation remains occupied')
+
+    def _reap_loop(self):
+        while not self.reaper_stop.wait(5):
+            self.reap_expired()
+
+    def server_close(self):
+        self.reaper_stop.set()
+        self.reaper.join(timeout=20)
+        with LOCK:
+            for job_id, job in self.jobs.items():
+                if job.get('container_id'):
+                    try:
+                        self.stop_job(job_id, job, 'worker_shutdown')
+                    except PreviewProvisioningError:
+                        LOGGER.warning('Preview shutdown cleanup incomplete; restart reconciliation required')
+        super().server_close()
 
 
 class WorkerHandler(BaseHTTPRequestHandler):
@@ -115,12 +189,12 @@ class WorkerHandler(BaseHTTPRequestHandler):
             return
         with LOCK:
             if operation == "prepare":
-                if job_id in JOBS:
-                    previous = JOBS[job_id]
-                    if previous.get("container_id") and previous.get("state") == "running":
+                if job_id in self.server.jobs:
+                    previous = self.server.jobs[job_id]
+                    if previous.get("container_id"):
                         self.reply(409, {"error": "job_already_running"})
                         return
-                    JOBS.pop(job_id, None)
+                    self.server.jobs.pop(job_id, None)
                     shutil.rmtree(Path("/var/lib/preview-worker/jobs") / job_id, ignore_errors=True)
                 framework = request.get("framework")
                 profile = PROFILES.get(framework) if isinstance(framework, str) else None
@@ -177,7 +251,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         image = os.environ.get('PREVIEW_IMAGE_' + profile.family.upper(), '')
                         if not image:
                             raise ValueError('Worker runtime image is not configured')
-                        JOBS[job_id] = {"spec": ContainerSpec(image, profile.argv, str(source)),
+                        self.server.jobs[job_id] = {"spec": ContainerSpec(image, profile.argv, str(source)),
                                         "container_id": None, "state": "ready", "family": profile.family}
                     except Exception:
                         shutil.rmtree(root)
@@ -186,7 +260,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                 except (ValueError, tarfile.TarError, OSError):
                     self.reply(400, {"error": "invalid_snapshot"})
                 return
-            job = JOBS.get(job_id)
+            job = self.server.jobs.get(job_id)
             if job is None:
                 self.reply(404, {"error": "unregistered_job"})
                 return
@@ -202,12 +276,22 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         self.reply(503, {'error': 'dependency_preparation_required',
                                          'message': MESSAGES['dependency_preparation_required']})
                         return
+                    self.server.reconcile_orphans()
+                    self.server.reap_expired()
+                    if any(item.get('container_id') for item in self.server.jobs.values()):
+                        self.reply(409, {'error': 'preview_capacity_reached'})
+                        return
+                    if not self.server.admission():
+                        self.reply(503, {'error': 'preview_host_headroom_insufficient'})
+                        return
                     job["state"] = "launching"
                     try:
                         cid = self.server.provisioner.launch_smoke(job_id, job["spec"])
                     except Exception:
                         job["state"] = "failed"
                         raise
+                    job["started_monotonic"] = self.server.clock()
+                    job["activity_monotonic"] = self.server.clock()
                     job["container_id"] = cid
                     job["state"] = "running"
                     # Docker accepted the container; that is not proof the HTTP
@@ -230,16 +314,19 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     if not ready:
                         job["state"] = "failed"
                         try:
-                            self.server.provisioner.stop(cid, job_id)
+                            self.server.stop_job(job_id, job, "application_not_ready")
                         except PreviewProvisioningError:
                             pass
                         self.reply(503, {"error": job.get('failure_code', 'application_not_ready')})
                         return
                     result = {"state": "running", "job_id": job_id, "container_id": cid, "url": None}
                 elif operation == "status":
+                    self.server.reap_expired()
+                    if request.get('user_activity') is True and job.get('state') == 'running':
+                        job['activity_monotonic'] = self.server.clock()
                     cid = job["container_id"]
                     state = self.server.provisioner.status(cid, job_id) if cid else job["state"]
-                    result = {"state": state, "job_id": job_id, "url": None,
+                    result = {"state": state, "job_id": job_id, "url": None, "stop_reason": job.get("stop_reason"),
                               "browser_lease": hashlib.sha256(cid.encode()).hexdigest() if cid and state == 'running' else None}
                 elif operation == "fetch":
                     cid = job["container_id"]
@@ -257,11 +344,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     cid = job["container_id"]
                     result = {"logs": self.server.provisioner.logs(cid, job_id) if cid else ""}
                 else:
-                    cid = job["container_id"]
-                    if cid:
-                        self.server.provisioner.stop(cid, job_id)
-                    job["state"] = "stopped"
-                    job["container_id"] = None
+                    self.server.stop_job(job_id, job, 'user_stop')
                     result = {"state": "stopped", "job_id": job_id}
                 self.reply(200, result)
             except (PreviewProvisioningError, OSError, ValueError) as exc:
@@ -274,7 +357,15 @@ class WorkerHandler(BaseHTTPRequestHandler):
 def main():
     token = os.environ.get("PREVIEW_WORKER_TOKEN", "")
     # Do not bind all interfaces or auto-register arbitrary customer jobs.
-    WorkerServer(("127.0.0.1", 8791), token).serve_forever()
+    server = WorkerServer(("127.0.0.1", 8791), token)
+    def shutdown(signum, frame):
+        Thread(target=server.shutdown, daemon=True).start()
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

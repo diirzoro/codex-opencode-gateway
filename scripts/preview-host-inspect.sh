@@ -33,6 +33,13 @@ print('NGINX_PREVIEW')
 for line in nginx.splitlines():
     if ('configuration file' in line and 'preview' in line) or ('server_name' in line and ('preview' in line or 'opencode' in line)):
         print(line.strip())
+for line in nginx.splitlines():
+    if any(key in line for key in ['proxy_pass', 'ssl_certificate ']) and ('8001' in line or '8000' in line or 'preview' in line):
+        print('NGINX_ROUTE', line.strip())
+for f in Path('/etc/nginx/sites-enabled').glob('*preview*'):
+    for line in f.read_text().splitlines():
+        if line.strip().startswith(('listen ', 'server_name ', 'proxy_pass ', 'ssl_certificate ', 'include ', 'location ', 'return ')):
+            print('PREVIEW_VHOST', line.strip())
 if Path('/run/preview-worker/docker.sock').is_socket() and shutil.which('docker'):
     prefix=['runuser','-u','preview-worker','--','env','HOME=/var/lib/preview-worker','DOCKER_HOST=unix:///run/preview-worker/docker.sock','docker']
     print('PREVIEW_CONTAINERS',command(prefix+['ps','--all','--format','{{.Names}} {{.State}} {{.Image}}']))

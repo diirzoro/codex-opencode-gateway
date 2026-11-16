@@ -11,7 +11,7 @@ from .preview_readiness import PreviewReadiness
 from .preview_launch_profiles import LaunchProfile, PROFILES
 
 # Fixed security contract: clients cannot loosen these limits via API input.
-LIMITS={"cpu_cores":1,"memory_mb":768,"disk_mb":1024,"processes":128,
+LIMITS={"cpu_cores":0.5,"memory_mb":768,"disk_mb":1024,"processes":128,
         "execution_seconds":900,"log_bytes":100000,"uid":10001,
         "read_only_root":True,"drop_capabilities":["ALL"],"no_new_privileges":True,
         "network":"none","public_ports":[],"docker_socket":False,
@@ -90,7 +90,7 @@ def _worker():
     except PreviewWorkerUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
     if client is None:
-        raise HTTPException(503, "Test Preview worker is not configured")
+        raise HTTPException(503, "Preview worker is not configured")
     return client
 
 
@@ -132,7 +132,7 @@ def start(workspace, *, fresh=False):
         # Opening Preview twice must not re-upload a snapshot over a live job.
         # Return the existing tenant-owned workspace relay instead.
         try:
-            existing = client.request("status", {"job_id": _job_id(workspace)})
+            existing = client.request("status", {"job_id": _job_id(workspace), "user_activity": True})
             if existing.get("state") == "running":
                 if not fresh:
                     return {"state": "running",

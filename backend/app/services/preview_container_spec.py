@@ -21,7 +21,7 @@ class UnsafeContainerSpec(ValueError):
 def argv_for(spec: ContainerSpec) -> tuple[str, ...]:
     """Fixed Docker arguments; no shell, user-supplied flags, ports or mounts."""
     if not isinstance(spec.image, str) or re.fullmatch(
-        r"[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}", spec.image
+        r"(?:[a-z0-9][a-z0-9._/-]*@)?sha256:[0-9a-f]{64}", spec.image
     ) is None:
         raise UnsafeContainerSpec("Verified SHA256 image digest required")
     if (not spec.argv or spec.internal_port != 8080 or
@@ -35,7 +35,7 @@ def argv_for(spec: ContainerSpec) -> tuple[str, ...]:
         "--read-only", "--user", "10001:10001",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--memory", "768m", "--memory-swap", "768m",
-        "--cpus", "1", "--pids-limit", "128",
+        "--cpus", "0.5", "--pids-limit", "128",
         "--tmpfs", "/tmp:rw,nosuid,noexec,size=64m",
         "--mount", f"type=bind,src={spec.project_mount},dst=/workspace,readonly",
         "--workdir", "/workspace", "--env", "PORT=8080",

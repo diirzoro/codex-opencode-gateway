@@ -60,7 +60,8 @@ class PreviewWorkerClient:
                 "unsupported_framework", "invalid_snapshot",
                 "worker_operation_failed", "application_not_ready",
                 "unsafe_job_directory", "stale_job_in_use", "stale_preview_lease",
-                "worker_internal_error", *MESSAGES,
+                "worker_internal_error", "preview_capacity_reached",
+                "preview_host_headroom_insufficient", *MESSAGES,
             }
             reference = None
             try:
@@ -85,8 +86,8 @@ class PreviewWorkerClient:
 
 
 def configured_client() -> PreviewWorkerClient | None:
-    """Only enabled by explicit Test environment settings; default stays off."""
-    if os.environ.get("PREVIEW_WORKER_ENABLED") != "test":
+    """Enabled only by explicit operator settings; default stays off."""
+    if os.environ.get("PREVIEW_WORKER_ENABLED") not in {"test", "live"}:
         return None
     url = os.environ.get("PREVIEW_WORKER_URL", "")
     token = os.environ.get("PREVIEW_WORKER_TOKEN", "")

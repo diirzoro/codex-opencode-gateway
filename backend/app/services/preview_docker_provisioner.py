@@ -137,8 +137,32 @@ class DockerProvisioner:
         if labels != f"{job_id}|true":
             raise PreviewProvisioningError("Refusing access to an unowned container")
 
+    def managed_containers(self) -> tuple[tuple[str, str], ...]:
+        """Inventory only labelled previews; verify ownership before cleanup."""
+        output = self._call(('ps', '--all', '--quiet', '--no-trunc',
+                             '--filter', 'label=opencode.preview.managed=true'))
+        result = []
+        for cid in output.splitlines():
+            if CONTAINER_ID.fullmatch(cid) is None:
+                raise PreviewProvisioningError('Invalid managed container identity')
+            job_id = self._call(('inspect', '--format',
+                                '{{index .Config.Labels "opencode.preview.job"}}', cid))
+            self._require_owned(cid, job_id)
+            result.append((job_id, cid))
+        return tuple(result)
+
     def stop(self, container_id: str, job_id: str) -> None:
         """Stop only a matching Preview container; never touch unrelated jobs."""
+        if CONTAINER_ID.fullmatch(container_id) is None or JOB_ID.fullmatch(job_id) is None:
+            raise PreviewProvisioningError('Invalid sandbox identity')
+        # --rm containers may already be gone after an early application exit.
+        # Only a successful Docker inventory can establish absence.
+        present = self._call(('ps', '--all', '--quiet', '--no-trunc',
+                              '--filter', 'id=' + container_id)).splitlines()
+        if not present:
+            return
+        if present != [container_id]:
+            raise PreviewProvisioningError('Ambiguous sandbox identity')
         self._require_owned(container_id, job_id)
         self._call(("stop", "--time", "2", container_id), timeout=15)
 
