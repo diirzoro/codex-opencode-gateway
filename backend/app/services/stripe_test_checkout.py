@@ -10,6 +10,8 @@ def test_credentials(db):
     from . import payment_provider_profiles as profiles
     if profiles.schema_ready(db):
         row = profiles._one(db, "stripe")
+        if row is not None and row.get('admin_suspended'):
+            raise HTTPException(409, 'Resume Stripe before using its test checkout')
         if row is not None and row.get("connection_mode") == "api" and row.get("environment") == "test":
             fields = {item["key"]: item["value"] for item in profiles._decode(row["encrypted_fields"])}
             return {"mode": "test", "secret_key": fields.get("secret_key", ""),

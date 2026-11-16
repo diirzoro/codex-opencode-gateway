@@ -1984,6 +1984,13 @@ window.renderGithubConfirmation=function(root,status,refresh){
   };
   const afReload=()=>ADMIN_LOADERS.billing();
   const afConfirm=(en,ar)=>window.confirmAction(tr(en,ar));
+  async function afToggleSubscription(id,suspended){
+    if(!await afConfirm(suspended?'Restore this customer subscription access?':'Suspend this customer subscription access without changing the paid end date?',
+      suspended?'هل تريد تنشيط صلاحية الاشتراك؟':'هل تريد تعليق صلاحية الاشتراك دون تغيير تاريخ انتهاء الفترة المدفوعة؟'))return;
+    await api('/api/admin/finance/subscriptions/'+id+'/suspend',{
+      method:'POST',body:JSON.stringify({suspended:!suspended,confirmation:suspended?'RESUME':'SUSPEND'})});
+    await afReload();
+  }
   const afNotesMap=rows=>new Map(rows.map(n=>[n.target_type+':'+n.target_id,n]));
   function afNoteEditor(kind,id,existing){
     const item=existing||{},body=el('div');
@@ -2033,13 +2040,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
         }));
         actions.append(afBtn(tr('View / note / archive','عرض / ملاحظة / أرشفة'),()=>afNoteEditor('subscription',id,note)));
         const suspended=trRow.dataset.financeSuspended==='true';
-        actions.append(afBtn(suspended?tr('Resume access','استئناف الاشتراك'):tr('Suspend access','تعليق الاشتراك'),async()=>{
-          if(!await afConfirm(suspended?'Restore this customer subscription access?':'Suspend this customer subscription access without changing the paid end date?',
-            suspended?'هل تريد استئناف صلاحية الاشتراك؟':'هل تريد تعليق صلاحية الاشتراك دون تغيير تاريخ انتهاء الفترة المدفوعة؟'))return;
-          await api('/api/admin/finance/subscriptions/'+id+'/suspend',{
-            method:'POST',body:JSON.stringify({suspended:!suspended,confirmation:suspended?'RESUME':'SUSPEND'})});
-          await afReload();
-        }));
+        actions.append(afBtn(suspended?tr('Resume access','تنشيط الاشتراك'):tr('Suspend access','تعليق الاشتراك'),()=>afToggleSubscription(id,suspended)));
         if(!['active'].includes(trRow.dataset.financeStatus)){
           actions.append(afBtn(tr('Delete empty record','حذف السجل الفارغ'),async()=>{
             if(!await afConfirm('Permanently remove this subscription ONLY if it has no active trial or any payment history?',
@@ -2228,6 +2229,10 @@ window.renderGithubConfirmation=function(root,status,refresh){
         }));
         buttons.append(afBtn(tr('Manage','إدارة'),()=>afNoteEditor('subscription',customer.id,
           annotations.get('subscription:'+customer.id))));
+        buttons.append(afBtn(customer.admin_suspended_at?tr('Resume','تنشيط'):tr('Suspend','تعليق'),
+          ()=>afToggleSubscription(customer.id,Boolean(customer.admin_suspended_at))));
+        buttons.append(afUnavailable(tr('Delete','حذف'),tr('This customer has verified payment history. Archive the subscription from Manage to hide it while retaining its payment records.',
+          'هذا العميل لديه سجل دفع موثق. يمكنك أرشفة الاشتراك من إدارة لإخفائه مع حفظ سجلات الدفع.')));
         action.append(buttons);row.append(action);tbody.append(row);
       }
       caption.textContent=tr('Showing ','المعروض ')+filtered.length+' / '+paid.length+
@@ -2320,12 +2325,9 @@ window.renderGithubConfirmation=function(root,status,refresh){
       await refresh();
     },
     async remove(method,refresh){
-      if(method.enabled||method.historical_orders)throw Error(tr(
-        'Only disabled unused methods may be removed','يُحذف فقط ما كان معطلاً ولم يستخدم في أي طلب دفع'));
-      if(!await afConfirm('Permanently delete unused method '+method.label+'?',
-        'تأكيد نهائي لحذف وسيلة الدفع غير المستخدمة: '+method.label+'؟'))return;
-      await api('/api/admin/finance/methods/'+method.id,{
-        method:'DELETE',body:JSON.stringify({confirmation:'DELETE UNUSED METHOD'})});
+      if(!await afConfirm('Delete payment method '+method.label+'? It will no longer accept new orders. Existing payment transactions and their recorded method names remain.',
+        'تأكيد حذف وسيلة الدفع '+method.label+'؟ لن تقبل طلبات جديدة. تبقى المعاملات السابقة وأسماء وسائلها المسجلة محفوظة.'))return;
+      await api('/api/billing/methods/'+method.id+'?platform=true',{method:'DELETE'});
       await refresh();
     }
   };
@@ -2914,6 +2916,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     const detail=el('div','','dynamic-provider-cards');
     detail.hidden=true;host.append(detail);
     const statusText=entry=>
+      entry.status==='suspended'?tr('Suspended','معلقة'):
       entry.customer_checkout_enabled?tr('Enabled for new customers','مفعلة للعملاء'):
       entry.status==='configured_unverified'?tr('Configured, not verified','إعداد محفوظ غير موثق'):
       entry.status==='draft'?tr('Draft','مسودة'):
@@ -3056,6 +3059,15 @@ window.renderGithubConfirmation=function(root,status,refresh){
             detail.scrollIntoView({behavior:'smooth',block:'nearest'});
           },'button ghost small'));
           actions.append(button(tr('Edit','تعديل'),()=>editor(profile),'button ghost small'));
+          const suspend=button(profile.admin_suspended?tr('Resume','تنشيط'):tr('Suspend','تعليق'),()=>run(suspend,async()=>{
+            if(!await window.confirmAction(profile.admin_suspended
+              ?tr('Resume this saved provider? This does not enable real charges or publish customer checkout.','تنشيط ملف المزود؟ لا يفعّل هذا تحصيل أموال حقيقية أو ينشر الدفع للعملاء.')
+              :tr('Suspend this provider and stop new checkouts? Existing payments remain.','تعليق هذا المزود وإيقاف طلبات الدفع الجديدة؟ تبقى المعاملات السابقة محفوظة.')))return;
+            await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+'/suspension',{
+              method:'POST',body:JSON.stringify({suspended:!profile.admin_suspended})});
+            await load();
+          }),'button ghost small');
+          actions.append(suspend);
           if(profile.publication?.published){
             const disable=button(tr('Suspend','تعليق'),()=>run(disable,async()=>{
               if(!await window.confirmAction(tr('Suspend this checkout for new orders? Paid records remain.',
@@ -3080,17 +3092,10 @@ window.renderGithubConfirmation=function(root,status,refresh){
           const toggle=button(method.enabled?tr('Suspend','تعليق'):tr('Enable','تفعيل'),
             ()=>run(toggle,()=>window.adminFinanceLegacyUI.toggle(method,load)),'button ghost small');
           actions.append(toggle);
-          if(!method.enabled&&!method.historical_orders){
+          {
             const remove=button(tr('Delete','حذف'),()=>run(remove,
               ()=>window.adminFinanceLegacyUI.remove(method,load)),'button ghost small');
             actions.append(remove);
-          }else{
-            const protectedInfo=button(tr('Delete','حذف'),()=>{
-              detail.hidden=false;detail.replaceChildren(el('p',tr('Disable this method before deletion. Methods with payment history are retained for reconciliation.',
-                'عطّل الوسيلة قبل حذفها. تُحفظ الوسائل المرتبطة بسجلات دفع للمراجعة المالية.')));
-              detail.scrollIntoView({behavior:'smooth',block:'nearest'});
-            },'button ghost small finance-unavailable');
-            actions.append(protectedInfo);
           }
         }else{
           actions.append(el('small',tr('Historical linked method — protected','وسيلة مرتبطة محفوظة تاريخيًا')));

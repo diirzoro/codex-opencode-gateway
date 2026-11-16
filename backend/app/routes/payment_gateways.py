@@ -208,6 +208,19 @@ def delete_dynamic_payment_profile(
     return payment_provider_profiles.delete_profile(db, slug)
 
 
+class ProfileSuspensionRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    suspended: bool
+
+
+@router.post('/profiles/{slug}/suspension')
+def suspend_dynamic_payment_profile(slug: str, data: ProfileSuspensionRequest,
+                                   response: Response, user: User = Depends(require_admin),
+                                   db: Session = Depends(get_db)):
+    _cache_safe(response)
+    return payment_provider_profiles.set_suspended(db, slug, data.suspended, user.id)
+
+
 class PublishProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
