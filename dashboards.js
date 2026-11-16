@@ -1365,7 +1365,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const previewStatus=text('p','Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');
   previewStatus.className='preview-status';previewStatus.setAttribute('role','status');previewStatus.setAttribute('aria-live','polite');
   const frame=document.createElement('iframe');frame.title=tr('Project preview','معاينة المشروع');frame.setAttribute('sandbox','allow-scripts');frame.setAttribute('referrerpolicy','no-referrer');frame.hidden=true;
-  let previewRevision=0;
+  let previewRevision=0,previewResourceMode=null;
   function setPreviewState(state){
     previewPanel.dataset.state=state;
     const buttons=previewActions.children;
@@ -1376,7 +1376,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     for(let index=3;index<5;index++)buttons[index].disabled=state!=='ready';
     previewPanel.setAttribute('aria-busy',String(state==='loading'));
   }
-  function clearPreview(){previewRevision++;frame.hidden=true;frame.removeAttribute('srcdoc');frame.removeAttribute('src');setPreviewState('idle');}
+  function clearPreview(){previewRevision++;previewResourceMode=null;frame.hidden=true;frame.removeAttribute('srcdoc');frame.removeAttribute('src');setPreviewState('idle');}
   async function previewBrowserURL(id){
     const access=await api('/api/workspaces/'+id+'/preview/access',{method:'POST'});
     const url=new URL(access.url),gateway=new URL(location.href);
@@ -1405,8 +1405,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           if(launched.url){
             const browserURL=state.browser_access_required?await previewBrowserURL(id):launched.url;
             if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+            previewResourceMode=launched.mode||null;
             frame.src=browserURL;frame.hidden=false;setPreviewState('ready');
-            previewStatus.textContent=state.browser_access_required?tr('Running application preview · Read link lasts up to 5 minutes; Refresh renews access.','معاينة التطبيق تعمل · رابط القراءة صالح حتى 5 دقائق؛ زر التحديث يجدّد الوصول.'):tr('Running application preview','معاينة التطبيق تعمل');
+            previewStatus.textContent=previewResourceMode==='prebuilt_static'?tr('Existing React build · No app server is running. Rebuild the project to include source changes. Refresh reloads dist.','نتيجة بناء React موجودة · دون خادم تطبيق. يلزم إعادة البناء لإظهار تغييرات المصدر؛ التحديث يعيد تحميل dist.'):state.browser_access_required?tr('Running application preview · Read link lasts up to 5 minutes; Refresh renews access.','معاينة التطبيق تعمل · رابط القراءة صالح حتى 5 دقائق؛ زر التحديث يجدّد الوصول.'):tr('Running application preview','معاينة التطبيق تعمل');
             return;
           }
           throw new Error(tr('Container started, but no preview URL was returned.','بدأت الحاوية دون رابط معاينة صالح.'));
@@ -1436,6 +1437,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }catch(error){if(activeWorkspace?.id===id&&previewRevision===revision){clearPreview();setPreviewState('error');previewStatus.textContent=error.message;}}
   }
   async function refreshPreview(){
+    if(previewResourceMode==='prebuilt_static'){await startPreview({fresh:true});return;}
     if(!frame.hidden && frame.getAttribute('src')){
       const current=new URL(frame.getAttribute('src'),location.href);
       if(current.hostname===new URL(location.href).hostname){
