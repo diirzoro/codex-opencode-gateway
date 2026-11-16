@@ -12,6 +12,9 @@ on:
           - prepare
           - activate
           - verify
+          - react_inspect
+          - audit
+          - audit_full
 permissions:
   contents: read
 concurrency:
@@ -22,7 +25,7 @@ jobs:
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,7 +53,7 @@ jobs:
             ssh-keyscan -p "$port" -H "$VPS_HOST" > "$HOME/.ssh/known_hosts"
           fi
           chmod 600 "$HOME/.ssh/known_hosts"
-          [[ "$OPERATION" == inspect || "$OPERATION" == prepare || "$OPERATION" == activate || "$OPERATION" == verify ]]
+          [[ "$OPERATION" == inspect || "$OPERATION" == prepare || "$OPERATION" == activate || "$OPERATION" == verify || "$OPERATION" == react_inspect || "$OPERATION" == audit || "$OPERATION" == audit_full ]]
           ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             'mkdir -p /home/tahir/preview-activation'
           mkdir -p preview-wheels
@@ -60,7 +63,7 @@ jobs:
               --dest preview-wheels 'fastapi>=0.115.6,<1' 'uvicorn>=0.34.0,<1'
             (cd preview-wheels && sha256sum *.whl > SHA256SUMS)
           fi
-          tar -czf /tmp/preview-activation.tgz scripts/preview-host-*.sh deploy/apparmor-preview backend/app/services/preview*.py preview-wheels
+          tar -czf /tmp/preview-activation.tgz scripts/preview-host-*.sh scripts/preview-react-inspect.py scripts/preview-runtime-audit.py deploy/apparmor-preview backend/app/services/preview*.py preview-wheels
           scp -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             /tmp/preview-activation.tgz "$VPS_USER@$VPS_HOST:/home/tahir/preview-activation.tgz"
           ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
@@ -69,6 +72,9 @@ jobs:
           [[ "$OPERATION" != prepare ]] || script=preview-host-prepare.sh
           [[ "$OPERATION" != activate ]] || script=preview-host-activate.sh
           [[ "$OPERATION" != verify ]] || script=preview-host-verify.sh
+          [[ "$OPERATION" != react_inspect ]] || script=preview-host-react-inspect.sh
+          [[ "$OPERATION" != audit ]] || script=preview-host-audit.sh
+          [[ "$OPERATION" != audit_full ]] || script=preview-host-audit-full.sh
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
             -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             "sudo -S -p '' bash /home/tahir/preview-activation/scripts/$script"
