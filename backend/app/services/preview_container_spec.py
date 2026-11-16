@@ -34,6 +34,7 @@ def argv_for(spec: ContainerSpec) -> tuple[str, ...]:
         "docker", "run", "--rm", "--network", "none",
         "--read-only", "--user", "10001:10001",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--security-opt", "apparmor=opencode-preview",
         "--memory", "768m", "--memory-swap", "768m",
         "--cpus", "0.5", "--pids-limit", "128",
         "--tmpfs", "/tmp:rw,nosuid,noexec,size=64m",

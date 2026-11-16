@@ -51,7 +51,7 @@ jobs:
           [[ "$OPERATION" == inspect || "$OPERATION" == prepare ]]
           ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             'mkdir -p /home/tahir/preview-activation'
-          tar -czf /tmp/preview-activation.tgz scripts/preview-host-*.sh deploy/preview-python.Dockerfile backend/app/services/preview*.py
+          tar -czf /tmp/preview-activation.tgz scripts/preview-host-*.sh deploy/preview-python.Dockerfile deploy/apparmor-preview backend/app/services/preview*.py
           scp -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             /tmp/preview-activation.tgz "$VPS_USER@$VPS_HOST:/home/tahir/preview-activation.tgz"
           ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \

@@ -9,6 +9,12 @@ ENVFILE=/etc/opencode-preview-worker-test.env
 [[ -f "$ENVFILE" && -f "$STAGE/backend/app/services/preview_worker_server.py" ]] || exit 2
 [[ $(systemctl show opencode-preview-docker-test.service -p User --value) == preview-worker ]] || exit 3
 [[ $(systemctl show opencode-preview-worker-test.service -p User --value) == preview-worker ]] || exit 3
+bash "$STAGE/scripts/preview-host-inspect.sh"
+# Named enforcing policy avoids rootless Docker attempting to load docker-default.
+# Keep AppArmor enabled; never use apparmor=unconfined or disable host security.
+command -v apparmor_parser >/dev/null
+install -o root -g root -m 0644 "$STAGE/deploy/apparmor-preview" /etc/apparmor.d/opencode-preview
+apparmor_parser -r /etc/apparmor.d/opencode-preview
 # Preserve existing unit isolation and add aggregate resource ceilings.
 install -d -m 0755 /etc/systemd/system/opencode-preview-docker-test.service.d
 cat > /etc/systemd/system/opencode-preview-docker-test.service.d/resources.conf <<'UNIT'
@@ -48,7 +54,7 @@ PY
 )
 docker_preview image inspect "$base" >/dev/null
 # Only a trusted tiny runtime is built. Customer source/requirements never enter it.
-docker_preview build --pull=false --memory=512m --cpu-period=100000 --cpu-quota=40000 \
+docker_preview build --security-opt apparmor=opencode-preview --pull=false --memory=512m --cpu-period=100000 --cpu-quota=40000 \
  --build-arg "PYTHON_BASE=$base" -t preview-python-runtime:configured \
  -f "$STAGE/deploy/preview-python.Dockerfile" "$STAGE/deploy"
 image_id=$(docker_preview image inspect preview-python-runtime:configured --format '{{.Id}}')

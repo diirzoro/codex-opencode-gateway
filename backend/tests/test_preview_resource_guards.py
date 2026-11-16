@@ -125,3 +125,34 @@ def test_polling_does_not_extend_idle_time():
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+def test_already_removed_container_cleanup_is_idempotent():
+    import subprocess
+    from app.services.preview_docker_provisioner import DockerProvisioner
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
+    DockerProvisioner(run=run).stop('a'*64, 'owned')
+    assert len(calls) == 1
+    assert calls[0][1] == 'ps'
+
+
+def test_live_client_requires_explicit_configuration(monkeypatch):
+    from app.services.preview_worker_client import configured_client
+    monkeypatch.delenv('PREVIEW_WORKER_ENABLED', raising=False)
+    assert configured_client() is None
+    monkeypatch.setenv('PREVIEW_WORKER_ENABLED', 'live')
+    monkeypatch.setenv('PREVIEW_WORKER_URL', 'http://127.0.0.1:8791')
+    monkeypatch.setenv('PREVIEW_WORKER_TOKEN', 'x'*32)
+    assert configured_client().base_url == 'http://127.0.0.1:8791'
+
+
+def test_immutable_local_image_and_cpu_ceiling():
+    from app.services.preview_container_spec import ContainerSpec, argv_for
+    args = argv_for(ContainerSpec('sha256:'+'a'*64,
+                   ('python', '-m', 'uvicorn', 'main:app'),
+                   '/var/lib/preview-worker/jobs/audit/src'))
+    assert args[args.index('--cpus')+1] == '0.5'
+    assert '--network' in args and 'none' in args
