@@ -11,7 +11,7 @@ The existing dedicated rootless Docker daemon and Python control worker are reus
 - Missing or insufficient trusted local RAM/disk telemetry denies launch. Current policy reserves at least 1536 MiB available RAM beyond a 768 MiB runtime reservation and 4096 MiB free disk beyond 1024 MiB planning allowance.
 - Read-only source snapshot and root filesystem, unprivileged UID/GID 10001, all capabilities dropped, no-new-privileges, default seccomp and a named enforcing AppArmor profile. Runtime network is none and no ports or Docker sockets are exposed.
 - Failed cleanup retains the allocation and retries. Restart reconciliation checks Docker ownership labels before stopping orphan preview containers.
-- Graceful worker shutdown stops active previews. Existing rootless infrastructure uses its dedicated user D-Bus manager for enforceable systemd cgroups.
+- Graceful worker shutdown stops active previews. Existing rootless infrastructure uses its dedicated user D-Bus manager for enforceable systemd cgroups. A private read-only inventory of two already enforcing AppArmor profiles lets the historical rootless Docker installation perform its exec profile check. This is mounted only inside that daemon service; host kernel policies and global securityfs permissions remain unchanged. The inventory persists under /etc/opencode-preview-apparmor. Actual kernel AppArmor enforcement is checked inside the controlled application.
 
 ## Trusted Python runtime
 

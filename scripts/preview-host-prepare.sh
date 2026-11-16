@@ -27,7 +27,7 @@ for name in required:
  matches=[line for line in profiles if line==name+' (enforce)']
  assert len(matches)==1, 'Required enforcing AppArmor profile not loaded: '+name
  selected+=matches
-root=Path('/run/opencode-preview-apparmor')
+root=Path('/etc/opencode-preview-apparmor')
 (root/'apparmor').mkdir(parents=True,exist_ok=True,mode=0o755)
 root.chmod(0o755); (root/'apparmor').chmod(0o755)
 file=root/'apparmor/profiles'; file.write_text('\n'.join(selected)+'\n'); file.chmod(0o444)
@@ -36,7 +36,7 @@ PYAA
 install -d -m 0755 /etc/systemd/system/opencode-preview-docker-test.service.d
 cat > /etc/systemd/system/opencode-preview-docker-test.service.d/apparmor-inventory.conf <<'UNIT'
 [Service]
-BindReadOnlyPaths=/run/opencode-preview-apparmor:/sys/kernel/security
+BindReadOnlyPaths=/etc/opencode-preview-apparmor:/sys/kernel/security
 UNIT
 # Preserve existing unit isolation and add aggregate resource ceilings.
 install -d -m 0755 /etc/systemd/system/opencode-preview-docker-test.service.d

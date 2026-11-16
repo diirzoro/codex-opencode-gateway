@@ -5,6 +5,8 @@ umask 077
 [[ $(id -u) -eq 0 ]] || exit 1
 STAGE=/home/tahir/preview-activation
 APP=/home/tahir/opencode-gateway
+# Complete current worker/kernel verification before any LIVE configuration change.
+bash "$STAGE/scripts/preview-host-prepare.sh"
 systemctl is-active --quiet pi-central.service
 systemctl is-active --quiet opencode-gateway.service
 systemctl is-active --quiet opencode-preview-worker-test.service
