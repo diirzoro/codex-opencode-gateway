@@ -465,7 +465,9 @@ const api=async(path,options={})=>{
     (body.detail&&typeof body.detail==='object')?
       [body.detail.provider,body.detail.provider_code,body.detail.http_status?('HTTP '+body.detail.http_status):'',body.detail.provider_reason,
         typeof body.detail.provider_param==='string'&&/^[A-Za-z0-9_\[\].]{1,100}$/.test(body.detail.provider_param)?'Field: '+body.detail.provider_param:'']
-        .filter(v=>typeof v==='string'&&/^[a-zA-Z0-9_ .:\[\]-]{1,110}$/.test(v)).join(' · ')||('Request failed (HTTP '+response.status+')'):
+        .filter(v=>typeof v==='string'&&/^[a-zA-Z0-9_ .:\[\]-]{1,110}$/.test(v)).concat(
+          typeof body.detail.provider_hint==='string'&&/^[a-zA-Z0-9 .,:;()\[\]/_=-]{1,320}$/.test(body.detail.provider_hint)?[body.detail.provider_hint]:[]
+        ).join(' · ')||('Request failed (HTTP '+response.status+')'):
       (body.detail||'Request failed');
   const error=new Error(readable);error.status=response.status;
   throw error;

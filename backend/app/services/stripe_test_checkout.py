@@ -5,6 +5,18 @@ import httpx
 from fastapi import HTTPException
 from . import payment_gateway_config
 
+def _safe_diagnostic_message(value):
+    """TEST-only developer hint: redact values, credentials and identifiers."""
+    value = str(value or '')[:2000]
+    value = re.sub(r'(?:sk|rk|pk)_(?:test|live)_[^\s,;]+', '[credential]', value)
+    value = re.sub(r'https?://\S+', '[url]', value)
+    value = re.sub(r'[\w.+-]+@[\w.-]+', '[email]', value)
+    value = re.sub(r'\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b', '[identifier]', value)
+    value = re.sub(r'\b(?:acct|cus|cs|pi|pm|req|ch|sub|price|prod|tok|ba|card)_[A-Za-z0-9_]+', '[identifier]', value)
+    value = re.sub(r"(['\"`]).*?\1", '[value]', value)
+    value = re.sub(r'\b\w{40,}\b|\d{6,}', '[value]', value)
+    return re.sub(r'[^a-zA-Z0-9 .,:;()\[\]/_=-]', ' ', value)[:320]
+
 def test_credentials(db):
     """Resolve saved dynamic Stripe test profile first; fall back to legacy settings."""
     from . import payment_provider_profiles as profiles
@@ -58,6 +70,7 @@ def _stripe_call(db, method, path, data=None):
                             {"provider": "stripe", "http_status": reply.status_code,
                              "provider_code": code, "provider_param": param,
                              "provider_reason": reason,
+                             "provider_hint": _safe_diagnostic_message(error.get('message')),
                              "request_reached_stripe": True})
     return payload
 
