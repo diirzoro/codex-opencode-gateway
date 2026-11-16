@@ -44,6 +44,18 @@ def call(operation,payload):
   if operation=='start':
    try: print('Controlled readiness probe logs:',call('logs',{}).get('logs','')[-3000:])
    except Exception: print('Controlled probe logs unavailable')
+   # Diagnose only this generated, non-customer readiness source.
+   diagnostic='preview-operator-'+uuid.uuid4().hex[:12]
+   argv=prefix+['run','--rm','--name',diagnostic,'--network','none','--read-only','--user','10001:10001','--cap-drop','ALL','--security-opt','no-new-privileges','--security-opt','apparmor=opencode-preview','--memory','768m','--cpus','0.5','--pids-limit','128','--tmpfs','/tmp:rw,nosuid,noexec,size=64m','--workdir','/workspace','--mount','type=bind,src=/var/lib/preview-worker/jobs/'+job+'/src,dst=/workspace,readonly',rows['PREVIEW_IMAGE_PYTHON'],'python','-m','uvicorn','main:app','--host','0.0.0.0','--port','8080']
+   try:
+    result=subprocess.run(argv,capture_output=True,text=True,timeout=25)
+    print('Controlled foreground exit:',result.returncode,'stderr:',result.stderr[-2500:])
+   except subprocess.TimeoutExpired as diagnostic_timeout:
+    print('Controlled foreground still running; startup:',str(diagnostic_timeout.stderr)[-2500:])
+    result=subprocess.run(prefix+['exec',diagnostic,'python','-c',"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/',timeout=5).read())"],capture_output=True,text=True,timeout=15)
+    print('Controlled direct GET:',result.returncode,result.stdout[-1000:],result.stderr[-1500:])
+   finally:
+    subprocess.run(prefix+['rm','-f',diagnostic],capture_output=True,timeout=15)
   raise
 try:
  assert call('prepare',{'framework':'python','entrypoint':'main.py','archive':base64.b64encode(archive.getvalue()).decode()})['state']=='ready'
