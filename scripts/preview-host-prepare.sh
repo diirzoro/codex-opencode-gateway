@@ -43,27 +43,38 @@ docker_preview() {
 # Require actual rootless cgroup support before launching any customer process.
 info=$(docker_preview info --format '{{json .SecurityOptions}} {{.CgroupVersion}} {{.CgroupDriver}}')
 [[ "$info" == *rootless* && "$info" == *' 2 '* && "$info" != *' none' ]] || { echo 'Rootless cgroup enforcement unavailable'; exit 5; }
-base=$(python3 - "$ENVFILE" <<'PY'
+base=$(python3 - "$ENVFILE" <<'PYBASE'
 import sys,re
 from pathlib import Path
 rows=dict(line.split('=',1) for line in Path(sys.argv[1]).read_text().splitlines() if '=' in line and not line.startswith('#'))
-image=rows.get('PREVIEW_IMAGE_PYTHON','').strip().strip('"')
+image=rows.get('PREVIEW_PYTHON_BASE',rows.get('PREVIEW_IMAGE_PYTHON','')).strip().strip('"')
 assert re.fullmatch(r'[a-z0-9._/-]+@sha256:[0-9a-f]{64}',image)
 print(image)
-PY
+PYBASE
 )
 docker_preview image inspect "$base" >/dev/null
-# Only a trusted tiny runtime is built. Customer source/requirements never enter it.
-docker_preview build --security-opt apparmor=opencode-preview --pull=false --memory=512m --cpu-period=100000 --cpu-quota=40000 \
- --build-arg "PYTHON_BASE=$base" -t preview-python-runtime:configured \
- -f "$STAGE/deploy/preview-python.Dockerfile" "$STAGE/deploy"
+# Prepare trusted dependencies in a bounded named-policy builder container.
+# No customer code, customer requirements, or host mounts enter this container.
+builder="preview-python-build-$(date +%s)"
+cleanup_builder() { docker_preview rm -f "$builder" >/dev/null 2>&1 || true; }
+trap cleanup_builder EXIT
+docker_preview run --name "$builder" --memory=512m --memory-swap=512m --cpus=0.4 --pids-limit=128 \
+ --cap-drop=ALL --security-opt=no-new-privileges --security-opt=apparmor=opencode-preview \
+ "$base" python -m pip install --no-cache-dir --disable-pip-version-check \
+ 'fastapi>=0.115.6,<1' 'uvicorn>=0.34.0,<1'
+docker_preview commit --change 'USER 10001:10001' --change 'WORKDIR /workspace' \
+ --change 'ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1' \
+ "$builder" preview-python-runtime:configured >/dev/null
+cleanup_builder
+trap - EXIT
 image_id=$(docker_preview image inspect preview-python-runtime:configured --format '{{.Id}}')
 [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 6
-PREVIEW_RUNTIME_IMAGE="$image_id" python3 - "$ENVFILE" <<'PY'
+PREVIEW_RUNTIME_BASE="$base" PREVIEW_RUNTIME_IMAGE="$image_id" python3 - "$ENVFILE" <<'PY'
 from pathlib import Path
 import os,sys
 p=Path(sys.argv[1]); lines=p.read_text().splitlines()
-lines=[line for line in lines if not line.startswith('PREVIEW_IMAGE_PYTHON=')]
+lines=[line for line in lines if not line.startswith(('PREVIEW_IMAGE_PYTHON=','PREVIEW_PYTHON_BASE='))]
+lines.append('PREVIEW_PYTHON_BASE='+os.environ['PREVIEW_RUNTIME_BASE'])
 lines.append('PREVIEW_IMAGE_PYTHON='+os.environ['PREVIEW_RUNTIME_IMAGE'])
 p.write_text('\n'.join(lines)+'\n')
 PY
