@@ -70,8 +70,8 @@ class DockerProvisioner:
         args = ("run", "--detach", "--pull", "never", "--name", f"preview-{job_id}",
                 "--label", "opencode.preview.managed=true",
                 "--label", f"opencode.preview.job={job_id}", *base[2:])
-        # The run --rm contract removes stopped containers. Worker must separately
-        # persist job->container mapping and verify cleanup on process restart.
+        # Explicit stop removes the container after bounded logs are collected.
+        # Worker reconciles ownership labels after a process restart.
         container_id = self._call(args, timeout=60)
         if CONTAINER_ID.fullmatch(container_id) is None:
             raise PreviewProvisioningError("Docker returned an invalid container identifier")

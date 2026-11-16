@@ -118,7 +118,12 @@ class WorkerServer(ThreadingHTTPServer):
 
     def _reap_loop(self):
         while not self.reaper_stop.wait(5):
-            self.reap_expired()
+            try:
+                with LOCK:
+                    self.reconcile_orphans()
+                    self.reap_expired()
+            except (PreviewProvisioningError, OSError):
+                LOGGER.warning('Preview reconciliation pending; new launches remain gated')
 
     def server_close(self):
         self.reaper_stop.set()
@@ -367,6 +372,8 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     try:
+        with LOCK:
+            server.reconcile_orphans()
         server.serve_forever()
     finally:
         server.server_close()

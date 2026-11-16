@@ -12,6 +12,17 @@ def command(argv):
 print('HOST_RESOURCES')
 print(command(['free','-m']))
 print(command(['df','-Pm','/var/lib/preview-worker','/home/tahir']))
+pid=command(['systemctl','show','opencode-preview-worker-test.service','-p','MainPID','--value'])
+if pid.isdigit() and pid!='0':
+    process=Path('/proc')/pid
+    print('WORKER_PROCESS_CWD',str((process/'cwd').resolve()))
+    values={}
+    for item in (process/'environ').read_bytes().split(b'\0'):
+        if b'=' in item:
+            key,value=item.split(b'=',1)
+            if key in [b'PYTHONPATH',b'DOCKER_HOST',b'PREVIEW_IMAGE_PYTHON']:
+                values[key.decode()]=value.decode()
+    print('WORKER_PROCESS_CONFIG',json.dumps(values))
 print('CPU_COUNT', command(['getconf','_NPROCESSORS_ONLN']))
 print('LOAD', Path('/proc/loadavg').read_text().split()[:3])
 for unit in ['pi-central.service','opencode-gateway.service','opencode-gateway-test.service','opencode-preview-worker-test.service','opencode-preview-docker-test.service','docker.service']:

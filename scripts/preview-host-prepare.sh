@@ -25,7 +25,15 @@ TasksMax=256
 UNIT
 install -d -m 0755 /etc/systemd/system/opencode-preview-worker-test.service.d
 cat > /etc/systemd/system/opencode-preview-worker-test.service.d/resources.conf <<'UNIT'
+[Unit]
+Requires=opencode-preview-docker-test.service
+After=opencode-preview-docker-test.service
 [Service]
+WorkingDirectory=/opt/opencode-preview-test
+Environment=PYTHONPATH=/opt/opencode-preview-test
+Environment=DOCKER_HOST=unix:///run/preview-worker/docker.sock
+ExecStart=
+ExecStart=/usr/bin/python3 -m app.services.preview_worker_server
 MemoryMax=384M
 CPUQuota=25%
 TasksMax=64
