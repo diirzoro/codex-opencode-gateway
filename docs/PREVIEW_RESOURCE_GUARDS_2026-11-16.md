@@ -27,7 +27,7 @@ Activation backs up the Gateway environment, relevant modules and preview Nginx 
 
 Thirteen local tests cover timers, concurrency refusal, cleanup retry, restart reconciliation, shutdown, idle polling, host reserve refusal, explicit LIVE opt-in, immutable image IDs, CPU ceiling, retained startup diagnostics and refusal to delete containers with foreign labels. These tests do not execute customer code or Docker.
 
-The preparation action additionally runs a tiny real isolated Python HTTP application, verifies its actual Docker configuration, fetches JSON and stops the container. Browser acceptance of the separate Python audit project remains required before reporting success.
+The preparation action additionally runs a tiny real isolated Python HTTP application, verifies its actual Docker configuration, fetches JSON and stops the container. Browser acceptance passed on LIVE for preview-audit-python-20261116: the Python-served HTML appeared in the sandboxed frame and Check Health returned {"ok":true,"runtime":"python","test":"preview-audit-python-20261116"}. Actual kernel AppArmor enforcement was verified from inside the generated server-side probe. LIVE activation succeeded in GitHub Actions run 43869397470, with Pi Central unchanged. A screenshot is stored at docs/evidence/python-preview-live-20261116.jpg.
 
 React/Vite dependency preparation and static artifact caching are still separate unfinished work. Java detection has no executable launch profile. Do not report either language working based on this Python setup. Python supports the prepared FastAPI/Uvicorn entrypoint shape; arbitrary project-specific requirements are not installed automatically.
 
