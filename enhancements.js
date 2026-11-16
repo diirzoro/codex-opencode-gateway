@@ -1984,6 +1984,20 @@ window.renderGithubConfirmation=function(root,status,refresh){
   };
   const afReload=()=>ADMIN_LOADERS.billing();
   const afConfirm=(en,ar)=>window.confirmAction(tr(en,ar));
+  async function afArchiveRecord(kind,id,note){
+    if(!await afConfirm('Archive this record from the current list? It remains recoverable through Show archived. No payment or refund is issued.',
+      'أرشفة السجل وإخفاؤه من القائمة الحالية؟ يمكن استعادته من عرض المؤرشف. لن يتم تحصيل أو استرداد أي أموال.'))return;
+    await api('/api/admin/finance/notes/'+kind+'/'+id,{
+      method:'PUT',body:JSON.stringify({note:note?.note||'',archived:true})});
+    await afReload();
+  }
+  async function afCancelSubscription(id){
+    if(!await afConfirm('Cancel and suspend this subscription access? Payment history and paid dates remain; no refund is issued.',
+      'تأكيد إلغاء الاشتراك وإيقاف صلاحيته؟ تبقى المعاملات والتواريخ المدفوعة محفوظة؛ لن يتم إصدار استرداد مالي.'))return;
+    await api('/api/admin/finance/subscriptions/'+id+'/cancel',{
+      method:'POST',body:JSON.stringify({confirmation:'CANCEL SUBSCRIPTION'})});
+    await afReload();
+  }
   async function afToggleSubscription(id,suspended){
     if(!await afConfirm(suspended?'Restore this customer subscription access?':'Suspend this customer subscription access without changing the paid end date?',
       suspended?'هل تريد تنشيط صلاحية الاشتراك؟':'هل تريد تعليق صلاحية الاشتراك دون تغيير تاريخ انتهاء الفترة المدفوعة؟'))return;
@@ -2040,8 +2054,12 @@ window.renderGithubConfirmation=function(root,status,refresh){
         }));
         actions.append(afBtn(tr('View / note / archive','عرض / ملاحظة / أرشفة'),()=>afNoteEditor('subscription',id,note)));
         const suspended=trRow.dataset.financeSuspended==='true';
-        actions.append(afBtn(suspended?tr('Resume access','تنشيط الاشتراك'):tr('Suspend access','تعليق الاشتراك'),()=>afToggleSubscription(id,suspended)));
-        if(!['active'].includes(trRow.dataset.financeStatus)){
+        const subscription=subscriptionLookup.get(id);
+        if(subscription?.can_manage!==false){
+          actions.append(afBtn(suspended?tr('Resume access','تنشيط الاشتراك'):tr('Suspend access','تعليق الاشتراك'),()=>afToggleSubscription(id,suspended)));
+          if(subscription?.status!=='cancelled')actions.append(afBtn(tr('Cancel subscription','إلغاء الاشتراك'),()=>afCancelSubscription(id)));
+        }
+        if(subscription?.can_delete===true){
           actions.append(afBtn(tr('Delete empty record','حذف السجل الفارغ'),async()=>{
             if(!await afConfirm('Permanently remove this subscription ONLY if it has no active trial or any payment history?',
               'تأكيد حذف الاشتراك نهائيًا بشرط عدم وجود تجربة سارية أو أي سجل دفع؟'))return;
@@ -2049,6 +2067,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
               method:'DELETE',body:JSON.stringify({confirmation:'DELETE EMPTY SUBSCRIPTION'})});
             await afReload();
           }));
+        }else{
+          actions.append(afBtn(tr('Archive','أرشفة'),()=>afArchiveRecord('subscription',id,note)));
         }
         cell.append(actions);trRow.append(cell);
       }
@@ -2142,8 +2162,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
               await afReload();
             }));
           }else{
-            actions.append(afUnavailable(tr('Delete','حذف'),tr('Payment evidence and provider records must be retained. Use archive to hide this record. Only empty cancelled, failed or rejected drafts can be permanently deleted after confirmation.',
-              'تُحفظ أدلة الدفع وسجلات المزود. استخدم الأرشفة لإخفاء السجل. الحذف النهائي مع التأكيد متاح فقط للمسودات الفارغة الملغاة أو الفاشلة أو المرفوضة.')));
+            actions.append(afBtn(tr('Archive','أرشفة'),()=>afArchiveRecord('order',id,note)));
           }
         }
         row.querySelector('[data-finance-actions]').replaceChildren(actions);
@@ -2229,10 +2248,10 @@ window.renderGithubConfirmation=function(root,status,refresh){
         }));
         buttons.append(afBtn(tr('Manage','إدارة'),()=>afNoteEditor('subscription',customer.id,
           annotations.get('subscription:'+customer.id))));
-        buttons.append(afBtn(customer.admin_suspended_at?tr('Resume','تنشيط'):tr('Suspend','تعليق'),
+        if(customer.can_manage!==false)buttons.append(afBtn(customer.admin_suspended_at?tr('Resume','تنشيط'):tr('Suspend','تعليق'),
           ()=>afToggleSubscription(customer.id,Boolean(customer.admin_suspended_at))));
-        buttons.append(afUnavailable(tr('Delete','حذف'),tr('This customer has verified payment history. Archive the subscription from Manage to hide it while retaining its payment records.',
-          'هذا العميل لديه سجل دفع موثق. يمكنك أرشفة الاشتراك من إدارة لإخفائه مع حفظ سجلات الدفع.')));
+        if(customer.can_manage!==false&&customer.status!=='cancelled')buttons.append(afBtn(tr('Cancel subscription','إلغاء الاشتراك'),()=>afCancelSubscription(customer.id)));
+        buttons.append(afBtn(tr('Archive','أرشفة'),()=>afArchiveRecord('subscription',customer.id,annotations.get('subscription:'+customer.id))));
         action.append(buttons);row.append(action);tbody.append(row);
       }
       caption.textContent=tr('Showing ','المعروض ')+filtered.length+' / '+paid.length+

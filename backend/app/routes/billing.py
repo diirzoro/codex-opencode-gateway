@@ -264,8 +264,8 @@ def cancellation_status(order_id:uuid.UUID,user:User=Depends(require_billing_use
     allowed=row.status in {'awaiting_payment','pending_review','failed','rejected'} and not row.provider_capture_id and not row.paid_at
     provider_status=None
     if allowed and row.provider_order_id:
-        provider_status=paypal.show_order(row).get('status')
-        allowed=provider_status in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED'}
+        provider_status=paypal.cancellation_state(row)
+        allowed=provider_status in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED','NOT_FOUND_SANDBOX'}
     return {'can_cancel':allowed,'provider_status':provider_status}
 
 @router.post('/orders/{order_id}/cancel')
@@ -280,8 +280,8 @@ def cancel_unpaid_order(db,row,actor):
     if row.status not in {'awaiting_payment','pending_review','failed','rejected','cancelled'}:
         raise HTTPException(409,'This payment cannot be cancelled after acceptance')
     if row.provider_order_id:
-        payload=paypal.show_order(row)
-        if payload.get('status') not in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED'}:
+        provider_status=paypal.cancellation_state(row)
+        if provider_status not in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED','NOT_FOUND_SANDBOX'}:
             raise HTTPException(409,'This PayPal order is approved or completed. Confirm its payment status before cancelling; no refund has been issued.')
     row.status='cancelled'
     db.add(AccountAudit(actor_id=actor.id,subject_id=row.user_id,action='billing.payment_cancelled'))
