@@ -26,6 +26,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Syntax validation (no VPS connection)
         shell: bash
         run: |
@@ -34,7 +37,7 @@ jobs:
           node --check dashboards.js
           node --check enhancements.js
       - name: Install backend testing requirements
-        run: python3 -m pip install --disable-pip-version-check -q -r backend/requirements.txt
+        run: python3 -m pip install --disable-pip-version-check -q -r backend/requirements.txt pytest
       - name: Verify Stripe signature and payment matching (no real charges)
         env:
           PYTHONPATH: backend

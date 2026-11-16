@@ -2873,6 +2873,44 @@ window.renderGithubConfirmation=function(root,status,refresh){
     return {wrap,input:i};
   }
 
+  function stripeTestTools(card,actions){
+          const feedback=el('p',tr('Stripe TEST not yet checked.','لم يتم فحص Stripe التجريبي.'),
+            'dynamic-provider-feedback');
+          const verify=button(tr('Verify Stripe TEST API','فحص اتصال Stripe التجريبي'),async()=>{
+            verify.disabled=true;
+            try{
+              const result=await api('/api/admin/payment-gateways/stripe/verify',{method:'POST'});
+              feedback.textContent=tr('Stripe verified: ','اتصال Stripe موثق: ')+(result.account_id||result.environment);
+            }catch(error){feedback.textContent=error.message;}finally{verify.disabled=false;}
+          },'button small');
+          const checkout=button(tr('Open Stripe TEST checkout','فتح الدفع التجريبي Stripe'),async()=>{
+            checkout.disabled=true;
+            try{
+              const result=await api('/api/admin/payment-gateways/stripe/test-checkout',{method:'POST'});
+              const url=new URL(result.checkout_url);
+              if(url.protocol!=='https:'||!['checkout.stripe.com','checkout.stripe.dev'].includes(url.hostname))
+                throw Error('Unexpected Stripe checkout destination');
+              feedback.replaceChildren();
+              const link=el('a',tr('Open Stripe test payment page','فتح صفحة دفع Stripe التجريبية'));
+              link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';
+              feedback.append(link);
+              const check=button(tr('Check test payment status','فحص حالة الدفع التجريبي'),async()=>{
+                check.disabled=true;
+                try{
+                  const status=await api('/api/admin/payment-gateways/stripe/test-checkout/'+encodeURIComponent(result.session_id));
+                  feedback.append(el('p',tr('TEST payment: ','الدفع التجريبي: ')+
+                    (status.payment_status||status.status||'unknown')+
+                    tr(' · No subscription activated',' · لم يُفعّل اشتراك')));
+                }catch(error){feedback.append(el('p',error.message));}
+                finally{check.disabled=false;}
+              },'button ghost small');
+              feedback.append(check);
+            }catch(error){feedback.textContent=error.message;}
+            finally{checkout.disabled=false;}
+          },'button small');
+          actions.append(verify,checkout);card.append(feedback);
+  }
+
   async function load(){
     const sequence=++revision;
     if(!['admin','owner'].includes(currentUser?.role))return;
@@ -2977,6 +3015,14 @@ window.renderGithubConfirmation=function(root,status,refresh){
     }
     const detail=el('div','','dynamic-provider-cards');
     detail.hidden=true;host.append(detail);
+    if(!profileMap.has('stripe')){
+      toolbar.append(button(tr('Check saved Stripe TEST settings','فحص إعدادات Stripe التجريبية المحفوظة'),()=>{
+        detail.hidden=false;detail.replaceChildren();
+        const actions=el('div','','dynamic-provider-actions');
+        stripeTestTools(detail,actions);detail.append(actions);
+        detail.scrollIntoView({behavior:'smooth',block:'nearest'});
+      },'button ghost small'));
+    }
     const statusText=entry=>
       entry.status==='suspended'?tr('Suspended','معلقة'):
       entry.customer_checkout_enabled?tr('Enabled for new customers','مفعلة للعملاء'):
@@ -3021,41 +3067,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
         card.append(el('p',tr('API credentials remain encrypted. Stripe TEST Checkout does not activate subscriptions.',
           'تبقى مفاتيح API مشفرة. دفع Stripe التجريبي لا يفعّل الاشتراكات.'),'dynamic-provider-hint'));
         if(profile.slug==='stripe'&&profile.environment==='test'){
-          const feedback=el('p',tr('Stripe TEST not yet checked.','لم يتم فحص Stripe التجريبي.'),
-            'dynamic-provider-feedback');
-          const verify=button(tr('Verify Stripe TEST API','فحص اتصال Stripe التجريبي'),async()=>{
-            verify.disabled=true;
-            try{
-              const result=await api('/api/admin/payment-gateways/stripe/verify',{method:'POST'});
-              feedback.textContent=tr('Stripe verified: ','اتصال Stripe موثق: ')+(result.account_id||result.environment);
-            }catch(error){feedback.textContent=error.message;}finally{verify.disabled=false;}
-          },'button small');
-          const checkout=button(tr('Open Stripe TEST checkout','فتح الدفع التجريبي Stripe'),async()=>{
-            checkout.disabled=true;
-            try{
-              const result=await api('/api/admin/payment-gateways/stripe/test-checkout',{method:'POST'});
-              const url=new URL(result.checkout_url);
-              if(url.protocol!=='https:'||!['checkout.stripe.com','checkout.stripe.dev'].includes(url.hostname))
-                throw Error('Unexpected Stripe checkout destination');
-              feedback.replaceChildren();
-              const link=el('a',tr('Open Stripe test payment page','فتح صفحة دفع Stripe التجريبية'));
-              link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';
-              feedback.append(link);
-              const check=button(tr('Check test payment status','فحص حالة الدفع التجريبي'),async()=>{
-                check.disabled=true;
-                try{
-                  const status=await api('/api/admin/payment-gateways/stripe/test-checkout/'+encodeURIComponent(result.session_id));
-                  feedback.append(el('p',tr('TEST payment: ','الدفع التجريبي: ')+
-                    (status.payment_status||status.status||'unknown')+
-                    tr(' · No subscription activated',' · لم يُفعّل اشتراك')));
-                }catch(error){feedback.append(el('p',error.message));}
-                finally{check.disabled=false;}
-              },'button ghost small');
-              feedback.append(check);
-            }catch(error){feedback.textContent=error.message;}
-            finally{checkout.disabled=false;}
-          },'button small');
-          actions.append(verify,checkout);card.append(feedback);
+          stripeTestTools(card,actions);
         }
       }else{
         actions.append(button(tr('Configure customer checkout','إعداد الدفع للعملاء'),

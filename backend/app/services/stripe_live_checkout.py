@@ -276,7 +276,6 @@ def start_checkout(db, user, plan_id, *, origin):
     db.refresh(row)
     data = {
         "mode": "payment",
-        "payment_method_types[0]": "card",
         "line_items[0][price_data][currency]": plan.currency.lower(),
         "line_items[0][price_data][unit_amount]": str(plan.price_cents),
         "line_items[0][price_data][product_data][name]": "Gateway access - " + plan.name,
