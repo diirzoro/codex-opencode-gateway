@@ -459,7 +459,15 @@ const api=async(path,options={})=>{
  if(revision!==authenticationRevision)throw new Error('Authenticated session changed');
  if(!response.ok){
   if(response.status===401&&!options.allowAnonymous&&currentUser)clearAuthenticatedState();
-  const readable=response.status===413?
+  const financeErrors={
+    'Subscription has trial or payment history; archive instead':'هذا الاشتراك مرتبط بتجربة أو سجل مالي؛ استخدم الأرشفة لإخفائه دون حذف تاريخه.',
+    'PayPal order status could not be verified; cancellation was not applied. Retry or archive the record.':'تعذر التحقق من حالة طلب PayPal. لم يُنفّذ الإلغاء؛ أعد المحاولة أو أرشف السجل.',
+    'PayPal LIVE order could not be reconciled; cancellation was not applied':'تعذر مطابقة طلب PayPal الحقيقي؛ لم يُنفّذ الإلغاء لحين مراجعة حالة الدفع.',
+    'Accepted payments cannot be cancelled or refunded':'هذه الدفعة مؤكدة؛ لا يمكن إلغاؤها بهذا الإجراء، ولم يُصدر أي استرداد مالي.',
+    'This PayPal order is approved or completed. Confirm its payment status before cancelling; no refund has been issued.':'طلب PayPal معتمد أو مكتمل؛ راجع حالة الدفع قبل إلغائه. لم يُصدر أي استرداد مالي.'
+  };
+  const localized=lang==='ar'&&typeof body.detail==='string'?financeErrors[body.detail]:null;
+  const readable=localized||(response.status===413?
     (lang==='ar'?'رفض الخادم حجم المرفق (HTTP 413) قبل إرسال الطلب إلى Pi؛ ليس ذلك دليلًا على عدم دعم PDF.':'Server rejected the attachment size (HTTP 413) before Pi received it; PDF support has not been tested.'):
     Array.isArray(body.detail)?body.detail.map(x=>x.msg).join(', '):
     (body.detail&&typeof body.detail==='object')?
@@ -468,7 +476,7 @@ const api=async(path,options={})=>{
         .filter(v=>typeof v==='string'&&/^[a-zA-Z0-9_ .:\[\]-]{1,110}$/.test(v)).concat(
           typeof body.detail.provider_hint==='string'&&/^[a-zA-Z0-9 .,:;()\[\]/_=-]{1,320}$/.test(body.detail.provider_hint)?[body.detail.provider_hint]:[]
         ).join(' · ')||('Request failed (HTTP '+response.status+')'):
-      (body.detail||'Request failed');
+      (body.detail||'Request failed'));
   const error=new Error(readable);error.status=response.status;
   throw error;
  }

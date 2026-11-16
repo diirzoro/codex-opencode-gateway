@@ -375,6 +375,15 @@ def admin_workspaces(_: User = Depends(require_admin), db: Session = Depends(get
                        "created_at": workspace.created_at, "last_activity_at": workspace.last_activity_at})
     return output
 
+def _subscription_deletable(row, customer, has_orders):
+    from ..services.entitlements import aware
+    if customer and customer.role in {'admin', 'owner'}:
+        return False
+    return not (has_orders or row.current_period_end or row.status == 'active'
+                or (customer and aware(customer.trial_ends_at)
+                    and aware(customer.trial_ends_at) > datetime.now(timezone.utc)))
+
+
 @router.get("/subscriptions")
 def admin_subscriptions(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     owners = _user_index(db)
@@ -399,9 +408,12 @@ def admin_subscriptions(_: User = Depends(require_admin), db: Session = Depends(
                           or last_paid > info["last_paid_at"]):
             info["last_paid_at"] = last_paid
     output = []
+    ordered_users = set(db.scalars(select(PaymentOrder.user_id).distinct()))
     for sub in db.scalars(select(Subscription).order_by(Subscription.created_at.desc())):
         owner = owners.get(sub.user_id)
         output.append({"id": str(sub.id), "user_id": str(sub.user_id), "owner": owner.username if owner else None, "owner_email": owner.email if owner else None,
+                       "can_manage": not owner or owner.role not in {'admin', 'owner'},
+                       "can_delete": _subscription_deletable(sub, owner, sub.user_id in ordered_users),
                        **paid_stats.get(sub.user_id, {"verified_payment_count": 0, "verified_totals": [], "last_paid_at": None}),
                        "plan": plans[sub.plan_id].name if (sub.plan_id in plans) else None, "status": sub.status, "admin_suspended_at": sub.admin_suspended_at,
                        "started_at": sub.started_at, "current_period_end": sub.current_period_end, "cancelled_at": sub.cancelled_at})
@@ -613,11 +625,44 @@ def finance_suspend_subscription(sub_id: _uuid.UUID, data: AdminFinanceSuspend,
     if customer and customer.role in {"owner", "admin"}:
         raise HTTPException(403, "Administrative accounts are managed separately")
     row.admin_suspended_at = datetime.now(timezone.utc) if data.suspended else None
+    if not data.suspended and row.status == 'cancelled':
+        from ..services.entitlements import aware
+        now = datetime.now(timezone.utc)
+        paid = db.scalar(select(PaymentOrder.id).where(
+            PaymentOrder.user_id == row.user_id, PaymentOrder.status == 'paid').limit(1)) is not None
+        if paid:
+            row.status = 'active' if row.plan_id and aware(row.current_period_end) and aware(row.current_period_end) > now else 'expired'
+        else:
+            row.status = 'trial' if customer and aware(customer.trial_ends_at) and aware(customer.trial_ends_at) > now else 'expired'
+        row.cancelled_at = None
     _finance_audit(db, actor, "finance.subscription_suspended" if data.suspended
                    else "finance.subscription_resumed", row.user_id)
     db.commit()
     return {"id": str(row.id), "suspended": bool(row.admin_suspended_at),
             "ends_at": row.current_period_end, "status": row.status}
+
+
+@router.post('/finance/subscriptions/{sub_id}/cancel')
+def finance_cancel_subscription(sub_id: _uuid.UUID, data: AdminFinanceConfirm,
+                                actor: User = Depends(require_admin),
+                                db: Session = Depends(get_db)):
+    if data.confirmation != 'CANCEL SUBSCRIPTION':
+        raise HTTPException(422, 'Exact subscription cancellation confirmation required')
+    row = db.scalar(select(Subscription).where(Subscription.id == sub_id).with_for_update())
+    if row is None:
+        raise HTTPException(404, 'Subscription not found')
+    customer = db.get(User, row.user_id)
+    if customer and customer.role in {'admin', 'owner'}:
+        raise HTTPException(403, 'Administrative accounts are managed separately')
+    if row.status != 'cancelled' or not row.admin_suspended_at:
+        row.status = 'cancelled'
+        row.cancelled_at = datetime.now(timezone.utc)
+        row.admin_suspended_at = row.cancelled_at
+        row.auto_renew = False
+        _finance_audit(db, actor, 'finance.subscription_cancelled', row.user_id)
+        db.commit()
+    return {'id': str(row.id), 'status': row.status, 'suspended': True,
+            'payment_records_changed': False, 'refund_issued': False}
 
 
 @router.delete("/finance/subscriptions/{sub_id}", status_code=204)
@@ -634,11 +679,8 @@ def finance_delete_empty_subscription(sub_id: _uuid.UUID,
     if row is None:
         raise HTTPException(404, "Subscription not found")
     customer = db.get(User, row.user_id)
-    if (db.scalar(select(PaymentOrder.id).where(
-            PaymentOrder.user_id == row.user_id).limit(1))
-            or row.current_period_end or row.status == "active"
-            or (customer and customer.trial_ends_at
-                and customer.trial_ends_at > datetime.now(timezone.utc))):
+    if not _subscription_deletable(row, customer, db.scalar(select(PaymentOrder.id).where(
+            PaymentOrder.user_id == row.user_id).limit(1)) is not None):
         raise HTTPException(409, "Subscription has trial or payment history; archive instead")
     db.execute(text("DELETE FROM admin_finance_notes "
                     "WHERE target_type='subscription' AND target_id=:id"),

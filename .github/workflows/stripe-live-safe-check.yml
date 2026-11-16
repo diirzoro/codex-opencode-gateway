@@ -9,10 +9,12 @@ on:
       - backend/app/services/paypal.py
       - backend/app/services/payment_gateway_config.py
       - backend/app/routes/billing.py
+      - backend/app/routes/admin.py
       - backend/app/routes/payment_gateways.py
       - backend/app/routes/management.py
       - backend/app/main.py
       - backend/tests/test_stripe_live_checkout.py
+      - backend/tests/test_finance_actions.py
       - dashboards.js
       - enhancements.js
       - .github/workflows/stripe-live-safe-check.yml
@@ -44,4 +46,4 @@ jobs:
           DATABASE_URL: postgresql+psycopg://ci_user:ci_password@127.0.0.1:5432/ci_only
           PUBLIC_BASE_URL: https://opencode-gateway.codes
           APP_PORT: "8000"
-        run: pytest -q backend/tests/test_stripe_live_checkout.py
+        run: pytest -q backend/tests/test_stripe_live_checkout.py backend/tests/test_finance_actions.py

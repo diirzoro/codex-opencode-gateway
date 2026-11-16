@@ -57,6 +57,22 @@ def verify_connection(db=None):
     return {'verified':True,'environment':cfg['environment']}
 
 
+class OrderNotFound(HTTPException):
+    def __init__(self):
+        super().__init__(409, 'PayPal order was not found; no payment or refund was issued')
+
+
+def cancellation_state(row,db=None):
+    try:
+        return (show_order(row) if db is None else show_order(row,db=db)).get('status')
+    except OrderNotFound:
+        if row.provider_environment == 'sandbox' and admin_config(db)['environment'] == 'sandbox':
+            return 'NOT_FOUND_SANDBOX'
+        raise HTTPException(409, 'PayPal LIVE order could not be reconciled; cancellation was not applied') from None
+    except HTTPException:
+        raise HTTPException(409, 'PayPal order status could not be verified; cancellation was not applied. Retry or archive the record.') from None
+
+
 def request(method,path,body=None,request_id=None,negative=False,db=None):
     cfg=admin_config(db)
     if not configured(db):raise HTTPException(503,'PayPal provider is not connected. Configure the merchant account in Admin.')
@@ -79,6 +95,11 @@ def request(method,path,body=None,request_id=None,negative=False,db=None):
         debug_id=payload.get('debug_id','')
         if not isinstance(debug_id,str) or not re.fullmatch(r'[A-Za-z0-9-]{1,100}',debug_id):debug_id=''
         logging.getLogger(__name__).warning('PayPal request rejected: status=%s issues=%s reference=%s',response.status_code,','.join(safe_issues),debug_id)
+        if (method == 'GET' and re.fullmatch(r'/v2/checkout/orders/[A-Z0-9]{5,100}', path)
+                and response.status_code == 404
+                and (payload.get('name') == 'RESOURCE_NOT_FOUND'
+                     or issues & {'INVALID_RESOURCE_ID', 'RESOURCE_NOT_FOUND'})):
+            raise OrderNotFound()
         if issues & {'PAYEE_ACCOUNT_RESTRICTED','PAYEE_ACCOUNT_NOT_VERIFIED','PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING','PAYEE_ACCOUNT_INVALID'}:
             raise HTTPException(503,'The PayPal merchant account cannot receive this payment. Administration must verify merchant eligibility. No subscription was activated.')
         suffix=(' Reference: '+debug_id) if debug_id else ''
