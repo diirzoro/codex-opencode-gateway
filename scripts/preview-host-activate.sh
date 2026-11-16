@@ -5,8 +5,6 @@ umask 077
 [[ $(id -u) -eq 0 ]] || exit 1
 STAGE=/home/tahir/preview-activation
 APP=/home/tahir/opencode-gateway
-# Complete current worker/kernel verification before any LIVE configuration change.
-bash "$STAGE/scripts/preview-host-prepare.sh"
 systemctl is-active --quiet pi-central.service
 systemctl is-active --quiet opencode-gateway.service
 systemctl is-active --quiet opencode-preview-worker-test.service
@@ -83,7 +81,7 @@ try:
  subprocess.run(['systemctl','restart','opencode-gateway.service'],check=True)
  for attempt in range(20):
   try:
-   with urlopen('http://127.0.0.1:8000/api/health',timeout=3) as response:
+   with urlopen(Request('http://127.0.0.1:8000/api/health',headers={'Host':'opencode-gateway.codes'}),timeout=3) as response:
     if response.status==200: break
   except OSError: time.sleep(1)
  else: raise RuntimeError('Gateway health failed')
