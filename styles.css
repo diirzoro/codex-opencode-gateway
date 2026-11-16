@@ -1871,6 +1871,7 @@ body:has(#workspacePage.active) .app-header{display:none!important}
  margin:0;font-size:13px;text-align:start
 }
 [data-admin-panel="billing"] .finance-methods-table{min-width:850px}
+[data-admin-panel="billing"] .finance-unavailable{opacity:.7;border-style:dashed}
 [data-admin-panel="billing"] .finance-table th{
  padding:13px 15px;background:var(--panel2);color:var(--muted);
  text-align:start;font-size:12px;font-weight:600;white-space:nowrap;
