@@ -98,13 +98,13 @@ def verify_stripe_connection(
 
 @router.post("/stripe/test-checkout")
 def create_stripe_diagnostic_checkout(
-    response: Response, _: User = Depends(require_admin),
+    response: Response, user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """Create a Stripe-hosted TEST checkout. Never grants subscriptions."""
     from ..services.stripe_test_checkout import create_diagnostic_checkout
     _cache_safe(response)
-    return create_diagnostic_checkout(db, settings.public_base_url)
+    return create_diagnostic_checkout(db, settings.public_base_url, user_id=user.id)
 
 
 @router.get("/stripe/test-checkout/{session_id}")
