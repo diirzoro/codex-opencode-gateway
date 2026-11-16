@@ -470,8 +470,7 @@ def stripe_status(user:User=Depends(require_billing_user),db:Session=Depends(get
     from ..services import credentials
     cfg=test_credentials(db)
     ready=bool(credentials.available() and cfg.get('mode')=='test'
-        and str(cfg.get('secret_key') or '').startswith('sk_test_')
-        and str(cfg.get('publishable_key') or '').startswith('pk_test_'))
+        and str(cfg.get('secret_key') or '').startswith('sk_test_'))
     return {'provider':'stripe','environment':cfg.get('mode') or 'not_configured',
             'test_checkout_available':ready,'live_checkout_available':False}
 
