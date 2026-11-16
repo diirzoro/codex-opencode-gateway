@@ -17,8 +17,8 @@ def verify_connection(db):
     # Diagnostics are TEST-only. Never probe the real Stripe account here.
     if mode != "test" or not secret.startswith("sk_test_"):
         raise HTTPException(409, "Stripe TEST check requires an sk_test_ secret key")
-    if not publishable.startswith("pk_test_"):
-        raise HTTPException(409, "Stripe TEST check requires a pk_test_ publishable key")
+    if publishable and not publishable.startswith("pk_test_"):
+        raise HTTPException(409, "Saved publishable key must belong to Stripe TEST")
     try:
         with httpx.Client(timeout=12, follow_redirects=False, trust_env=False) as client:
             result = client.get(
