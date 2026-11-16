@@ -187,3 +187,45 @@ def test_host_reserve_prevents_dynamic_start():
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+def test_startup_failure_retains_logs_and_releases_container():
+    import json
+    import urllib.request
+    import urllib.error
+    from threading import Thread
+    from types import SimpleNamespace
+    jobs={'broken':dict(state='ready',container_id=None,family='node',
+                       spec=SimpleNamespace(argv=('node','server.js')))}
+    server,docker=worker(jobs)
+    docker.launch_smoke=lambda name,spec:'a'*64
+    docker.status=lambda cid,name:'exited'
+    docker.logs=lambda cid,name:'Controlled application startup error'
+    thread=Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        request=urllib.request.Request(
+            f'http://127.0.0.1:{server.server_address[1]}/v1/start',
+            data=b'{"job_id":"broken"}',headers={'Authorization':'Bearer '+'x'*32})
+        try:
+            urllib.request.urlopen(request)
+            assert False
+        except urllib.error.HTTPError as exc:
+            assert json.load(exc)['error']=='application_exited_early'
+        assert jobs['broken']['container_id'] is None
+        assert jobs['broken']['failure_logs']=='Controlled application startup error'
+        assert docker.stopped==[('broken','a'*64)]
+    finally:
+        server.shutdown();thread.join();server.server_close()
+
+
+def test_cleanup_refuses_foreign_container_labels():
+    import subprocess
+    import pytest
+    from app.services.preview_docker_provisioner import DockerProvisioner
+    calls=[]
+    def run(args,**kwargs):
+        calls.append(args[1])
+        return subprocess.CompletedProcess(args,0,stdout='a'*64 if args[1]=='ps' else 'foreign|true',stderr='')
+    with pytest.raises(PreviewProvisioningError):
+        DockerProvisioner(run=run).stop('a'*64,'owned')
+    assert calls==['ps','inspect']

@@ -15,6 +15,29 @@ bash "$STAGE/scripts/preview-host-inspect.sh"
 command -v apparmor_parser >/dev/null
 install -o root -g root -m 0644 "$STAGE/deploy/apparmor-preview" /etc/apparmor.d/opencode-preview
 apparmor_parser -r /etc/apparmor.d/opencode-preview
+# Docker exec in this rootless installation cannot read securityfs directly.
+# Expose a read-only inventory of two ALREADY enforcing kernel profiles inside
+# this dedicated daemon's mount namespace. Kernel policy remains unchanged.
+python3 - <<'PYAA'
+from pathlib import Path
+profiles=Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()
+required=['docker-default','opencode-preview']
+selected=[]
+for name in required:
+ matches=[line for line in profiles if line==name+' (enforce)']
+ assert len(matches)==1, 'Required enforcing AppArmor profile not loaded: '+name
+ selected+=matches
+root=Path('/run/opencode-preview-apparmor')
+(root/'apparmor').mkdir(parents=True,exist_ok=True,mode=0o755)
+root.chmod(0o755); (root/'apparmor').chmod(0o755)
+file=root/'apparmor/profiles'; file.write_text('\n'.join(selected)+'\n'); file.chmod(0o444)
+print('Existing enforcing AppArmor profiles verified; private read-only inventory prepared')
+PYAA
+install -d -m 0755 /etc/systemd/system/opencode-preview-docker-test.service.d
+cat > /etc/systemd/system/opencode-preview-docker-test.service.d/apparmor-inventory.conf <<'UNIT'
+[Service]
+BindReadOnlyPaths=/run/opencode-preview-apparmor:/sys/kernel/security
+UNIT
 # Preserve existing unit isolation and add aggregate resource ceilings.
 install -d -m 0755 /etc/systemd/system/opencode-preview-docker-test.service.d
 cat > /etc/systemd/system/opencode-preview-docker-test.service.d/resources.conf <<'UNIT'
