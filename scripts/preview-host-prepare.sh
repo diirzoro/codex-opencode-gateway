@@ -80,7 +80,7 @@ trap cleanup_builder EXIT
 (cd "$STAGE/preview-wheels" && sha256sum --check SHA256SUMS)
 docker_preview create --name "$builder" --network=none --memory=512m --memory-swap=512m --cpus=0.4 --pids-limit=128 \
  --cap-drop=ALL --security-opt=no-new-privileges --security-opt=apparmor=opencode-preview \
- "$base" python -c "import subprocess,shutil; subprocess.run(['python','-m','pip','install','--no-index','--find-links=/runtime-wheels','--no-cache-dir','--disable-pip-version-check','fastapi>=0.115.6,<1','uvicorn>=0.34.0,<1'],check=True); shutil.rmtree('/runtime-wheels')" >/dev/null
+ "$base" python -c "import subprocess,shutil; subprocess.run(['python','-m','pip','install','--no-index','--find-links=/runtime-wheels','--no-cache-dir','--disable-pip-version-check','fastapi>=0.115.6,<1','uvicorn>=0.34.0,<1'],check=True)" >/dev/null
 docker_preview cp "$STAGE/preview-wheels/." "$builder:/runtime-wheels"
 docker_preview start --attach "$builder"
 [[ $(docker_preview inspect --format '{{.State.ExitCode}}' "$builder") == 0 ]] || exit 9

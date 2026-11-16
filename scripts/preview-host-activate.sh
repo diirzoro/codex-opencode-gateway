@@ -40,6 +40,8 @@ original=vhost.read_text()
 assert 'preview-test.opencode-gateway.codes' in original
 assert 'proxy_pass http://127.0.0.1:8001' in original or 'proxy_pass http://127.0.0.1:8000' in original
 updated=original.replace('proxy_pass http://127.0.0.1:8001','proxy_pass http://127.0.0.1:8000')
+assert 'location /preview/ {' in updated
+updated=updated.replace('location /preview/ {','location /preview/ {\n        access_log off;\n        error_log /dev/null crit;',1)
 # Fail before changing anything if active TLS cannot validate this hostname.
 import ssl,socket
 with socket.create_connection(('127.0.0.1',443),timeout=5) as raw:
@@ -83,6 +85,7 @@ try:
  else: raise RuntimeError('Gateway health failed')
  subprocess.run(['systemctl','reload','nginx'],check=True)
  subprocess.run(['systemctl','is-active','--quiet','pi-central.service'],check=True)
+ subprocess.run(['systemctl','enable','opencode-preview-docker-test.service','opencode-preview-worker-test.service'],check=True)
  print('LIVE preview configuration activated; existing Pi service unchanged')
 except Exception:
  shutil.copy2(backup/'gateway.env',app/'.env')
