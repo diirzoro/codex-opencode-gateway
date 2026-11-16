@@ -41,6 +41,9 @@ def call(operation,payload):
  except HTTPError as exc:
   payload=json.loads(exc.read(2048))
   print('Runtime smoke operation failed:',operation,'HTTP',exc.code,'code',payload.get('error'),'reference',payload.get('reference'))
+  if operation=='start':
+   try: print('Controlled readiness probe logs:',call('logs',{}).get('logs','')[-3000:])
+   except Exception: print('Controlled probe logs unavailable')
   raise
 try:
  assert call('prepare',{'framework':'python','entrypoint':'main.py','archive':base64.b64encode(archive.getvalue()).decode()})['state']=='ready'

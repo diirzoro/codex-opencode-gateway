@@ -314,6 +314,10 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     if not ready:
                         job["state"] = "failed"
                         try:
+                            job['failure_logs'] = self.server.provisioner.logs(cid, job_id)[-100000:]
+                        except PreviewProvisioningError:
+                            job['failure_logs'] = ''
+                        try:
                             self.server.stop_job(job_id, job, "application_not_ready")
                         except PreviewProvisioningError:
                             pass
@@ -342,7 +346,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         cid, job_id, job["family"], request.get("path", "/"))
                 elif operation == "logs":
                     cid = job["container_id"]
-                    result = {"logs": self.server.provisioner.logs(cid, job_id) if cid else ""}
+                    result = {"logs": self.server.provisioner.logs(cid, job_id) if cid else job.get("failure_logs", "")}
                 else:
                     self.server.stop_job(job_id, job, 'user_stop')
                     result = {"state": "stopped", "job_id": job_id}

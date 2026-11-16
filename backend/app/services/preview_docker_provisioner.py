@@ -165,6 +165,7 @@ class DockerProvisioner:
             raise PreviewProvisioningError('Ambiguous sandbox identity')
         self._require_owned(container_id, job_id)
         self._call(("stop", "--time", "2", container_id), timeout=15)
+        self._call(("rm", container_id), timeout=15)
 
     def logs(self, container_id: str, job_id: str) -> str:
         """Bound logs and verify job identity before reading."""

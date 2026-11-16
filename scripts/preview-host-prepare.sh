@@ -71,6 +71,17 @@ print(image)
 PYBASE
 )
 docker_preview image inspect "$base" >/dev/null
+current_image=$(python3 - "$ENVFILE" <<'PYCACHE'
+import sys
+from pathlib import Path
+rows=dict(line.split('=',1) for line in Path(sys.argv[1]).read_text().splitlines() if '=' in line and not line.startswith('#'))
+print(rows.get('PREVIEW_IMAGE_PYTHON','').strip())
+PYCACHE
+)
+if [[ "$current_image" =~ ^sha256:[0-9a-f]{64}$ ]] && docker_preview image inspect "$current_image" >/dev/null 2>&1; then
+  echo 'Reusing existing immutable prepared Python runtime'
+  image_id="$current_image"
+else
 # Prepare trusted dependencies in a bounded named-policy builder container.
 # No customer code, customer requirements, or host mounts enter this container.
 builder="preview-python-build-$(date +%s)"
@@ -90,6 +101,7 @@ docker_preview commit --change 'USER 10001:10001' --change 'WORKDIR /workspace' 
 cleanup_builder
 trap - EXIT
 image_id=$(docker_preview image inspect preview-python-runtime:configured --format '{{.Id}}')
+fi
 [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 6
 PREVIEW_RUNTIME_BASE="$base" PREVIEW_RUNTIME_IMAGE="$image_id" python3 - "$ENVFILE" <<'PY'
 from pathlib import Path

@@ -31,7 +31,7 @@ def argv_for(spec: ContainerSpec) -> tuple[str, ...]:
     # This is a *configuration contract*, not a complete sandbox security proof.
     # No -p, --privileged, host namespaces, Docker socket or secret volumes.
     return (
-        "docker", "run", "--rm", "--network", "none",
+        "docker", "run", "--network", "none",
         "--read-only", "--user", "10001:10001",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--security-opt", "apparmor=opencode-preview",
