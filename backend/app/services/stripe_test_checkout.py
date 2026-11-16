@@ -44,9 +44,20 @@ def _stripe_call(db, method, path, data=None):
         code = code if re.fullmatch(r"[a-z_]{1,100}", code) else "request_rejected"
         param = str(error.get('param') or '')
         param = param if re.fullmatch(r'[A-Za-z0-9_\[\].]{1,100}', param) else ''
+        message = str(error.get('message') or '').lower()
+        reason = ''
+        if any(term in message for term in ('business name', 'account name', 'account or business')):
+            reason = 'account_business_name_required'
+        elif 'payment method' in message and any(term in message for term in ('activate', 'configured', 'no valid', 'enabled')):
+            reason = 'account_payment_methods_required'
+        elif any(term in message for term in ('terms of service', 'accept the terms')):
+            reason = 'account_terms_acceptance_required'
+        elif any(term in message for term in ('business profile', 'business_profile', 'activate your account', 'complete your account')):
+            reason = 'account_setup_required'
         raise HTTPException(422 if reply.status_code < 500 else 502,
                             {"provider": "stripe", "http_status": reply.status_code,
                              "provider_code": code, "provider_param": param,
+                             "provider_reason": reason,
                              "request_reached_stripe": True})
     return payload
 
