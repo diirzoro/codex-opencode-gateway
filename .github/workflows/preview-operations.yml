@@ -11,6 +11,7 @@ on:
           - inspect
           - prepare
           - activate
+          - verify
 permissions:
   contents: read
 concurrency:
@@ -49,7 +50,7 @@ jobs:
             ssh-keyscan -p "$port" -H "$VPS_HOST" > "$HOME/.ssh/known_hosts"
           fi
           chmod 600 "$HOME/.ssh/known_hosts"
-          [[ "$OPERATION" == inspect || "$OPERATION" == prepare || "$OPERATION" == activate ]]
+          [[ "$OPERATION" == inspect || "$OPERATION" == prepare || "$OPERATION" == activate || "$OPERATION" == verify ]]
           ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             'mkdir -p /home/tahir/preview-activation'
           mkdir -p preview-wheels
@@ -67,6 +68,7 @@ jobs:
           script=preview-host-inspect.sh
           [[ "$OPERATION" != prepare ]] || script=preview-host-prepare.sh
           [[ "$OPERATION" != activate ]] || script=preview-host-activate.sh
+          [[ "$OPERATION" != verify ]] || script=preview-host-verify.sh
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
             -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             "sudo -S -p '' bash /home/tahir/preview-activation/scripts/$script"

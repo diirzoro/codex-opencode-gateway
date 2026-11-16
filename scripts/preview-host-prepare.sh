@@ -107,57 +107,6 @@ for file in "$STAGE"/backend/app/services/preview*.py; do
 done
 systemctl start opencode-preview-worker-test.service
 systemctl is-active --quiet opencode-preview-worker-test.service
-# Authenticated protocol check without logging credentials.
-python3 - "$ENVFILE" <<'PY'
-import json,sys
-from pathlib import Path
-from urllib.request import Request,urlopen
-from urllib.error import HTTPError
-rows=dict(line.split('=',1) for line in Path(sys.argv[1]).read_text().splitlines() if '=' in line and not line.startswith('#'))
-token=rows['PREVIEW_WORKER_TOKEN'].strip().strip('"').strip("'")
-req=Request('http://127.0.0.1:8791/v1/status',data=b'{"job_id":"readiness-probe"}',headers={'Authorization':'Bearer '+token})
-import time
-for attempt in range(20):
- try:
-  urlopen(req,timeout=10)
-  raise SystemExit('Unexpected protocol response')
- except HTTPError as exc:
-  assert exc.code==404 and json.load(exc)['error']=='unregistered_job'
-  break
- except OSError:
-  if attempt==19: raise
-  time.sleep(0.5)
-print('Existing preview worker authenticated protocol: OK')
-import base64,io,tarfile,uuid,time
-job='preview-readiness-'+uuid.uuid4().hex[:12]
-source=b'from fastapi import FastAPI\napp=FastAPI()\n@app.get("/")\ndef health(): return {"ok":True,"runtime":"python"}\n'
-archive=io.BytesIO()
-with tarfile.open(fileobj=archive,mode='w') as tar:
- member=tarfile.TarInfo('main.py'); member.size=len(source); tar.addfile(member,io.BytesIO(source))
-def call(operation,payload):
- req=Request('http://127.0.0.1:8791/v1/'+operation,data=json.dumps({'job_id':job,**payload}).encode(),headers={'Authorization':'Bearer '+token})
- with urlopen(req,timeout=90) as response: return json.load(response)
-try:
- assert call('prepare',{'framework':'python','entrypoint':'main.py','archive':base64.b64encode(archive.getvalue()).decode()})['state']=='ready'
- started=call('start',{})
- assert started['state']=='running'
- import subprocess
- prefix=['runuser','-u','preview-worker','--','env','HOME=/var/lib/preview-worker','DOCKER_HOST=unix:///run/preview-worker/docker.sock','docker']
- details=json.loads(subprocess.check_output(prefix+['inspect',started['container_id']],text=True))[0]
- host=details['HostConfig']
- assert host['NetworkMode']=='none' and host['ReadonlyRootfs'] is True
- assert host['Memory']==768*1024*1024 and host['NanoCpus']==500000000 and host['PidsLimit']==128
- assert details['Config']['User']=='10001:10001' and host['CapDrop']==['ALL']
- assert any('no-new-privileges' in option for option in host['SecurityOpt'])
- assert 'apparmor=opencode-preview' in host['SecurityOpt']
- assert len(details['Mounts'])==1 and details['Mounts'][0]['Destination']=='/workspace' and details['Mounts'][0]['RW'] is False
- print('Runtime identity, mounts, network, AppArmor and resource limits: OK')
- result=call('fetch',{'path':'/'})
- assert result['status']==200 and json.loads(base64.b64decode(result['body']))['runtime']=='python'
- print('Real isolated Python runtime HTTP smoke: OK')
-finally:
- assert call('stop',{})['state']=='stopped'
-print('Runtime stopped after smoke: OK')
-PY
+bash "$STAGE/scripts/preview-host-verify.sh"
 echo 'Prepared existing worker and immutable Python runtime; Gateway not yet enabled.'
 bash "$STAGE/scripts/preview-host-inspect.sh"

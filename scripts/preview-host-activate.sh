@@ -29,6 +29,8 @@ live=env(app/'.env'); test=env(Path('/home/tahir/opencode-gateway-test/.env'))
 assert live.get('PUBLIC_BASE_URL')=='https://opencode-gateway.codes'
 assert test.get('PREVIEW_WORKER_ENABLED') not in {'test','live'}, 'TEST preview already enabled; refuse route takeover'
 credentials=env(worker_env); token=credentials['PREVIEW_WORKER_TOKEN']; assert len(token)>=32
+proof=json.loads(Path('/var/lib/opencode-preview-activation/verified.json').read_text())
+assert 0 <= time.time()-proof['verified_at'] < 600 and proof['image']==credentials['PREVIEW_IMAGE_PYTHON'], 'Fresh isolated runtime verification required' 
 req=Request('http://127.0.0.1:8791/v1/status',data=b'{"job_id":"activation-readiness"}',headers={'Authorization':'Bearer '+token})
 try:
  urlopen(req,timeout=10); raise AssertionError('Unexpected readiness response')
