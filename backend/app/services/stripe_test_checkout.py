@@ -42,9 +42,12 @@ def _stripe_call(db, method, path, data=None):
         # Stripe public diagnostic codes only: no request body, keys or private messages.
         code = str(error.get("code") or error.get("type") or "request_rejected")
         code = code if re.fullmatch(r"[a-z_]{1,100}", code) else "request_rejected"
+        param = str(error.get('param') or '')
+        param = param if re.fullmatch(r'[A-Za-z0-9_\[\].]{1,100}', param) else ''
         raise HTTPException(422 if reply.status_code < 500 else 502,
                             {"provider": "stripe", "http_status": reply.status_code,
-                             "provider_code": code, "request_reached_stripe": True})
+                             "provider_code": code, "provider_param": param,
+                             "request_reached_stripe": True})
     return payload
 
 def create_diagnostic_checkout(db, origin, plan_id=None, user_id=None):
