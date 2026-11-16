@@ -156,3 +156,34 @@ def test_immutable_local_image_and_cpu_ceiling():
                    '/var/lib/preview-worker/jobs/audit/src'))
     assert args[args.index('--cpus')+1] == '0.5'
     assert '--network' in args and 'none' in args
+
+
+def test_host_reserve_prevents_dynamic_start():
+    import json
+    import urllib.request
+    import urllib.error
+    from threading import Thread
+    from types import SimpleNamespace
+    jobs = {'blocked': dict(state='ready', container_id=None,
+                           spec=SimpleNamespace(argv=('node','server.js')))}
+    server, docker = worker(jobs)
+    server.admission = lambda: False
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f'http://127.0.0.1:{server.server_address[1]}/v1/start',
+            data=b'{"job_id":"blocked"}',
+            headers={'Authorization':'Bearer '+'x'*32})
+        try:
+            urllib.request.urlopen(request)
+            assert False, 'insufficient headroom must refuse launch'
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 503
+            assert json.load(exc)['error'] == 'preview_host_headroom_insufficient'
+        assert jobs['blocked']['state']=='ready'
+        assert jobs['blocked']['container_id'] is None
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()

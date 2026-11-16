@@ -76,10 +76,14 @@ docker_preview image inspect "$base" >/dev/null
 builder="preview-python-build-$(date +%s)"
 cleanup_builder() { docker_preview rm -f "$builder" >/dev/null 2>&1 || true; }
 trap cleanup_builder EXIT
-docker_preview run --name "$builder" --memory=512m --memory-swap=512m --cpus=0.4 --pids-limit=128 \
+[[ -f "$STAGE/preview-wheels/SHA256SUMS" ]] || { echo 'Trusted offline runtime wheels missing'; exit 8; }
+(cd "$STAGE/preview-wheels" && sha256sum --check SHA256SUMS)
+docker_preview create --name "$builder" --network=none --memory=512m --memory-swap=512m --cpus=0.4 --pids-limit=128 \
  --cap-drop=ALL --security-opt=no-new-privileges --security-opt=apparmor=opencode-preview \
- "$base" python -m pip install --no-cache-dir --disable-pip-version-check \
- 'fastapi>=0.115.6,<1' 'uvicorn>=0.34.0,<1'
+ "$base" python -c "import subprocess,shutil; subprocess.run(['python','-m','pip','install','--no-index','--find-links=/runtime-wheels','--no-cache-dir','--disable-pip-version-check','fastapi>=0.115.6,<1','uvicorn>=0.34.0,<1'],check=True); shutil.rmtree('/runtime-wheels')" >/dev/null
+docker_preview cp "$STAGE/preview-wheels/." "$builder:/runtime-wheels"
+docker_preview start --attach "$builder"
+[[ $(docker_preview inspect --format '{{.State.ExitCode}}' "$builder") == 0 ]] || exit 9
 docker_preview commit --change 'USER 10001:10001' --change 'WORKDIR /workspace' \
  --change 'ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1' \
  "$builder" preview-python-runtime:configured >/dev/null
@@ -112,11 +116,17 @@ from urllib.error import HTTPError
 rows=dict(line.split('=',1) for line in Path(sys.argv[1]).read_text().splitlines() if '=' in line and not line.startswith('#'))
 token=rows['PREVIEW_WORKER_TOKEN'].strip().strip('"').strip("'")
 req=Request('http://127.0.0.1:8791/v1/status',data=b'{"job_id":"readiness-probe"}',headers={'Authorization':'Bearer '+token})
-try:
- urlopen(req,timeout=10)
- raise SystemExit('Unexpected protocol response')
-except HTTPError as exc:
- assert exc.code==404 and json.load(exc)['error']=='unregistered_job'
+import time
+for attempt in range(20):
+ try:
+  urlopen(req,timeout=10)
+  raise SystemExit('Unexpected protocol response')
+ except HTTPError as exc:
+  assert exc.code==404 and json.load(exc)['error']=='unregistered_job'
+  break
+ except OSError:
+  if attempt==19: raise
+  time.sleep(0.5)
 print('Existing preview worker authenticated protocol: OK')
 import base64,io,tarfile,uuid,time
 job='preview-readiness-'+uuid.uuid4().hex[:12]
