@@ -140,3 +140,24 @@ def test_admin_subscription_and_wrong_confirmation_are_protected(records):
     assert not admin.admin_subscriptions(actor,db)[0]['can_manage']
     with pytest.raises(HTTPException) as err:admin.finance_cancel_subscription(sub.id,admin.AdminFinanceConfirm(confirmation='CANCEL SUBSCRIPTION'),actor,db)
     assert err.value.status_code==403
+
+
+@pytest.mark.parametrize('mode,secret,expected', [
+    ('test','sk_test_fixture',True),
+    ('test','',False),
+    ('live','sk_live_fixture',False),
+    ('test','rk_live_fixture',False),
+])
+def test_customer_stripe_hosted_readiness_does_not_require_publishable_key(monkeypatch,mode,secret,expected):
+    from app.services import credentials, stripe_test_checkout
+    monkeypatch.setattr(credentials,'available',lambda:True)
+    monkeypatch.setattr(stripe_test_checkout,'test_credentials',lambda db:{
+        'mode':mode,'secret_key':secret,'publishable_key':''})
+    if hasattr(billing,'StripeLiveCheckoutInput'):
+        from app.services import stripe_live_checkout
+        monkeypatch.setattr(stripe_live_checkout,'_profile',lambda db:{})
+        monkeypatch.setattr(stripe_live_checkout,'status',lambda db:{'live_checkout_enabled':False,'paypal_customer_visible':False})
+    result=billing.stripe_status(SimpleNamespace(id='customer'),None)
+    assert result['test_checkout_available'] is expected
+    assert result['live_checkout_available'] is False
+    assert 'secret_key' not in result and 'publishable_key' not in result

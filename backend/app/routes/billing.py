@@ -477,7 +477,6 @@ def stripe_status(user:User=Depends(require_billing_user),db:Session=Depends(get
     cfg=test_credentials(db)
     ready=bool(credentials.available() and cfg.get('mode')=='test'
         and str(cfg.get('secret_key') or '').startswith('sk_test_')
-        and str(cfg.get('publishable_key') or '').startswith('pk_test_')
         and not stripe_live_checkout._profile(db))
     live=stripe_live_checkout.status(db)
     return {'provider':'stripe','environment':'live' if live['live_checkout_enabled'] else cfg.get('mode') or 'not_configured',
