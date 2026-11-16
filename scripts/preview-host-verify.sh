@@ -12,6 +12,9 @@ from urllib.request import Request,urlopen
 from urllib.error import HTTPError
 rows=dict(line.split('=',1) for line in Path(sys.argv[1]).read_text().splitlines() if '=' in line and not line.startswith('#'))
 token=rows['PREVIEW_WORKER_TOKEN'].strip().strip('"').strip("'")
+import subprocess
+prefix=['runuser','-u','preview-worker','--','env','HOME=/var/lib/preview-worker','DOCKER_HOST=unix:///run/preview-worker/docker.sock','docker']
+subprocess.run(prefix+['run','--rm','--network','none','--read-only','--user','10001:10001','--cap-drop','ALL','--security-opt','no-new-privileges','--security-opt','apparmor=opencode-preview','--memory','768m','--cpus','0.5',rows['PREVIEW_IMAGE_PYTHON'],'python','-c','import fastapi,uvicorn; print("Non-root immutable Python runtime imports: OK")'],check=True,timeout=45)
 req=Request('http://127.0.0.1:8791/v1/status',data=b'{"job_id":"readiness-probe"}',headers={'Authorization':'Bearer '+token})
 import time
 for attempt in range(20):
