@@ -10,6 +10,7 @@ on:
         options:
           - inspect
           - prepare
+          - activate
 permissions:
   contents: read
 concurrency:
@@ -48,7 +49,7 @@ jobs:
             ssh-keyscan -p "$port" -H "$VPS_HOST" > "$HOME/.ssh/known_hosts"
           fi
           chmod 600 "$HOME/.ssh/known_hosts"
-          [[ "$OPERATION" == inspect || "$OPERATION" == prepare ]]
+          [[ "$OPERATION" == inspect || "$OPERATION" == prepare || "$OPERATION" == activate ]]
           ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             'mkdir -p /home/tahir/preview-activation'
           tar -czf /tmp/preview-activation.tgz scripts/preview-host-*.sh deploy/apparmor-preview backend/app/services/preview*.py
@@ -58,6 +59,7 @@ jobs:
             'tar -xzf /home/tahir/preview-activation.tgz -C /home/tahir/preview-activation'
           script=preview-host-inspect.sh
           [[ "$OPERATION" != prepare ]] || script=preview-host-prepare.sh
+          [[ "$OPERATION" != activate ]] || script=preview-host-activate.sh
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
             -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             "sudo -S -p '' bash /home/tahir/preview-activation/scripts/$script"

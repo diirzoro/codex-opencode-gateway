@@ -30,8 +30,26 @@ MemoryMax=384M
 CPUQuota=25%
 TasksMax=64
 UNIT
+# The historical daemon was launched as a system unit without its user bus.
+# Rootless systemd cgroups require the dedicated user's manager, not root D-Bus.
+preview_uid=$(id -u preview-worker)
+loginctl enable-linger preview-worker
+systemctl start "user@${preview_uid}.service"
+[[ -S "/run/user/${preview_uid}/bus" ]] || { echo 'Dedicated user bus unavailable'; exit 7; }
+cat > /etc/systemd/system/opencode-preview-docker-test.service.d/user-bus.conf <<UNIT
+[Service]
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${preview_uid}/bus
+Delegate=yes
+UNIT
+install -d -m 0755 "/etc/systemd/system/user-${preview_uid}.slice.d"
+cat > "/etc/systemd/system/user-${preview_uid}.slice.d/preview-resources.conf" <<'UNIT'
+[Slice]
+MemoryMax=1G
+CPUQuota=60%
+TasksMax=256
+UNIT
 systemctl daemon-reload
-systemctl start opencode-preview-docker-test.service
+systemctl restart opencode-preview-docker-test.service
 for attempt in {1..20}; do
   [[ -S /run/preview-worker/docker.sock ]] && break
   sleep 1
@@ -111,7 +129,19 @@ def call(operation,payload):
  with urlopen(req,timeout=90) as response: return json.load(response)
 try:
  assert call('prepare',{'framework':'python','entrypoint':'main.py','archive':base64.b64encode(archive.getvalue()).decode()})['state']=='ready'
- assert call('start',{})['state']=='running'
+ started=call('start',{})
+ assert started['state']=='running'
+ import subprocess
+ prefix=['runuser','-u','preview-worker','--','env','HOME=/var/lib/preview-worker','DOCKER_HOST=unix:///run/preview-worker/docker.sock','docker']
+ details=json.loads(subprocess.check_output(prefix+['inspect',started['container_id']],text=True))[0]
+ host=details['HostConfig']
+ assert host['NetworkMode']=='none' and host['ReadonlyRootfs'] is True
+ assert host['Memory']==768*1024*1024 and host['NanoCpus']==500000000 and host['PidsLimit']==128
+ assert details['Config']['User']=='10001:10001' and host['CapDrop']==['ALL']
+ assert any('no-new-privileges' in option for option in host['SecurityOpt'])
+ assert 'apparmor=opencode-preview' in host['SecurityOpt']
+ assert len(details['Mounts'])==1 and details['Mounts'][0]['Destination']=='/workspace' and details['Mounts'][0]['RW'] is False
+ print('Runtime identity, mounts, network, AppArmor and resource limits: OK')
  result=call('fetch',{'path':'/'})
  assert result['status']==200 and json.loads(base64.b64decode(result['body']))['runtime']=='python'
  print('Real isolated Python runtime HTTP smoke: OK')
