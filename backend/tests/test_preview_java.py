@@ -37,6 +37,7 @@ def test_java_fetch_uses_only_compiled_trusted_relay():
     response=DockerProvisioner(run=run).fetch('a'*64,'java-test','java','/health')
     assert response['status']==200
     assert calls[-1][-4:]==('-cp','/opt/preview','PreviewFetch','/health')
+    assert calls[-1].index('-Xlog:disable') < calls[-1].index('-Xlog:all=warning:stderr')
     assert 'Main.java' not in calls[-1]
 
 def test_startup_logs_preserve_stderr_after_owner_check():

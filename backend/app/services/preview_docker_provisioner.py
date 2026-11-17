@@ -112,7 +112,7 @@ class DockerProvisioner:
             raise PreviewProvisioningError("PHP relay not yet available")
         if family == 'java':
             command = ('java','-Xmx32m','-XX:ActiveProcessorCount=1','-XX:+UseSerialGC',
-                       '-Xlog:all=warning:stderr',
+                       '-Xlog:disable','-Xlog:all=warning:stderr',
                        '-cp','/opt/preview','PreviewFetch',path)
         else:
             binary = "node" if family == "node" else "python"
@@ -124,12 +124,7 @@ class DockerProvisioner:
                 raise ValueError("Invalid response")
             return result
         except (ValueError, TypeError) as exc:
-            message = "Application returned an invalid response"
-            # Only the protected operator creates this generated, non-customer
-            # fixture namespace. Gateway job ids are workspace UUIDs.
-            if family == 'java' and job_id.startswith('java-acceptance-'):
-                message += ' (generated fixture prefix: ' + repr(output[:160]) + ')'
-            raise PreviewProvisioningError(message) from exc
+            raise PreviewProvisioningError("Application returned an invalid response") from exc
 
     def status(self, container_id: str, job_id: str) -> str:
         """Inspect a matching sandbox, without ever running an application."""
