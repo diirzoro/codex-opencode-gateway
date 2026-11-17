@@ -269,8 +269,14 @@ def cancellation_status(order_id:uuid.UUID,user:User=Depends(require_billing_use
     allowed=row.status in {'awaiting_payment','pending_review','failed','rejected'} and not row.provider_capture_id and not row.paid_at
     provider_status=None
     if allowed and row.provider_order_id:
-        provider_status=paypal.cancellation_state(row)
-        allowed=provider_status in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED','NOT_FOUND_SANDBOX'}
+        if row.provider_order_id.startswith("cs_"):
+            # A Stripe Checkout session could still complete remotely.
+            # Do not cancel its local order before provider reconciliation.
+            allowed=False
+            provider_status="STRIPE_REQUIRES_RECONCILIATION"
+        else:
+            provider_status=paypal.cancellation_state(row)
+            allowed=provider_status in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED','NOT_FOUND_SANDBOX'}
     return {'can_cancel':allowed,'provider_status':provider_status}
 
 @router.post('/orders/{order_id}/cancel')
@@ -285,6 +291,8 @@ def cancel_unpaid_order(db,row,actor):
     if row.status not in {'awaiting_payment','pending_review','failed','rejected','cancelled'}:
         raise HTTPException(409,'This payment cannot be cancelled after acceptance')
     if row.provider_order_id:
+        if row.provider_order_id.startswith("cs_"):
+            raise HTTPException(409, "Stripe Checkout may still complete. Confirm or expire the Stripe session before cancelling the local order.")
         provider_status=paypal.cancellation_state(row)
         if provider_status not in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED','NOT_FOUND_SANDBOX'}:
             raise HTTPException(409,'This PayPal order is approved or completed. Confirm its payment status before cancelling; no refund has been issued.')
@@ -378,7 +386,7 @@ class AdminConfirm(BaseModel):
 def confirm_payment(order_id:uuid.UUID,data:AdminConfirm,user:User=Depends(require_admin),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
-    if row.provider_environment:raise HTTPException(409,'PayPal payments cannot be manually confirmed')
+    if row.provider_environment:raise HTTPException(409,'Provider API payments cannot be manually confirmed')
     if row.status=='paid':return order_payload(row)
     if row.status!='pending_review':raise HTTPException(409,'A submitted payment reference is required before review')
     activate_order(db,row,user.id,data.reference)
@@ -387,7 +395,7 @@ def confirm_payment(order_id:uuid.UUID,data:AdminConfirm,user:User=Depends(requi
 def reject_payment(order_id:uuid.UUID,data:RejectRequest,user:User=Depends(require_admin),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
-    if row.provider_environment:raise HTTPException(409,'PayPal payments cannot be manually rejected')
+    if row.provider_environment:raise HTTPException(409,'Provider API payments cannot be manually rejected')
     if row.status in {'paid','rejected'}:return order_payload(row)
     if row.status!='pending_review':raise HTTPException(409,'Only payments under review can be rejected')
     row.status='rejected';row.reject_reason=data.reason;row.reviewed_by=user.id
@@ -423,7 +431,8 @@ def activate_order(db,row,actor_id,reference):
 def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
-    if not row.provider_order_id:raise HTTPException(409,'This is not a PayPal API payment')
+    if not row.provider_order_id or row.provider_order_id.startswith("cs_"):
+        raise HTTPException(409, 'This is not a PayPal API payment')
     if row.status in {'paid','sandbox_paid'}:return order_payload(row)
     if row.status in {'cancelled','rejected','failed'}:
         payload=paypal.show_order(row)
