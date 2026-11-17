@@ -42,11 +42,18 @@ def _decode(token):
         raise HTTPException(503, "Cannot decrypt provider profile with current encryption key") from None
 
 
-def _profile_fingerprint(row):
-    # Includes encrypted credentials and connection identity; changes invalidate
-    # previous verification even when secrets are not displayed in the UI.
-    identity = "\\0".join((row["slug"], row["connection_mode"], row["environment"], row["encrypted_fields"]))
+def _fields_fingerprint(environment, fields, connection_mode="api"):
+    # Stable across re-encryption and harmless label changes. This digest is
+    # internal only; Stripe credentials are high entropy, never sent to clients.
+    relevant = sorted((f["key"], f["kind"], f["value"]) for f in fields)
+    identity = json.dumps(["stripe", environment, connection_mode, relevant],
+                          ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _profile_fingerprint(row):
+    return _fields_fingerprint(row["environment"], _decode(row["encrypted_fields"]),
+                               row["connection_mode"])
 
 
 def _public(row):
@@ -164,14 +171,31 @@ def stripe_fields_for_environment(db, environment):
     return []
 
 
-def _save_stripe_environment(db, environment, fields):
+def _save_stripe_environment(db, environment, fields, verified=None):
+    fingerprint = _fields_fingerprint(environment, fields)
+    current = db.execute(text(
+        "SELECT verification_fingerprint,verified_at,verified_account_id "
+        "FROM stripe_environment_credentials WHERE environment=:env"
+    ), {"env": environment}).mappings().first()
+    # Preserve verification only for the identical environment and credentials.
+    source = current if current and current["verification_fingerprint"] == fingerprint else (
+        verified if verified and verified.get("verification_fingerprint") == fingerprint else None)
+    values = {
+        "env": environment, "fields": credentials.encrypt(json.dumps(fields, ensure_ascii=False)),
+        "fingerprint": fingerprint if source else None,
+        "verified_at": source.get("verified_at") if source else None,
+        "account_id": source.get("verified_account_id") if source else None,
+    }
     db.execute(text(
-        "INSERT INTO stripe_environment_credentials (environment, encrypted_fields) "
-        "VALUES (:environment,:fields) "
+        "INSERT INTO stripe_environment_credentials "
+        "(environment, encrypted_fields, verification_fingerprint, verified_at, verified_account_id) "
+        "VALUES (:env,:fields,:fingerprint,:verified_at,:account_id) "
         "ON CONFLICT (environment) DO UPDATE SET encrypted_fields=excluded.encrypted_fields,"
+        "verification_fingerprint=excluded.verification_fingerprint,"
+        "verified_at=excluded.verified_at,verified_account_id=excluded.verified_account_id,"
         "updated_at=CURRENT_TIMESTAMP"
-    ), {"environment": environment,
-        "fields": credentials.encrypt(json.dumps(fields, ensure_ascii=False))})
+    ), values)
+    return values
 
 
 def save_profile(db, actor_id, data, *, create):
@@ -193,16 +217,18 @@ def save_profile(db, actor_id, data, *, create):
             # Save the old mode before switching. Blank secrets in the new mode
             # retain only that mode's own credentials, never the other mode's.
             if not stripe_fields_for_environment(db, row["environment"]):
-                _save_stripe_environment(db, row["environment"], previous)
+                _save_stripe_environment(db, row["environment"], previous, row)
             previous = stripe_fields_for_environment(db, data.environment)
     fields = _prepare_fields(data.fields, previous)
-    if data.slug == "stripe":
-        _save_stripe_environment(db, data.environment, fields)
+    verification = _save_stripe_environment(db, data.environment, fields) if data.slug == "stripe" else None
     token = credentials.encrypt(json.dumps(fields, ensure_ascii=False))
     params = {
         "slug": data.slug, "label": data.label, "category": data.category,
         "connection_mode": data.connection_mode, "environment": data.environment,
-        "encrypted_fields": token, "actor": actor_id
+        "encrypted_fields": token, "actor": actor_id,
+        "fingerprint": verification["fingerprint"] if verification else None,
+        "verified_at": verification["verified_at"] if verification else None,
+        "account_id": verification["account_id"] if verification else None,
     }
     if not create:
         # Updating a merchant/bank profile must immediately disable any
@@ -219,7 +245,8 @@ def save_profile(db, actor_id, data, *, create):
         db.execute(text(
             "UPDATE payment_provider_profiles SET label=:label,category=:category,"
             "connection_mode=:connection_mode,environment=:environment,"
-            "encrypted_fields=:encrypted_fields,updated_by=:actor,updated_at=CURRENT_TIMESTAMP,verification_fingerprint=NULL,verified_at=NULL,verified_account_id=NULL "
+            "encrypted_fields=:encrypted_fields,updated_by=:actor,updated_at=CURRENT_TIMESTAMP,"
+            "verification_fingerprint=:fingerprint,verified_at=:verified_at,verified_account_id=:account_id "
             "WHERE slug=:slug"
         ), params)
     db.commit()
@@ -326,6 +353,13 @@ def check_provider_connection(db, slug):
     if updated.rowcount != 1:
         db.rollback()
         raise HTTPException(409, "Payment credentials changed during verification; verify the newly saved settings")
+    _save_stripe_environment(db, mode, fields, {
+        "verification_fingerprint": fingerprint,
+        "verified_at": db.execute(text(
+            "SELECT verified_at FROM payment_provider_profiles WHERE slug=:slug"
+        ), {"slug": slug}).scalar_one(),
+        "verified_account_id": account["id"],
+    })
     db.commit()
     return {"result": "api_verified", "verified": True, "provider": "stripe",
             "environment": mode, "account_id": account["id"],
