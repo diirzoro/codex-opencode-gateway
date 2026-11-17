@@ -348,6 +348,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     # app has started. Gate the iframe URL on a real response.
                     import time
                     ready = False
+                    relay_failure = None
                     readiness_deadline = time.monotonic() + (30 if job['family']=='java' else 10)
                     for _ in range(30 if job['family']=='java' else 12):
                         if time.monotonic() >= readiness_deadline:
@@ -361,8 +362,8 @@ class WorkerHandler(BaseHTTPRequestHandler):
                             ready = 200 <= response["status"] < 500
                             if ready:
                                 break
-                        except (PreviewProvisioningError, OSError, ValueError):
-                            pass
+                        except (PreviewProvisioningError, OSError, ValueError) as exc:
+                            relay_failure = str(exc) if isinstance(exc, PreviewProvisioningError) else type(exc).__name__
                         time.sleep(0.5)
                     if not ready:
                         job["state"] = "failed"
@@ -370,6 +371,8 @@ class WorkerHandler(BaseHTTPRequestHandler):
                             job['failure_logs'] = self.server.provisioner.logs(cid, job_id)[-100000:]
                         except PreviewProvisioningError:
                             job['failure_logs'] = ''
+                        if relay_failure:
+                            job['failure_logs'] += '\nPreview relay check: ' + relay_failure[:256]
                         try:
                             self.server.stop_job(job_id, job, "application_not_ready")
                         except PreviewProvisioningError:

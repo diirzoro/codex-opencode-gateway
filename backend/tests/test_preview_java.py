@@ -39,6 +39,17 @@ def test_java_fetch_uses_only_compiled_trusted_relay():
     assert calls[-1][-4:]==('-cp','/opt/preview','PreviewFetch','/health')
     assert 'Main.java' not in calls[-1]
 
+def test_startup_logs_preserve_stderr_after_owner_check():
+    calls=[]
+    def run(args,**kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args,0,
+            stdout='java-test|true' if args[1]=='inspect' else 'application stdout\n',
+            stderr='' if args[1]=='inspect' else 'compiler diagnostic\n')
+    logs=DockerProvisioner(run=run).logs('a'*64,'java-test')
+    assert 'application stdout' in logs and 'compiler diagnostic' in logs
+    assert calls[0][1]=='inspect' and calls[1][1]=='logs'
+
 @pytest.mark.parametrize('path,status,body',[
     ('/health',200,b'java-relay-canary'),('/missing',404,b'missing'),
     ('/redirect',302,b''),('/large',None,None)])
