@@ -147,6 +147,33 @@ def _prepare_fields(fields, previous):
     return result
 
 
+def stripe_fields_for_environment(db, environment):
+    """Return environment-scoped merchant fields (never exposed through API)."""
+    if environment not in ("test", "live"):
+        raise HTTPException(422, "Invalid Stripe environment")
+    if inspect(db.connection()).has_table("stripe_environment_credentials"):
+        saved = db.execute(text(
+            "SELECT encrypted_fields FROM stripe_environment_credentials "
+            "WHERE environment=:environment"
+        ), {"environment": environment}).scalar_one_or_none()
+        if saved is not None:
+            return _decode(saved)
+    row = _one(db, "stripe")
+    if row and row["environment"] == environment:
+        return _decode(row["encrypted_fields"])
+    return []
+
+
+def _save_stripe_environment(db, environment, fields):
+    db.execute(text(
+        "INSERT INTO stripe_environment_credentials (environment, encrypted_fields) "
+        "VALUES (:environment,:fields) "
+        "ON CONFLICT (environment) DO UPDATE SET encrypted_fields=excluded.encrypted_fields,"
+        "updated_at=CURRENT_TIMESTAMP"
+    ), {"environment": environment,
+        "fields": credentials.encrypt(json.dumps(fields, ensure_ascii=False))})
+
+
 def save_profile(db, actor_id, data, *, create):
     _require_ready(db)
     row = _one(db, data.slug, lock=True)
@@ -159,7 +186,18 @@ def save_profile(db, actor_id, data, *, create):
         if count >= MAX_PROFILES:
             raise HTTPException(409, "Maximum provider profile count reached")
     previous = _decode(row["encrypted_fields"]) if row else []
+    if data.slug == "stripe":
+        if not inspect(db.connection()).has_table("stripe_environment_credentials"):
+            raise HTTPException(503, "Stripe environment migration 0041 must be applied")
+        if row and row["environment"] != data.environment:
+            # Save the old mode before switching. Blank secrets in the new mode
+            # retain only that mode's own credentials, never the other mode's.
+            if not stripe_fields_for_environment(db, row["environment"]):
+                _save_stripe_environment(db, row["environment"], previous)
+            previous = stripe_fields_for_environment(db, data.environment)
     fields = _prepare_fields(data.fields, previous)
+    if data.slug == "stripe":
+        _save_stripe_environment(db, data.environment, fields)
     token = credentials.encrypt(json.dumps(fields, ensure_ascii=False))
     params = {
         "slug": data.slug, "label": data.label, "category": data.category,
