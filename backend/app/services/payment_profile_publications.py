@@ -71,7 +71,7 @@ def management_catalog(db):
             "environment": item["environment"],
             "configured": item["configured"],
             "status": "suspended" if item.get('admin_suspended') else "enabled_manual" if publication["published"] else (
-                "configured_unverified" if item["configured"] else "draft"
+                "api_verified" if item.get("api_verified") else "configured_unverified" if item["configured"] else "draft"
             ),
             "customer_checkout_enabled": bool(publication["published"]),
             "method_id": linked_id,
