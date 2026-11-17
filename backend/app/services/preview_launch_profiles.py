@@ -15,6 +15,9 @@ class LaunchProfile:
 
 
 PROFILES = {
+    "java": LaunchProfile("java", ("java", "-Xmx256m", "-XX:ActiveProcessorCount=1",
+                                    "-XX:+UseSerialGC", "-Djava.io.tmpdir=/tmp",
+                                    "--source", "21", "Main.java")),
     "nextjs": LaunchProfile("node", ("./node_modules/.bin/next", "dev",
                                       "--hostname", "0.0.0.0", "--port", "8080")),
     "vite": LaunchProfile("node", ("./node_modules/.bin/vite", "--host",

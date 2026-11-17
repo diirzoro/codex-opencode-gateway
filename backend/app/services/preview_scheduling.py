@@ -15,7 +15,7 @@ DYNAMIC_IDLE_TIMEOUT_SECONDS = 5 * 60
 
 _STATIC = frozenset({"html"})
 _BUILD = frozenset({"vite", "react", "vue", "angular", "svelte"})
-_DYNAMIC = frozenset({"node", "django", "python", "laravel", "php", "nuxt"})
+_DYNAMIC = frozenset({"node", "django", "python", "laravel", "php", "nuxt", "java"})
 _NEXT = frozenset({"nextjs"})
 
 

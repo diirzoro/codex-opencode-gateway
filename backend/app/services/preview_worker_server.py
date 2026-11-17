@@ -229,6 +229,8 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     shutil.rmtree(JOB_ROOT / job_id, ignore_errors=True)
                 framework = request.get("framework")
                 profile = PROFILES.get(framework) if isinstance(framework, str) else None
+                if framework == 'java' and request.get('entrypoint') != 'Main.java':
+                    profile = None
                 if request.get('prebuilt_static') is True and framework in {'vite','react'}:
                     profile=LaunchProfile('static',())
                 selected = request.get("entrypoint")
@@ -346,7 +348,10 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     # app has started. Gate the iframe URL on a real response.
                     import time
                     ready = False
-                    for _ in range(12):
+                    readiness_deadline = time.monotonic() + (30 if job['family']=='java' else 10)
+                    for _ in range(30 if job['family']=='java' else 12):
+                        if time.monotonic() >= readiness_deadline:
+                            break
                         try:
                             if self.server.provisioner.status(cid, job_id) != "running":
                                 job['failure_code'] = 'application_exited_early'
