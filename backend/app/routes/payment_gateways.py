@@ -169,6 +169,16 @@ def list_dynamic_payment_profiles(
     }
 
 
+@router.post("/profiles/{slug}/verify")
+def verify_dynamic_payment_profile(
+    slug: str, response: Response, _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Read-only connection / detail check. Never activates or publishes payments."""
+    _cache_safe(response)
+    return payment_provider_profiles.check_provider_connection(db, slug)
+
+
 @router.get("/method-catalog")
 def unified_payment_method_catalog(
     response: Response, _: User = Depends(require_admin),
