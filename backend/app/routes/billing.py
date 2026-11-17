@@ -6,7 +6,7 @@ transfers activate after administrative receipt review. Selection never pays.
 from datetime import datetime, timezone,timedelta
 import uuid
 from math import ceil
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -465,14 +465,30 @@ def stripe_test_checkout_status(
 
 @router.get('/stripe/status')
 def stripe_status(user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
-    """Safe customer-visible Stripe test readiness, without credentials."""
-    from ..services.stripe_test_checkout import test_credentials
-    from ..services import credentials
-    cfg=test_credentials(db)
-    ready=bool(credentials.available() and cfg.get('mode')=='test'
-        and str(cfg.get('secret_key') or '').startswith('sk_test_'))
-    return {'provider':'stripe','environment':cfg.get('mode') or 'not_configured',
-            'test_checkout_available':ready,'live_checkout_available':False}
+    """Read the currently selected Stripe environment and readiness from DB."""
+    from ..services.stripe_checkout import status
+    return status(db)
+
+
+@router.post('/stripe/checkout')
+def stripe_unified_checkout(
+    data: StripeTestCheckoutInput,
+    user: User = Depends(require_billing_user),
+    db: Session = Depends(get_db),
+):
+    from ..config import settings
+    from ..services.stripe_checkout import create_checkout
+    return create_checkout(db, user, data.plan_id, settings.public_base_url)
+
+
+@router.post('/stripe/webhook')
+async def stripe_signed_webhook(request: Request, db: Session = Depends(get_db)):
+    """Public Stripe callback; signed payload required, never browser-authenticated."""
+    from ..services.stripe_checkout import webhook
+    if int(request.headers.get('content-length', '0') or '0') > 65536:
+        raise HTTPException(413, "Webhook is too large")
+    raw = await request.body()
+    return webhook(db, raw, request.headers.get('stripe-signature', ''))
 
 
 @router.get('/paypal/status')
