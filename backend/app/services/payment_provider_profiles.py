@@ -6,6 +6,7 @@ methods and processor credentials are intentionally independent.
 """
 import json
 import re
+import hashlib
 
 from fastapi import HTTPException
 from sqlalchemy import inspect, text
@@ -41,8 +42,18 @@ def _decode(token):
         raise HTTPException(503, "Cannot decrypt provider profile with current encryption key") from None
 
 
+def _profile_fingerprint(row):
+    # Includes encrypted credentials and connection identity; changes invalidate
+    # previous verification even when secrets are not displayed in the UI.
+    identity = "\\0".join((row["slug"], row["connection_mode"], row["environment"], row["encrypted_fields"]))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
 def _public(row):
     fields = _decode(row["encrypted_fields"])
+    verified = bool(row.get("verification_fingerprint") and
+                    row["verification_fingerprint"] == _profile_fingerprint(row) and
+                    row["slug"] == "stripe" and row["connection_mode"] == "api")
     return {
         "slug": row["slug"], "label": row["label"],
         "category": row["category"], "connection_mode": row["connection_mode"],
@@ -59,7 +70,10 @@ def _public(row):
         "configured": bool(fields) and all(
             bool(item["value"]) for item in fields if item["required"]
         ),
-        "status": "saved_unverified",
+        "status": "api_verified" if verified else "saved_unverified",
+        "api_verified": verified,
+        "verified_at": str(row["verified_at"]) if verified and row.get("verified_at") else None,
+        "verified_account_id": row.get("verified_account_id") if verified else None,
         "checkout_enabled": False, "webhook_enabled": False,
         "payouts_enabled": False,
         "message": "Configuration only; no automatic charge or connection test.",
@@ -71,7 +85,7 @@ def _one(db, slug, *, lock=False):
     suffix = " FOR UPDATE" if lock and db.bind.dialect.name == "postgresql" else ""
     row = db.execute(text(
         "SELECT slug,label,category,connection_mode,environment,"
-        "encrypted_fields,updated_at,admin_suspended FROM payment_provider_profiles "
+        "encrypted_fields,updated_at,admin_suspended,verification_fingerprint,verified_at,verified_account_id FROM payment_provider_profiles "
         "WHERE slug=:slug" + suffix
     ), {"slug": slug}).mappings().first()
     return dict(row) if row else None
@@ -81,7 +95,7 @@ def list_profiles(db):
     _require_ready(db)
     rows = db.execute(text(
         "SELECT slug,label,category,connection_mode,environment,"
-        "encrypted_fields,updated_at,admin_suspended FROM payment_provider_profiles ORDER BY label,slug"
+        "encrypted_fields,updated_at,admin_suspended,verification_fingerprint,verified_at,verified_account_id FROM payment_provider_profiles ORDER BY label,slug"
     )).mappings()
     from . import payment_profile_publications
     result=[]
@@ -167,7 +181,7 @@ def save_profile(db, actor_id, data, *, create):
         db.execute(text(
             "UPDATE payment_provider_profiles SET label=:label,category=:category,"
             "connection_mode=:connection_mode,environment=:environment,"
-            "encrypted_fields=:encrypted_fields,updated_by=:actor,updated_at=CURRENT_TIMESTAMP "
+            "encrypted_fields=:encrypted_fields,updated_by=:actor,updated_at=CURRENT_TIMESTAMP,verification_fingerprint=NULL,verified_at=NULL,verified_account_id=NULL "
             "WHERE slug=:slug"
         ), params)
     db.commit()
@@ -260,6 +274,21 @@ def check_provider_connection(db, slug):
         raise HTTPException(502, "Invalid Stripe verification response") from None
     if account.get("object") != "account" or not str(account.get("id", "")).startswith("acct_"):
         raise HTTPException(502, "Unexpected Stripe account response") from None
+    fingerprint = _profile_fingerprint(row)
+    # Save only if the same encrypted credentials are still current.
+    updated = db.execute(text(
+        "UPDATE payment_provider_profiles SET "
+        "verification_fingerprint=:fingerprint,verified_at=CURRENT_TIMESTAMP,"
+        "verified_account_id=:account_id "
+        "WHERE slug=:slug AND encrypted_fields=:encrypted_fields "
+        "AND environment=:environment AND connection_mode='api'"
+    ), {"fingerprint": fingerprint, "account_id": account["id"],
+        "slug": slug, "encrypted_fields": row["encrypted_fields"],
+        "environment": mode})
+    if updated.rowcount != 1:
+        db.rollback()
+        raise HTTPException(409, "Payment credentials changed during verification; verify the newly saved settings")
+    db.commit()
     return {"result": "api_verified", "verified": True, "provider": "stripe",
             "environment": mode, "account_id": account["id"],
             "charges_enabled": bool(account.get("charges_enabled")),
