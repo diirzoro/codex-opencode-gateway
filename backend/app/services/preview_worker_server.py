@@ -382,6 +382,9 @@ class WorkerHandler(BaseHTTPRequestHandler):
                               "mode": 'prebuilt_static' if job.get('artifact_root') else 'dynamic',
                               "browser_lease": (job.get('artifact_lease') if job.get('artifact_root') else hashlib.sha256(cid.encode()).hexdigest() if cid else None) if state=='running' else None}
                 elif operation == "fetch":
+                    # Enforce the deadline on the read itself, even between
+                    # reaper ticks. A cached browser grant cannot extend it.
+                    self.server.reap_expired()
                     cid = job["container_id"]
                     if (not cid and not job.get('artifact_root')) or job["state"] != "running":
                         self.reply(409, {"error": "not_running"})
