@@ -200,3 +200,62 @@ def delete_profile(db, slug):
                {"slug": slug})
     db.commit()
     return {"deleted": True, "slug": slug, "payment_orders_changed": False}
+
+
+
+def check_provider_connection(db, slug):
+    """Read-only admin check; never publishes a method or activates payments."""
+    import httpx
+
+    _require_ready(db)
+    row = _one(db, slug)
+    if row is None:
+        raise HTTPException(404, "Payment method not found")
+    fields = _decode(row["encrypted_fields"])
+    required_missing = [f["label"] for f in fields if f.get("required") and not f.get("value")]
+    if required_missing:
+        return {"result": "incomplete", "verified": False,
+                "message": "Required configuration fields are missing.",
+                "missing_fields": required_missing}
+
+    if row["connection_mode"] != "api":
+        # A completed form does not prove that a bank account belongs to the
+        # merchant or that an actual transfer will reach it.
+        return {"result": "manual_review_required", "verified": False,
+                "message": "Saved details are complete. Independently confirm the bank or wallet account ownership and receiving details before enabling customer payments."}
+
+    if slug != "stripe":
+        return {"result": "unsupported", "verified": False,
+                "message": "No safe provider API verification is implemented for this payment service."}
+
+    values = {field["key"]: field["value"] for field in fields}
+    secret = values.get("secret_key", "")
+    publishable = values.get("publishable_key", "")
+    mode = row["environment"]
+    expected = "live" if mode == "live" else "test"
+    if (not secret.startswith("sk_" + expected + "_") or
+        (publishable and not publishable.startswith("pk_" + expected + "_"))):
+        return {"result": "invalid_configuration", "verified": False,
+                "message": "Stored Stripe keys do not match the selected environment."}
+    try:
+        with httpx.Client(timeout=12, follow_redirects=False, trust_env=False) as client:
+            response = client.get("https://api.stripe.com/v1/account",
+                                  headers={"Authorization": "Bearer " + secret})
+    except httpx.RequestError:
+        raise HTTPException(503, "Stripe API is unreachable; no verification performed") from None
+    if response.status_code in (401, 403):
+        return {"result": "rejected", "verified": False,
+                "message": "Stripe rejected this API credential or its permissions."}
+    if response.status_code != 200:
+        raise HTTPException(502, "Stripe verification is unavailable") from None
+    try:
+        account = response.json()
+    except ValueError:
+        raise HTTPException(502, "Invalid Stripe verification response") from None
+    if account.get("object") != "account" or not str(account.get("id", "")).startswith("acct_"):
+        raise HTTPException(502, "Unexpected Stripe account response") from None
+    return {"result": "api_verified", "verified": True, "provider": "stripe",
+            "environment": mode, "account_id": account["id"],
+            "charges_enabled": bool(account.get("charges_enabled")),
+            "checkout_verified": False, "webhook_verified": False,
+            "message": "Stripe API credential is valid. Checkout and webhooks are not verified."}
