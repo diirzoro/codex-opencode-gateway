@@ -1,0 +1,35 @@
+name: Stripe billing | Regression checks
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'backend/app/routes/billing.py'
+      - 'backend/app/routes/management.py'
+      - 'backend/app/services/stripe_checkout.py'
+      - 'backend/app/services/payment_provider_profiles.py'
+      - 'backend/app/services/payment_profile_publications.py'
+      - 'backend/alembic/versions/004*.py'
+      - 'backend/tests/test_stripe_dynamic_checkout.py'
+      - '.github/workflows/stripe-billing-checks.yml'
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  billing-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install -r backend/requirements.txt
+      - name: Check syntax and billing regressions without external payments
+        working-directory: backend
+        run: |
+          python -m compileall -q app alembic tests
+          python -m pytest -q tests/test_stripe_dynamic_checkout.py tests/test_finance_actions.py
