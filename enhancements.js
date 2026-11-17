@@ -2893,41 +2893,29 @@ window.renderGithubConfirmation=function(root,status,refresh){
   }
 
   function stripeTestTools(card,actions){
-          const feedback=el('p',tr('Stripe TEST not yet checked.','لم يتم فحص Stripe التجريبي.'),
-            'dynamic-provider-feedback');
-          const verify=button(tr('Verify Stripe TEST API','فحص اتصال Stripe التجريبي'),async()=>{
-            verify.disabled=true;
-            try{
-              const result=await api('/api/admin/payment-gateways/stripe/verify',{method:'POST'});
-              feedback.textContent=tr('Stripe verified: ','اتصال Stripe موثق: ')+(result.account_id||result.environment);
-            }catch(error){feedback.textContent=error.message;}finally{verify.disabled=false;}
-          },'button small');
-          const checkout=button(tr('Open Stripe TEST checkout','فتح الدفع التجريبي Stripe'),async()=>{
-            checkout.disabled=true;
-            try{
-              const result=await api('/api/admin/payment-gateways/stripe/test-checkout',{method:'POST'});
-              const url=new URL(result.checkout_url);
-              if(url.protocol!=='https:'||!['checkout.stripe.com','checkout.stripe.dev'].includes(url.hostname))
-                throw Error('Unexpected Stripe checkout destination');
-              feedback.replaceChildren();
-              const link=el('a',tr('Open Stripe test payment page','فتح صفحة دفع Stripe التجريبية'));
-              link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';
-              feedback.append(link);
-              const check=button(tr('Check test payment status','فحص حالة الدفع التجريبي'),async()=>{
-                check.disabled=true;
-                try{
-                  const status=await api('/api/admin/payment-gateways/stripe/test-checkout/'+encodeURIComponent(result.session_id));
-                  feedback.append(el('p',tr('TEST payment: ','الدفع التجريبي: ')+
-                    (status.payment_status||status.status||'unknown')+
-                    tr(' · No subscription activated',' · لم يُفعّل اشتراك')));
-                }catch(error){feedback.append(el('p',error.message));}
-                finally{check.disabled=false;}
-              },'button ghost small');
-              feedback.append(check);
-            }catch(error){feedback.textContent=error.message;}
-            finally{checkout.disabled=false;}
-          },'button small');
-          actions.append(verify,checkout);card.append(feedback);
+    const feedback=el('p',tr('Stripe TEST uses the same checkout system as LIVE.',
+      'يستخدم Stripe TEST نفس نظام الدفع المستخدم في LIVE.'),'dynamic-provider-feedback');
+    const verify=button(tr('Verify Stripe TEST API','فحص اتصال Stripe التجريبي'),async()=>{
+      verify.disabled=true;
+      try{
+        const result=await api('/api/admin/payment-gateways/profiles/stripe/verify',{method:'POST'});
+        feedback.textContent=result.verified
+          ?tr('Stripe API verified: ','تم التحقق من Stripe API: ')+(result.account_id||result.environment)
+          :result.message||result.result;
+      }catch(error){feedback.textContent=error.message;}finally{verify.disabled=false;}
+    },'button small');
+    const checkout=button(tr('Open unified Stripe TEST checkout','فتح دفع Stripe التجريبي الموحد'),async()=>{
+      checkout.disabled=true;
+      try{
+        const plans=await api('/api/plans');
+        const choices=Array.isArray(plans)?plans:(plans.plans||[]);
+        const plan=choices.find(p=>p.active!==false&&p.price_cents>0&&p.currency==='USD');
+        if(!plan)throw Error(tr('No active USD paid plan configured','لا توجد خطة مدفوعة نشطة بالدولار'));
+        if(typeof window.beginCheckout!=='function')throw Error('Checkout interface unavailable');
+        await window.beginCheckout(plan.id,'stripe-test');
+      }catch(error){feedback.textContent=error.message;}finally{checkout.disabled=false;}
+    },'button small');
+    actions.append(verify,checkout);card.append(feedback);
   }
 
   async function load(){
