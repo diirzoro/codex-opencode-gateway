@@ -113,6 +113,27 @@ def test_static_snapshot_expires_and_releases_disk(tmp_path,monkeypatch):
     finally:server.server_close()
 
 
+def test_fetch_rejects_expired_snapshot_before_background_reaper(tmp_path,monkeypatch):
+    from app.services import preview_worker_server as worker
+    monkeypatch.setattr(worker,'JOB_ROOT',tmp_path)
+    root=tmp_path/'expired';(root/'src/dist').mkdir(parents=True)
+    (root/'src/dist/index.html').write_text('expired-canary')
+    jobs={'expired':dict(state='running',container_id=None,spec=None,
+        artifact_root=str(root/'src/dist'),artifact_lease='a'*64,started_monotonic=0)}
+    server=WorkerServer(('127.0.0.1',0),'x'*32,NoDocker(),jobs=jobs,clock=lambda:900)
+    server.reconciled=True
+    thread=Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        request=urllib.request.Request(f'http://127.0.0.1:{server.server_address[1]}/v1/fetch',
+            data=json.dumps({'job_id':'expired','path':'/','browser_lease':'a'*64}).encode(),
+            headers={'Authorization':'Bearer '+'x'*32})
+        with pytest.raises(urllib.error.HTTPError) as error:urllib.request.urlopen(request)
+        assert error.value.code==409
+        assert jobs['expired']['state']=='stopped' and not root.exists()
+    finally:
+        server.shutdown();thread.join();server.server_close()
+
+
 def test_static_stop_removes_only_its_own_snapshot(tmp_path,monkeypatch):
     from app.services import preview_worker_server as worker
     monkeypatch.setattr(worker,'JOB_ROOT',tmp_path)
