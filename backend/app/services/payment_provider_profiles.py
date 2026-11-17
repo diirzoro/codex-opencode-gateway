@@ -233,19 +233,25 @@ def check_provider_connection(db, slug):
     publishable = values.get("publishable_key", "")
     mode = row["environment"]
     expected = "live" if mode == "live" else "test"
-    if (not secret.startswith("sk_" + expected + "_") or
+    # Stripe supports both standard server secrets (sk_) and least-privilege
+    # restricted server keys (rk_). Environment must still match exactly.
+    allowed_prefixes = ("sk_" + expected + "_", "rk_" + expected + "_")
+    if (not secret.startswith(allowed_prefixes) or
         (publishable and not publishable.startswith("pk_" + expected + "_"))):
         return {"result": "invalid_configuration", "verified": False,
-                "message": "Stored Stripe keys do not match the selected environment."}
+                "message": "Stripe API key or publishable key does not match the selected TEST/LIVE environment."}
     try:
         with httpx.Client(timeout=12, follow_redirects=False, trust_env=False) as client:
             response = client.get("https://api.stripe.com/v1/account",
                                   headers={"Authorization": "Bearer " + secret})
     except httpx.RequestError:
         raise HTTPException(503, "Stripe API is unreachable; no verification performed") from None
-    if response.status_code in (401, 403):
+    if response.status_code == 401:
         return {"result": "rejected", "verified": False,
-                "message": "Stripe rejected this API credential or its permissions."}
+                "message": "Stripe rejected the saved API credential. Check its value and environment."}
+    if response.status_code == 403:
+        return {"result": "insufficient_permissions", "verified": False,
+                "message": "Stripe key accepted for its mode but lacks permission for this account-read verification. Grant the minimum necessary read permission in Stripe; no payment has been enabled."}
     if response.status_code != 200:
         raise HTTPException(502, "Stripe verification is unavailable") from None
     try:
