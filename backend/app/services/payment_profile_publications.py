@@ -55,6 +55,8 @@ def management_catalog(db):
     Do not disclose credentials or encrypted method details.
     """
     dynamic = profiles.list_profiles(db)
+    from .stripe_checkout import status as stripe_status
+    stripe = stripe_status(db)
     result = []
     linked_ids = set()
     for item in dynamic:
@@ -62,6 +64,7 @@ def management_catalog(db):
         linked_id = publication.get("method_id")
         if linked_id:
             linked_ids.add(linked_id)
+        stripe_checkout_enabled = bool(item["slug"] == "stripe" and stripe["checkout_available"])
         result.append({
             "source": "dynamic",
             "slug": item["slug"],
@@ -70,10 +73,10 @@ def management_catalog(db):
             "connection_mode": item["connection_mode"],
             "environment": item["environment"],
             "configured": item["configured"],
-            "status": "suspended" if item.get('admin_suspended') else "enabled_manual" if publication["published"] else (
+            "status": "suspended" if item.get('admin_suspended') else "enabled_api" if stripe_checkout_enabled else "enabled_manual" if publication["published"] else (
                 "api_verified" if item.get("api_verified") else "configured_unverified" if item["configured"] else "draft"
             ),
-            "customer_checkout_enabled": bool(publication["published"]),
+            "customer_checkout_enabled": bool(publication["published"] or stripe_checkout_enabled),
             "method_id": linked_id,
             "automatic_capture": False,
         })
