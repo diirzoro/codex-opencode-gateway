@@ -9,19 +9,17 @@ docker_preview() {
 }
 [[ -z $(docker_preview ps --quiet --filter label=opencode.preview.managed=true) ]] || { echo 'Active preview; activation refused'; exit 1; }
 [[ $(df --output=avail -BM /var/lib/preview-worker | tail -1 | tr -dc '0-9') -ge 6144 ]] || { echo 'Insufficient disk reserve'; exit 1; }
-# Fetch only the official vendor image, then build against its immutable digest.
-timeout 300 bash -c 'runuser -u preview-worker -- env HOME=/var/lib/preview-worker DOCKER_HOST=unix:///run/preview-worker/docker.sock docker pull eclipse-temurin:21-jdk-jammy'
-base=$(docker_preview image inspect --format '{{index .RepoDigests 0}}' eclipse-temurin:21-jdk-jammy)
-[[ "$base" =~ ^eclipse-temurin@sha256:[0-9a-f]{64}$ ]] || exit 1
-build_dir=$(mktemp -d /var/lib/preview-worker/java-image-XXXXXX)
-trap 'rm -rf "$build_dir"' EXIT
-cp "$STAGE/deploy/PreviewFetch.java" "$build_dir/PreviewFetch.java"
-printf 'FROM %s\nCOPY PreviewFetch.java /opt/preview/PreviewFetch.java\nRUN javac -d /opt/preview /opt/preview/PreviewFetch.java && rm /opt/preview/PreviewFetch.java\n' "$base" > "$build_dir/Dockerfile"
-chmod 755 "$build_dir"; chmod 644 "$build_dir"/*
-timeout 300 runuser -u preview-worker -- env HOME=/var/lib/preview-worker DOCKER_HOST=unix:///run/preview-worker/docker.sock docker build --network none --memory 768m --cpu-quota 50000 -t opencode-preview-java:21 "$build_dir"
+# Runtime is prepared by Actions; the dedicated daemon retains its closed network.
+expected_hash=$(cat "$STAGE/preview-java-runtime.sha256")
+[[ "$expected_hash" =~ ^[0-9a-f]{64}$ ]] || exit 1
+actual_hash=$(sha256sum "$STAGE/preview-java-runtime.tar.gz");actual_hash=${actual_hash%% *}
+[[ "$actual_hash" == "$expected_hash" ]] || { echo 'Runtime archive checksum mismatch'; exit 1; }
+expected_image=$(cat "$STAGE/preview-java-runtime.id")
+[[ "$expected_image" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
+timeout 300 runuser -u preview-worker -- env HOME=/var/lib/preview-worker DOCKER_HOST=unix:///run/preview-worker/docker.sock docker load < "$STAGE/preview-java-runtime.tar.gz"
 export PREVIEW_JAVA_RUNTIME_IMAGE
 PREVIEW_JAVA_RUNTIME_IMAGE=$(docker_preview image inspect --format '{{.Id}}' opencode-preview-java:21)
-[[ "$PREVIEW_JAVA_RUNTIME_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
+[[ "$PREVIEW_JAVA_RUNTIME_IMAGE" == "$expected_image" ]] || exit 1
 python3 - <<'PY'
 from pathlib import Path
 from datetime import datetime,timezone
