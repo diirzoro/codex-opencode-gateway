@@ -172,6 +172,8 @@ def create_checkout(db, user, plan_id, origin):
     }
     if mode == "test":
         checkout_data["metadata[diagnostic]"] = "true"
+        # Preserve the original Stripe TEST diagnostic configuration.
+        checkout_data["managed_payments[enabled]"] = "false"
     try:
         payload = _call(cfg["secret_key"], "POST", "checkout/sessions",
                         data=checkout_data,
