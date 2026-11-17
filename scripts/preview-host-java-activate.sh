@@ -16,7 +16,10 @@ actual_hash=$(sha256sum "$STAGE/preview-java-runtime.tar.gz");actual_hash=${actu
 [[ "$actual_hash" == "$expected_hash" ]] || { echo 'Runtime archive checksum mismatch'; exit 1; }
 expected_image=$(cat "$STAGE/preview-java-runtime.id")
 [[ "$expected_image" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
-timeout 300 runuser -u preview-worker -- env HOME=/var/lib/preview-worker DOCKER_HOST=unix:///run/preview-worker/docker.sock docker load < "$STAGE/preview-java-runtime.tar.gz"
+cached_image=$(docker_preview image inspect --format '{{.Id}}' "$expected_image" 2>/dev/null || true)
+if [[ "$cached_image" != "$expected_image" ]]; then
+  timeout 300 runuser -u preview-worker -- env HOME=/var/lib/preview-worker DOCKER_HOST=unix:///run/preview-worker/docker.sock docker load < "$STAGE/preview-java-runtime.tar.gz"
+fi
 export PREVIEW_JAVA_RUNTIME_IMAGE
 PREVIEW_JAVA_RUNTIME_IMAGE=$(docker_preview image inspect --format '{{.Id}}' opencode-preview-java:21)
 [[ "$PREVIEW_JAVA_RUNTIME_IMAGE" == "$expected_image" ]] || exit 1
