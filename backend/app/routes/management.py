@@ -324,6 +324,23 @@ def receiving(plan_id:int|None=Query(default=None,ge=1),include_unavailable:bool
         else:
             payload['available']=True
         ranked.append((0 if (allowed_countries and user_code in allowed_countries) else 1,payload))
+    # Stripe is a virtual provider-backed method, not a duplicate BillingMethod.
+    # Its current TEST/LIVE state is read from the encrypted admin profile.
+    from ..services.stripe_checkout import status as stripe_status
+    stripe = stripe_status(db)
+    if stripe["configured"]:
+        available = stripe["checkout_available"]
+        if available or include_unavailable:
+            ranked.append((0, {
+                "id": "stripe-" + stripe["environment"],
+                "kind": "stripe", "label": "Stripe" + (
+                    " (TEST)" if stripe["environment"] == "test" else ""),
+                "enabled": stripe["enabled"], "available": available,
+                "available_reason": None if available else "processor_not_connected",
+                "details": {"checkout_mode": "stripe",
+                            "environment": stripe["environment"],
+                            "currency": "USD", "plan_id": None}
+            }))
     ranked.sort(key=lambda item:item[0])
     return [payload for _,payload in ranked]
 @router.post('/billing/methods',status_code=201)
