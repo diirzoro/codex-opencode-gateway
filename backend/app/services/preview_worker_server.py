@@ -31,6 +31,7 @@ from .preview_host_probe import read_host_telemetry
 from .preview_host_gate import permit_preview
 from .preview_scheduling import DYNAMIC_IDLE_TIMEOUT_SECONDS
 from . import preview_static_artifact
+from . import preview_npm_cache, preview_react_build
 
 MAX_BODY = 72 * 1024 * 1024
 JOB_NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}' + chr(36))
@@ -116,9 +117,41 @@ class WorkerServer(ThreadingHTTPServer):
         if cid:
             # Keep the allocation occupied until Docker confirms cleanup.
             self.provisioner.stop(cid, job_id)
-        if job.get('artifact_root'):
+        if job.get('artifact_root') or job.get('family')=='react_build':
             self.cleanup_static_snapshot(job_id)
         job.update(state='stopped', container_id=None, stop_reason=reason)
+
+    def complete_react_build(self,job_id,job,cid):
+        deadline=time.monotonic()+preview_react_build.BUILD_SECONDS
+        try:
+            while not self.reaper_stop.is_set():
+                with LOCK:
+                    if job.get('state')!='building' or job.get('container_id')!=cid:return
+                if self.provisioner.build_ready(cid,job_id):break
+                if self.provisioner.status(cid,job_id)!='running':
+                    raise PreviewProvisioningError('Offline build exited before completion')
+                if time.monotonic()>=deadline:raise PreviewProvisioningError('Offline build time limit exceeded')
+                self.reaper_stop.wait(1)
+            else:return
+            raw=self.provisioner.export_build(cid,job_id)
+            with LOCK:
+                if job.get('state')!='building' or job.get('container_id')!=cid:return
+                root=JOB_ROOT/job_id
+                output=root/'output'
+                preview_react_build.extract_artifact(raw,output)
+                self.provisioner.stop(cid,job_id)
+                job.update(state='running',container_id=None,spec=None,family='static',
+                    artifact_root=str(output),artifact_lease=uuid.uuid4().hex+uuid.uuid4().hex,
+                    built_static=True,started_monotonic=self.clock())
+        except (PreviewProvisioningError,OSError,ValueError,tarfile.TarError):
+            with LOCK:
+                if job.get('state')!='building' or job.get('container_id')!=cid:return
+                try:job['failure_logs']=self.provisioner.logs(cid,job_id)[-100000:]
+                except PreviewProvisioningError:job['failure_logs']=''
+                try:self.stop_job(job_id,job,'build_failed')
+                except (PreviewProvisioningError,OSError):pass
+                if not job.get('container_id'):job['state']='failed'
+                job['failure_code']='build_failed'
 
     def reap_expired(self):
         with LOCK:
@@ -229,9 +262,11 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     shutil.rmtree(JOB_ROOT / job_id, ignore_errors=True)
                 framework = request.get("framework")
                 profile = PROFILES.get(framework) if isinstance(framework, str) else None
+                build_static=request.get('build_static') is True and framework in {'vite','react'}
+                if build_static:profile=LaunchProfile('react_build',('node','--max-old-space-size=256','-e',preview_react_build.BUILD_SCRIPT))
                 if framework == 'java' and request.get('entrypoint') != 'Main.java':
                     profile = None
-                if request.get('prebuilt_static') is True and framework in {'vite','react'}:
+                if not build_static and request.get('prebuilt_static') is True and framework in {'vite','react'}:
                     profile=LaunchProfile('static',())
                 selected = request.get("entrypoint")
                 if framework == "python" and selected in ("main.py", "app.py"):
@@ -248,7 +283,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     snapshot = base64.b64decode(encoded, validate=True)
                     if len(snapshot) > 50 * 1024 * 1024:
                         raise ValueError("oversized snapshot")
-                    if profile.family=='static' and shutil.disk_usage(JOB_ROOT).free < 5120*1024*1024+len(snapshot):
+                    if profile.family in {'static','react_build'} and shutil.disk_usage(JOB_ROOT).free < 5120*1024*1024+len(snapshot):
                         self.reply(503,{'error':'preview_disk_headroom_insufficient'})
                         return
                     root = JOB_ROOT / job_id
@@ -292,11 +327,15 @@ class WorkerHandler(BaseHTTPRequestHandler):
                                 'family':'static','artifact_root':preview_static_artifact.artifact_root(source),
                                 'artifact_lease':uuid.uuid4().hex+uuid.uuid4().hex}
                         else:
-                            image = os.environ.get('PREVIEW_IMAGE_' + profile.family.upper(), '')
+                            if profile.family=='react_build':
+                                preview_npm_cache.stage(request.get('packages'),root/'packages')
+                                (root/STATIC_MARKER).write_text('react-build-v1\n')
+                            image = os.environ.get('PREVIEW_IMAGE_' + ('NODE' if profile.family=='react_build' else profile.family.upper()), '')
                             if not image:
                                 raise ValueError('Worker runtime image is not configured')
-                            self.server.jobs[job_id] = {"spec": ContainerSpec(image, profile.argv, str(source)),
-                                            "container_id": None, "state": "ready", "family": profile.family}
+                            self.server.jobs[job_id] = {"spec": ContainerSpec(image, profile.argv, str(source),build_only=profile.family=='react_build'),
+                                            "container_id": None, "state": "ready", "family": profile.family,
+                                            "source_digest":hashlib.sha256(snapshot).hexdigest()}
                     except Exception:
                         shutil.rmtree(root)
                         raise
@@ -343,6 +382,11 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     job["started_monotonic"] = self.server.clock()
                     job["activity_monotonic"] = self.server.clock()
                     job["container_id"] = cid
+                    if job['family']=='react_build':
+                        job['state']='building'
+                        Thread(target=self.server.complete_react_build,args=(job_id,job,cid),daemon=True).start()
+                        self.reply(200,{'state':'building','job_id':job_id,'url':None,'mode':'offline_build','execution_enabled':True})
+                        return
                     job["state"] = "running"
                     # Docker accepted the container; that is not proof the HTTP
                     # app has started. Gate the iframe URL on a real response.
@@ -385,9 +429,11 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     if request.get('user_activity') is True and job.get('state') == 'running':
                         job['activity_monotonic'] = self.server.clock()
                     cid = job["container_id"]
-                    state = self.server.provisioner.status(cid, job_id) if cid else job["state"]
+                    state = (job['state'] if job['state']!='running' else self.server.provisioner.status(cid, job_id)) if cid else job["state"]
                     result = {"state": state, "job_id": job_id, "url": None, "stop_reason": job.get("stop_reason"),
-                              "mode": 'prebuilt_static' if job.get('artifact_root') else 'dynamic',
+                              "mode": 'built_static' if job.get('built_static') else 'prebuilt_static' if job.get('artifact_root') else 'offline_build' if job.get('family')=='react_build' else 'dynamic',
+                              "failure_code":job.get('failure_code'),
+                              "source_digest":job.get('source_digest'),
                               "browser_lease": (job.get('artifact_lease') if job.get('artifact_root') else hashlib.sha256(cid.encode()).hexdigest() if cid else None) if state=='running' else None}
                 elif operation == "fetch":
                     # Enforce the deadline on the read itself, even between

@@ -1387,6 +1387,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     updatePreviewIdentity();
     if(!activeWorkspace?.id||!activeProject?.id){setPreviewState('blocked');return;}
     clearPreview();setPreviewState('loading');const revision=previewRevision,id=activeWorkspace.id;
+    const stopControl=previewActions.querySelector('#stopWorkspacePreview');
+    if(stopControl)stopControl.disabled=true;
     previewStatus.textContent=tr('Detecting project…','جارٍ اكتشاف نوع المشروع…');
     try{
       const state=await api('/api/workspaces/'+id+'/preview/status');
@@ -1400,18 +1402,41 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       let dynamicError=null;
       if(state.mode!=='static'){
         try {
-          const launched=await api('/api/workspaces/'+id+'/preview/start'+(fresh?'?fresh=true':''),{method:'POST'});
+          let launched=await api('/api/workspaces/'+id+'/preview/start'+(fresh?'?fresh=true':''),{method:'POST'});
+          if(activeWorkspace?.id!==id||previewRevision!==revision){
+            if(launched.state==='building')try{await api('/api/workspaces/'+id+'/preview/stop',{method:'POST'});}catch(_){}
+            return;
+          }
+          if(launched.state==='building'){
+            if(stopControl)stopControl.disabled=false;
+            previewStatus.textContent=tr('Preparing your project preview…','جارٍ تجهيز معاينة مشروعك…');
+            const deadline=Date.now()+180000;
+            while(Date.now()<deadline){
+              await new Promise(resolve=>setTimeout(resolve,1200));
+              if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+              const built=await api('/api/workspaces/'+id+'/preview/status');
+              if(activeWorkspace?.id!==id||previewRevision!==revision)return;
+              if(built.state==='building')continue;
+              if(built.state!=='running')throw new Error(tr('Preview build failed. Check the dependency lockfile and build script.','تعذر بناء المعاينة. تحقق من ملف قفل الاعتماديات وأمر البناء في المشروع.'));
+              launched={...built,url:'/api/workspaces/'+id+'/preview/live/',mode:'built_static',execution_enabled:false};break;
+            }
+            if(!launched.url){
+              try{await api('/api/workspaces/'+id+'/preview/stop',{method:'POST'});}catch(_){}
+              throw new Error(tr('Preview build exceeded its time limit.','تجاوز بناء المعاينة المهلة المحددة.'));
+            }
+          }
           if(activeWorkspace?.id!==id||previewRevision!==revision)return;
           if(launched.url){
             const browserURL=state.browser_access_required?await previewBrowserURL(id):launched.url;
             if(activeWorkspace?.id!==id||previewRevision!==revision)return;
             previewResourceMode=launched.mode||null;
             frame.src=browserURL;frame.hidden=false;setPreviewState('ready');
-            previewStatus.textContent=previewResourceMode==='prebuilt_static'?tr('Existing React build · No app server is running. Rebuild the project to include source changes. Refresh reloads dist.','نتيجة بناء React موجودة · دون خادم تطبيق. يلزم إعادة البناء لإظهار تغييرات المصدر؛ التحديث يعيد تحميل dist.'):state.browser_access_required?tr('Running application preview · Read link lasts up to 5 minutes; Refresh renews access.','معاينة التطبيق تعمل · رابط القراءة صالح حتى 5 دقائق؛ زر التحديث يجدّد الوصول.'):tr('Running application preview','معاينة التطبيق تعمل');
+            previewStatus.textContent=previewResourceMode==='built_static'?tr('Preview built from your current files. Refresh to rebuild after changes.','تم تجهيز المعاينة من ملفات المشروع الحالية. حدّثها لإظهار التغييرات الجديدة.'):previewResourceMode==='prebuilt_static'?tr('Existing React build · No app server is running. Rebuild the project to include source changes. Refresh reloads dist.','نتيجة بناء React موجودة · دون خادم تطبيق. يلزم إعادة البناء لإظهار تغييرات المصدر؛ التحديث يعيد تحميل dist.'):state.browser_access_required?tr('Running application preview · Read link lasts up to 5 minutes; Refresh renews access.','معاينة التطبيق تعمل · رابط القراءة صالح حتى 5 دقائق؛ زر التحديث يجدّد الوصول.'):tr('Running application preview','معاينة التطبيق تعمل');
             return;
           }
           throw new Error(tr('Container started, but no preview URL was returned.','بدأت الحاوية دون رابط معاينة صالح.'));
         } catch(launchError) {
+          if(state.launch?.build_static)throw launchError;
           if(activeWorkspace?.id!==id||previewRevision!==revision)return;
           dynamicError=launchError;
           previewStatus.textContent=tr('Server preview failed; checking HTML fallback…','تعذر تشغيل معاينة الخادم؛ جارٍ فحص بديل HTML…');
@@ -1437,7 +1462,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }catch(error){if(activeWorkspace?.id===id&&previewRevision===revision){clearPreview();setPreviewState('error');previewStatus.textContent=error.message;}}
   }
   async function refreshPreview(){
-    if(previewResourceMode==='prebuilt_static'){await startPreview({fresh:true});return;}
+    if(previewResourceMode==='prebuilt_static'||previewResourceMode==='built_static'){await startPreview({fresh:true});return;}
     if(!frame.hidden && frame.getAttribute('src')){
       const current=new URL(frame.getAttribute('src'),location.href);
       if(current.hostname===new URL(location.href).hostname){
@@ -1457,10 +1482,11 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     await startPreview();
   }
   async function stopPreview(){
+    const localHTML=frame.hasAttribute('srcdoc')&&!frame.hasAttribute('src');
     clearPreview();const revision=previewRevision,id=activeWorkspace?.id;
-    previewStatus.textContent=tr('Preview stopped.','تم إيقاف المعاينة.');
-    if(!id)return;
-    try{await api('/api/workspaces/'+id+'/preview/stop',{method:'POST'});}
+    previewStatus.textContent=tr('Stopping preview…','جارٍ إيقاف المعاينة…');
+    if(!id||localHTML){previewStatus.textContent=tr('Preview stopped.','تم إيقاف المعاينة.');return;}
+    try{const result=await api('/api/workspaces/'+id+'/preview/stop',{method:'POST'});if(result.state!=='stopped')throw new Error(tr('Preview shutdown was not confirmed.','لم يتأكد إيقاف المعاينة.'));if(activeWorkspace?.id===id&&previewRevision===revision)previewStatus.textContent=tr('Preview stopped.','تم إيقاف المعاينة.');}
     catch(error){if(activeWorkspace?.id===id&&previewRevision===revision)previewStatus.textContent=error.message;}
   }
   const previewActions=textElement('div','','preview-actions');

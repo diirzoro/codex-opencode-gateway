@@ -37,7 +37,7 @@ def validate_archive(archive: tarfile.TarFile) -> tuple[int, int]:
         if any(part.startswith(".env") or part in (".git", ".ssh", ".aws",
                 ".azure", ".config", "node_modules", ".venv", "venv",
                 "__pycache__", ".next", "vendor", "opencode.json",
-                "opencode.jsonc") for part in path.parts):
+                "opencode.jsonc", ".npmrc", ".yarnrc", ".yarnrc.yml", ".netrc") for part in path.parts):
             raise UnsafePreviewArchive("Private or generated files cannot enter Preview")
         canonical = str(path)
         if canonical in seen:
