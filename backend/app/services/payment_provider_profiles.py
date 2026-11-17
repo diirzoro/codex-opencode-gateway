@@ -109,6 +109,15 @@ def list_profiles(db):
     for row in rows:
         item=_public(dict(row))
         item["publication"]=payment_profile_publications.publication_status(db,item["slug"])
+        if item["slug"] == "stripe":
+            from .stripe_checkout import status as stripe_status
+            runtime = stripe_status(db)
+            item["checkout_enabled"] = runtime["checkout_available"]
+            item["webhook_configured"] = runtime["webhook_configured"]
+            item["message"] = ("Stripe TEST diagnostic checkout available." if runtime["test_checkout_available"]
+                               else "Stripe LIVE checkout available; webhook delivery must still be monitored."
+                               if runtime["live_checkout_available"]
+                               else "Stripe Checkout is not ready in the active mode.")
         result.append(item)
     return result
 
