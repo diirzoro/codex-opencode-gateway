@@ -2983,6 +2983,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     const statusText=entry=>
       entry.status==='suspended'?tr('Suspended','معلقة'):
       entry.customer_checkout_enabled?tr('Enabled for new customers','مفعلة للعملاء'):
+      entry.status==='api_verified'?tr('API verified','اتصال API موثّق'):
       entry.status==='configured_unverified'?tr('Configured, not verified','إعداد محفوظ غير موثق'):
       entry.status==='draft'?tr('Draft','مسودة'):
       entry.status==='disabled_existing'?tr('Disabled','معطلة'):
@@ -3009,7 +3010,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
         el('p',profile.category+' · '+profile.connection_mode+' · '+profile.environment));
       head.append(icon,names);
       const fields=profile.fields.filter(f=>f.configured).length;
-      const status=el('span',profile.configured?tr('Fields saved','الحقول محفوظة'):tr('Incomplete draft','مسودة غير مكتملة'),
+      const status=el('span',profile.api_verified?tr('Stripe API verified','اتصال Stripe API موثّق'):profile.configured?tr('Fields saved','الحقول محفوظة'):tr('Incomplete draft','مسودة غير مكتملة'),
         'dynamic-provider-status');
       head.append(status);
       card.append(head,
@@ -3020,7 +3021,10 @@ window.renderGithubConfirmation=function(root,status,refresh){
           'dynamic-provider-hint'));
       const actions=el('div','','dynamic-provider-actions');
       actions.append(button(tr('Edit connection','تعديل بيانات الربط'),()=>editor(profile),'button small'));
-      const verifyFeedback=el('p',tr('Not checked yet.','لم يتم التحقق بعد.'),'dynamic-provider-feedback');
+      const verifyFeedback=el('p',profile.api_verified
+        ?tr('Last successful Stripe API verification: ','آخر تحقق ناجح من Stripe API: ')+(profile.verified_at||'')+
+          tr(' · Checkout and webhook not verified.',' · لم يتم التحقق من Checkout وWebhook.')
+        :tr('Not checked yet.','لم يتم التحقق بعد.'),'dynamic-provider-feedback');
       verifyFeedback.setAttribute('role','status');
       const verifyProfile=button(tr('Verify connection / details','التحقق من الربط / البيانات'),async()=>{
         verifyProfile.disabled=true;
@@ -3031,6 +3035,12 @@ window.renderGithubConfirmation=function(root,status,refresh){
             verifyFeedback.textContent=tr('Stripe API verified (','تم توثيق اتصال Stripe API (')+
               (result.environment||'')+' · '+(result.account_id||'')+
               tr('). Checkout and webhook are NOT verified.','‎). الدفع والويب هوك لم يتم التحقق منهما.');
+            status.textContent=tr('Stripe API verified','اتصال Stripe API موثّق');
+            const currentEntry=entries.find(entry=>entry.source==='dynamic'&&entry.slug===profile.slug);
+            if(currentEntry){
+              currentEntry.status='api_verified';
+              render();
+            }
           }else if(result.result==='manual_review_required'){
             verifyFeedback.textContent=tr(
               'Fields complete — bank/wallet ownership and receiving ability require independent manual confirmation.',
@@ -3104,7 +3114,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
         const category=categories.find(([value])=>value===entry.category)?.[1]||entry.category||'—';
         const mode=entry.source==='legacy'?tr('Existing method','وسيلة سابقة'):
           entry.connection_mode==='api'?'API':entry.connection_mode==='manual'?tr('Manual transfer','تحويل يدوي'):tr('Hosted link','رابط دفع');
-        const badge=el('span',statusText(entry),'finance-status');badge.dataset.status=entry.customer_checkout_enabled?'paid':'disabled';
+        const badge=el('span',statusText(entry),'finance-status');
+        badge.dataset.status=entry.status==='api_verified'?'paid':entry.customer_checkout_enabled?'paid':'disabled';
         const stateCell=el('td');stateCell.append(badge);
         row.append(info,el('td',category),el('td',mode),el('td',entry.environment==='live'?tr('Live','حقيقي'):entry.environment==='test'?tr('Test','تجريبي'):'—'),stateCell);
         const actions=el('div','','admin-payment-entry-actions');
