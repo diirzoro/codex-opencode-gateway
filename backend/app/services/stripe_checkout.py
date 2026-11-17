@@ -202,7 +202,9 @@ def webhook(db, raw, signature):
         raise HTTPException(400, "Invalid Stripe webhook event")
     if event.get("livemode") is not (matched_mode == "live"):
         raise HTTPException(400, "Stripe event environment mismatch")
-    if event.get("type") != "checkout.session.completed":
+    if event.get("type") not in (
+        "checkout.session.completed", "checkout.session.async_payment_succeeded"
+    ):
         return {"received": True}
     checkout = (event.get("data") or {}).get("object") or {}
     if checkout.get("object") != "checkout.session" or checkout.get("payment_status") != "paid":
