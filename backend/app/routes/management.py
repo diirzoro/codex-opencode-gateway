@@ -24,6 +24,21 @@ def aware(date): return date if date.tzinfo else date.replace(tzinfo=timezone.ut
 def audit(db,user,action,subject=None): db.add(AccountAudit(actor_id=user.id if user else None,subject_id=subject or (user.id if user else None),action=action))
 def revoke(db,user):
     db.execute(update(AuthSession).where(AuthSession.user_id==user.id,AuthSession.revoked_at.is_(None)).values(revoked_at=now()))
+def stop_work(db, user):
+    """Stop account-owned workspace session bookkeeping on administrative disable.
+
+    Authentication revocation is handled separately by revoke(). This does not
+    terminate Pi Central or delete native session history, project files or
+    payment records. Further authenticated requests are rejected after disable.
+    """
+    from ..models import WorkspaceSession
+    db.execute(
+        update(WorkspaceSession)
+        .where(WorkspaceSession.user_id == user.id,
+               WorkspaceSession.status.in_(('running', 'streaming', 'busy')))
+        .values(status='stopped')
+    )
+
 class PasswordInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
     current_password: str=Field(min_length=1,max_length=128)
