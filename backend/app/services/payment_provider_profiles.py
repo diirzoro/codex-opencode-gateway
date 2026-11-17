@@ -219,6 +219,14 @@ def save_profile(db, actor_id, data, *, create):
             if not stripe_fields_for_environment(db, row["environment"]):
                 _save_stripe_environment(db, row["environment"], previous, row)
             previous = stripe_fields_for_environment(db, data.environment)
+            # The editor still displays the old mode's public key until Save.
+            # Restore the target mode's saved public key unless the admin typed
+            # a public key matching the newly selected environment.
+            target_values = {item["key"]: item["value"] for item in previous}
+            for item in data.fields:
+                if (item.key == "publishable_key" and
+                    item.value.startswith("pk_" + row["environment"] + "_")):
+                    item.value = target_values.get("publishable_key", "")
     fields = _prepare_fields(data.fields, previous)
     verification = _save_stripe_environment(db, data.environment, fields) if data.slug == "stripe" else None
     token = credentials.encrypt(json.dumps(fields, ensure_ascii=False))
