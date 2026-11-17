@@ -3020,6 +3020,32 @@ window.renderGithubConfirmation=function(root,status,refresh){
           'dynamic-provider-hint'));
       const actions=el('div','','dynamic-provider-actions');
       actions.append(button(tr('Edit connection','تعديل بيانات الربط'),()=>editor(profile),'button small'));
+      const verifyFeedback=el('p',tr('Not checked yet.','لم يتم التحقق بعد.'),'dynamic-provider-feedback');
+      verifyFeedback.setAttribute('role','status');
+      const verifyProfile=button(tr('Verify connection / details','التحقق من الربط / البيانات'),async()=>{
+        verifyProfile.disabled=true;
+        verifyFeedback.textContent=tr('Checking saved details…','جارٍ فحص البيانات المحفوظة…');
+        try{
+          const result=await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+'/verify',{method:'POST'});
+          if(result.result==='api_verified'){
+            verifyFeedback.textContent=tr('Stripe API verified (','تم توثيق اتصال Stripe API (')+
+              (result.environment||'')+' · '+(result.account_id||'')+
+              tr('). Checkout and webhook are NOT verified.','‎). الدفع والويب هوك لم يتم التحقق منهما.');
+          }else if(result.result==='manual_review_required'){
+            verifyFeedback.textContent=tr(
+              'Fields complete — bank/wallet ownership and receiving ability require independent manual confirmation.',
+              'الحقول مكتملة، لكن ملكية الحساب البنكي/المحفظة وإمكانية الاستلام تتطلب تأكيدًا يدويًا مستقلًا.');
+          }else if(result.result==='incomplete'){
+            verifyFeedback.textContent=tr('Missing required fields: ','الحقول المطلوبة الناقصة: ')+(result.missing_fields||[]).join(', ');
+          }else{
+            verifyFeedback.textContent=tr('Not verified: ','لم يتم التحقق: ')+(result.message||result.result||'');
+          }
+        }catch(error){verifyFeedback.textContent=tr('Verification failed: ','فشل التحقق: ')+(error.message||String(error));}
+        finally{verifyProfile.disabled=false;}
+      },'button ghost small');
+      actions.append(verifyProfile);
+      card.append(verifyFeedback);
+
       if(profile.connection_mode==='api'){
         card.append(el('p',tr('API credentials remain encrypted. Stripe TEST Checkout does not activate subscriptions.',
           'تبقى مفاتيح API مشفرة. دفع Stripe التجريبي لا يفعّل الاشتراكات.'),'dynamic-provider-hint'));
