@@ -17,6 +17,7 @@ on:
           - audit_full
           - react_activate
           - java_activate
+          - java_verify
 permissions:
   contents: read
 concurrency:
@@ -55,7 +56,7 @@ jobs:
             ssh-keyscan -p "$port" -H "$VPS_HOST" > "$HOME/.ssh/known_hosts"
           fi
           chmod 600 "$HOME/.ssh/known_hosts"
-          [[ "$OPERATION" == inspect || "$OPERATION" == prepare || "$OPERATION" == activate || "$OPERATION" == verify || "$OPERATION" == react_inspect || "$OPERATION" == audit || "$OPERATION" == audit_full || "$OPERATION" == react_activate || "$OPERATION" == java_activate ]]
+          [[ "$OPERATION" == inspect || "$OPERATION" == prepare || "$OPERATION" == activate || "$OPERATION" == verify || "$OPERATION" == react_inspect || "$OPERATION" == audit || "$OPERATION" == audit_full || "$OPERATION" == react_activate || "$OPERATION" == java_activate || "$OPERATION" == java_verify ]]
           ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             'mkdir -p /home/tahir/preview-activation'
           mkdir -p preview-wheels
@@ -96,6 +97,7 @@ jobs:
           [[ "$OPERATION" != audit_full ]] || script=preview-host-audit-full.sh
           [[ "$OPERATION" != react_activate ]] || script=preview-host-react-activate.sh
           [[ "$OPERATION" != java_activate ]] || script=preview-host-java-activate.sh
+          [[ "$OPERATION" != java_verify ]] || script=preview-host-java-activate.sh
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
             -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             "sudo -S -p '' bash /home/tahir/preview-activation/scripts/$script"

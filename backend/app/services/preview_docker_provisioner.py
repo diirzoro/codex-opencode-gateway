@@ -33,7 +33,7 @@ class DockerProvisioner:
     run: Run = subprocess.run
     docker_binary: str = "/usr/bin/docker"
 
-    def _call(self, args: tuple[str, ...], *, timeout: int = 20) -> str:
+    def _call(self, args: tuple[str, ...], *, timeout: int = 20, include_stderr: bool = False) -> str:
         try:
             completed = self.run(
                 (self.docker_binary, *args), capture_output=True, text=True,
@@ -48,7 +48,7 @@ class DockerProvisioner:
         except OSError as exc:
             code = 'docker_binary_missing' if isinstance(exc, FileNotFoundError) else 'docker_operation_failed'
             raise PreviewProvisioningError(MESSAGES[code], code=code, operation=args[0]) from exc
-        return completed.stdout.strip()
+        return (completed.stdout + ((completed.stderr or '') if include_stderr else '')).strip()
 
     def launch_smoke(self, job_id: str, spec: ContainerSpec) -> str:
         """Run a pinned, network-disconnected smoke container.
@@ -175,4 +175,4 @@ class DockerProvisioner:
     def logs(self, container_id: str, job_id: str) -> str:
         """Bound logs and verify job identity before reading."""
         self._require_owned(container_id, job_id)
-        return self._call(("logs", "--tail", "100", container_id), timeout=10)[-100000:]
+        return self._call(("logs", "--tail", "100", container_id), timeout=10, include_stderr=True)[-100000:]
