@@ -481,6 +481,28 @@ def stripe_unified_checkout(
     return create_checkout(db, user, data.plan_id, settings.public_base_url)
 
 
+@router.get('/stripe/checkout/{session_id}')
+def stripe_checkout_result(
+    session_id: str,
+    user: User = Depends(require_billing_user),
+    db: Session = Depends(get_db),
+):
+    """Return existing order state, never treat browser redirect as payment."""
+    import re
+    if not re.fullmatch(r'cs_(?:test|live)_[A-Za-z0-9_]{4,180}', session_id):
+        raise HTTPException(422, "Invalid Stripe session ID")
+    if session_id.startswith('cs_test_'):
+        return {"environment": "test", "status": "diagnostic", "subscription_activated": False}
+    row = db.scalar(select(PaymentOrder).where(
+        PaymentOrder.user_id == user.id,
+        PaymentOrder.provider_order_id == session_id,
+        PaymentOrder.provider_environment == 'live'))
+    if row is None:
+        raise HTTPException(404, "Stripe checkout not found")
+    return {"environment": "live", "status": row.status,
+            "subscription_activated": row.status == "paid"}
+
+
 @router.post('/stripe/webhook')
 async def stripe_signed_webhook(request: Request, db: Session = Depends(get_db)):
     """Public Stripe callback; signed payload required, never browser-authenticated."""
