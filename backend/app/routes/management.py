@@ -329,7 +329,7 @@ def receiving(plan_id:int|None=Query(default=None,ge=1),include_unavailable:bool
     from ..services.stripe_checkout import status as stripe_status
     stripe = stripe_status(db)
     if stripe["configured"]:
-        available = stripe["checkout_available"]
+        available = stripe["checkout_available"] and (plan is None or plan.currency == "USD")
         if available or include_unavailable:
             ranked.append((0, {
                 "id": "stripe-" + stripe["environment"],
