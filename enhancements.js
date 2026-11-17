@@ -3016,8 +3016,17 @@ window.renderGithubConfirmation=function(root,status,refresh){
       card.append(head,
         el('p',tr('Stored fields: ','الحقول المحفوظة: ')+fields+' / '+profile.fields.length,
            'dynamic-provider-description'),
-        el('p',tr('Settings only · Automatic checkout is not activated.',
-          'إعدادات الربط فقط · التحصيل الآلي غير مفعل.'),
+        el('p',profile.slug==='stripe'
+          ?(profile.checkout_enabled
+            ?(profile.environment==='test'
+              ?tr('Stripe TEST checkout ready · no real subscription activation.',
+                  'Stripe TEST جاهز للاختبار · لا يُفعّل اشتراكات حقيقية.')
+              :tr('Stripe LIVE checkout enabled · signed webhook confirmation required to activate subscriptions.',
+                  'Stripe LIVE مفعّل · يلزم تأكيد Webhook الموقّع لتفعيل الاشتراكات.'))
+            :tr('Stripe checkout is not ready. Check the active mode, API key, webhook secret and suspension state.',
+                'Stripe غير جاهز للدفع. راجع البيئة والمفتاح وسر Webhook وحالة التعليق.'))
+          :tr('Saved connection details · customer checkout requires activation.',
+              'بيانات الربط محفوظة · يلزم تفعيل وسيلة الدفع للعملاء.'),
           'dynamic-provider-hint'));
       const actions=el('div','','dynamic-provider-actions');
       actions.append(button(tr('Edit connection','تعديل بيانات الربط'),()=>editor(profile),'button small'));
@@ -3057,8 +3066,12 @@ window.renderGithubConfirmation=function(root,status,refresh){
       card.append(verifyFeedback);
 
       if(profile.connection_mode==='api'){
-        card.append(el('p',tr('API credentials remain encrypted. Stripe TEST Checkout does not activate subscriptions.',
-          'تبقى مفاتيح API مشفرة. دفع Stripe التجريبي لا يفعّل الاشتراكات.'),'dynamic-provider-hint'));
+        card.append(el('p',tr('API credentials remain encrypted. TEST checkout never activates paid subscriptions.',
+          'مفاتيح API مشفرة، ودفع TEST لا يفعّل اشتراكات مدفوعة.'),'dynamic-provider-hint'));
+        if(profile.slug==='stripe'){
+          const endpoint=location.origin+'/api/billing/stripe/webhook';
+          card.append(el('p',tr('Stripe webhook destination: ','عنوان Stripe Webhook: ')+endpoint,'dynamic-provider-hint'));
+        }
         if(profile.slug==='stripe'&&profile.environment==='test'){
           stripeTestTools(card,actions);
         }
