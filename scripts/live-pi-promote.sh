@@ -63,6 +63,31 @@ assert env.get("GITHUB_CALLBACK_URL", "https://opencode-gateway.codes/api/github
 print("LIVE origin/port/database/credential configuration verified (secrets hidden)")
 PY
 
+# Back up the existing LIVE PostgreSQL database BEFORE any release files,
+# dependencies, or migrations are changed. Never include the dump in rsync.
+(
+  set -a
+  . "$APP/.env"
+  set +a
+  command -v pg_dump >/dev/null || {
+    echo "pg_dump unavailable; refusing to migrate LIVE without a backup" >&2
+    exit 5
+  }
+  backup_dir="$APP/backups"
+  install -d -m 700 "$backup_dir"
+  backup_path="$backup_dir/pre-live-$(date -u +%Y%m%dT%H%M%SZ)-${LIVE_PI_SOURCE_SHA:0:12}.dump"
+  pg_url="${DATABASE_URL/postgresql+psycopg:\/\//postgresql:\/\/}"
+  pg_dump --format=custom --file="$backup_path" "$pg_url"
+  [[ -s "$backup_path" ]] || {
+    echo "LIVE PostgreSQL backup is empty; refusing to deploy" >&2
+    exit 5
+  }
+  chmod 600 "$backup_path"
+  sha256sum "$backup_path" > "$backup_path.sha256"
+  chmod 600 "$backup_path.sha256"
+  echo "LIVE_PRE_DEPLOY_DATABASE_BACKUP_OK (private dump retained under $backup_dir)"
+)
+
 # Replace the entire legacy OpenCode source, not just changed files.
 # Preserve only production environment, databases, project/runtime state, and keys.
 rsync -a --delete \
