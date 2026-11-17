@@ -65,7 +65,10 @@ def public(db, provider, *, origin):
         "checkout_enabled": False,
         "payouts_enabled": False,
         "webhook_enabled": False,
-        "webhook_url_planned": origin.rstrip("/") + "/api/billing/webhooks/" + provider,
+        "webhook_url_planned": origin.rstrip("/") + (
+            "/api/billing/stripe/webhook" if provider == "stripe"
+            else "/api/billing/webhooks/" + provider
+        ),
         **visible,
         **secrets,
     }
