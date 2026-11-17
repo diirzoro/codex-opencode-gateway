@@ -18,6 +18,7 @@ on:
           - react_activate
           - java_activate
           - java_verify
+          - react_build_activate
 permissions:
   contents: read
 concurrency:
@@ -56,10 +57,16 @@ jobs:
             ssh-keyscan -p "$port" -H "$VPS_HOST" > "$HOME/.ssh/known_hosts"
           fi
           chmod 600 "$HOME/.ssh/known_hosts"
-          [[ "$OPERATION" == inspect || "$OPERATION" == prepare || "$OPERATION" == activate || "$OPERATION" == verify || "$OPERATION" == react_inspect || "$OPERATION" == audit || "$OPERATION" == audit_full || "$OPERATION" == react_activate || "$OPERATION" == java_activate || "$OPERATION" == java_verify ]]
+          [[ "$OPERATION" == inspect || "$OPERATION" == prepare || "$OPERATION" == activate || "$OPERATION" == verify || "$OPERATION" == react_inspect || "$OPERATION" == audit || "$OPERATION" == audit_full || "$OPERATION" == react_activate || "$OPERATION" == java_activate || "$OPERATION" == java_verify || "$OPERATION" == react_build_activate ]]
           ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             'mkdir -p /home/tahir/preview-activation'
           mkdir -p preview-wheels
+          mkdir -p preview-react-fixture
+          if [[ "$OPERATION" == react_build_activate ]]; then
+            node -e 'require("fs").writeFileSync("preview-react-fixture/package.json",JSON.stringify({name:"pi-preview-react-fixture",version:"1.0.0",private:true,scripts:{build:"vite build --base=./"},dependencies:{react:"^19.0.0","react-dom":"^19.0.0"},devDependencies:{vite:"^7.0.0"}}))'
+            mkdir -p /tmp/pi-preview-npm-home
+            (cd preview-react-fixture && env -i PATH="$PATH" HOME=/tmp/pi-preview-npm-home npm install --package-lock-only --ignore-scripts --include=dev --no-audit --no-fund --registry=https://registry.npmjs.org)
+          fi
           if [[ "$OPERATION" == prepare ]]; then
             python3 -m pip download --only-binary=:all: --python-version 312 \
               --platform manylinux_2_17_x86_64 --implementation cp --abi cp312 \
@@ -83,7 +90,7 @@ jobs:
             ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
               'chmod 644 /home/tahir/preview-activation/preview-java-runtime.tar.gz'
           fi
-          tar -czf /tmp/preview-activation.tgz scripts/preview-host-*.sh scripts/preview-react-inspect.py scripts/preview-runtime-audit.py dashboards.js deploy/apparmor-preview deploy/PreviewFetch.java backend/app/services/preview*.py preview-wheels
+          tar -czf /tmp/preview-activation.tgz scripts/preview-host-*.sh scripts/preview-react-inspect.py scripts/preview-runtime-audit.py dashboards.js deploy/apparmor-preview deploy/PreviewFetch.java backend/app/services/preview*.py preview-wheels preview-react-fixture
           scp -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             /tmp/preview-activation.tgz "$VPS_USER@$VPS_HOST:/home/tahir/preview-activation.tgz"
           ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
@@ -98,6 +105,7 @@ jobs:
           [[ "$OPERATION" != react_activate ]] || script=preview-host-react-activate.sh
           [[ "$OPERATION" != java_activate ]] || script=preview-host-java-activate.sh
           [[ "$OPERATION" != java_verify ]] || script=preview-host-java-activate.sh
+          [[ "$OPERATION" != react_build_activate ]] || script=preview-host-react-build-activate.sh
           printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
             -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
             "sudo -S -p '' bash /home/tahir/preview-activation/scripts/$script"

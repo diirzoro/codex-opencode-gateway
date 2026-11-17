@@ -134,6 +134,35 @@ class DockerProvisioner:
             raise PreviewProvisioningError("Unknown sandbox state")
         return state
 
+    def build_ready(self,container_id,job_id):
+        self._require_owned(container_id,job_id)
+        return self._call(('exec',container_id,'node','-e',
+            "process.stdout.write(require('fs').existsSync('/build/complete')?'ready':'building')"),timeout=10)=='ready'
+
+    def export_build(self,container_id,job_id):
+        """Stream a bounded tar from the sandbox; never buffer arbitrary cp output."""
+        import os,select,time
+        from .preview_react_build import MAX_ARTIFACT
+        self._require_owned(container_id,job_id)
+        process=subprocess.Popen((self.docker_binary,'cp',container_id+':/build/project/dist/.','-'),
+                                 stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+        result=bytearray();deadline=time.monotonic()+20
+        try:
+            while True:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise PreviewProvisioningError('Build artifact export timed out')
+                readable,_,_=select.select([process.stdout],[],[],min(1,remaining))
+                if not readable:continue
+                chunk=os.read(process.stdout.fileno(),65536)
+                if not chunk:break
+                result.extend(chunk)
+                if len(result)>MAX_ARTIFACT+1024*1024:raise PreviewProvisioningError('Build artifact exceeds quota')
+            if process.wait(timeout=2)!=0:raise PreviewProvisioningError('Build artifact export failed')
+            return bytes(result)
+        finally:
+            if process.poll() is None:process.kill();process.wait(timeout=3)
+            process.stdout.close()
+
     def _require_owned(self, container_id: str, job_id: str) -> None:
         if CONTAINER_ID.fullmatch(container_id) is None or JOB_ID.fullmatch(job_id) is None:
             raise PreviewProvisioningError("Invalid sandbox identity")
