@@ -105,6 +105,37 @@ def create_checkout(db, user, plan_id, origin):
         # A stable order ID is also the Stripe idempotency key. Pending/failed
         # Stripe requests may be retried without a second charge session.
         db.scalar(select(User).where(User.id == user.id).with_for_update())
+        previous = db.scalar(select(PaymentOrder).where(
+            PaymentOrder.user_id == user.id,
+            PaymentOrder.plan_id == plan.id,
+            PaymentOrder.provider_environment == "live",
+            PaymentOrder.status == "awaiting_payment",
+            PaymentOrder.provider_order_id.like("cs_live_%")).order_by(
+            PaymentOrder.created_at.desc()).with_for_update())
+        if previous:
+            # Reuse the same unfinished Stripe session to prevent accidentally
+            # opening multiple payable sessions for the same plan.
+            existing = _call(cfg["secret_key"], "GET",
+                             "checkout/sessions/" + previous.provider_order_id)
+            if (existing.get("id") == previous.provider_order_id and
+                existing.get("status") == "open" and
+                existing.get("amount_total") == previous.amount_cents and
+                previous.amount_cents == plan.price_cents):
+                url = existing.get("url", "")
+                parsed = urlsplit(url)
+                if parsed.scheme == "https" and parsed.hostname in _HOSTS:
+                    db.commit()
+                    return {"provider": "stripe", "environment": mode,
+                            "checkout_url": url, "session_id": previous.provider_order_id,
+                            "order_id": str(previous.id), "test_only": False}
+            if existing.get("status") == "complete" and existing.get("payment_status") == "paid":
+                raise HTTPException(409, "Stripe payment is awaiting signed webhook confirmation")
+            # An expired/unpaid provider session cannot later capture money.
+            if existing.get("status") == "expired":
+                previous.status = "failed"
+                db.flush()
+            else:
+                raise HTTPException(409, "Existing Stripe checkout needs reconciliation")
         order = db.scalar(select(PaymentOrder).where(
             PaymentOrder.user_id == user.id,
             PaymentOrder.plan_id == plan.id,
@@ -112,6 +143,10 @@ def create_checkout(db, user, plan_id, origin):
             PaymentOrder.status == "awaiting_payment",
             PaymentOrder.provider_order_id.is_(None)).order_by(
             PaymentOrder.created_at.desc()).with_for_update())
+        if order and (order.amount_cents != plan.price_cents or order.currency != plan.currency):
+            order.status = "cancelled"
+            db.flush()
+            order = None
         if order is None:
             order = PaymentOrder(user_id=user.id, plan_id=plan.id,
                                  method_id=None, plan_name=plan.name,
@@ -121,12 +156,6 @@ def create_checkout(db, user, plan_id, origin):
                                  payer_email=user.email, payer_name=user.username)
             db.add(order)
             db.flush()
-        else:
-            # Never reuse an order if plan pricing has since changed.
-            if order.amount_cents != plan.price_cents or order.currency != plan.currency:
-                order.status = "cancelled"
-                db.flush()
-                return create_checkout(db, user, plan_id, origin)
         db.commit()
     checkout_data = {
         "mode": "payment",
@@ -143,9 +172,18 @@ def create_checkout(db, user, plan_id, origin):
     }
     if mode == "test":
         checkout_data["metadata[diagnostic]"] = "true"
-    payload = _call(cfg["secret_key"], "POST", "checkout/sessions",
-                    data=checkout_data,
-                    idempotency_key=("gateway-stripe-" + str(order.id)) if order else None)
+    try:
+        payload = _call(cfg["secret_key"], "POST", "checkout/sessions",
+                        data=checkout_data,
+                        idempotency_key=("gateway-stripe-" + str(order.id)) if order else None)
+    except HTTPException as exc:
+        # A definitive Stripe 4xx rejection created no payable session.
+        # Keep ambiguous network/5xx outcomes pending for safe reconciliation.
+        if order is not None and exc.status_code == 422:
+            db.scalar(select(PaymentOrder).where(
+                PaymentOrder.id == order.id).with_for_update()).status = "failed"
+            db.commit()
+        raise
     sid, url = payload.get("id", ""), payload.get("url", "")
     target = urlsplit(url)
     if not _SESSION_RE.fullmatch(sid) or not sid.startswith("cs_" + mode + "_"):
