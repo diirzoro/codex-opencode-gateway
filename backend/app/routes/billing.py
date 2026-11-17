@@ -69,7 +69,11 @@ def subscription_payload(db, user) -> dict:
         "paid_entitlement": {"active": paid_active, "ends_at": paid_end,
                              "remaining_days": paid_remaining if paid_active else 0,
                              "plan_id": row.plan_id if paid_active else None},
-        "payment": {"available": bool(db.scalar(select(BillingMethod.id).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)).limit(1))), "message": "Choose checkout; activation requires verified payment" if db.scalar(select(BillingMethod.id).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)).limit(1)) else PAYMENT_MESSAGE},
+        "payment": {"available": bool(
+            db.scalar(select(BillingMethod.id).where(
+                BillingMethod.user_id.is_(None), BillingMethod.enabled.is_(True)).limit(1))
+            or __import__("app.services.stripe_checkout", fromlist=["status"]).status(db)["checkout_available"]
+        ), "message": "Choose checkout; activation requires verified payment"},
         "access": access,
     }
 
