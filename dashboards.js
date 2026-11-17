@@ -2563,6 +2563,11 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           window.location.assign(url.href);
         }catch(error){showError(error);launch.disabled=false;}
       });
+      if(!method.available){
+        launch.disabled=true;
+        body.append(text('p','Stripe is listed but the selected environment is not ready. Check API key, webhook secret and provider suspension in administration.',
+          'Stripe ظاهر، لكن البيئة المختارة غير جاهزة. راجع مفتاح API وسر Webhook وحالة تعليق الوسيلة في الإدارة.','checkout-lead'));
+      }
       body.append(launch);
     };
     const renderManualForm=method=>{
