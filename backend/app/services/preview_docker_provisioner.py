@@ -86,7 +86,7 @@ class DockerProvisioner:
         import base64
         from urllib.parse import urlsplit
         self._require_owned(container_id, job_id)
-        if family not in ("node", "python", "php") or not isinstance(path, str):
+        if family not in ("node", "python", "php", "java") or not isinstance(path, str):
             raise PreviewProvisioningError("Unsupported preview runtime")
         parsed = urlsplit(path)
         if (not path.startswith("/") or path.startswith("//") or
@@ -110,8 +110,13 @@ class DockerProvisioner:
         )
         if family == "php":
             raise PreviewProvisioningError("PHP relay not yet available")
-        binary = "node" if family == "node" else "python"
-        output = self._call(("exec", container_id, binary, "-e" if family == "node" else "-c", script, path), timeout=12)
+        if family == 'java':
+            command = ('java','-Xmx32m','-XX:ActiveProcessorCount=1','-XX:+UseSerialGC',
+                       '-cp','/opt/preview','PreviewFetch',path)
+        else:
+            binary = "node" if family == "node" else "python"
+            command = (binary,"-e" if family == "node" else "-c",script,path)
+        output = self._call(("exec", container_id, *command), timeout=12)
         try:
             result = __import__("json").loads(output)
             if not isinstance(result, dict) or not 200 <= result.get("status", 0) <= 599:

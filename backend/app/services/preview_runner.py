@@ -58,6 +58,9 @@ def launch_options(workspace):
     detected = preview.detect(workspace)
     framework = detected['framework']
     profile = PROFILES.get(framework)
+    if framework == 'java' and not workspaces.safe_path(workspace, 'Main.java').is_file():
+        # Maven/Gradle projects require their own dependency/build stage.
+        profile = None
     if framework in {'react', 'vue', 'svelte'}:
         # These libraries alone do not establish a server/start command.
         profile = None
@@ -153,7 +156,7 @@ def start(workspace, *, fresh=False):
             spool.seek(0)
             archive = base64.b64encode(spool.read()).decode("ascii")
         client.request("prepare", {"job_id": _job_id(workspace),
-                                   "framework": framework, "prebuilt_static": info.get('prebuilt_static',False), "entrypoint": info["argv"][-1] if framework == "node" else ("main.py" if "main:app" in info["argv"] else "app.py" if "app:app" in info["argv"] else "index.php" if framework == "php" else None), "archive": archive})
+                                   "framework": framework, "prebuilt_static": info.get('prebuilt_static',False), "entrypoint": info["argv"][-1] if framework in {"node","java"} else ("main.py" if "main:app" in info["argv"] else "app.py" if "app:app" in info["argv"] else "index.php" if framework == "php" else None), "archive": archive})
         response = client.request("start", {"job_id": _job_id(workspace)})
         # No iframe URL is provided until dedicated browser routing exists.
         if response.get("state") != "running":
