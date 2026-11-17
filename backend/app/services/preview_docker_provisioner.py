@@ -112,6 +112,7 @@ class DockerProvisioner:
             raise PreviewProvisioningError("PHP relay not yet available")
         if family == 'java':
             command = ('java','-Xmx32m','-XX:ActiveProcessorCount=1','-XX:+UseSerialGC',
+                       '-Xlog:all=warning:stderr',
                        '-cp','/opt/preview','PreviewFetch',path)
         else:
             binary = "node" if family == "node" else "python"
