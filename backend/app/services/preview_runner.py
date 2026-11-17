@@ -75,7 +75,11 @@ def launch_options(workspace):
                 break
     if framework == 'php' and workspaces.safe_path(workspace, 'index.php').is_file():
         profile = LaunchProfile('php', ('php', '-S', '0.0.0.0:8080'))
-    return {'framework': framework, 'profile_available': profile is not None,
+    prebuilt_static=False
+    if framework in {'vite','react'} and workspaces.safe_path(workspace,'dist/index.html').is_file():
+        profile=LaunchProfile('static',())
+        prebuilt_static=True
+    return {'framework': framework, 'prebuilt_static':prebuilt_static, 'profile_available': profile is not None,
             'runtime_family': profile.family if profile else None,
             'argv': list(profile.argv) if profile else [],
             'internal_port': profile.internal_port if profile else None,
@@ -134,7 +138,7 @@ def start(workspace, *, fresh=False):
         try:
             existing = client.request("status", {"job_id": _job_id(workspace), "user_activity": True})
             if existing.get("state") == "running":
-                if not fresh:
+                if not fresh and not info.get("prebuilt_static"):
                     return {"state": "running",
                             "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/",
                             "execution_enabled": True, "reused": True}
@@ -149,12 +153,12 @@ def start(workspace, *, fresh=False):
             spool.seek(0)
             archive = base64.b64encode(spool.read()).decode("ascii")
         client.request("prepare", {"job_id": _job_id(workspace),
-                                   "framework": framework, "entrypoint": info["argv"][-1] if framework == "node" else ("main.py" if "main:app" in info["argv"] else "app.py" if "app:app" in info["argv"] else "index.php" if framework == "php" else None), "archive": archive})
+                                   "framework": framework, "prebuilt_static": info.get('prebuilt_static',False), "entrypoint": info["argv"][-1] if framework == "node" else ("main.py" if "main:app" in info["argv"] else "app.py" if "app:app" in info["argv"] else "index.php" if framework == "php" else None), "archive": archive})
         response = client.request("start", {"job_id": _job_id(workspace)})
         # No iframe URL is provided until dedicated browser routing exists.
         if response.get("state") != "running":
             raise HTTPException(503, "Preview container did not start")
-        return {**response, "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/", "execution_enabled": True}
+        return {**response, "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/", "execution_enabled": response.get("execution_enabled",True)}
     except PreviewWorkerUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -181,7 +185,7 @@ def fetch_asset(workspace, path: str, *, relay_prefix: str | None = None, browse
             payload['browser_lease'] = browser_lease
         result = _worker().request("fetch", payload)
         body = base64.b64decode(result["body"], validate=True)
-        if len(body) > 262144:
+        if len(body) > (2*1024*1024 if result.get('mode')=='prebuilt_static' else 262144):
             raise ValueError("Oversized preview response")
         status_code = int(result["status"])
         if not 200 <= status_code <= 599:
@@ -189,8 +193,13 @@ def fetch_asset(workspace, path: str, *, relay_prefix: str | None = None, browse
         media_type = str(result.get("type") or "application/octet-stream").split(";")[0]
         if media_type not in ("text/html", "text/css", "application/javascript",
                               "text/javascript", "application/json", "image/png",
-                              "image/jpeg", "image/svg+xml", "text/plain"):
+                              "image/jpeg", "image/svg+xml", "image/gif", "image/webp", "image/x-icon",
+                              "font/woff", "font/woff2", "font/ttf", "font/otf", "application/manifest+json", "text/plain"):
             media_type = "application/octet-stream"
+        if result.get('mode')=='prebuilt_static' and status_code<400:
+            from .preview_static_artifact import rewrite_references
+            prefix=relay_prefix or "/api/workspaces/"+_job_id(workspace)+"/preview/live/"
+            body=rewrite_references(body,media_type,prefix)
         if media_type == "text/html" and status_code < 400:
             from html import escape
             import re
@@ -205,10 +214,17 @@ def fetch_asset(workspace, path: str, *, relay_prefix: str | None = None, browse
             # Rewrite customer root-relative references before adding our base.
             # Otherwise the injected href is prefixed again and relative assets
             # and nested-page links resolve to a duplicated Gateway API path.
-            page = re.sub(r"""((?:src|href)\s*=\s*["'])/(?!/)""", lambda m: m.group(1) + prefix, page)
+            references=0
+            def rebase_attribute(match):
+                nonlocal references
+                references+=1
+                if references>512:raise ValueError('Preview reference limit exceeded')
+                return match.group(1)+prefix
+            page = re.sub(r"""((?:src|href)\s*=\s*["'])/(?!/)""", rebase_attribute, page)
             head = re.search(r"<head\b[^>]*>", page, re.IGNORECASE)
             page = page[:head.end()] + base + page[head.end():] if head else base + page
             body = page.encode("utf-8")
+            if len(body)>2*1024*1024:raise ValueError('Preview response exceeds asset limit')
         return Response(content=body, status_code=status_code, media_type=media_type,
                         headers={"Cache-Control": "no-store",
                                  "Content-Security-Policy": "sandbox allow-scripts"})

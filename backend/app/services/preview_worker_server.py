@@ -30,6 +30,7 @@ from .preview_diagnostics import MESSAGES
 from .preview_host_probe import read_host_telemetry
 from .preview_host_gate import permit_preview
 from .preview_scheduling import DYNAMIC_IDLE_TIMEOUT_SECONDS
+from . import preview_static_artifact
 
 MAX_BODY = 72 * 1024 * 1024
 JOB_NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}' + chr(36))
@@ -37,6 +38,9 @@ LOCK = RLock()
 JOBS = {}
 LOGGER = logging.getLogger('preview.worker')
 MAX_RUNTIME_SECONDS = 900
+STATIC_CACHE_TTL_SECONDS = 900
+JOB_ROOT = Path("/var/lib/preview-worker/jobs")
+STATIC_MARKER = ".prebuilt-static"
 
 
 def register_local_job(job_id: str, image: str, argv: tuple[str, ...]):
@@ -88,7 +92,22 @@ class WorkerServer(ThreadingHTTPServer):
         for job_id, cid in self.provisioner.managed_containers():
             if cid not in known:
                 self.provisioner.stop(cid, job_id)
+        # Restart loses in-memory static leases, so their snapshots are stale.
+        if JOB_ROOT.is_dir() and not JOB_ROOT.is_symlink():
+            for root in JOB_ROOT.iterdir():
+                marker=root/STATIC_MARKER
+                if (JOB_NAME.fullmatch(root.name) and root.name not in self.jobs
+                    and root.is_dir() and not root.is_symlink()
+                    and marker.is_file() and not marker.is_symlink()):
+                    shutil.rmtree(root)
         self.reconciled = True
+
+    def cleanup_static_snapshot(self, job_id):
+        if JOB_NAME.fullmatch(job_id) is None:
+            raise ValueError('Invalid static snapshot identity')
+        root=JOB_ROOT/job_id
+        if root.is_symlink():raise ValueError('Unsafe static snapshot directory')
+        if root.exists():shutil.rmtree(root)
 
     def stop_job(self, job_id, job, reason):
         job['state'] = 'stopping'
@@ -97,6 +116,8 @@ class WorkerServer(ThreadingHTTPServer):
         if cid:
             # Keep the allocation occupied until Docker confirms cleanup.
             self.provisioner.stop(cid, job_id)
+        if job.get('artifact_root'):
+            self.cleanup_static_snapshot(job_id)
         job.update(state='stopped', container_id=None, stop_reason=reason)
 
     def reap_expired(self):
@@ -104,6 +125,11 @@ class WorkerServer(ThreadingHTTPServer):
             now = self.clock()
             for job_id, job in self.jobs.items():
                 if not job.get('container_id'):
+                    if job.get('artifact_root') and job.get('state') in {'running','stopping'}:
+                        started=job.get('started_monotonic')
+                        if job.get('state')=='stopping' or started is None or now-started>=STATIC_CACHE_TTL_SECONDS:
+                            try:self.stop_job(job_id,job,job.get('stop_reason') or 'artifact_cache_expired')
+                            except (OSError,ValueError):LOGGER.warning('Static snapshot cleanup pending')
                     continue
                 started = job.get('started_monotonic')
                 active = job.get('activity_monotonic')
@@ -200,9 +226,11 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         self.reply(409, {"error": "job_already_running"})
                         return
                     self.server.jobs.pop(job_id, None)
-                    shutil.rmtree(Path("/var/lib/preview-worker/jobs") / job_id, ignore_errors=True)
+                    shutil.rmtree(JOB_ROOT / job_id, ignore_errors=True)
                 framework = request.get("framework")
                 profile = PROFILES.get(framework) if isinstance(framework, str) else None
+                if request.get('prebuilt_static') is True and framework in {'vite','react'}:
+                    profile=LaunchProfile('static',())
                 selected = request.get("entrypoint")
                 if framework == "python" and selected in ("main.py", "app.py"):
                     profile = LaunchProfile("python", ("python", "-m", "uvicorn", selected[:-3] + ":app", "--host", "0.0.0.0", "--port", "8080"))
@@ -218,7 +246,10 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     snapshot = base64.b64decode(encoded, validate=True)
                     if len(snapshot) > 50 * 1024 * 1024:
                         raise ValueError("oversized snapshot")
-                    root = Path("/var/lib/preview-worker/jobs") / job_id
+                    if profile.family=='static' and shutil.disk_usage(JOB_ROOT).free < 5120*1024*1024+len(snapshot):
+                        self.reply(503,{'error':'preview_disk_headroom_insufficient'})
+                        return
+                    root = JOB_ROOT / job_id
                     if root.exists():
                         # The Worker process may have restarted while a
                         # previous sandbox snapshot remained on disk.
@@ -253,11 +284,17 @@ class WorkerHandler(BaseHTTPRequestHandler):
                             elif path.is_file():
                                 path.chmod(0o644)
                         source.chmod(0o755)
-                        image = os.environ.get('PREVIEW_IMAGE_' + profile.family.upper(), '')
-                        if not image:
-                            raise ValueError('Worker runtime image is not configured')
-                        self.server.jobs[job_id] = {"spec": ContainerSpec(image, profile.argv, str(source)),
-                                        "container_id": None, "state": "ready", "family": profile.family}
+                        if profile.family=='static':
+                            (root/STATIC_MARKER).write_text('prebuilt-static-v1\n')
+                            self.server.jobs[job_id]={'spec':None,'container_id':None,'state':'ready',
+                                'family':'static','artifact_root':preview_static_artifact.artifact_root(source),
+                                'artifact_lease':uuid.uuid4().hex+uuid.uuid4().hex}
+                        else:
+                            image = os.environ.get('PREVIEW_IMAGE_' + profile.family.upper(), '')
+                            if not image:
+                                raise ValueError('Worker runtime image is not configured')
+                            self.server.jobs[job_id] = {"spec": ContainerSpec(image, profile.argv, str(source)),
+                                            "container_id": None, "state": "ready", "family": profile.family}
                     except Exception:
                         shutil.rmtree(root)
                         raise
@@ -273,6 +310,12 @@ class WorkerHandler(BaseHTTPRequestHandler):
                 if operation == "start":
                     if job["state"] != "ready":
                         self.reply(409, {"error": "job_already_started"})
+                        return
+                    if job.get('artifact_root'):
+                        job['state']='running'
+                        job['started_monotonic']=self.server.clock()
+                        self.reply(200,{'state':'running','job_id':job_id,'url':None,
+                                        'mode':'prebuilt_static','execution_enabled':False})
                         return
                     # Source archives deliberately exclude node_modules. A
                     # copied snapshot is not an installed/built application.
@@ -336,19 +379,21 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     cid = job["container_id"]
                     state = self.server.provisioner.status(cid, job_id) if cid else job["state"]
                     result = {"state": state, "job_id": job_id, "url": None, "stop_reason": job.get("stop_reason"),
-                              "browser_lease": hashlib.sha256(cid.encode()).hexdigest() if cid and state == 'running' else None}
+                              "mode": 'prebuilt_static' if job.get('artifact_root') else 'dynamic',
+                              "browser_lease": (job.get('artifact_lease') if job.get('artifact_root') else hashlib.sha256(cid.encode()).hexdigest() if cid else None) if state=='running' else None}
                 elif operation == "fetch":
                     cid = job["container_id"]
-                    if not cid or job["state"] != "running":
+                    if (not cid and not job.get('artifact_root')) or job["state"] != "running":
                         self.reply(409, {"error": "not_running"})
                         return
                     expected = request.get('browser_lease')
                     if expected is not None and (not isinstance(expected,str) or
-                        not hmac.compare_digest(expected,hashlib.sha256(cid.encode()).hexdigest())):
+                        not hmac.compare_digest(expected,job['artifact_lease'] if job.get('artifact_root') else hashlib.sha256(cid.encode()).hexdigest())):
                         self.reply(409, {'error':'stale_preview_lease'})
                         return
-                    result = self.server.provisioner.fetch(
-                        cid, job_id, job["family"], request.get("path", "/"))
+                    result = (preview_static_artifact.fetch(job['artifact_root'],request.get('path','/'))
+                              if job.get('artifact_root') else self.server.provisioner.fetch(
+                                  cid, job_id, job["family"], request.get("path", "/")))
                 elif operation == "logs":
                     cid = job["container_id"]
                     result = {"logs": self.server.provisioner.logs(cid, job_id) if cid else job.get("failure_logs", "")}

@@ -38,7 +38,7 @@ class PreviewWorkerClient:
         # A snapshot transfer and an application readiness check take longer
         # than a status ping. The previous 8s global timeout hid both failures.
         timeout = {"prepare": 60.0, "start": 75.0, "fetch": 20.0}.get(operation, self.timeout)
-        limit = 524288 if operation == "fetch" else 65536
+        limit = 3*1024*1024 if operation == "fetch" else 65536
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 if response.status != 200:
@@ -61,7 +61,7 @@ class PreviewWorkerClient:
                 "worker_operation_failed", "application_not_ready",
                 "unsafe_job_directory", "stale_job_in_use", "stale_preview_lease",
                 "worker_internal_error", "preview_capacity_reached",
-                "preview_host_headroom_insufficient", *MESSAGES,
+                "preview_host_headroom_insufficient", "preview_disk_headroom_insufficient", *MESSAGES,
             }
             reference = None
             try:
