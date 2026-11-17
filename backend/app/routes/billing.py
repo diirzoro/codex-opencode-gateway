@@ -19,6 +19,7 @@ from ..services import paypal
 LEGACY_PLAN_CODES = frozenset(('monthly', 'two_months', 'three_months'))
 from ..services.location_validation import validate_locations
 from ..services.billing_methods import method_payload
+from ..services.stripe_checkout import status as stripe_checkout_status
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 PAYMENT_MESSAGE = "Payment integration not available yet"
@@ -72,7 +73,7 @@ def subscription_payload(db, user) -> dict:
         "payment": {"available": bool(
             db.scalar(select(BillingMethod.id).where(
                 BillingMethod.user_id.is_(None), BillingMethod.enabled.is_(True)).limit(1))
-            or __import__("app.services.stripe_checkout", fromlist=["status"]).status(db)["checkout_available"]
+            or stripe_checkout_status(db)["checkout_available"]
         ), "message": "Choose checkout; activation requires verified payment"},
         "access": access,
     }
