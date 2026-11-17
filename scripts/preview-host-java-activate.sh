@@ -25,6 +25,7 @@ from pathlib import Path
 from datetime import datetime,timezone
 import base64,io,json,os,shutil,subprocess,tarfile,time,uuid
 from urllib.request import Request,urlopen
+from urllib.error import HTTPError
 stage=Path('/home/tahir/preview-activation')
 app=Path('/home/tahir/opencode-gateway')
 worker=Path('/opt/opencode-preview-test')
@@ -44,7 +45,16 @@ job='java-acceptance-'+uuid.uuid4().hex[:12]
 values={row.split('=',1)[0]:row.split('=',1)[1].strip().strip('"').strip("'") for row in env.read_text().splitlines() if '=' in row and not row.startswith('#')}
 def call(op,**extra):
  req=Request('http://127.0.0.1:8791/v1/'+op,data=json.dumps({'job_id':job,**extra}).encode(),headers={'Authorization':'Bearer '+values['PREVIEW_WORKER_TOKEN']})
- with urlopen(req,timeout=75) as response:return json.load(response)
+ try:
+  with urlopen(req,timeout=75) as response:return json.load(response)
+ except HTTPError as exc:
+  try:diagnostic=json.loads(exc.read(4096))
+  except ValueError:diagnostic={}
+  print('Java fixture operation failed: '+op+' '+str(diagnostic.get('error','unknown')),flush=True)
+  if op=='start':
+   try:print('Generated fixture runtime logs: '+call('logs').get('logs','')[-3000:],flush=True)
+   except Exception:pass
+  raise
 try:
  subprocess.run(['systemctl','stop','opencode-preview-worker-test.service'],check=True)
  for source,dest,old,existed in changes:shutil.copy2(source,dest)
