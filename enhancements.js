@@ -3338,7 +3338,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
       'مسودة إعدادات فقط: تُحفظ المفاتيح مشفّرة ولا تُعرض ثانيةً، ولا يُفعّل هذا النموذج التحصيل الآلي.'),'dynamic-provider-hint');
     const feedback=el('p','','dynamic-provider-feedback');
     const controls=el('div','','dynamic-provider-actions');
-    const save=el('button',tr('Save encrypted settings','حفظ الإعدادات المشفّرة'),'button');
+    const save=el('button',profile?tr('Save changes','حفظ التغييرات'):tr('Save encrypted settings','حفظ الإعدادات المشفّرة'),'button');
     save.type='submit';
     controls.append(save,button(tr('Cancel','إلغاء'),()=>area.close(),'button ghost small'));
     form.append(note,controls,feedback);area.append(form);
