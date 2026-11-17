@@ -52,6 +52,7 @@ def status(db):
     return {
         "provider": "stripe", "environment": mode,
         "enabled": bool(row and not row.get("admin_suspended")),
+        "configured": bool(row),
         "checkout_available": ready,
         "test_checkout_available": ready and mode == "test",
         "live_checkout_available": ready and mode == "live",
@@ -199,11 +200,15 @@ def webhook(db, raw, signature):
         raise HTTPException(400, "Invalid Stripe webhook payload") from None
     if not isinstance(event, dict):
         raise HTTPException(400, "Invalid Stripe webhook event")
+    if event.get("livemode") is not (matched_mode == "live"):
+        raise HTTPException(400, "Stripe event environment mismatch")
     if event.get("type") != "checkout.session.completed":
         return {"received": True}
     checkout = (event.get("data") or {}).get("object") or {}
     if checkout.get("object") != "checkout.session" or checkout.get("payment_status") != "paid":
         return {"received": True}
+    if checkout.get("livemode") is not (matched_mode == "live"):
+        raise HTTPException(400, "Stripe session environment mismatch")
     metadata = checkout.get("metadata") or {}
     sid = str(checkout.get("id") or "")
     if not _SESSION_RE.fullmatch(sid) or not sid.startswith("cs_" + matched_mode + "_"):
