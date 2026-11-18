@@ -247,11 +247,6 @@ def save_profile(db, actor_id, data, *, create):
         "verified_at": verification["verified_at"] if verification else None,
         "account_id": verification["account_id"] if verification else None,
     }
-    if not create:
-        # Updating a merchant/bank profile must immediately disable any
-        # previously published receiving method until an admin republishes.
-        from . import payment_profile_publications
-        payment_profile_publications.disable_on_edit(db,data.slug)
     if create:
         db.execute(text(
             "INSERT INTO payment_provider_profiles "
@@ -266,6 +261,11 @@ def save_profile(db, actor_id, data, *, create):
             "verification_fingerprint=:fingerprint,verified_at=:verified_at,verified_account_id=:account_id "
             "WHERE slug=:slug"
         ), params)
+    if not create:
+        from . import payment_profile_publications
+        if payment_profile_publications.sync_published_profile_on_edit(
+                db, data.slug, actor_id):
+            return _public(_one(db, data.slug))
     db.commit()
     return _public(_one(db, data.slug))
 
