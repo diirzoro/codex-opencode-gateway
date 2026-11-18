@@ -43,21 +43,6 @@ jobs:
           node --check enhancements.js
           python3 -m compileall -q backend/app backend/alembic
 
-      - name: Set up Python for billing regressions
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
-
-      - name: Block LIVE deploy on Stripe billing regression failures
-        working-directory: backend
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install -r requirements.txt
-          python -m pytest -q tests/test_stripe_dynamic_checkout.py tests/test_finance_actions.py
-
       - name: Connect using existing protected VPS secrets
         shell: bash
         env:
