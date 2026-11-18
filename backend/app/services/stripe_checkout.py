@@ -169,11 +169,12 @@ def create_checkout(db, user, plan_id, origin):
         "metadata[user_id]": str(user.id),
         "metadata[plan_id]": str(plan.id),
         "metadata[order_id]": str(order.id) if order else "",
+        # Keep the existing direct Checkout payment flow in both environments.
+        # Otherwise Stripe may select Managed Payments and reject LIVE sessions.
+        "managed_payments[enabled]": "false",
     }
     if mode == "test":
         checkout_data["metadata[diagnostic]"] = "true"
-        # Preserve the original Stripe TEST diagnostic configuration.
-        checkout_data["managed_payments[enabled]"] = "false"
     try:
         payload = _call(cfg["secret_key"], "POST", "checkout/sessions",
                         data=checkout_data,
