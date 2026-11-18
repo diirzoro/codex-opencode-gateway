@@ -2417,7 +2417,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       row.append(textElement('strong',order.plan_name+' · '+order.currency+' '+(order.amount_cents/100).toFixed(2)),textElement('span',(order.email?order.email+' · ':'')+(statuses[order.status]||tr('Payment being checked','جارٍ التحقق من الدفع'))));
       if(order.created_at)row.append(textElement('small',tr('Requested: ','تاريخ الطلب: ')+new Date(order.created_at).toLocaleString(lang==='ar'?'ar-u-nu-latn':'en')));
       if(order.paid_at)row.append(textElement('small',tr('Accepted: ','تاريخ القبول: ')+new Date(order.paid_at).toLocaleString(lang==='ar'?'ar-u-nu-latn':'en')));
-      if(order.payment_reference)row.append(textElement('small',order.payment_reference));
+      // Keep full Stripe identifiers in payment records/admin, not customer history.
+      // Manual bank or wallet references continue to display unchanged.
+      if(order.payment_reference){
+        const isStripeReference=/^(?:cs_(?:live|test)_|pi_|ch_)/.test(String(order.payment_reference));
+        row.append(textElement('small',isStripeReference
+          ?tr('Payment method: Stripe','وسيلة الدفع: Stripe')
+          :order.payment_reference));
+      }
       if(order.sender_name)row.append(textElement('small',tr('Sender: ','المرسل: ')+order.sender_name));
       if(order.sender_email)row.append(textElement('small',order.sender_email));
       if(order.sender_bank)row.append(textElement('small',tr('From bank: ','البنك المرسل: ')+order.sender_bank));
