@@ -70,6 +70,7 @@ def test_live_checkout_uses_saved_mode_and_server_amount(db, monkeypatch):
     order = session.scalar(select(PaymentOrder).where(PaymentOrder.user_id == user.id))
     assert called["key"].startswith("rk_live_")
     assert called["data"]["line_items[0][price_data][unit_amount]"] == str(plan.price_cents)
+    assert called["data"]["managed_payments[enabled]"] == "false"
     assert called["idempotency_key"] == "gateway-stripe-" + str(order.id)
     assert result["environment"] == "live" and order.status == "awaiting_payment"
     assert not session.scalar(select(Subscription).where(Subscription.user_id == user.id))
