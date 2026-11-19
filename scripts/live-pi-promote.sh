@@ -297,8 +297,18 @@ if [[ "$pi_update_needed" == 1 ]]; then
   pi_restart_attempted=1
   sudo_operator /usr/bin/systemctl restart pi-central.service
   sudo_operator /usr/bin/systemctl is-active --quiet pi-central.service
-  curl -fsS --max-time 5 --retry 10 --retry-delay 1 --retry-connrefused \
-    --unix-socket "$PI_SOCKET" http://localhost/health >/dev/null
+  # A missing Unix socket during startup is ENOENT, which curl's TCP
+  # --retry-connrefused does not retry. Allow the existing service to bind it.
+  pi_ready=0
+  for attempt in {1..15}; do
+    if curl -fsS --max-time 3 --unix-socket "$PI_SOCKET" \
+      http://localhost/health >/dev/null 2>&1; then
+      pi_ready=1
+      break
+    fi
+    sleep 1
+  done
+  [[ "$pi_ready" == 1 ]] || { echo "Pi did not finish startup; restoring its previous source" >&2; exit 9; }
 fi
 cmp -s "$pi_file" "$RELEASE/integration/pi-central.mjs" || {
   echo "The shared Pi runtime does not match the deployed release" >&2
