@@ -7,14 +7,173 @@ umask 077
 # Explicit one-time operator action. Normal deployments never activate or
 # change containment settings. Reuse existing units/config; no new service.
 if [[ "${1:-}" == --activate-client-isolation ]]; then
-  echo "The old shared LIVE/TEST activation is permanently disabled. Use the dedicated LIVE Pi service." >&2
-  exit 2
+  [[ $(id -u) -eq 0 ]] || { echo 'Run this activation with sudo'; exit 2; }
+  /usr/bin/python3 - <<'PY_ACTIVATE'
+import hashlib,json,os,re,secrets,shutil,stat,subprocess,tempfile,time
+from pathlib import Path
+from urllib.request import Request,urlopen
+
+def run(*args):
+    return subprocess.check_output(args,text=True,stderr=subprocess.PIPE).strip()
+def require(condition,message):
+    if not condition:raise SystemExit(message)
+def env(path):
+    values={}
+    for line in path.read_text().splitlines():
+        if '=' in line and not line.lstrip().startswith('#'):
+            key,value=line.split('=',1)
+            require(key.strip() not in values,'Duplicate setting in '+str(path))
+            values[key.strip()]=value.strip().strip('"').strip("'")
+    return values
+def replace_env(text,changes):
+    out=[];seen=set()
+    for line in text.splitlines(keepends=True):
+        key=line.split('=',1)[0].strip() if '=' in line and not line.lstrip().startswith('#') else ''
+        if key in changes:out.append(key+'='+changes[key]+'\n');seen.add(key)
+        else:out.append(line)
+    for key,value in changes.items():
+        if key not in seen:
+            if out and not out[-1].endswith('\n'):out.append('\n')
+            out.append(key+'='+value+'\n')
+    return ''.join(out)
+def atomic(path,data,mode=None):
+    previous=path.stat();fd,tmp=tempfile.mkstemp(prefix='.pi-activate-',dir=path.parent)
+    try:
+        with os.fdopen(fd,'wb') as output:output.write(data);output.flush();os.fsync(output.fileno())
+        os.chmod(tmp,mode if mode is not None else stat.S_IMODE(previous.st_mode))
+        os.chown(tmp,previous.st_uid,previous.st_gid);os.replace(tmp,path)
+    finally:
+        if os.path.exists(tmp):os.unlink(tmp)
+
+live=Path('/home/tahir/opencode-gateway');test=Path('/home/tahir/opencode-gateway-test')
+require(int(run('systemctl','--version').split()[1])>=254,'systemd 254 or newer is required')
+units=['pi-central.service','opencode-gateway.service','opencode-gateway-test.service']
+for unit in units:require(run('systemctl','is-active',unit)=='active',unit+' is not active; no settings changed')
+for app,origin in [(live,'https://opencode-gateway.codes'),(test,'https://test.opencode-gateway.codes')]:
+    require((app/'.env').is_file() and not (app/'.env').is_symlink(),'Unsafe Gateway environment')
+    require(env(app/'.env').get('PUBLIC_BASE_URL')==origin,'Unexpected Gateway environment identity')
+# Pi is shared: an old TEST Git/API path could bypass LIVE isolation. This
+# checks source prerequisites only; it does not repeat the passed bwrap tests.
+security_files=['backend/app/routes/auth.py','backend/app/routes/management.py',
+ 'backend/app/routes/workspaces.py','backend/app/routes/github.py',
+ 'backend/app/services/workspaces.py','backend/app/services/preview.py',
+ 'backend/app/services/attachment_reader.py','app.js','native-session-client.js']
+different=[name for name in security_files if not (test/name).is_file() or
+           hashlib.sha256((live/name).read_bytes()).digest()!=hashlib.sha256((test/name).read_bytes()).digest()]
+require(not different,'TEST security source is not synchronized; nothing changed. Update TEST to the same security release first: '+', '.join(different))
+pid=int(run('systemctl','show','pi-central.service','-p','MainPID','--value'))
+args=[part.decode() for part in (Path('/proc')/str(pid)/'cmdline').read_bytes().split(b'\0') if part]
+sources=[Path(arg) for arg in args if Path(arg).name=='pi-central.mjs']
+require(len(sources)==1,'Cannot identify the running Pi source')
+source=sources[0]
+if not source.is_absolute():source=(Path('/proc')/str(pid)/'cwd').resolve()/source
+require(source.read_bytes()==(live/'integration/pi-central.mjs').read_bytes(),'Running Pi source does not match the deployed release')
+helper=Path('/usr/local/libexec/pi-project-bwrap')
+require(helper.is_file() and not helper.is_symlink() and helper.stat().st_uid==0 and
+        not helper.stat().st_mode&0o6022 and helper.read_bytes()==Path('/usr/bin/bwrap').read_bytes(),
+        'The previously approved bwrap helper is missing or changed')
+require('pi-project-bwrap (unconfined)' in Path('/sys/kernel/security/apparmor/profiles').read_text(),
+        'The previously approved AppArmor userns profile is not loaded')
+
+paths={units[0]:Path('/etc/systemd/system/pi-central.service.d/99-security-containment.conf')}
+for unit in units[1:]:paths[unit]=Path(run('systemctl','show',unit,'-p','FragmentPath','--value'))
+for path in paths.values():
+    require(str(path).startswith('/etc/systemd/system/') and path.is_file() and not path.is_symlink() and
+            path.stat().st_uid==0 and not path.stat().st_mode&0o022,'Unsafe existing systemd configuration: '+str(path))
+roots=[];identities={}
+for unit in units:
+    user=run('systemctl','show',unit,'-p','User','--value')
+    require(user=='tahir','Unexpected service user; nothing changed')
+    group=run('systemctl','show',unit,'-p','Group','--value') or user
+    import pwd,grp
+    identities[unit]=(pwd.getpwnam(user).pw_uid,grp.getgrnam(group).gr_gid)
+    control=run('systemctl','show',unit,'-p','ControlGroup','--value')
+    require(re.fullmatch(r'/system\.slice/[a-zA-Z0-9_.@-]+',control),'Unexpected cgroup layout')
+    roots.append('/sys/fs/cgroup'+control+'/projects')
+
+live_env=env(live/'.env');test_env=env(test/'.env')
+tokens=[live_env.get('PI_GATEWAY_INTERNAL_TOKEN',''),test_env.get('PI_GATEWAY_INTERNAL_TOKEN','')]
+for i,value in enumerate(tokens):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{32,256}',value):tokens[i]=secrets.token_urlsafe(48)
+if tokens[0]==tokens[1]:tokens[1]=secrets.token_urlsafe(48)
+workspace_roots=[live_env.get('WORKSPACE_ROOT','/var/lib/opencode-workspaces'),test_env.get('WORKSPACE_ROOT','/var/lib/opencode-workspaces-test')]
+require(workspace_roots==['/var/lib/opencode-workspaces','/var/lib/opencode-workspaces-test'],'Unexpected workspace roots; files preserved')
+changes={}
+for i,app in enumerate([live,test]):
+    p=app/'.env';changes[p]=replace_env(p.read_text(),{'PI_PROJECT_SANDBOX':'1',
+       'PI_GATEWAY_INTERNAL_TOKEN':tokens[i],'PI_SANDBOX_CGROUP_ROOT':roots[i+1]}).encode()
+for i,unit in enumerate(units):
+    p=paths[unit];uid,gid=identities[unit];parent=str(Path(roots[i]).parent)
+    # Each service gets its own delegated subtree. Moving backend Git into
+    # Pi's subtree would fail cgroup common-ancestor permission checks.
+    setup=('from pathlib import Path;import os;'
+      f'r=Path({parent!r});p=r/"projects";'
+      '(r/"cgroup.subtree_control").write_text("+cpu +memory +pids");p.mkdir(exist_ok=True);'
+      f'(p/"memory.max").write_text("{1536*1024*1024 if i==0 else 512*1024*1024}");'
+      '(p/"memory.swap.max").write_text("0");(p/"pids.max").write_text("256");'
+      '(p/"cpu.max").write_text("100000 100000");(p/"cpu.weight").write_text("20");'
+      '(p/"cgroup.subtree_control").write_text("+cpu +memory +pids");'
+      f'[os.chown(x,{uid},{gid}) for x in [p,p/"cgroup.procs",p/"cgroup.subtree_control"]]')
+    extra='\n[Service]\nDelegate=cpu memory pids\nDelegateSubgroup=control\nProtectControlGroups=no\n'
+    extra+='ExecStartPost=+/usr/bin/python3 -c '+json.dumps(setup)+'\n'
+    if i==0:
+        values={'PI_PROJECT_SANDBOX':'1','PI_GATEWAY_LIVE_TOKEN':tokens[0],
+                'PI_GATEWAY_TEST_TOKEN':tokens[1],'PI_GATEWAY_LIVE_ROOT':workspace_roots[0],
+                'PI_GATEWAY_TEST_ROOT':workspace_roots[1],'PI_SANDBOX_CGROUP_ROOT':roots[0]}
+        extra+=''.join('Environment='+json.dumps(key+'='+value)+'\n' for key,value in values.items())
+    original=p.read_text()
+    require('# PI_CLIENT_ISOLATION_MANAGED' not in original,'Activation was already configured; no settings changed')
+    changes[p]=(original+'\n# PI_CLIENT_ISOLATION_MANAGED\n'+extra).encode()
+
+backup=Path('/var/backups/pi-client-isolation')/(time.strftime('%Y%m%dT%H%M%S')+'-'+secrets.token_hex(3))
+backup.mkdir(parents=True,mode=0o700)
+originals={p:(p.read_bytes(),stat.S_IMODE(p.stat().st_mode)) for p in changes}
+for index,(path,(data,mode)) in enumerate(originals.items()):
+    destination=backup/str(index);destination.write_bytes(data);destination.chmod(0o600)
+(backup/'paths.json').write_text(json.dumps([str(p) for p in originals]));(backup/'paths.json').chmod(0o600)
+try:
+    for path,data in changes.items():atomic(path,data,0o600 if path in paths.values() else None)
+    run('systemctl','daemon-reload')
+    for unit in units:
+        require(run('systemctl','show',unit,'-p','DelegateSubgroup','--value')=='control','Service delegation was overridden')
+    run('systemctl','restart',*units)
+    for _ in range(20):
+        try:
+            for port,host in [(8000,'opencode-gateway.codes'),(8001,'test.opencode-gateway.codes')]:
+                with urlopen(Request(f'http://127.0.0.1:{port}/api/health',headers={'Host':host}),timeout=2) as response:
+                    if response.status!=200:raise OSError('Gateway not ready')
+            break
+        except OSError:time.sleep(1)
+    else:raise RuntimeError('Gateway startup did not become ready')
+    for i,unit in enumerate(units):
+        require(run('systemctl','is-active',unit)=='active','Service did not remain active')
+        require({'cpu','memory','pids'}.issubset(set((Path(roots[i])/'cgroup.subtree_control').read_text().split())),
+                'Delegated resource controllers were not initialized')
+    for i,unit in enumerate(units):
+        pid=int(run('systemctl','show',unit,'-p','MainPID','--value'))
+        actual=dict(item.split(b'=',1) for item in (Path('/proc')/str(pid)/'environ').read_bytes().split(b'\0') if b'=' in item)
+        expected={'PI_PROJECT_SANDBOX':'1','PI_SANDBOX_CGROUP_ROOT':roots[i]}
+        if i==0:expected.update(PI_GATEWAY_LIVE_TOKEN=tokens[0],PI_GATEWAY_TEST_TOKEN=tokens[1],
+                               PI_GATEWAY_LIVE_ROOT=workspace_roots[0],PI_GATEWAY_TEST_ROOT=workspace_roots[1])
+        else:expected['PI_GATEWAY_INTERNAL_TOKEN']=tokens[i-1]
+        require(all(actual.get(key.encode())==value.encode() for key,value in expected.items()),
+                unit+' did not load the security configuration; values hidden')
+    print('CLIENT_ISOLATION_ACTIVATED=1; existing services active; global configuration persistent.')
+    print('No disk-quota, boot, workflow, payment or project-file changes. Private rollback backup: '+str(backup))
+except BaseException:
+    for path,(data,mode) in originals.items():atomic(path,data,mode)
+    subprocess.run(['systemctl','daemon-reload'],check=False)
+    subprocess.run(['systemctl','restart',*units],check=False)
+    print('Activation did not complete; previous configuration restored. Backup: '+str(backup))
+    raise
+PY_ACTIVATE
+  exit $?
 fi
 
 APP=/home/tahir/opencode-gateway
 RELEASE=/home/tahir/opencode-gateway-release
 SNIPPET=/etc/nginx/snippets/opencode-native-live.conf
-PI_SOCKET=/run/pi-central-live/pi.sock
+PI_SOCKET=/run/pi-central/pi.sock
 
 [[ "$LIVE_SUDO_PASS_STDIN" == "1" ]] || { echo "Protected sudo stdin required" >&2; exit 2; }
 [[ "$LIVE_PI_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid release revision" >&2; exit 2; }
@@ -36,15 +195,15 @@ sudo_operator() {
 [[ -S "$PI_SOCKET" ]] || { echo "The existing Pi Central Unix socket is unavailable" >&2; exit 4; }
 [[ -f "$SNIPPET" && ! -L "$SNIPPET" ]] ||
   { echo "Existing LIVE Nginx native snippet not found; nothing deployed" >&2; exit 4; }
-sudo_operator /usr/bin/systemctl is-active --quiet pi-central-live.service ||
-  { echo "Dedicated LIVE Pi service is not active" >&2; exit 4; }
+sudo_operator /usr/bin/systemctl is-active --quiet pi-central.service ||
+  { echo "Shared Pi Central service is not active" >&2; exit 4; }
 sudo_operator /usr/bin/systemctl is-active --quiet opencode-gateway.service ||
   { echo "LIVE Gateway is not active" >&2; exit 4; }
 
 # Resolve the file actually executed by the existing shared Pi service. LIVE
 # source synchronization alone does not update a separate /home/tahir/pi-test
 # runtime. Do not guess a checkout, change ExecStart or replace the SDK.
-pi_pid="$(sudo_operator /usr/bin/systemctl show pi-central-live.service -p MainPID --value)"
+pi_pid="$(sudo_operator /usr/bin/systemctl show pi-central.service -p MainPID --value)"
 pi_file="$("$APP/.venv/bin/python" - "$pi_pid" <<'PY'
 import sys
 from pathlib import Path
@@ -83,10 +242,10 @@ finish_release() {
   local result=$?
   trap - EXIT
   if [[ "$result" != 0 && "$pi_source_touched" == 1 && -n "$pi_backup" ]]; then
-    echo "Release failed; restoring the previous LIVE Pi entry point" >&2
+    echo "Release failed; restoring the previous shared Pi entry point" >&2
     if install_pi_file "$pi_backup"; then
       if [[ "$pi_restart_attempted" == 1 ]]; then
-        sudo_operator /usr/bin/systemctl restart pi-central-live.service ||
+        sudo_operator /usr/bin/systemctl restart pi-central.service ||
           echo "Pi recovery requires operator attention; private backup retained" >&2
       fi
     else
@@ -186,7 +345,6 @@ changes = {
     "OPENCODE_NATIVE_TEST_ENABLED": "false",
     "OPENCODE_NATIVE_LOCAL_ENABLED": "false",
     "OPENCODE_RUNTIME_MODE": "disabled",
-    "PI_SOCKET": "/run/pi-central-live/pi.sock",
 }
 original = p.read_text()
 lines = original.splitlines(keepends=True)
@@ -225,7 +383,7 @@ print("LIVE Pi native selectors set; payment, email and database values preserve
 PY
 
 # Gateway is the existing Python administrative backend; it never processes Pi
-# prompts. Dedicated LIVE Pi is updated below only when its actual source differs.
+# prompts. Shared Pi is updated below only when its actual source differs.
 "$APP/.venv/bin/python" -m pip install --disable-pip-version-check -q -r "$APP/backend/requirements.txt"
 (
   set -a
@@ -298,13 +456,13 @@ if ! sudo_operator /usr/bin/systemctl reload nginx; then
   exit 7
 fi
 
-# Activate the release in the dedicated LIVE Pi runtime only. No service unit,
+# Activate the same source in the existing shared Pi runtime. No service unit,
 # SDK package, environment flag, workflow, payment setting or project is edited.
 if [[ "$pi_update_needed" == 1 ]]; then
   install_pi_file "$RELEASE/integration/pi-central.mjs"
   pi_restart_attempted=1
-  sudo_operator /usr/bin/systemctl restart pi-central-live.service
-  sudo_operator /usr/bin/systemctl is-active --quiet pi-central-live.service
+  sudo_operator /usr/bin/systemctl restart pi-central.service
+  sudo_operator /usr/bin/systemctl is-active --quiet pi-central.service
   # A missing Unix socket during startup is ENOENT, which curl's TCP
   # --retry-connrefused does not retry. Allow the existing service to bind it.
   pi_ready=0
@@ -319,10 +477,10 @@ if [[ "$pi_update_needed" == 1 ]]; then
   [[ "$pi_ready" == 1 ]] || { echo "Pi did not finish startup; restoring its previous source" >&2; exit 9; }
 fi
 cmp -s "$pi_file" "$RELEASE/integration/pi-central.mjs" || {
-  echo "The dedicated LIVE Pi runtime does not match the deployed release" >&2
+  echo "The shared Pi runtime does not match the deployed release" >&2
   exit 9
 }
-echo "LIVE_PI_SOURCE_DEPLOYED revision=$LIVE_PI_SOURCE_SHA updated=$pi_update_needed"
+echo "SHARED_PI_SOURCE_DEPLOYED revision=$LIVE_PI_SOURCE_SHA updated=$pi_update_needed"
 
 unset sudo_password
-echo "LIVE_PI_GATEWAY_DEPLOYED revision=$LIVE_PI_SOURCE_SHA gateway=8000 db=opencode_gateway live_pi=release-matched"
+echo "LIVE_PI_GATEWAY_DEPLOYED revision=$LIVE_PI_SOURCE_SHA gateway=8000 db=opencode_gateway shared_pi=release-matched"
