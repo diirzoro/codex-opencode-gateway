@@ -25,6 +25,35 @@ if pid.isdigit() and pid!='0':
     print('WORKER_PROCESS_CONFIG',json.dumps(values))
 print('CPU_COUNT', command(['getconf','_NPROCESSORS_ONLN']))
 print('LOAD', Path('/proc/loadavg').read_text().split()[:3])
+print('PI_RESOURCE_DELEGATION',command(['systemctl','show','pi-central.service',
+    '--property=Delegate,DelegateSubgroup,ControlGroup,ProtectControlGroups']))
+cg=command(['systemctl','show','pi-central.service','-p','ControlGroup','--value'])
+if cg.startswith('/'):
+    base=Path('/sys/fs/cgroup')/cg.lstrip('/')
+    for name in ['cgroup.controllers','cgroup.subtree_control','memory.max','pids.max','cpu.max']:
+        p=base/name
+        if p.is_file(): print('PI_CGROUP',name,p.read_text().strip())
+for env_file in ['/home/tahir/opencode-gateway/.env','/home/tahir/opencode-gateway-test/.env']:
+    p=Path(env_file)
+    if not p.is_file():continue
+    values={}
+    for line in p.read_text().splitlines():
+        if '=' in line and not line.lstrip().startswith('#'):
+            k,v=line.split('=',1);values[k.strip()]=v.strip().strip('\"').strip("'")
+    root=Path(values.get('WORKSPACE_ROOT',str(p.parent/'workspaces')))
+    if not root.exists():print('PROJECT_STORAGE',str(root),'missing');continue
+    mount=command(['findmnt','-J','-T',str(root),'-o','FSTYPE,OPTIONS'])
+    try:
+        item=json.loads(mount)['filesystems'][0]
+        options=set(item.get('options','').split(','))
+        print('PROJECT_STORAGE',json.dumps({'path':str(root),'fstype':item.get('fstype'),
+            'quota_flags':sorted(options&{'prjquota','pquota','usrquota','grpquota','quota'}),
+            'free_bytes':shutil.disk_usage(root).free}))
+    except (ValueError,KeyError,IndexError):print('PROJECT_STORAGE','filesystem information unavailable')
+print('HOST_QUOTA_TOOLS',json.dumps({name:bool(shutil.which(name)) for name in ['setquota','xfs_quota','chattr','prlimit']}))
+agent=Path('/home/tahir/.pi/agent')
+print('GLOBAL_PI_EXTENSION_COUNT',len(list((agent/'extensions').glob('*'))) if (agent/'extensions').is_dir() else 0)
+print('GLOBAL_PI_TOOL_CACHE',json.dumps({name:(agent/'bin'/name).is_file() for name in ['rg','fd']}))
 for unit in ['pi-central.service','opencode-gateway.service','opencode-gateway-test.service','opencode-preview-worker-test.service','opencode-preview-docker-test.service','docker.service']:
     print('UNIT', unit, command(['systemctl','show',unit,'--property=LoadState,ActiveState,SubState,MemoryCurrent,CPUQuotaPerSecUSec,FragmentPath,WorkingDirectory,User']))
 for path in ['/run/preview-worker/docker.sock','/opt/opencode-preview-test/app/services/preview_worker_server.py','/etc/opencode-preview-worker-test.env']:
