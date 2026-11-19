@@ -330,6 +330,13 @@ class SdkAgent {
     // Use the complete existing Pi installation for every account.
     // Pi SDK remains the only agent, tool, skill and extension executor.
     const settingsManager=sdk.SettingsManager.inMemory();
+    // A customer repository is data, not trusted code for this shared
+    // credential-bearing process. Keep Pi's built-ins and user/global
+    // extensions, but never auto-load project-local executable extensions.
+    // Such extensions may be enabled only inside a verified project sandbox.
+    if(typeof settingsManager.setProjectTrusted!=="function")
+      throw Object.assign(new Error("Installed Pi lacks project trust isolation"),{status:503});
+    settingsManager.setProjectTrusted(false);
     // Reuse installed todo extensions where present. Otherwise load the
     // replacement-friendly Pi extension with native session tool results.
     let todoFallback=[];
@@ -958,6 +965,42 @@ function withWorkspaceDirectory(scope,relative,operation) {
       status===403?"Project file access denied":"Project file access unavailable"),{status});
   }finally{if(fd!==undefined)closeSync(fd);}
 }
+function projectGitRead(scope,args) {
+  // Customer explorer metadata only. Never inherit provider keys, Git
+  // configuration injection or global credential helpers from Pi's process.
+  const env={PATH:"/usr/bin:/bin",HOME:"/nonexistent",XDG_CONFIG_HOME:"/nonexistent",
+    LANG:"C.UTF-8",GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null",
+    GIT_ATTR_NOSYSTEM:"1",GIT_TERMINAL_PROMPT:"0",GIT_OPTIONAL_LOCKS:"0",
+    GIT_NO_REPLACE_OBJECTS:"1",GIT_ALLOW_PROTOCOL:""};
+  const fixed=["-c","core.hooksPath=/dev/null","-c","core.fsmonitor=false",
+    "-c","credential.helper=","-c","protocol.file.allow=never",
+    "-c","core.worktree="+scope.directory];
+  return new Promise((resolve,reject)=>{
+    const child=spawn("/usr/bin/git",[...fixed,...args],{
+      cwd:scope.directory,env,detached:true,stdio:["ignore","pipe","ignore"]});
+    let done=false,size=0,chunks=[];
+    const finish=error=>{
+      if(done)return;done=true;clearTimeout(timer);
+      const output=error?null:Buffer.concat(chunks,size).toString("utf8");
+      chunks=[];
+      error?reject(new Error("Project Git information unavailable")):resolve(output);
+    };
+    const stop=()=>{
+      // Kill only the dedicated process group created by this invocation.
+      if(Number.isSafeInteger(child.pid)&&child.pid>0)
+        try{process.kill(-child.pid,"SIGKILL");}catch{try{child.kill("SIGKILL");}catch{}}
+    };
+    const timer=setTimeout(()=>{stop();finish(true);},8000);
+    timer.unref();
+    child.once("error",()=>finish(true));
+    child.stdout.on("data",chunk=>{
+      if(done)return;
+      if(size+chunk.length>1024*1024){stop();finish(true);return;}
+      size+=chunk.length;chunks.push(chunk);
+    });
+    child.once("close",code=>finish(code!==0));
+  });
+}
 function projectFileRequest(scope,pathname,query) {
   const relative=query.get("path")||"";
   if(pathname==="/file"){
@@ -1009,19 +1052,16 @@ function projectFileRequest(scope,pathname,query) {
   }
   // Read-only Git information for the existing project panel; model edits and
   // shell commands still execute with Pi's native tools, never this route.
-  const git=(args)=>execFileSync("git",args,{cwd:scope.directory,encoding:"utf8",
-    timeout:8000,maxBuffer:1024*1024,stdio:["ignore","pipe","ignore"]}).trim();
   if(pathname==="/vcs"){
-    try{return {branch:git(["branch","--show-current"])};}catch{return {branch:""};}
+    return projectGitRead(scope,["branch","--show-current"])
+      .then(output=>({branch:output.trim()}),()=>({branch:""}));
   }
   if(pathname==="/file/status"){
-    try{
-      const output=git(["status","--porcelain=v1","-uno"]);
-      return output.split("\n").filter(Boolean).map(line=>({
+    return projectGitRead(scope,["status","--porcelain=v1","-uno"])
+      .then(output=>output.trimEnd().split("\n").filter(Boolean).map(line=>({
         status:line.slice(0,2).trim()||"modified",
         path:line.slice(3).replace(/^"(.*)"$/,"$1")
-      }));
-    }catch{return [];}
+      })),()=>[]);
   }
   throw Object.assign(new Error("Unsupported project file operation"),{status:404});
 }
@@ -1307,7 +1347,7 @@ const server=http.createServer(async(req,res)=>{
     // File tree reads should not consume an agent process or compete with a
     // running Pi conversation for RPC worker slots.
     if(req.method==="GET"&&["/file","/file/content","/file/status","/vcs"].includes(pathname))
-      return json(res,200,projectFileRequest(s,pathname,query));
+      return json(res,200,await projectFileRequest(s,pathname,query));
     const a=await agent(s);
     if(pathname==="/question"&&req.method==="GET")
       return json(res,200,a.pendingUI());
