@@ -11,7 +11,7 @@
 import http from "node:http";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync, rmSync, statSync, openSync, closeSync, fstatSync, readSync, constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 
@@ -930,28 +930,82 @@ function workspaceFile(scope,relative,allowRoot=false) {
     throw Object.assign(new Error("Project file outside workspace"),{status:403});
   return file;
 }
+function withWorkspaceDirectory(scope,relative,operation) {
+  // Client explorer only. Pin every directory with O_NOFOLLOW instead of
+  // resolving a string and reopening it after a concurrent tool changed it.
+  // This is not a sandbox for the SDK's execution tools.
+  if(process.platform!=="linux"||!fsConstants.O_NOFOLLOW||!fsConstants.O_DIRECTORY)
+    throw Object.assign(new Error("Secure project file access unavailable"),{status:503});
+  let fd;
+  try{
+    if(!path.isAbsolute(scope.directory)||path.resolve(scope.directory)!==scope.directory)
+      throw Object.assign(new Error("Unsafe project directory"),{status:403});
+    fd=openSync("/",fsConstants.O_RDONLY|fsConstants.O_DIRECTORY|fsConstants.O_NOFOLLOW);
+    const parts=[...scope.directory.split("/").filter(Boolean),...relative.split("/").filter(Boolean)];
+    for(const part of parts){
+      if(part==="."||part==="..")
+        throw Object.assign(new Error("Unsafe project directory"),{status:403});
+      const next=openSync(`/proc/self/fd/${fd}/${part}`,
+        fsConstants.O_RDONLY|fsConstants.O_DIRECTORY|fsConstants.O_NOFOLLOW);
+      closeSync(fd);fd=next;
+    }
+    return operation(fd);
+  }catch(e){
+    if(e.status)throw e;
+    const status=e.code==="ENOENT"?404:
+      ["ELOOP","ENOTDIR","EACCES","EPERM"].includes(e.code)?403:503;
+    throw Object.assign(new Error(status===404?"Project file not found":
+      status===403?"Project file access denied":"Project file access unavailable"),{status});
+  }finally{if(fd!==undefined)closeSync(fd);}
+}
 function projectFileRequest(scope,pathname,query) {
   const relative=query.get("path")||"";
   if(pathname==="/file"){
-    const dir=workspaceFile(scope,relative,true);
-    if(!lstatSync(dir).isDirectory())
-      throw Object.assign(new Error("Not a project directory"),{status:404});
-    return readdirSync(dir,{withFileTypes:true})
+    workspaceFile(scope,relative,true);
+    return withWorkspaceDirectory(scope,relative,fd=>readdirSync(`/proc/self/fd/${fd}`,{withFileTypes:true})
       .filter(x=>!x.isSymbolicLink()&&![".git",".ssh",".pi","auth.json"].includes(x.name)
         &&!x.name.startsWith(".env"))
       .slice(0,2000).map(x=>({name:x.name,
         path:[relative,x.name].filter(Boolean).join("/"),
-        type:x.isDirectory()?"directory":"file"}));
+        type:x.isDirectory()?"directory":"file"})));
   }
   if(pathname==="/file/content"){
-    const file=workspaceFile(scope,relative);
-    if(!lstatSync(file).isFile())
-      throw Object.assign(new Error("Not a regular project file"),{status:404});
-    if(lstatSync(file).size>1024*1024)
-      throw Object.assign(new Error("File exceeds 1 MB preview limit"),{status:413});
-    const data=readFileSync(file);
-    if(data.includes(0))throw Object.assign(new Error("Binary file cannot be previewed as text"),{status:415});
-    return {content:new TextDecoder("utf-8",{fatal:true}).decode(data)};
+    workspaceFile(scope,relative);
+    const parts=relative.split("/").filter(Boolean),name=parts.pop();
+    return withWorkspaceDirectory(scope,parts.join("/"),dirfd=>{
+      let fd;
+      try{
+        fd=openSync(`/proc/self/fd/${dirfd}/${name}`,
+          fsConstants.O_RDONLY|fsConstants.O_NOFOLLOW|fsConstants.O_NONBLOCK);
+        const info=fstatSync(fd);
+        if(!info.isFile())
+          throw Object.assign(new Error("Not a regular project file"),{status:404});
+        // Hard links can name an inode originating outside this project.
+        if(info.nlink!==1)
+          throw Object.assign(new Error("Linked project files are not accessible"),{status:403});
+        const limit=1024*1024;
+        if(info.size>limit)
+          throw Object.assign(new Error("File exceeds 1 MB preview limit"),{status:413});
+        // Bound the actual read as well: a tool may grow the file after stat.
+        // Small source files should not allocate/zero a full megabyte.
+        let buffer=Buffer.allocUnsafe(Math.min(limit+1,Math.max(4096,info.size+1))),size=0;
+        while(size<=limit){
+          if(size===buffer.length){
+            const grown=Buffer.allocUnsafe(Math.min(limit+1,buffer.length*2));
+            buffer.copy(grown,0,0,size);buffer=grown;
+          }
+          const count=readSync(fd,buffer,size,buffer.length-size,null);
+          if(!count)break;size+=count;
+        }
+        if(size>limit)
+          throw Object.assign(new Error("File exceeds 1 MB preview limit"),{status:413});
+        const data=buffer.subarray(0,size);
+        if(data.includes(0))
+          throw Object.assign(new Error("Binary file cannot be previewed as text"),{status:415});
+        try{return {content:new TextDecoder("utf-8",{fatal:true}).decode(data)};}
+        catch{throw Object.assign(new Error("File cannot be previewed as UTF-8 text"),{status:415});}
+      }finally{if(fd!==undefined)closeSync(fd);}
+    });
   }
   // Read-only Git information for the existing project panel; model edits and
   // shell commands still execute with Pi's native tools, never this route.

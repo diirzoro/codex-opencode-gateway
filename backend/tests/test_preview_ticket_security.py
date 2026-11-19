@@ -125,3 +125,106 @@ def test_gateway_origin_cannot_serve_customer_preview(context):
     context.request.url='https://gateway.example/preview/placeholder/'
     with pytest.raises(HTTPException) as error: authorize(context)
     assert error.value.status_code==404
+
+# Client explorer boundaries: run the existing JavaScript adapter without
+# starting Pi, making network requests or loading an SDK/model.
+_CLIENT_FILE_HARNESS = r'''
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const input=JSON.parse(fs.readFileSync(0,'utf8'));
+const source=fs.readFileSync(input.source,'utf8');
+const root=fs.realpathSync(input.root),other=fs.realpathSync(input.other);
+const scope={directory:root};
+const sandbox={path,process,Buffer,TextDecoder,...fs,fsConstants:fs.constants,
+  execFileSync(){throw Error('No Git or model execution in file boundary tests');}};
+const run=vm.createContext(sandbox);
+vm.runInContext(source.slice(source.indexOf('function workspaceFile('),source.indexOf('function piNativeTodos(')),run);
+const query=name=>new URLSearchParams({path:name});
+const read=name=>run.projectFileRequest(scope,'/file/content',query(name));
+const list=name=>run.projectFileRequest(scope,'/file',query(name));
+const reject=(fn,status)=>assert.throws(fn,e=>e.status===status && !e.message.includes(other));
+fs.mkdirSync(path.join(root,'sub'));
+fs.writeFileSync(path.join(root,'sub','file.txt'),'OWN_FILE');
+fs.writeFileSync(path.join(other,'file.txt'),'OTHER_ACCOUNT_CANARY');
+const own=path.join(root,'sub','file.txt'),outside=path.join(other,'file.txt');
+const action=input.action;
+if(action==='own'){
+ assert.equal(read('sub/file.txt').content,'OWN_FILE');
+ assert.equal(list('sub')[0].path,'sub/file.txt');
+ assert.equal(fs.readFileSync(own,'utf8'),'OWN_FILE');
+}else if(action==='policy'){
+ for(const name of ['../file.txt','/etc/hostname','sub/../../file.txt','sub\\file.txt','.git/config','.env'])reject(()=>read(name),400);
+}else if(action==='symlink'){
+ fs.symlinkSync(outside,path.join(root,'outside.txt'));reject(()=>read('outside.txt'),403);
+ assert.equal(list('').some(x=>x.name==='outside.txt'),false);
+}else if(action==='hardlink'){
+ fs.linkSync(outside,path.join(root,'linked.txt'));reject(()=>read('linked.txt'),403);
+}else if(action==='fifo'){
+ // proc pseudo-files are not used: make a disposable FIFO with a fixed tool.
+ const {execFileSync}=await import('node:child_process');
+ execFileSync('mkfifo',[path.join(root,'pipe')]);reject(()=>read('pipe'),404);
+}else if(action==='large'){
+ fs.writeFileSync(own,Buffer.alloc(1024*1024+1,65));reject(()=>read('sub/file.txt'),413);
+}else if(action==='binary'){
+ fs.writeFileSync(own,Buffer.from([0,1,2]));reject(()=>read('sub/file.txt'),415);
+ fs.writeFileSync(own,Buffer.from([0xff]));reject(()=>read('sub/file.txt'),415);
+}else if(action==='missing'){
+ reject(()=>read('missing'),404);reject(()=>read('sub'),404);
+}else if(action==='grow'){
+ sandbox.fstatSync=fd=>{const info=fs.fstatSync(fd);fs.appendFileSync(own,Buffer.alloc(1024*1024,65));return info;};
+ reject(()=>read('sub/file.txt'),413);
+}else if(['leaf-race','directory-race','list-race','root-race'].includes(action)){
+ const original=run.workspaceFile;let changed=false;
+ run.workspaceFile=(...args)=>{
+  const result=original(...args);
+  if(!changed){changed=true;
+   if(action==='leaf-race'){fs.unlinkSync(own);fs.symlinkSync(outside,own);}
+   else if(action==='root-race'){fs.renameSync(root,root+'-held');fs.symlinkSync(other,root);}
+   else{fs.renameSync(path.join(root,'sub'),path.join(root,'held'));fs.symlinkSync(other,path.join(root,'sub'));}
+  }
+  return result;
+ };
+ reject(()=>action==='list-race'?list('sub'):read('sub/file.txt'),403);
+}else if(action==='fd-cleanup'){
+ const before=fs.readdirSync('/proc/self/fd').length;
+ for(let i=0;i<30;i++){assert.equal(read('sub/file.txt').content,'OWN_FILE');reject(()=>read('missing'),404);}
+ assert.equal(fs.readdirSync('/proc/self/fd').length,before);
+}else if(action==='owner-scope'){
+ const account={user_id:input.ownerB,workspaces:[{id:input.workspaceB,project_id:input.projectB,directory:other}]};
+ sandbox.browserPrincipal=()=>account;
+ sandbox.CATALOG_DIRECTORY='/unused-catalog';
+ vm.runInContext(source.slice(source.indexOf('async function scope('),source.indexOf('// Read only public model definitions.')),run);
+ const queryA=new URLSearchParams({directory:root});
+ await assert.rejects(()=>run.scope({},queryA),e=>e.status===403);
+ const result=await run.scope({},new URLSearchParams({directory:other}));
+ assert.equal(result.directory,other);assert.equal(result.userId,input.ownerB);
+}else throw Error('Unknown test');
+console.log('PASS');
+'''
+
+@pytest.mark.parametrize('action',[
+    'own','policy','symlink','hardlink','fifo','large','binary','missing','grow',
+    'leaf-race','directory-race','list-race','root-race','fd-cleanup','owner-scope'])
+def test_client_explorer_pins_owned_files_and_bounds_reads(tmp_path, action):
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+    if os.name != 'posix' or not Path('/proc/self/fd').exists():
+        pytest.skip('Linux descriptor-relative client file access')
+    node=shutil.which('node')
+    if not node:
+        pytest.skip('Node runtime unavailable')
+    owner_a, owner_b, workspace_a, workspace_b, project_b=[str(uuid.uuid4()) for _ in range(5)]
+    root=tmp_path/owner_a/workspace_a/'repo'
+    other=tmp_path/owner_b/workspace_b/'repo'
+    root.mkdir(parents=True);other.mkdir(parents=True)
+    payload=dict(source=str(Path(__file__).resolve().parents[2]/'integration/pi-central.mjs'),
+                 root=str(root),other=str(other),action=action,
+                 ownerB=owner_b,workspaceB=workspace_b,projectB=project_b)
+    result=subprocess.run([node,'--input-type=module','-e',_CLIENT_FILE_HARNESS],
+                          input=json.dumps(payload),text=True,capture_output=True,timeout=8)
+    assert result.returncode==0,result.stderr
+    assert result.stdout.strip()=='PASS'
