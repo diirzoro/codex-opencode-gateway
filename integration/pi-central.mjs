@@ -24,8 +24,7 @@ const SOCK = process.env.PI_SOCKET || "/run/pi-central/pi.sock";
 const ROOT = process.env.PI_SESSIONS_ROOT || "/home/tahir/pi-test/sessions";
 const PI_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || "/home/tahir/.pi/agent";
 const GATEWAY = process.env.PI_TEST_GATEWAY || "http://127.0.0.1:8001";
-const SERVICE_ORIGIN = process.env.PI_SERVICE_ORIGIN || "";
-const HOST = SERVICE_ORIGIN ? new URL(SERVICE_ORIGIN).host : "test.opencode-gateway.codes";
+const HOST = "test.opencode-gateway.codes";
 // Runtime credentials MUST originate from Gateway, not service environment.
 // Strip provider key fallbacks before creating Pi SDK model runtimes. Keep
 // PI_GATEWAY_INTERNAL_TOKEN untouched (it authenticates internal fetch only).
@@ -100,23 +99,21 @@ const authorityKey=account=>account.origin+"\0"+account.auth_session_id;
 const accountKey=account=>account.origin+"\0"+account.user_id;
 function gatewayOrigin(req){
   const origin=req.headers["x-pi-gateway-origin"];
-  if(SERVICE_ORIGIN && origin!==SERVICE_ORIGIN)return null;
   if(["https://opencode-gateway.codes","https://test.opencode-gateway.codes"].includes(origin))return origin;
   // The still-running older TEST Gateway has no origin header. Preserve its
   // existing channel only during staged rollout, never after full activation.
-  return !SERVICE_ORIGIN&&!PROJECT_SANDBOX_ENABLED&&!origin&&req.headers.host===BOOTSTRAP_HOST?
+  return !PROJECT_SANDBOX_ENABLED&&!origin&&req.headers.host===BOOTSTRAP_HOST?
     "https://test.opencode-gateway.codes":null;
 }
 function fromGateway(req){
   if(req.headers.host!==BOOTSTRAP_HOST||req.headers["x-forwarded-for"]||req.headers["x-real-ip"])return false;
   const origin=gatewayOrigin(req);
-  if(!origin)return false;
   const expected=origin==="https://test.opencode-gateway.codes"?
     process.env.PI_GATEWAY_TEST_TOKEN:
     process.env.PI_GATEWAY_LIVE_TOKEN||process.env.PI_GATEWAY_INTERNAL_TOKEN;
   // Rollout keeps the existing control path working until the one-time
   // server activation. Isolation never activates without authenticated control.
-  if(!expected||expected.length<32)return !SERVICE_ORIGIN&&!PROJECT_SANDBOX_ENABLED;
+  if(!expected||expected.length<32)return !PROJECT_SANDBOX_ENABLED;
   const supplied=req.headers["x-pi-gateway-token"];
   return !!origin&&typeof supplied==="string"&&supplied.length<=4096&&
     Buffer.byteLength(supplied)===Buffer.byteLength(expected)&&
