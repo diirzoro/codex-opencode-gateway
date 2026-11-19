@@ -5,6 +5,7 @@ import secrets
 import uuid
 import hashlib
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
@@ -195,11 +196,17 @@ def _copy_snapshot(row):
     for change in state['changes']:
         for name in (change['path'],change.get('original_path')):
             if not name:continue
-            path=workspaces.safe_path(row,name)
-            if path.is_dir():raise HTTPException(409,'Nested repositories or submodules need manual save review')
-            if path.is_file():
-                with path.open('rb') as stream:
-                    while chunk:=stream.read(65536):digest.update(chunk)
+            try:
+                with workspaces._project_file(row,name) as (fd,info):
+                    if info.st_size>512*1024*1024:
+                        raise HTTPException(413,'Changed file exceeds review limit')
+                    size=0
+                    while chunk:=os.read(fd,65536):
+                        size+=len(chunk)
+                        if size>512*1024*1024:raise HTTPException(413,'Changed file exceeds review limit')
+                        digest.update(chunk)
+            except HTTPException as error:
+                if error.status_code!=404:raise
     ignored=workspaces.git(row,'ls-files','--others','--ignored','--exclude-standard','-z').stdout
     refs=workspaces.git(row,'for-each-ref','--format=%(objectname)','refs/heads','refs/stash').stdout.splitlines()
     digest.update(json.dumps(refs).encode())

@@ -1025,4 +1025,7 @@
   window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,resetContext,archives,readArchive,projectArchives,projectArchiveMessages,deleteProjectArchive,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
   window.addEventListener('account-provider-changed',()=>{snapshots.clear();discoveryReads.clear();});
+  window.addEventListener('native-agent-inventory-updated',event=>{
+    if(event.detail?.owner===owner())snapshots.clear();
+  });
 })();

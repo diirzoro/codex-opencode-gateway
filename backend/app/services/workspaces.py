@@ -1,7 +1,8 @@
 """Owned filesystem and Git operations; no shell strings or client local paths."""
 from pathlib import Path, PureWindowsPath
 from datetime import datetime, timezone
-import base64, difflib, os, re, stat, subprocess, uuid, time, tempfile, zipfile
+import base64, difflib, os, re, stat, subprocess, uuid, time, tempfile, zipfile, selectors
+from contextlib import contextmanager
 from fastapi import HTTPException
 from sqlalchemy import select, and_, or_, exists
 from ..config import settings
@@ -212,11 +213,156 @@ def safe_path(workspace, relative=""):
     return candidate
 
 def _git_env():
-    hooks = settings.runtime_root / "empty-hooks"
-    hooks.mkdir(parents=True, exist_ok=True)
-    env = {k:v for k,v in os.environ.items() if not k.upper().startswith("GIT_")}
-    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", GIT_LFS_SKIP_SMUDGE="1")
-    return env, hooks
+    env = dict(PATH="/usr/bin:/bin", HOME="/nonexistent", LANG="C.UTF-8",
+               GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0",
+               GIT_LFS_SKIP_SMUDGE="1", GIT_ATTR_NOSYSTEM="1",
+               GIT_NO_REPLACE_OBJECTS="1", GIT_ALLOW_PROTOCOL="https",
+               GIT_SSH_COMMAND="/bin/false")
+    return env, Path(os.devnull)
+
+
+@contextmanager
+def _git_execution_scope(cwd, arguments, env, workspace=None):
+    """Administrative Git only; no extra Gateway hop during native tool calls.
+
+    Existing customer metadata is mounted in a private PID/filesystem boundary.
+    Network Git uses an empty allowlisted config, so repository includes, URL
+    rewrites, filters and alternate-ref commands cannot execute with its token.
+    """
+    fixed=["-c","core.hooksPath=/dev/null","-c","core.fsmonitor=false",
+           "-c","credential.helper=","-c","protocol.file.allow=never",
+           "-c","core.alternateRefsCommand=/bin/true","-c","gc.auto=0",
+           "-c","maintenance.auto=false","-c","push.recurseSubmodules=no"]
+    if arguments and arguments[0] in {'clone','fetch','push'}:
+        urls=[value for value in arguments if value.startswith('https://')]
+        if len(urls)!=1 or not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?',urls[0]):
+            raise HTTPException(422,'An authorized HTTPS GitHub repository is required')
+        fixed+=['-c','http.followRedirects=false','-c','http.proxy=']
+    if os.getenv('PI_PROJECT_SANDBOX') != '1':
+        yield ['/usr/bin/git',*fixed,*arguments],(),env
+        return
+    root=Path(cwd)
+    if not root.is_absolute() or '..' in root.parts:
+        raise HTTPException(503,'Invalid isolated Git directory')
+    fds=[];group=None;temp=None
+    try:
+        # Walk from / with openat and O_NOFOLLOW; do not reopen a checked path.
+        fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        fds.append(fd)
+        for part in root.parts[1:]:
+            next_fd=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd);fd=next_fd;fds[0]=fd
+        initial=workspace is not None and workspace.status!='ready' and arguments[0] in {
+            'init','clone','sparse-checkout','checkout'}
+        git_fd=None
+        if not initial:
+            git_fd=os.open('.git',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd);fds.append(git_fd)
+        cg_root=Path(os.environ['PI_SANDBOX_CGROUP_ROOT'])
+        if not str(cg_root).startswith('/sys/fs/cgroup/') or cg_root.resolve()!=cg_root:
+            raise ValueError('Invalid resource delegation')
+        if not {'cpu','memory','pids'}.issubset(set((cg_root/'cgroup.subtree_control').read_text().split())):
+            raise ValueError('Resource controllers unavailable')
+        group=cg_root/('pi-project-'+str(uuid.uuid4()));group.mkdir()
+        for name,value in {'memory.max':768*1024*1024,'memory.swap.max':0,
+                           'memory.oom.group':1,'pids.max':128,'cpu.max':'100000 100000','cpu.weight':20}.items():
+            (group/name).write_text(str(value))
+        limit_fd=os.open(group/'cgroup.procs',os.O_WRONLY|os.O_NOFOLLOW);fds.append(limit_fd)
+        args=['/usr/local/libexec/pi-project-bwrap','--unshare-user','--unshare-pid',
+              '--unshare-ipc','--unshare-uts','--hostname','project','--disable-userns',
+              '--die-with-parent','--new-session','--cap-drop','ALL']
+        if arguments[0] not in {'clone','fetch','push'}:args+=['--unshare-net']
+        else:
+            # Administrative Git alone needs host DNS; these files never enter
+            # the model's private-network tool namespace.
+            args+=['--ro-bind','/etc/resolv.conf','/etc/resolv.conf']
+        for item in ['/usr/bin','/usr/lib','/usr/share','/bin','/lib','/lib64','/etc/ssl/certs']:
+            args+=['--ro-bind',item,item]
+        args+=['--proc','/proc','--dev','/dev','--tmpfs','/tmp',
+               '--bind',f'/proc/self/fd/{fd}',str(root),'--chdir',str(root)]
+        child_env=dict(env)
+        if git_fd is not None:
+            # Parse only pinned config bytes; includes are explicitly disabled.
+            cfg=os.open('config',os.O_RDONLY|os.O_NOFOLLOW,dir_fd=git_fd)
+            try:
+                info=os.fstat(cfg)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_size>65536:
+                    raise ValueError('Unsafe Git configuration')
+                data=os.read(cfg,65537)
+            finally:os.close(cfg)
+            if len(data)>65536:raise ValueError('Git configuration exceeds limit')
+            parsed=subprocess.run(['/usr/bin/git','config','--no-includes','--file','-',
+                                   '--null','--list'],input=data,capture_output=True,env=_git_env()[0],timeout=3)
+            if parsed.returncode:raise ValueError('Invalid Git configuration')
+            # Preserve sparse checkout and object-format semantics, not scripts
+            # or user-controlled remotes. Commit authors are supplied by the API.
+            safe={}
+            allowed={'core.repositoryformatversion':{'0','1'},'core.sparsecheckout':{'true','false'},
+                     'core.sparsecheckoutcone':{'true','false'},'core.ignorecase':{'true','false'},
+                     'extensions.objectformat':{'sha1','sha256'}}
+            for row in parsed.stdout.split(b'\0'):
+                key,sep,value=row.partition(b'\n')
+                key=key.decode('utf8','strict').lower();value=value.decode('utf8','strict').lower()
+                if sep and key in allowed and value in allowed[key]:safe[key]=value
+            temp=tempfile.TemporaryDirectory(prefix='pi-git-config-')
+            config=Path(temp.name)/'config'
+            lines=['[core]','\tbare = false','\tlogAllRefUpdates = true']
+            for section in ['core','extensions']:
+                rows=[(key.split('.')[1],value) for key,value in safe.items() if key.startswith(section+'.')]
+                if rows:lines+=['['+section+']',*[f'\t{key} = {value}' for key,value in rows]]
+            config.write_text('\n'.join(lines)+'\n');config.chmod(0o600)
+            args+=['--bind',f'/proc/self/fd/{git_fd}','/sandbox-git',
+                   '--ro-bind',str(config),'/sandbox-git/config']
+            # GIT_COMMON_DIR overrides an untrusted commondir file without
+            # creating or changing any file in the customer's .git directory.
+            child_env.update(GIT_COMMON_DIR='/sandbox-git')
+            fixed=['--git-dir=/sandbox-git','--work-tree='+str(root),*fixed]
+        bootstrap=(
+            'import os,sys;root=int(sys.argv[1]);meta=int(sys.argv[2]);limit=int(sys.argv[3]);'
+            'a=os.fstat(root);b=os.stat(os.getcwd());assert(a.st_dev,a.st_ino)==(b.st_dev,b.st_ino);'
+            'a=os.fstat(meta) if meta>=0 else None;b=os.stat("/sandbox-git") if meta>=0 else None;'
+            'assert meta<0 or (a.st_dev,a.st_ino)==(b.st_dev,b.st_ino);'
+            'os.write(limit,b"0");'
+            '[os.close(x) for x in [root,meta,limit] if x>=0];'
+            'os.execve("/usr/bin/git",["git",*sys.argv[4:]],os.environ)')
+        args+=['--','/usr/bin/python3','-c',bootstrap,str(fd),str(git_fd if git_fd is not None else -1),str(limit_fd),*fixed,*arguments]
+        yield args,tuple(fds),child_env
+    except (OSError,ValueError,KeyError,UnicodeError,subprocess.TimeoutExpired):
+        raise HTTPException(503,'Isolated Git execution unavailable; project files preserved') from None
+    finally:
+        for fd in fds:
+            try:os.close(fd)
+            except OSError:pass
+        if temp is not None:temp.cleanup()
+        if group is not None:
+            try:(group/'cgroup.kill').write_text('1')
+            except OSError:pass
+            for _ in range(10):
+                try:group.rmdir();break
+                except OSError:time.sleep(0.01)
+
+def _bounded_git_result(command,cwd,env,fds):
+    # Bound actual pipe bytes, not just the final HTTP response slice. A large
+    # diff must not allocate unbounded memory in the administrative Gateway.
+    output=bytearray();total=0;deadline=time.monotonic()+30
+    with subprocess.Popen(command,cwd=cwd,env=env,pass_fds=fds,
+                          stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE) as process:
+        try:
+            with selectors.DefaultSelector() as streams:
+                streams.register(process.stdout,selectors.EVENT_READ,True)
+                streams.register(process.stderr,selectors.EVENT_READ,False)
+                while streams.get_map():
+                    if time.monotonic()>deadline:raise subprocess.TimeoutExpired(command,30)
+                    for key,_ in streams.select(0.1):
+                        data=os.read(key.fileobj.fileno(),65536)
+                        if not data:streams.unregister(key.fileobj);continue
+                        total+=len(data)
+                        if total>4*1024*1024:raise HTTPException(413,'Git output exceeds review limit; files preserved')
+                        if key.data:output.extend(data)
+            code=process.wait(timeout=max(0.01,deadline-time.monotonic()))
+            return subprocess.CompletedProcess(command,code,output.decode('utf8','replace'),'')
+        finally:
+            if process.poll() is None:process.kill();process.wait()
 
 def git(workspace, *arguments, check=True):
     root = root_for(workspace)
@@ -224,7 +370,8 @@ def git(workspace, *arguments, check=True):
         raise HTTPException(409, "Workspace files are unavailable")
     env, hooks = _git_env()
     try:
-        result = subprocess.run(["git", "-c", f"core.hooksPath={hooks}", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "protocol.file.allow=never", *arguments], cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+        with _git_execution_scope(root,list(arguments),env,workspace) as (command,fds,child_env):
+            result = _bounded_git_result(command,root,child_env,fds)
     except (OSError, subprocess.TimeoutExpired):
         raise HTTPException(503, "Git command unavailable or timed out")
     if check and result.returncode:
@@ -238,11 +385,11 @@ def _auth_header(token):
 def _run_git(cwd, arguments, check=True, workspace=None, token=None):
     env, hooks = _git_env()
     if token:
-        env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.extraHeader", GIT_CONFIG_VALUE_0=_auth_header(token))
+        env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraHeader", GIT_CONFIG_VALUE_0=_auth_header(token))
     try:
         # Auth stays in the child environment, never argv or persistent Git config.
-        with tempfile.TemporaryFile() as output:
-            with subprocess.Popen(["git", "-c", f"core.hooksPath={hooks}", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "protocol.file.allow=never", *arguments], cwd=cwd, env=env, stdout=output, stderr=output) as process:
+        with _git_execution_scope(cwd,list(arguments),env,workspace) as (command,fds,child_env):
+            with subprocess.Popen(command, cwd=cwd, env=child_env, pass_fds=fds, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as process:
                 started = time.monotonic()
                 try:
                     while process.poll() is None:
@@ -357,23 +504,69 @@ def workspace_payload(row):
         available = False
     return {"files_available":available,"cache":cache_payload(row),"id":str(row.id),"project_id":str(row.project_id),"status":row.status,"base_commit_sha":row.base_commit_sha,"created_at":row.created_at,"last_activity_at":row.last_activity_at}
 
+@contextmanager
+def _project_directory(workspace, relative=''):
+    safe_path(workspace,relative)
+    root=root_for(workspace);fd=None
+    try:
+        fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        for part in [*root.parts[1:],*Path(relative).parts]:
+            next_fd=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd);fd=next_fd
+        yield fd
+    except OSError as error:
+        status=404 if error.errno==2 else 403 if error.errno in {1,13,20,40} else 503
+        raise HTTPException(status,'Project file access unavailable') from None
+    finally:
+        if fd is not None:os.close(fd)
+
+@contextmanager
+def _project_file(workspace, relative):
+    safe_path(workspace,relative)
+    parts=Path(relative).parts
+    if not parts:raise HTTPException(404,'File not found')
+    with _project_directory(workspace,str(Path(*parts[:-1])) if len(parts)>1 else '') as parent:
+        fd=None
+        try:
+            fd=os.open(parts[-1],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+            info=os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:
+                raise HTTPException(403,'Linked or special project files are not accessible')
+            yield fd,info
+        except OSError as error:
+            raise HTTPException(404 if error.errno==2 else 403,'Project file access denied') from None
+        finally:
+            if fd is not None:os.close(fd)
+
 def files(workspace, relative=""):
-    path=safe_path(workspace,relative)
-    if not path.is_dir(): raise HTTPException(404,"Directory not found")
     result=[]
-    root=root_for(workspace)
-    for item in sorted(path.iterdir(),key=lambda p:p.name.lower()):
-        if protected_component(item.name) or item.is_symlink() or (hasattr(item,"is_junction") and item.is_junction()): continue
-        result.append({"name":item.name,"path":item.relative_to(root).as_posix(),"type":"directory" if item.is_dir() else "file"})
-        if len(result)>=1000: break
-    return result
+    with _project_directory(workspace,relative) as fd, os.scandir(fd) as entries:
+        for item in entries:
+            if protected_component(item.name):continue
+            try:info=os.stat(item.name,dir_fd=fd,follow_symlinks=False)
+            except FileNotFoundError:continue
+            if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):continue
+            result.append({'name':item.name,'path':(Path(relative)/item.name).as_posix(),
+                           'type':'directory' if stat.S_ISDIR(info.st_mode) else 'file'})
+            if len(result)>=1000:break
+    return sorted(result,key=lambda item:item['name'].lower())
+
+def file_bytes(workspace, relative, maximum=1000000):
+    with _project_file(workspace,relative) as (fd,info):
+        if info.st_size>maximum:raise HTTPException(413,'File exceeds preview limit')
+        data=bytearray()
+        while len(data)<=maximum:
+            chunk=os.read(fd,min(65536,maximum+1-len(data)))
+            if not chunk:break
+            data.extend(chunk)
+        if len(data)>maximum:raise HTTPException(413,'File exceeds preview limit')
+        return bytes(data)
 
 def content(workspace, relative):
-    path=safe_path(workspace,relative)
-    if not path.is_file(): raise HTTPException(404,"File not found")
-    if path.stat().st_size>1000000: raise HTTPException(413,"File exceeds 1 MB preview limit")
-    try: return path.read_text(encoding="utf-8")
-    except UnicodeError: raise HTTPException(415,"Binary file preview is not supported")
+    data=file_bytes(workspace,relative)
+    if b'\0' in data:raise HTTPException(415,'Binary file preview is not supported')
+    try:return data.decode('utf8')
+    except UnicodeError:raise HTTPException(415,'Binary file preview is not supported') from None
 
 def status(workspace):
     raw=git(workspace,"status","--porcelain=v1","-z","--untracked-files=all").stdout
@@ -436,16 +629,41 @@ def export(workspace):
     handle = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
     path = Path(handle.name); handle.close()
     try:
-        root = root_for(workspace)
-        if not root.is_dir(): raise HTTPException(409,"Workspace files are unavailable")
-        with zipfile.ZipFile(path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
-            for directory, folders, files in os.walk(root,followlinks=False):
-                folders[:] = [name for name in folders if not protected_component(name) and not (Path(directory)/name).is_symlink()]
-                for name in files:
-                    item=Path(directory)/name
-                    relative=item.relative_to(root).as_posix()
-                    if item.is_symlink() or any(protected_component(part) for part in item.relative_to(root).parts): continue
-                    archive.write(item,relative)
+        maximum=quota_bytes(workspace);count=0;total=0
+        with _project_directory(workspace) as root_fd, zipfile.ZipFile(path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
+            def walk(fd,prefix='',depth=0):
+                nonlocal count,total
+                if depth>64:raise HTTPException(413,'Project export depth exceeds limit')
+                with os.scandir(fd) as entries:
+                    for item in entries:
+                        if protected_component(item.name):continue
+                        info=os.stat(item.name,dir_fd=fd,follow_symlinks=False)
+                        if stat.S_ISLNK(info.st_mode):continue
+                        relative=prefix+item.name
+                        child=None
+                        try:
+                            if stat.S_ISDIR(info.st_mode):
+                                child=os.open(item.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+                                walk(child,relative+'/',depth+1)
+                            elif stat.S_ISREG(info.st_mode):
+                                child=os.open(item.name,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW,dir_fd=fd)
+                                pinned=os.fstat(child)
+                                if not stat.S_ISREG(pinned.st_mode) or pinned.st_nlink!=1:
+                                    raise HTTPException(403,'Unsafe project export file')
+                                count+=1
+                                if count>10000:raise HTTPException(413,'Project export file limit exceeded')
+                                entry=zipfile.ZipInfo(relative);entry.compress_type=zipfile.ZIP_DEFLATED
+                                entry.external_attr=(pinned.st_mode&0xffff)<<16
+                                with archive.open(entry,'w') as output:
+                                    while True:
+                                        chunk=os.read(child,min(65536,max(1,maximum-total+1)))
+                                        if not chunk:break
+                                        total+=len(chunk)
+                                        if total>maximum:raise HTTPException(413,'Project export exceeds storage allowance')
+                                        output.write(chunk)
+                        finally:
+                            if child is not None:os.close(child)
+            walk(root_fd)
         return path
     except Exception:
         path.unlink(missing_ok=True)
