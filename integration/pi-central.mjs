@@ -11,7 +11,7 @@
 import http from "node:http";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync, rmSync, statSync, openSync, closeSync, fstatSync, readSync, constants as fsConstants } from "node:fs";
+import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync, readlinkSync, rmSync, statSync, openSync, closeSync, fstatSync, readSync, constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 
@@ -477,6 +477,65 @@ class ProjectToolSandbox {
     try{this.child?.stdin.destroy();}catch{}
     // Only the dedicated group created by spawn; no shared Pi processes.
     if(this.child?.pid)try{process.kill(-this.child.pid,"SIGKILL");}catch{}
+  }
+}
+async function probeProjectToolSandbox(){
+  // Explicit operator-only CLI probe. No listener, production project,
+  // provider call, credential lookup or service restart is involved.
+  const roots=[],checks=[];let boundary,phase="create-test-projects";
+  const check=(condition,label)=>{if(!condition)throw Error(label);checks.push(label);};
+  try{
+    for(let i=0;i<2;i++){
+      const owner=path.join("/var/lib/opencode-workspaces",randomUUID());
+      mkdirSync(owner,{mode:0o700});roots.push(owner);
+      mkdirSync(path.join(owner,randomUUID(),"repo"),{recursive:true,mode:0o700});
+    }
+    const directories=roots.map(owner=>path.join(owner,readdirSync(owner)[0],"repo"));
+    const [directory,other]=directories;
+    writeFileSync(path.join(other,"isolation-canary.txt"),randomUUID(),{mode:0o600});
+    boundary=new ProjectToolSandbox({directory});
+    const run=async(name,args)=>{
+      phase=name;
+      return boundary.execute(name,randomUUID(),args,AbortSignal.timeout(8000));
+    };
+    const text=result=>(result.content||[]).filter(part=>part.type==="text").map(part=>part.text).join("\n");
+    await run("write",{path:"isolation-sample.txt",content:"OWN_ALPHA\n"});checks.push("native-write");
+    await run("edit",{path:"isolation-sample.txt",oldText:"OWN_ALPHA",newText:"OWN_BETA"});checks.push("native-edit");
+    check(text(await run("read",{path:"isolation-sample.txt"})).includes("OWN_BETA"),"native-read");
+    check(text(await run("ls",{path:"."})).includes("isolation-sample.txt"),"native-ls");
+    check(text(await run("grep",{pattern:"OWN_BETA",path:"."})).includes("OWN_BETA"),"native-grep");
+    check(text(await run("find",{pattern:"isolation-sample.txt",path:"."})).includes("isolation-sample.txt"),"native-find");
+    phase="deny-other-project";
+    let denied=false;
+    try{await run("read",{path:path.join(other,"isolation-canary.txt")});}catch{denied=true;}
+    check(denied,"deny-other-project");
+    const netNamespace=readlinkSync("/proc/self/ns/net");
+    const program=`const fs=require("fs");if(fs.existsSync(${JSON.stringify(other)})||`+
+      `fs.existsSync("/etc/hostname")||fs.existsSync("/run/pi-central/pi.sock")||`+
+      `fs.existsSync("/run/docker.sock")||fs.readlinkSync("/proc/self/ns/net")===${JSON.stringify(netNamespace)})process.exit(7);`+
+      `console.log("ISOLATED_NODE_OK")`;
+    // Every interpolated value is a generated UUID path or a kernel namespace
+    // identifier, encoded in JavaScript literals, never user-supplied shell.
+    check(!program.includes("'"),"probe-command-encoding");
+    const runtime=await run("bash",{command:"python3 -c 'print(\"ISOLATED_PYTHON_OK\")' && node -e '"+program+"'",timeout:5});
+    check(text(runtime).includes("ISOLATED_PYTHON_OK")&&text(runtime).includes("ISOLATED_NODE_OK"),
+      "native-bash-python-node-host-and-network-boundaries");
+    phase="native-stop";
+    const stop=new AbortController();
+    const pending=boundary.execute("bash",randomUUID(),{command:"sleep 30",timeout:35},stop.signal);
+    const timer=setTimeout(()=>stop.abort(),200);
+    let cancelled=false;try{await pending;}catch{cancelled=true;}finally{clearTimeout(timer);}
+    check(cancelled,"native-stop");
+    check(text(await run("read",{path:"isolation-sample.txt"})).includes("OWN_BETA"),"read-after-stop");
+    console.log(JSON.stringify({probe:"PASS",checks,notes:[
+      "No model, payment or administration endpoint was called.",
+      "This is a tool compatibility gate, not complete tenant-isolation or performance acceptance."]}));
+  }catch(error){
+    console.error(JSON.stringify({probe:"FAIL",phase,checks,error:String(error.message).slice(0,200)}));
+    throw Error("Project tool isolation probe did not pass");
+  }finally{
+    boundary?.close();
+    for(const root of roots)rmSync(root,{recursive:true,force:true});
   }
 }
 class SdkAgent {
@@ -1808,6 +1867,10 @@ const server=http.createServer(async(req,res)=>{
       isPrompt&&(!promptDispatched||e.receipt==="not_submitted")?"not_submitted":undefined);
   }
 });
+if(process.argv.includes("--isolation-probe")){
+  try{await probeProjectToolSandbox();process.exit(0);}
+  catch{process.exit(1);}
+}
 server.on("clientError",(_,s)=>s.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 mkdirSync(path.dirname(SOCK),{recursive:true,mode:0o700});
 if(existsSync(SOCK))unlinkSync(SOCK);
