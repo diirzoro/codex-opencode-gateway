@@ -275,12 +275,19 @@ def login(data: LoginRequest, response: Response, db: Session = Depends(get_db))
 
 @router.post("/logout", status_code=204)
 def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    pi_sessions = []
     for name in (settings.session_cookie_name, reactivation_cookie_name()):
         raw = request.cookies.get(name)
         if raw:
             session = db.scalar(select(AuthSession).where(AuthSession.token_hash == hash_session_token(raw)))
-            if session: session.revoked_at = datetime.now(timezone.utc)
+            if session:
+                session.revoked_at = datetime.now(timezone.utc)
+                pi_sessions.append((session.user_id, session.id))
     db.commit()
+    if pi_sessions:
+        from .management import _ai_pi_invalidate
+        for user_id, session_id in set(pi_sessions):
+            _ai_pi_invalidate(user_id, session_id=session_id)
     response.delete_cookie(settings.session_cookie_name, path="/", secure=settings.cookie_secure, httponly=True, samesite="strict")
     response.delete_cookie(reactivation_cookie_name(), path="/api", secure=settings.cookie_secure, httponly=True, samesite="strict")
 

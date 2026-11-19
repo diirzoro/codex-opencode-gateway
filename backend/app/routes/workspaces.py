@@ -195,6 +195,8 @@ def archive_project(project_id: uuid.UUID,user: User=Depends(require_user),db: S
     row.archived_at=datetime.now(timezone.utc)
     db.execute(update(Workspace).where(Workspace.project_id==row.id,Workspace.status.not_in(["cache_expiring","cache_expired"])).values(last_activity_at=datetime.now(timezone.utc)))
     db.commit()
+    from .management import _ai_pi_invalidate
+    _ai_pi_invalidate(user.id)
     return manager.project_payload(row)
 
 class ConfirmLocalProjectDelete(BaseModel):
@@ -268,6 +270,8 @@ def delete_project(project_id:uuid.UUID,data:ConfirmLocalProjectDelete,
         db.rollback()
         raise HTTPException(503,'Could not remove project worktree; project record was retained') from None
     db.commit()
+    from .management import _ai_pi_invalidate
+    _ai_pi_invalidate(user.id)
     return {'deleted':True,'project_id':str(project_id),'source_type':source_type,
             'remote_repository_deleted':False,'local_worktrees_removed':len(paths)}
 
