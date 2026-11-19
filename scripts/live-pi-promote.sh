@@ -34,6 +34,63 @@ sudo_operator /usr/bin/systemctl is-active --quiet pi-central.service ||
 sudo_operator /usr/bin/systemctl is-active --quiet opencode-gateway.service ||
   { echo "LIVE Gateway is not active" >&2; exit 4; }
 
+# Resolve the file actually executed by the existing shared Pi service. LIVE
+# source synchronization alone does not update a separate /home/tahir/pi-test
+# runtime. Do not guess a checkout, change ExecStart or replace the SDK.
+pi_pid="$(sudo_operator /usr/bin/systemctl show pi-central.service -p MainPID --value)"
+pi_file="$("$APP/.venv/bin/python" - "$pi_pid" <<'PY'
+import sys
+from pathlib import Path
+pid = int(sys.argv[1])
+assert pid > 0, 'Pi process is unavailable'
+proc = Path('/proc') / str(pid)
+args = (proc / 'cmdline').read_bytes().split(b'\0')
+files = [Path(arg.decode()) for arg in args if arg and Path(arg.decode()).name == 'pi-central.mjs']
+assert len(files) == 1, 'Cannot identify the existing Pi entry point'
+p = files[0]
+if not p.is_absolute():
+    p = (proc / 'cwd').resolve() / p
+p = p.resolve(strict=True)
+assert p.is_file() and str(p).startswith('/home/tahir/'), 'Unexpected Pi entry point'
+assert '\n' not in str(p), 'Invalid Pi entry point'
+print(p)
+PY
+)"
+pi_update_needed=0
+cmp -s "$pi_file" "$RELEASE/integration/pi-central.mjs" || pi_update_needed=1
+read -r pi_uid pi_gid pi_mode < <(stat -c '%u %g %a' "$pi_file")
+pi_backup=
+pi_source_touched=0
+pi_restart_attempted=0
+rollback=
+install_pi_file() {
+  local source="$1" staged
+  staged="$(sudo_operator /usr/bin/mktemp "${pi_file}.release.XXXXXX")" || return 1
+  if ! sudo_operator /usr/bin/install -o "$pi_uid" -g "$pi_gid" -m "$pi_mode" "$source" "$staged" ||
+     ! sudo_operator /usr/bin/mv -fT -- "$staged" "$pi_file"; then
+    sudo_operator /usr/bin/rm -f -- "$staged" || true
+    return 1
+  fi
+}
+finish_release() {
+  local result=$?
+  trap - EXIT
+  if [[ "$result" != 0 && "$pi_source_touched" == 1 && -n "$pi_backup" ]]; then
+    echo "Release failed; restoring the previous shared Pi entry point" >&2
+    if install_pi_file "$pi_backup"; then
+      if [[ "$pi_restart_attempted" == 1 ]]; then
+        sudo_operator /usr/bin/systemctl restart pi-central.service ||
+          echo "Pi recovery requires operator attention; private backup retained" >&2
+      fi
+    else
+      echo "Pi source recovery requires operator attention; private backup retained" >&2
+    fi
+  fi
+  [[ -z "$rollback" ]] || rm -f -- "$rollback"
+  exit "$result"
+}
+trap finish_release EXIT
+
 # Confirm the LIVE host actually loads the existing production-only snippet.
 nginx_before="$(sudo_operator /usr/sbin/nginx -T 2>/dev/null)"
 if ! grep -Fq "configuration file $SNIPPET:" <<< "$nginx_before"; then
@@ -87,6 +144,15 @@ PY
   chmod 600 "$backup_path.sha256"
   echo "LIVE_PRE_DEPLOY_DATABASE_BACKUP_OK (private dump retained under $backup_dir)"
 )
+
+if [[ "$pi_update_needed" == 1 ]]; then
+  pi_backup="$(mktemp "$APP/backups/pi-central-before-${LIVE_PI_SOURCE_SHA:0:12}.XXXXXX")"
+  cat "$pi_file" > "$pi_backup"
+  chmod 600 "$pi_backup"
+  # rsync below may itself replace this file when ExecStart points into APP.
+  # Retain recovery before that happens, as well as for a separate Pi runtime.
+  pi_source_touched=1
+fi
 
 # Replace the entire legacy OpenCode source, not just changed files.
 # Preserve only production environment, databases, project/runtime state, and keys.
@@ -151,7 +217,7 @@ print("LIVE Pi native selectors set; payment, email and database values preserve
 PY
 
 # Gateway is the existing Python administrative backend; it never processes Pi
-# prompts. Pi Central itself is shared and is NEVER changed or restarted here.
+# prompts. Shared Pi is updated below only when its actual source differs.
 "$APP/.venv/bin/python" -m pip install --disable-pip-version-check -q -r "$APP/backend/requirements.txt"
 (
   set -a
@@ -212,7 +278,6 @@ restore_nginx() {
   sudo_operator /usr/sbin/nginx -t >/dev/null
   sudo_operator /usr/bin/systemctl reload nginx
 }
-trap 'rm -f "$rollback"' EXIT
 sudo_operator /usr/bin/install -m 644 "$RELEASE/ops/native-direct/nginx-live.conf" "$SNIPPET"
 if ! sudo_operator /usr/sbin/nginx -t; then
   restore_nginx
@@ -225,5 +290,21 @@ if ! sudo_operator /usr/bin/systemctl reload nginx; then
   exit 7
 fi
 
+# Activate the same source in the existing shared Pi runtime. No service unit,
+# SDK package, environment flag, workflow, payment setting or project is edited.
+if [[ "$pi_update_needed" == 1 ]]; then
+  install_pi_file "$RELEASE/integration/pi-central.mjs"
+  pi_restart_attempted=1
+  sudo_operator /usr/bin/systemctl restart pi-central.service
+  sudo_operator /usr/bin/systemctl is-active --quiet pi-central.service
+  curl -fsS --max-time 5 --retry 10 --retry-delay 1 --retry-connrefused \
+    --unix-socket "$PI_SOCKET" http://localhost/health >/dev/null
+fi
+cmp -s "$pi_file" "$RELEASE/integration/pi-central.mjs" || {
+  echo "The shared Pi runtime does not match the deployed release" >&2
+  exit 9
+}
+echo "SHARED_PI_SOURCE_DEPLOYED revision=$LIVE_PI_SOURCE_SHA updated=$pi_update_needed"
+
 unset sudo_password
-echo "LIVE_PI_GATEWAY_DEPLOYED revision=$LIVE_PI_SOURCE_SHA gateway=8000 db=opencode_gateway shared_pi=unchanged"
+echo "LIVE_PI_GATEWAY_DEPLOYED revision=$LIVE_PI_SOURCE_SHA gateway=8000 db=opencode_gateway shared_pi=release-matched"
