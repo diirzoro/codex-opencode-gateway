@@ -137,7 +137,7 @@ const input=JSON.parse(fs.readFileSync(0,'utf8'));
 const source=fs.readFileSync(input.source,'utf8');
 const root=fs.realpathSync(input.root),other=fs.realpathSync(input.other);
 const scope={directory:root};
-const sandbox={path,process,Buffer,TextDecoder,setTimeout,clearTimeout,...fs,fsConstants:fs.constants,
+const sandbox={path,process,Buffer,TextDecoder,URLSearchParams,setTimeout,clearTimeout,...fs,fsConstants:fs.constants,
   execFileSync(){throw Error('No Git or model execution in file boundary tests');}};
 const run=vm.createContext(sandbox);
 vm.runInContext(source.slice(source.indexOf('function workspaceFile('),source.indexOf('function piNativeTodos(')),run);
@@ -230,6 +230,16 @@ if(action==='own'){
   const result=await pending;assert.equal(result.branch,'');
   assert.equal(JSON.stringify(result).includes('PRIVATE_BACKEND_ERROR'),false);
  }
+}else if(action.startsWith('context-')){
+ fs.writeFileSync(path.join(path.dirname(root),'AGENTS.md'),'PARENT_CONTEXT_MUST_NOT_LOAD');
+ if(action==='context-own'){
+  fs.writeFileSync(path.join(root,'AGENTS.md'),'OWN_CONTEXT');
+  const result=run.projectContextFiles(scope);
+  assert.equal(result.length,1);assert.equal(result[0].content,'OWN_CONTEXT');
+ }else{
+  if(action==='context-link')fs.symlinkSync(outside,path.join(root,'AGENTS.md'));
+  assert.equal(run.projectContextFiles(scope).length,0);
+ }
 }else if(action==='owner-scope'){
  const account={user_id:input.ownerB,workspaces:[{id:input.workspaceB,project_id:input.projectB,directory:other}]};
  sandbox.browserPrincipal=()=>account;
@@ -246,7 +256,8 @@ console.log('PASS');
 @pytest.mark.parametrize('action',[
     'own','policy','symlink','hardlink','fifo','large','binary','missing','grow',
     'leaf-race','directory-race','list-race','root-race','fd-cleanup','owner-scope',
-    'git-status','git-async','git-output-bound','git-errors'])
+    'git-status','git-async','git-output-bound','git-errors',
+    'context-own','context-link','context-ancestor'])
 def test_client_explorer_pins_owned_files_and_bounds_reads(tmp_path, action):
     import os
     import shutil
@@ -297,5 +308,128 @@ console.log('PASS');
     result=subprocess.run([node,'--input-type=module','-e',script],
                           input=json.dumps(dict(source=source,supported=supported)),
                           text=True,capture_output=True,timeout=5)
+    assert result.returncode==0,result.stderr
+    assert result.stdout.strip()=='PASS'
+
+# Exercise the staged project's real Node IPC/lifecycle. These tests do not
+# simulate successful OS containment: the namespace mount requires a VPS gate.
+@pytest.mark.parametrize('action',['plan','rpc','cancel','stuck-cancel','root-mismatch','launcher-failure'])
+def test_project_tool_boundary_protocol_and_fail_closed(tmp_path, action):
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node=shutil.which('node')
+    if not node:
+        pytest.skip('Node runtime unavailable')
+    root=tmp_path/'project';root.mkdir()
+    other=tmp_path/'other';other.mkdir()
+    fixture=tmp_path/'tools.mjs'
+    fixture.write_text(r'''
+import fs from 'node:fs';
+try{fs.fstatSync(3);throw Error('Host project descriptor leaked');}
+catch(e){if(e.code!=='EBADF')throw e;}
+let calls=0;
+const definition=name=>({name,async execute(id,args,signal,update,context){
+ if(args.stuck)return new Promise(()=>{});
+ if(args.wait)return new Promise((resolve,reject)=>{
+  signal.addEventListener('abort',()=>reject(Error('cancelled')),{once:true});
+ });
+ update?.({content:[{type:'text',text:'progress'}]});
+ return {content:[{type:'text',text:JSON.stringify({calls:++calls,cwd:context.cwd,
+  leaked:process.env.PROJECT_CANARY||null,input:context.model?.input})}]};
+}});
+export function createAllToolDefinitions(){
+ return Object.fromEntries(['read','bash','edit','write','grep','find','ls','powershell']
+  .map(name=>[name,definition(name)]));
+}
+''',encoding='utf8')
+    script=r'''
+import fs from 'node:fs';import path from 'node:path';import vm from 'node:vm';
+import {spawn} from 'node:child_process';import {pathToFileURL} from 'node:url';
+import {randomUUID} from 'node:crypto';import assert from 'node:assert/strict';
+const input=JSON.parse(fs.readFileSync(0,'utf8'));
+const source=fs.readFileSync(input.source,'utf8');
+const section=source.slice(source.indexOf('const PROJECT_SANDBOX_ENABLED='),source.indexOf('class SdkAgent {'));
+let spawns=0,child;
+const context={process,Buffer,path,setTimeout,clearTimeout,randomUUID,
+ withWorkspaceDirectory(scope,relative,operation){
+  const fd=fs.openSync(input.action==='root-mismatch'?input.other:input.root,'r');
+  try{return operation(fd);}finally{fs.closeSync(fd);}
+ },spawn(file,args,options){
+  spawns++;
+  assert.equal(file,'/usr/local/libexec/pi-project-bwrap');
+  assert.equal(options.env.PROJECT_CANARY,undefined);
+  assert.equal(options.env.NODE_OPTIONS,undefined);
+  if(input.action==='launcher-failure')return spawn('/nonexistent-pi-boundary',[],options);
+  const code=args.at(-1).replace(
+   'file:///opt/pi/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/index.js',
+   pathToFileURL(input.fixture).href);
+  child=spawn(process.execPath,['--input-type=module','-e',code],{
+   ...options,cwd:input.root,stdio:['pipe','pipe','pipe',options.stdio[3]]});
+  return child;
+ }};
+vm.createContext(context);vm.runInContext(section,context);
+const plan=vm.runInContext('projectSandboxPlan',context);
+const directory='/var/lib/opencode-workspaces/owner/project/repo';
+const p=plan({directory},'/usr/bin/node');
+assert.ok(p.args.includes('--unshare-net'));assert.ok(p.args.includes('--unshare-pid'));
+assert.ok(p.args.includes('--clearenv'));assert.equal(p.env.HOME,'/tmp/home');
+assert.ok(!p.args.includes('/run'));assert.ok(!p.args.includes('/etc'));
+assert.throws(()=>plan({directory:'/home/other'},'/usr/bin/node'));
+assert.throws(()=>plan({directory:directory+'/../other'},'/usr/bin/node'));
+assert.throws(()=>plan({directory},'/home/tahir/node'));
+// The local runtime path is different; keep production validation and substitute
+// only the runtime argument in this isolated protocol harness.
+vm.runInContext('const originalPlan=projectSandboxPlan;projectSandboxPlan=scope=>originalPlan(scope,"/usr/bin/node")',context);
+const Boundary=vm.runInContext('ProjectToolSandbox',context);
+const boundary=new Boundary({directory});
+process.env.PROJECT_CANARY='never-forward-provider-or-control-secrets';
+let updates=0;
+try{
+ if(input.action==='plan'){
+  const sdk={};
+  for(const name of ['Read','Bash','Edit','Write','Grep','Find','Ls','PowerShell'])
+   sdk['create'+name+'ToolDefinition']=()=>({name:name.toLowerCase(),execute(){throw Error('Host execution forbidden');}});
+  const defs=boundary.definitions(sdk);assert.equal(defs.length,8);
+  assert.equal(spawns,0); // Definitions/catalog creation must not start a worker.
+ }else if(['launcher-failure','root-mismatch'].includes(input.action)){
+  await assert.rejects(boundary.execute('read','x',{},null));
+  assert.equal(spawns,1);assert.equal(boundary.closed,true);
+ }else{
+  const result=await boundary.execute('read','x',{},null,()=>updates++,{
+   model:{input:['text'],apiKey:'secret',headers:{Authorization:'secret'}},credentials:{secret:true}});
+  const first=JSON.parse(result.content[0].text);
+  assert.equal(first.calls,1);assert.equal(first.leaked,null);assert.equal(first.cwd,input.root);
+  assert.deepEqual(first.input,['text']);assert.equal(updates,1);
+  const second=await boundary.execute('bash','y',{},null);
+  assert.equal(JSON.parse(second.content[0].text).calls,2);assert.equal(spawns,1);
+  if(input.action==='cancel'){
+   const controller=new AbortController();
+   const pending=boundary.execute('bash','z',{wait:true},controller.signal);
+   setTimeout(()=>controller.abort(),80);
+   await assert.rejects(pending,/cancelled/);
+   assert.equal(boundary.pending.size,0);
+   const again=await boundary.execute('ls','after-stop',{},null);
+   assert.equal(JSON.parse(again.content[0].text).calls,3);assert.equal(spawns,1);
+  }
+  if(input.action==='stuck-cancel'){
+   const controller=new AbortController();
+   const pending=boundary.execute('bash','stuck',{stuck:true},controller.signal);
+   setTimeout(()=>controller.abort(),80);
+   await assert.rejects(pending,/closed/);
+   const again=await boundary.execute('ls','after-forced-stop',{},null);
+   assert.equal(JSON.parse(again.content[0].text).calls,1);assert.equal(spawns,2);
+  }
+  assert.equal(boundary.pending.size,0);
+ }
+}finally{boundary.close();delete process.env.PROJECT_CANARY;}
+assert.equal(boundary.closed,true);
+await assert.rejects(boundary.execute('read','closed',{},null));
+console.log('PASS');
+'''
+    result=subprocess.run([node,'--input-type=module','-e',script],
+        input=json.dumps(dict(source=str(Path(__file__).resolve().parents[2]/'integration/pi-central.mjs'),
+                              root=str(root),other=str(other),fixture=str(fixture),action=action)),
+        capture_output=True,text=True,timeout=12)
     assert result.returncode==0,result.stderr
     assert result.stdout.strip()=='PASS'

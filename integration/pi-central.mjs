@@ -302,6 +302,183 @@ function piTodoExtension(Type){
 }
 // In-process Pi SDK session: one isolated, in-memory credential runtime per
 // project, keeping the existing bridge/socket/routes and persistent Pi JSONL.
+// Staged customer-only tool boundary. It is deliberately opt-in until the
+// installed SDK, cancellation, builds and resource/network policy pass on VPS.
+// Pi's model runtime and credentials never enter this process. One namespace
+// is reused for all tool calls during this project session, not per message.
+const PROJECT_SANDBOX_ENABLED=process.env.PI_PROJECT_SANDBOX==="1";
+const PROJECT_TOOL_NAMES=["read","bash","edit","write","grep","find","ls","powershell"];
+async function projectToolWorkerMain() {
+  // Serialized into `node -e` inside bwrap; no application file is created.
+  // bwrap 0.9 resolves bind sources to pathnames. Compare the resulting
+  // mount against our pinned inode BEFORE loading tools, then close the
+  // inherited host-directory fd: leaving it open would expose host parents.
+  const fs=await import("node:fs");
+  let sameRoot=false;
+  try{
+    const pinned=fs.fstatSync(3,{bigint:true});
+    const mounted=fs.statSync(process.cwd(),{bigint:true});
+    sameRoot=pinned.dev===mounted.dev&&pinned.ino===mounted.ino;
+  }finally{fs.closeSync(3);}
+  if(!sameRoot)process.exit(2);
+  const emit=message=>process.stdout.write(JSON.stringify(message)+"\n");
+  const controllers=new Map();
+  let buffer="",chain=Promise.resolve();
+  import("file:///opt/pi/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/index.js")
+    .then(sdk=>{
+      const cwd=process.cwd();
+      const tools=sdk.createAllToolDefinitions(cwd,{
+        bash:{exposeSessionEnvironment:false},powershell:{exposeSessionEnvironment:false}
+      });
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data",chunk=>{
+        buffer+=chunk;
+        if(Buffer.byteLength(buffer)>4*1024*1024)process.exit(2);
+        let newline;
+        while((newline=buffer.indexOf("\n"))>=0){
+          const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);
+          let msg;try{msg=JSON.parse(line);}catch{process.exit(2);}
+          if(msg.cancel){controllers.get(msg.id)?.abort();continue;}
+          if(!["read","bash","edit","write","grep","find","ls","powershell"].includes(msg.name)){
+            emit({id:msg.id,error:"Unsupported project tool"});continue;
+          }
+          const controller=new AbortController();controllers.set(msg.id,controller);
+          chain=chain.then(async()=>{
+            try{
+              if(controller.signal.aborted)throw Error("Tool cancelled");
+              const result=await tools[msg.name].execute(msg.id,msg.args,controller.signal,
+                update=>emit({id:msg.id,update}),{cwd,model:msg.model});
+              emit({id:msg.id,result});
+            }catch{emit({id:msg.id,error:controller.signal.aborted?
+              "Project tool cancelled":"Project tool failed inside isolation"});}
+            finally{controllers.delete(msg.id);}
+          });
+        }
+      });
+      process.stdin.on("end",()=>process.exit(0));
+      emit({ready:true});
+    }).catch(()=>process.exit(2));
+}
+function projectSandboxPlan(scope,node=process.execPath) {
+  const directory=scope.directory;
+  if(process.platform!=="linux"||!path.isAbsolute(directory)||
+     path.resolve(directory)!==directory||directory==="/"||
+     !directory.startsWith("/var/lib/opencode-workspaces/"))
+    throw Object.assign(new Error("Project isolation scope unavailable"),{status:503});
+  if(!path.isAbsolute(node)||!/^\/usr\/(?:local\/)?bin\/[^/]+$/.test(node))
+    throw Object.assign(new Error("Project Node runtime needs explicit review"),{status:503});
+  const env={PATH:"/usr/local/bin:/usr/bin:/bin",HOME:"/tmp/home",TMPDIR:"/tmp",
+    LANG:"C.UTF-8",XDG_CONFIG_HOME:"/tmp/home/.config",
+    GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null",GIT_TERMINAL_PROMPT:"0"};
+  const args=["--unshare-user","--unshare-pid","--unshare-net","--unshare-ipc",
+    "--unshare-uts","--die-with-parent","--new-session","--cap-drop","ALL",
+    "--clearenv"];
+  // Expose runtime resources, not the host's /home, /etc, /run or project
+  // parents. /proc is private to this PID namespace; /tmp and /dev are fresh.
+  for(const runtime of ["/usr/bin","/usr/lib","/usr/share","/bin","/lib","/lib64"])
+    args.push("--ro-bind",runtime,runtime);
+  if(!node.startsWith("/usr/bin/"))args.push("--ro-bind",node,node);
+  args.push("--ro-bind","/home/tahir/pi-test/node_modules","/opt/pi/node_modules",
+    "--proc","/proc","--dev","/dev","--tmpfs","/tmp","--dir","/tmp/home",
+    // fd 3 pins the validated inode. The trusted bootstrap verifies that
+    // bwrap mounted that inode and closes fd 3 before any tool code loads.
+    "--bind","/proc/self/fd/3",directory,"--chdir",directory);
+  for(const [key,value] of Object.entries(env))args.push("--setenv",key,value);
+  args.push("--",node,"--input-type=module","-e",`(${projectToolWorkerMain.toString()})();`);
+  return {file:"/usr/local/libexec/pi-project-bwrap",args,env};
+}
+class ProjectToolSandbox {
+  constructor(scope){this.scope=scope;this.child=null;this.pending=new Map();this.closed=false;}
+  start(){
+    if(this.closed)return Promise.reject(new Error("Project isolation is closed"));
+    if(this.ready)return this.ready;
+    this.ready=new Promise((resolve,reject)=>{
+      this.rejectStartup=reject;
+      const plan=projectSandboxPlan(this.scope);
+      this.child=withWorkspaceDirectory(this.scope,"",fd=>spawn(plan.file,plan.args,{
+        cwd:"/",env:plan.env,stdio:["pipe","pipe","ignore",fd],detached:true}));
+      const currentChild=this.child;
+      const failed=()=>{if(!this.closed&&this.child===currentChild)this.close();};
+      let buffer="";
+      this.startTimer=setTimeout(()=>this.close(),10000);
+      this.child.once("error",failed);
+      this.child.once("exit",failed);
+      this.child.stdin.on("error",failed);
+      this.child.stdout.setEncoding("utf8");
+      this.child.stdout.on("data",chunk=>{
+        if(this.closed||this.child!==currentChild)return;
+        buffer+=chunk;
+        if(Buffer.byteLength(buffer)>16*1024*1024){this.close();return;}
+        let newline;
+        while((newline=buffer.indexOf("\n"))>=0){
+          const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);
+          let msg;try{msg=JSON.parse(line);}catch{this.close();return;}
+          if(msg.ready){clearTimeout(this.startTimer);resolve();continue;}
+          const request=this.pending.get(msg.id);if(!request)continue;
+          if(msg.update){try{request.update?.(msg.update);}catch{}continue;}
+          request.finish(msg.error?new Error(msg.error):null,msg.result);
+        }
+      });
+    });
+    return this.ready;
+  }
+  async execute(name,id,args,signal,update,context){
+    if(!PROJECT_TOOL_NAMES.includes(name))throw Error("Unsupported project tool");
+    if(signal?.aborted)throw Error("Project tool cancelled");
+    if(this.closed&&this.restartAllowed){
+      this.closed=false;this.restartAllowed=false;this.child=null;this.ready=null;
+    }
+    await this.start();
+    if(this.closed||signal?.aborted)throw Error("Project tool cancelled or isolation closed");
+    if(this.pending.size>=32)throw Error("Project tool queue limit reached");
+    // Transfer only tool arguments and public image capabilities, never the
+    // SDK context, model headers, credentials, environment or control grants.
+    const model=context?.model?{input:context.model.input,
+      inputLimits:{images:{resize:context.model.inputLimits?.images?.resize}}}:undefined;
+    const key=randomUUID();
+    const line=JSON.stringify({id:key,name,args,model})+"\n";
+    if(Buffer.byteLength(line)>4*1024*1024)throw Error("Project tool input exceeds limit");
+    return new Promise((resolve,reject)=>{
+      let cancelTimer;
+      const timer=setTimeout(()=>this.close(),30*60_000);
+      const finish=(error,result)=>{
+        clearTimeout(timer);clearTimeout(cancelTimer);
+        signal?.removeEventListener("abort",cancel);this.pending.delete(key);
+        error?reject(error):resolve(result);
+      };
+      const cancel=()=>{
+        if(this.closed)return;
+        this.child.stdin.write(JSON.stringify({id:key,cancel:true})+"\n");
+        // A stuck child must not survive Stop. Killing PID 1 of this private
+        // namespace tears down its descendants; never fall back to host tools.
+        cancelTimer=setTimeout(()=>{this.close();this.restartAllowed=true;},1500);
+      };
+      this.pending.set(key,{finish,update});
+      signal?.addEventListener("abort",cancel,{once:true});
+      this.child.stdin.write(line,error=>{if(error)this.close();});
+    });
+  }
+  definitions(sdk){
+    return PROJECT_TOOL_NAMES.map(name=>{
+      const factory=sdk[name==="powershell"?"createPowerShellToolDefinition":
+        "create"+name[0].toUpperCase()+name.slice(1)+"ToolDefinition"];
+      if(typeof factory!=="function")throw Error("Installed Pi lacks native tool definitions");
+      return {...factory(this.scope.directory,
+        ["bash","powershell"].includes(name)?{exposeSessionEnvironment:false}:undefined),
+        execute:(id,args,signal,update,context)=>
+        this.execute(name,id,args,signal,update,context)};
+    });
+  }
+  close(){
+    this.restartAllowed=false;
+    if(this.closed)return;this.closed=true;clearTimeout(this.startTimer);
+    this.rejectStartup?.(new Error("Project isolation unavailable"));
+    for(const request of [...this.pending.values()])request.finish(new Error("Project isolation closed"));
+    try{this.child?.stdin.destroy();}catch{}
+    // Only the dedicated group created by spawn; no shared Pi processes.
+    if(this.child?.pid)try{process.kill(-this.child.pid,"SIGKILL");}catch{}
+  }
+}
 class SdkAgent {
   static async create(scope) {
     const sdk=await import("@earendil-works/pi-coding-agent");
@@ -385,20 +562,36 @@ class SdkAgent {
         "fails, explain the limitation clearly; do not fabricate tool calls."
       ],
       noExtensions:false,noSkills:false,
-      noPromptTemplates:false,noContextFiles:false
+      noPromptTemplates:false,noContextFiles:true,
+      // Native ancestor discovery follows AGENTS links and walks above the
+      // owned root. Feed only the bounded, descriptor-pinned project document.
+      agentsFilesOverride:()=>({agentsFiles:projectContextFiles(scope)})
     });
     await resourceLoader.reload();
-    const {session}=await sdk.createAgentSession({
+    if(PROJECT_SANDBOX_ENABLED){
+      // A global extension can execute model-selected code outside custom
+      // tools. Do not advertise isolation while an unreviewed extension can
+      // bypass it; keep this staged mode closed pending extension inventory.
+      const external=resourceLoader.getExtensions().extensions.filter(extension=>
+        !String(extension.path).startsWith("<inline:"));
+      if(external.length)
+        throw Object.assign(new Error("Project isolation requires review of installed extension execution"),{status:503});
+    }
+    const projectSandbox=PROJECT_SANDBOX_ENABLED?new ProjectToolSandbox(scope):null;
+    let session;
+    try{({session}=await sdk.createAgentSession({
       cwd:scope.directory,agentDir:PI_AGENT_DIR,
       modelRuntime:runtime,sessionManager:manager,settingsManager,
-      resourceLoader,noTools:false
-    });
+      resourceLoader,noTools:false,
+      ...(projectSandbox?{customTools:projectSandbox.definitions(sdk)}:{})
+    }));}catch(error){projectSandbox?.close();throw error;}
     // Activate every tool already registered in Pi, including the seven
     // built-ins and installed extension tools. No new tools or APIs are added.
     if(typeof session.getAllTools==="function"&&
        typeof session.setActiveToolsByName==="function")
       session.setActiveToolsByName(session.getAllTools().map(tool=>tool.name));
     const agent=new SdkAgent(scope,session,runtime);
+    agent.projectSandbox=projectSandbox;
     // Bind the SDK's existing extension UI channel to the same Pi session.
     // Dialog requests are handled by the existing Workspace question form.
     try{
@@ -732,6 +925,7 @@ class SdkAgent {
   }
   close(){
     if(this.closed)return;this.closed=true;
+    this.projectSandbox?.close();
     for(const request of this.uiRequests.values())try{request.answer({reject:true});}catch{}
     this.uiRequests.clear();this.uiWidgets.clear();
     releaseExecution(this);
@@ -1064,6 +1258,20 @@ function projectFileRequest(scope,pathname,query) {
       })),()=>[]);
   }
   throw Object.assign(new Error("Unsupported project file operation"),{status:404});
+}
+function projectContextFiles(scope){
+  for(const filename of ["AGENTS.override.md","AGENTS.md","AGENTS.MD","CLAUDE.md","CLAUDE.MD"]){
+    try{
+      const result=projectFileRequest(scope,"/file/content",new URLSearchParams({path:filename}));
+      if(typeof result?.content==="string"&&Buffer.byteLength(result.content)<=64*1024)
+        return [{path:path.join(scope.directory,filename),content:result.content.replace(/^\uFEFF/,"")}];
+    }catch(error){
+      // Unsafe, missing, binary or oversized context must never cause a host
+      // fallback. The project remains usable through its normal file tools.
+      if(![400,403,404,413,415].includes(error.status))throw error;
+    }
+  }
+  return [];
 }
 function piNativeTodos(messages){
   // Only the existing Pi todo extension's tool results represent real state.
