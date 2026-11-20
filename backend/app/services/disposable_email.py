@@ -15,10 +15,12 @@ BLOCKED_DOMAINS = frozenset({
     "getnada.com", "emailondeck.com", "trashmail.com",
     "dispostable.com", "maildrop.cc", "fakeinbox.com",
     "mohmal.com", "minuteinbox.com",
+    "euploading.com", "fldubai.com", "tempmailx.org",
 })
 
 
 def require_permanent_email(email: str):
     domain = email.strip().lower().rsplit("@", 1)[-1].rstrip(".")
-    if domain in BLOCKED_DOMAINS:
+    labels = domain.split(".")
+    if any(".".join(labels[i:]) in BLOCKED_DOMAINS for i in range(len(labels) - 1)):
         raise HTTPException(422, "Temporary or disposable email addresses are not accepted")
