@@ -796,7 +796,7 @@ async function probeProjectToolSandbox(){
     };
     const text=result=>(result.content||[]).filter(part=>part.type==="text").map(part=>part.text).join("\n");
     await run("write",{path:"isolation-sample.txt",content:"OWN_ALPHA\n"});checks.push("native-write");
-    await run("edit",{path:"isolation-sample.txt",oldText:"OWN_ALPHA",newText:"OWN_BETA"});checks.push("native-edit");
+    await run("edit",{path:"isolation-sample.txt",edits:[{oldText:"OWN_ALPHA",newText:"OWN_BETA"}]});checks.push("native-edit");
     check(text(await run("read",{path:"isolation-sample.txt"})).includes("OWN_BETA"),"native-read");
     check(text(await run("ls",{path:"."})).includes("isolation-sample.txt"),"native-ls");
     check(text(await run("grep",{pattern:"OWN_BETA",path:"."})).includes("OWN_BETA"),"native-grep");
