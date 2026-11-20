@@ -13,6 +13,7 @@ class Plan(Base):
     price_cents: Mapped[int] = mapped_column(Integer)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     duration_days: Mapped[int] = mapped_column(Integer)
+    storage_mb: Mapped[int] = mapped_column(Integer, server_default="50")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

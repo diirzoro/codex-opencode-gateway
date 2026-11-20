@@ -12,7 +12,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Plan, Subscription, User, PaymentOrder,BillingMethod,AccountAudit,Country,Region,City
-from ..services.storage_policy import PLAN_MB
 from .dependencies import require_user,require_admin,require_billing_user,access_payload
 from ..services import paypal
 
@@ -44,7 +43,7 @@ def plan_payload(plan):
     if plan is None:
         return None
     return {"id": plan.id, "code": plan.code, "name": plan.name, "price_cents": plan.price_cents, "currency": plan.currency, "duration_days": plan.duration_days,
-            "storage_mb": PLAN_MB.get(plan.code, 50), "includes_ai_api": False,
+            "storage_mb": plan.storage_mb, "includes_ai_api": False,
             "service_description": "Gateway platform and shared local/GitHub storage only; connect your own AI models/API keys."}
 
 def subscription_payload(db, user) -> dict:
