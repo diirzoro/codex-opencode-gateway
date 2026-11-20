@@ -112,6 +112,7 @@ function gatewayOrigin(req){
 function fromGateway(req){
   if(req.headers.host!==BOOTSTRAP_HOST||req.headers["x-forwarded-for"]||req.headers["x-real-ip"])return false;
   const origin=gatewayOrigin(req);
+  if(!origin)return false;
   const expected=origin==="https://test.opencode-gateway.codes"?
     process.env.PI_GATEWAY_TEST_TOKEN:
     process.env.PI_GATEWAY_LIVE_TOKEN||process.env.PI_GATEWAY_INTERNAL_TOKEN;
@@ -145,8 +146,10 @@ function assertProjectAuthority(scope){
 }
 function grantWorkspaceRootsValid(account){
   const expected=account.origin==="https://opencode-gateway.codes"?
-    process.env.PI_GATEWAY_LIVE_ROOT:process.env.PI_GATEWAY_TEST_ROOT;
-  if(projectSandboxEnabled(account.origin)&&(!expected||account.workspace_root!==expected))return false;
+    process.env.PI_GATEWAY_LIVE_ROOT||"/var/lib/opencode-workspaces":
+    account.origin==="https://test.opencode-gateway.codes"?
+      process.env.PI_GATEWAY_TEST_ROOT||"/var/lib/opencode-workspaces-test":null;
+  if(!expected||account.workspace_root!==expected)return false;
   const root=account.workspace_root;
   if(typeof root!=="string"||!path.isAbsolute(root)||path.resolve(root)!==root||root==="/")return false;
   return account.workspaces.every(work=>
