@@ -9,9 +9,13 @@
  * Nginx must proxy /native-direct/api/ to this UNIX socket, stripping prefix.
  */
 import http from "node:http";
+import http2 from "node:http2";
+import net from "node:net";
+import { networkInterfaces } from "node:os";
+import { lookup as lookupAddress } from "node:dns/promises";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, chmodSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync, readdirSync, lstatSync, realpathSync, readlinkSync, rmSync, rmdirSync, statfsSync, statSync, openSync, closeSync, fstatSync, readSync, constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 
@@ -86,37 +90,121 @@ function cleanPath(uri) {
 const BOOTSTRAP_HOST="pi-internal";
 const PI_COOKIE="pi_test_session";
 const PI_SESSION_DURATION_MS=14*60_000;
+function projectSandboxEnabled(origin){
+  return PROJECT_SANDBOX_ENABLED&&(!process.env.PI_PROJECT_SANDBOX_ORIGIN||
+    process.env.PI_PROJECT_SANDBOX_ORIGIN===origin);
+}
 const browserGrants=new Map();
 const pendingTickets=new Map();
+const sessionAuthorities=new Map();
+const revokedAccounts=new Map(),revokedSessions=new Map(),revokedOrigins=new Map(),revokedLogins=new Map();
+let allRevokedAt=0;
+const authorityKey=account=>account.origin+"\0"+account.auth_session_id;
+const accountKey=account=>account.origin+"\0"+account.user_id;
+function gatewayOrigin(req){
+  const origin=req.headers["x-pi-gateway-origin"];
+  if(["https://opencode-gateway.codes","https://test.opencode-gateway.codes"].includes(origin))return origin;
+  // The still-running older TEST Gateway has no origin header. Preserve its
+  // existing channel only during staged rollout, never after full activation.
+  return !projectSandboxEnabled("https://test.opencode-gateway.codes")&&!origin&&req.headers.host===BOOTSTRAP_HOST?
+    "https://test.opencode-gateway.codes":null;
+}
 function fromGateway(req){
-  return req.headers.host===BOOTSTRAP_HOST &&
-    !req.headers["x-forwarded-for"]&&!req.headers["x-real-ip"];
+  if(req.headers.host!==BOOTSTRAP_HOST||req.headers["x-forwarded-for"]||req.headers["x-real-ip"])return false;
+  const origin=gatewayOrigin(req);
+  if(!origin)return false;
+  const expected=origin==="https://test.opencode-gateway.codes"?
+    process.env.PI_GATEWAY_TEST_TOKEN:
+    process.env.PI_GATEWAY_LIVE_TOKEN||process.env.PI_GATEWAY_INTERNAL_TOKEN;
+  // Rollout keeps the existing control path working until the one-time
+  // server activation. Isolation never activates without authenticated control.
+  if(!expected||expected.length<32)return !projectSandboxEnabled(origin);
+  const supplied=req.headers["x-pi-gateway-token"];
+  return !!origin&&typeof supplied==="string"&&supplied.length<=4096&&
+    Buffer.byteLength(supplied)===Buffer.byteLength(expected)&&
+    timingSafeEqual(Buffer.from(supplied),Buffer.from(expected));
+}
+function accountGrantCurrent(account){
+  if(!account||!Number.isSafeInteger(account.issued_at)||!Number.isSafeInteger(account.expires_at)||
+     !["https://opencode-gateway.codes","https://test.opencode-gateway.codes"].includes(account.origin)||
+     !Number.isSafeInteger(account.auth_created_at)||account.auth_created_at>account.issued_at+5000||
+     account.expires_at<=Date.now()||account.issued_at>Date.now()+5000||
+     account.expires_at>account.issued_at+PI_SESSION_DURATION_MS||
+     !/^[0-9a-f-]{36}$/i.test(account.auth_session_id||""))return false;
+  const revoked=Math.max(allRevokedAt,revokedOrigins.get(account.origin)||0,revokedAccounts.get(accountKey(account))||0,
+    revokedSessions.get(authorityKey(account))||0);
+  return account.issued_at>revoked&&account.auth_created_at>(revokedLogins.get(accountKey(account))||0);
+}
+function assertProjectAuthority(scope){
+  const current=sessionAuthorities.get(authorityKey(scope.account));
+  const account=current?.account;
+  const owned=account?.workspaces?.some(work=>work.id===scope.workspaceId&&
+    work.project_id===scope.projectId&&work.directory===scope.directory);
+  if(!accountGrantCurrent(account)||account.user_id!==scope.userId||!owned)
+    throw Object.assign(new Error("Project authorization expired or revoked"),{status:401});
+  return account;
+}
+function grantWorkspaceRootsValid(account){
+  const expected=account.origin==="https://opencode-gateway.codes"?
+    process.env.PI_GATEWAY_LIVE_ROOT||"/var/lib/opencode-workspaces":
+    account.origin==="https://test.opencode-gateway.codes"?
+      process.env.PI_GATEWAY_TEST_ROOT||"/var/lib/opencode-workspaces-test":null;
+  if(!expected||account.workspace_root!==expected)return false;
+  const root=account.workspace_root;
+  if(typeof root!=="string"||!path.isAbsolute(root)||path.resolve(root)!==root||root==="/")return false;
+  return account.workspaces.every(work=>
+    /^[0-9a-f-]{36}$/i.test(work.id||"")&&/^[0-9a-f-]{36}$/i.test(work.project_id||"")&&
+    work.directory===path.join(root,account.user_id,work.id,"repo"));
 }
 function browserPrincipal(req){
   const cookie=String(req.headers.cookie||"");
   const id=cookie.match(/(?:^|;\s*)pi_test_session=([0-9a-f-]{36})(?:;|$)/i)?.[1];
   const existing=id?browserGrants.get(id):null;
-  if(!existing||existing.expires<=Date.now()){
+  if(!existing||existing.expires<=Date.now()||!accountGrantCurrent(existing.account)||
+     new URL(existing.account.origin).host!==req.headers.host){
     if(id)browserGrants.delete(id);
     throw Object.assign(new Error("Pi session expired; reopen the workspace"),{status:401});
   }
   return existing.account;
 }
-function issueBrowserGrant(res,account){
+function issueBrowserGrant(res,account,req){
+  if(!accountGrantCurrent(account)||new URL(account.origin).host!==req.headers.host)
+    throw Object.assign(new Error("Invalid or revoked Pi handoff"),{status:401});
+  const key=authorityKey(account),old=sessionAuthorities.get(key);
+  // A delayed ticket cannot replace a newer credential/ownership snapshot.
+  if(old&&old.account.issued_at>account.issued_at)
+    throw Object.assign(new Error("Pi handoff superseded; renew session"),{status:401});
   const sid=randomUUID();
-  browserGrants.set(sid,{account,expires:Date.now()+PI_SESSION_DURATION_MS});
+  const expires=Math.min(account.expires_at,Date.now()+PI_SESSION_DURATION_MS);
+  browserGrants.set(sid,{account,expires});
+  clearTimeout(old?.timer);
+  const entry={account};
+  entry.timer=setTimeout(()=>{
+    if(sessionAuthorities.get(key)===entry)revokeBrowserGrants(account.user_id,account.origin,account.auth_session_id);
+  },Math.max(1,expires-Date.now()));
+  entry.timer.unref?.();sessionAuthorities.set(key,entry);
   res.writeHead(204,{"set-cookie":PI_COOKIE+"="+sid+
     "; Path=/native-direct/api/; Max-Age=840; HttpOnly; Secure; SameSite=Strict",
     "cache-control":"no-store"});
   res.end();
 }
-function revokeBrowserGrants(userId){
+function revokeBrowserGrants(userId,origin=null,authSessionId=null,revokeLogin=false){
+  const matches=account=>(!userId||account.user_id===userId)&&
+    (!origin||account.origin===origin)&&(!authSessionId||account.auth_session_id===authSessionId);
+  const stamp=Date.now();
+  if(revokeLogin&&userId&&origin)revokedLogins.set(origin+"\0"+userId,stamp);
+  if(authSessionId&&origin)revokedSessions.set(origin+"\0"+authSessionId,stamp);
+  else if(userId&&origin)revokedAccounts.set(origin+"\0"+userId,stamp);
+  else if(!origin)allRevokedAt=stamp;
+  else revokedOrigins.set(origin,stamp);
   for(const [sid,grant] of browserGrants)
-    if(!userId||grant.account.user_id===userId)browserGrants.delete(sid);
+    if(matches(grant.account))browserGrants.delete(sid);
   for(const [ticket,entry] of pendingTickets)
-    if(!userId||entry.account.user_id===userId)pendingTickets.delete(ticket);
+    if(matches(entry.account))pendingTickets.delete(ticket);
+  for(const [key,entry] of sessionAuthorities)
+    if(matches(entry.account)){clearTimeout(entry.timer);sessionAuthorities.delete(key);}
   for(const worker of pool.values())
-    if(!userId||worker.scope.userId===userId)try{worker.close();}catch{}
+    if(matches(worker.scope.account||{}))try{worker.close();}catch{}
 }
 async function scope(req,query){
   const directory=query.get("directory");
@@ -142,7 +230,7 @@ async function scope(req,query){
   return {directory,workspaceId:work.id,projectId:work.project_id,
     projectName:typeof work.project_name==="string"?
       work.project_name.slice(0,200):"",
-    userId:account.user_id,account,testOwner:
+    userId:account.user_id,origin:account.origin,account,testOwner:
     process.env.PI_TEST_SINGLE_OWNER_TOOLS==="1"&&account.role==="owner"};
 }
 // Read only public model definitions. Provider metadata must NEVER open the
@@ -302,6 +390,454 @@ function piTodoExtension(Type){
 }
 // In-process Pi SDK session: one isolated, in-memory credential runtime per
 // project, keeping the existing bridge/socket/routes and persistent Pi JSONL.
+// Staged customer-only tool boundary. It is deliberately opt-in until the
+// installed SDK, cancellation, builds and resource/network policy pass on VPS.
+// Pi's model runtime and credentials never enter this process. One namespace
+// is reused for all tool calls during this project session, not per message.
+const PROJECT_SANDBOX_ENABLED=process.env.PI_PROJECT_SANDBOX==="1";
+if(PROJECT_SANDBOX_ENABLED&&process.env.PI_PROJECT_SANDBOX_ORIGIN&&
+   !["https://opencode-gateway.codes","https://test.opencode-gateway.codes"].includes(process.env.PI_PROJECT_SANDBOX_ORIGIN))
+  throw Error("Invalid project isolation origin; refusing unsafe startup");
+const PROJECT_TOOL_NAMES=["read","bash","edit","write","grep","find","ls","powershell"];
+async function projectToolWorkerMain() {
+  // Serialized into `node -e` inside bwrap; no application file is created.
+  // bwrap 0.9 resolves bind sources to pathnames. Compare the resulting
+  // mount against our pinned inode BEFORE loading tools, then close the
+  // inherited host-directory fd: leaving it open would expose host parents.
+  const fs=await import("node:fs");
+  if(process.env.PI_PROJECT_LIMITS_FD==="4"){
+    try{fs.writeFileSync(4,"0");}finally{fs.closeSync(4);}
+    delete process.env.PI_PROJECT_LIMITS_FD;
+  }
+  let sameRoot=false;
+  try{
+    const pinned=fs.fstatSync(3,{bigint:true});
+    const mounted=fs.statSync(process.cwd(),{bigint:true});
+    sameRoot=pinned.dev===mounted.dev&&pinned.ino===mounted.ino;
+  }finally{fs.closeSync(3);}
+  if(!sameRoot)process.exit(2);
+  if(process.env.PI_PROJECT_NETWORK_FD==="5"){
+    const http=await import("node:http"),http2=await import("node:http2"),net=await import("node:net");
+    const channel=new net.Socket({fd:5,readable:true,writable:true});
+    const transport=http2.connect("http://package-egress",{createConnection:()=>channel});
+    transport.on("error",()=>process.exit(2));
+    const proxy=http.createServer((_req,res)=>{res.writeHead(403);res.end("HTTPS CONNECT required");});
+    proxy.on("connect",(req,socket,head)=>{
+      socket.on("error",()=>{});
+      let stream;
+      try{stream=transport.request({":method":"CONNECT",":authority":req.url});}
+      catch{socket.destroy();return;}
+      stream.on("error",()=>socket.destroy());socket.once("close",()=>stream.close());
+      stream.once("response",headers=>{
+        if(headers[":status"]!==200){socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");stream.close();return;}
+        socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if(head.length)stream.write(head);
+        socket.pipe(stream).pipe(socket);
+      });
+    });
+    await new Promise((resolve,reject)=>{proxy.once("error",reject);proxy.listen(0,"127.0.0.1",resolve);});
+    const endpoint="http://127.0.0.1:"+proxy.address().port;
+    for(const name of ["HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy"])process.env[name]=endpoint;
+    process.env.NO_PROXY="";process.env.no_proxy="";
+    // Reuse Pi's installed HTTP library for native tool downloads. Only this
+    // isolated tool process changes dispatcher; Pi's provider stream is untouched.
+    const {createRequire}=await import("node:module");
+    const require=createRequire("file:///opt/pi/node_modules/@earendil-works/pi-coding-agent/package.json");
+    const {setGlobalDispatcher,ProxyAgent}=require("undici");
+    setGlobalDispatcher(new ProxyAgent(endpoint));
+    delete process.env.PI_PROJECT_NETWORK_FD;
+  }
+  const emit=message=>process.stdout.write(JSON.stringify(message)+"\n");
+  const controllers=new Map();
+  let buffer="",chain=Promise.resolve();
+  import("file:///opt/pi/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/index.js")
+    .then(sdk=>{
+      const cwd=process.cwd();
+      const tools=sdk.createAllToolDefinitions(cwd,{
+        bash:{exposeSessionEnvironment:false},powershell:{exposeSessionEnvironment:false}
+      });
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data",chunk=>{
+        buffer+=chunk;
+        if(Buffer.byteLength(buffer)>4*1024*1024)process.exit(2);
+        let newline;
+        while((newline=buffer.indexOf("\n"))>=0){
+          const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);
+          let msg;try{msg=JSON.parse(line);}catch{process.exit(2);}
+          if(msg.cancel){controllers.get(msg.id)?.abort();continue;}
+          if(msg.name==="__git_read"){
+            const allowed=[['rev-parse','--abbrev-ref','HEAD'],['status','--porcelain=v1','-uno']];
+            if(!allowed.some(args=>JSON.stringify(args)===JSON.stringify(msg.args))){
+              emit({id:msg.id,error:"Unsupported project Git metadata"});continue;
+            }
+            const controller=new AbortController();controllers.set(msg.id,controller);
+            // Read-only metadata may run beside a long native tool; its timeout
+            // must not cancel or wait behind the customer's active Bash job.
+            import("node:child_process").then(({spawn})=>new Promise(resolve=>{
+              const child=spawn('/usr/bin/git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',
+                '-c','credential.helper=','-c','core.worktree='+cwd,...msg.args],
+                {cwd,env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',
+                  GIT_CONFIG_GLOBAL:'/dev/null',GIT_OPTIONAL_LOCKS:'0',GIT_TERMINAL_PROMPT:'0'},
+                  stdio:['ignore','pipe','ignore'],detached:true});
+              let output='',done=false;
+              const finish=error=>{
+                if(done)return;done=true;clearTimeout(timer);controller.signal.removeEventListener('abort',cancel);
+                controllers.delete(msg.id);
+                if(child.pid)try{process.kill(-child.pid,'SIGKILL');}catch{}
+                emit(error?{id:msg.id,error:'Project Git metadata unavailable'}:{id:msg.id,result:{output}});resolve();
+              };
+              const cancel=()=>finish(true),timer=setTimeout(cancel,8000);
+              controller.signal.addEventListener('abort',cancel,{once:true});
+              child.once('error',cancel);child.once('close',code=>finish(code!==0));
+              child.stdout.setEncoding('utf8');child.stdout.on('data',part=>{
+                output+=part;if(Buffer.byteLength(output)>1024*1024)finish(true);
+              });
+            })).catch(()=>{controllers.delete(msg.id);emit({id:msg.id,error:'Project Git metadata unavailable'});});
+            continue;
+          }
+          if(!["read","bash","edit","write","grep","find","ls","powershell"].includes(msg.name)){
+            emit({id:msg.id,error:"Unsupported project tool"});continue;
+          }
+          const controller=new AbortController();controllers.set(msg.id,controller);
+          chain=chain.then(async()=>{
+            try{
+              if(controller.signal.aborted)throw Error("Tool cancelled");
+              const result=await tools[msg.name].execute(msg.id,msg.args,controller.signal,
+                update=>emit({id:msg.id,update}),{cwd,model:msg.model});
+              emit({id:msg.id,result});
+            }catch(error){emit({id:msg.id,error:controller.signal.aborted?
+              "Project tool cancelled":"Project tool failed inside isolation"+
+              (process.env.PI_PROJECT_PROBE_DIAGNOSTICS==="1"?": "+String(error?.message||error).slice(0,1000):"")});}
+            finally{controllers.delete(msg.id);}
+          });
+        }
+      });
+      process.stdin.on("end",()=>process.exit(0));
+      emit({ready:true});
+    }).catch(()=>process.exit(2));
+}
+function projectSandboxPlan(scope,node=process.execPath) {
+  const directory=scope.directory;
+  const workspaceRoot=scope.account?.workspace_root||"/var/lib/opencode-workspaces";
+  if(process.platform!=="linux"||!path.isAbsolute(directory)||
+     path.resolve(directory)!==directory||directory==="/"||
+     !directory.startsWith(workspaceRoot+"/"))
+    throw Object.assign(new Error("Project isolation scope unavailable"),{status:503});
+  if(!path.isAbsolute(node)||!/^\/usr\/(?:local\/)?bin\/[^/]+$/.test(node))
+    throw Object.assign(new Error("Project Node runtime needs explicit review"),{status:503});
+  const env={PATH:"/usr/local/bin:/usr/bin:/bin",HOME:"/tmp/home",TMPDIR:"/tmp",
+    LANG:"C.UTF-8",XDG_CONFIG_HOME:"/tmp/home/.config",
+    GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null",GIT_TERMINAL_PROMPT:"0"};
+  if(process.argv.includes("--isolation-probe"))env.PI_PROJECT_PROBE_DIAGNOSTICS="1";
+  const args=["--unshare-user","--unshare-pid","--unshare-net","--unshare-ipc",
+    "--unshare-uts","--hostname","project","--disable-userns","--die-with-parent","--new-session","--cap-drop","ALL",
+    "--clearenv"];
+  // Expose runtime resources, not the host's /home, /etc, /run or project
+  // parents. /proc is private to this PID namespace; /tmp and /dev are fresh.
+  for(const runtime of ["/usr/bin","/usr/lib","/usr/share","/bin","/lib","/lib64"])
+    args.push("--ro-bind",runtime,runtime);
+  if(!node.startsWith("/usr/bin/"))args.push("--ro-bind",node,node);
+  args.push("--ro-bind","/home/tahir/pi-test/node_modules","/opt/pi/node_modules",
+    "--proc","/proc","--dev","/dev","--tmpfs","/tmp","--dir","/tmp/home",
+    "--ro-bind","/etc/ssl/certs","/etc/ssl/certs",
+    "--ro-bind-try",path.join(PI_AGENT_DIR,"bin"),"/tmp/home/.pi/agent/bin",
+    "--ro-bind-try",path.join(PI_AGENT_DIR,"skills"),path.join(PI_AGENT_DIR,"skills"),
+    // fd 3 pins the validated inode. The trusted bootstrap verifies that
+    // bwrap mounted that inode and closes fd 3 before any tool code loads.
+    "--bind","/proc/self/fd/3",directory,"--chdir",directory);
+  for(const [key,value] of Object.entries(env))args.push("--setenv",key,value);
+  args.push("--",node,"--input-type=module","-e",`(${projectToolWorkerMain.toString()})();`);
+  return {file:"/usr/local/libexec/pi-project-bwrap",args,env};
+}
+function publicProjectAddress(address){
+  if(net.isIP(address)===4){
+    const octets=address.split(".").map(Number),[a,b,c,d]=octets;
+    return !(a===0||a===10||a===127||a>=224||a===169&&b===254||
+      a===172&&b>=16&&b<=31||a===100&&b>=64&&b<=127||
+      a===192&&(b===168||b===0&&(c===0||c===2)||b===88&&c===99)||
+      a===198&&(b===18||b===19||b===51&&c===100)||a===203&&b===0&&c===113||
+      a===168&&b===63&&c===129&&d===16);
+  }
+  if(net.isIP(address)===6){
+    const normalized=new URL("http://["+address+"]/").hostname.slice(1,-1);
+    const first=parseInt(normalized.split(":")[0],16);
+    // Accept global unicast only; exclude documentation and transition ranges.
+    return first>=0x2000&&first<=0x3fff&&first!==0x2002&&
+      !/^2001:(?:db8|0?1?[0-9a-f]{1,2}):/i.test(normalized)&&
+      !normalized.startsWith("2001::")&&!normalized.startsWith("3fff:");
+  }
+  return false;
+}
+function projectEgressTarget(authority){
+  if(typeof authority!=="string"||authority.length>255||!/^[a-z0-9.-]+:443$/i.test(authority))
+    throw Error("HTTPS package destination required");
+  const host=authority.slice(0,-4).toLowerCase();
+  const allowed=new Set(["registry.npmjs.org","registry.yarnpkg.com","pypi.org","files.pythonhosted.org",
+    "github.com","api.github.com","raw.githubusercontent.com","objects.githubusercontent.com",
+    "release-assets.githubusercontent.com","codeload.github.com","repo.maven.apache.org",
+    "repo1.maven.org","plugins.gradle.org","services.gradle.org","downloads.gradle.org"]);
+  if(!allowed.has(host))throw Error("Package destination is not allowed");
+  return host;
+}
+function projectNetworkBridge(channel){
+  // HTTP/2 multiplexes a bounded number of CONNECT tunnels over an inherited
+  // pipe. No host TCP listener or new service, and no Python relay per tool.
+  const server=http2.createServer({settings:{maxConcurrentStreams:4}}),sessions=new Set(),sockets=new Set();
+  const localAddresses=new Set(Object.values(networkInterfaces()).flat().filter(Boolean).map(value=>value.address));
+  let closed=false,inflight=0,windowStart=Date.now(),windowBytes=0,windowRequests=0;
+  server.on("session",session=>{
+    sessions.add(session);session.on("error",()=>{});session.once("close",()=>sessions.delete(session));
+  });
+  server.on("sessionError",()=>{});server.on("error",()=>{});
+  server.on("stream",async(stream,headers)=>{
+    stream.on("error",()=>{});
+    if(Date.now()-windowStart>=60000){windowStart=Date.now();windowBytes=0;windowRequests=0;}
+    if(closed||inflight>=4||++windowRequests>240||windowBytes>=256*1024*1024){
+      try{stream.respond({":status":429});stream.end();}catch{}return;
+    }
+    inflight++;let socket,bytes=0,finished=false;
+    const finish=()=>{if(finished)return;finished=true;inflight--;socket?.destroy();sockets.delete(socket);};
+    stream.once("close",finish);
+    const timeout=setTimeout(()=>{stream.close();finish();},120000);timeout.unref?.();
+    stream.once("close",()=>clearTimeout(timeout));
+    try{
+      if(headers[":method"]!=="CONNECT")throw Error("CONNECT required");
+      const host=projectEgressTarget(headers[":authority"]);
+      const resolved=await lookupAddress(host,{all:true,verbatim:true});
+      const address=resolved.find(value=>publicProjectAddress(value.address)&&!localAddresses.has(value.address));
+      if(!address||finished||closed)throw Error("Public package address unavailable");
+      // Connect to the vetted numeric address: DNS is never resolved a second
+      // time during connect, preventing rebinding to a private/metadata address.
+      socket=net.connect({host:address.address,family:address.family,port:443});sockets.add(socket);
+      socket.on("error",()=>{stream.close();finish();});
+      socket.setTimeout(30000,()=>{stream.close();finish();});
+      socket.once("connect",()=>{
+        if(finished||stream.closed||stream.destroyed){socket.destroy();return;}
+        try{stream.respond({":status":200});stream.pipe(socket).pipe(stream);}
+        catch{finish();}
+      });
+      const count=chunk=>{bytes+=chunk.length;windowBytes+=chunk.length;
+        if(bytes>128*1024*1024||windowBytes>256*1024*1024){stream.close();finish();}};
+      socket.on("data",count);stream.on("data",count);
+    }catch{
+      try{
+        if(!stream.destroyed&&!stream.closed&&!stream.headersSent){stream.respond({":status":403});stream.end();}
+        else stream.close();
+      }catch{}
+      finish();
+    }
+  });
+  channel.on("error",()=>{});server.emit("connection",channel);
+  return {close(){closed=true;for(const socket of sockets)socket.destroy();
+    for(const session of sessions)session.destroy();channel.destroy();server.close();}};
+}
+function projectToolResourceLimits(scope){
+  const root=process.env.PI_SANDBOX_CGROUP_ROOT;
+  if(!root||!root.startsWith("/sys/fs/cgroup/")||path.resolve(root)!==root||
+     realpathSync(root)!==root||Number(statfsSync(root).type)!==0x63677270)
+    throw Object.assign(new Error("Delegated project resource limits unavailable"),{status:503});
+  const controllers=readFileSync(path.join(root,"cgroup.subtree_control"),"utf8").split(/\s+/);
+  if(!["cpu","memory","pids"].every(name=>controllers.includes(name)))
+    throw Object.assign(new Error("Project resource controllers are not delegated"),{status:503});
+  const bounded=(name,fallback,min,max)=>{
+    const value=Number(process.env[name]||fallback);
+    if(!Number.isSafeInteger(value)||value<min||value>max)throw Error("Invalid project resource budget");
+    return value;
+  };
+  const memory=bounded("PI_SANDBOX_MEMORY_MB",768,128,4096)*1024*1024;
+  const pids=bounded("PI_SANDBOX_PIDS",128,16,512);
+  const cpu=bounded("PI_SANDBOX_CPU_PERCENT",100,10,400)*1000;
+  const dir=path.join(root,"pi-project-"+randomUUID());
+  mkdirSync(dir);
+  let fd;
+  const cleanup=()=>{
+    if(fd!==undefined){try{closeSync(fd);}catch{}fd=undefined;}
+    try{writeFileSync(path.join(dir,"cgroup.kill"),"1");}catch{}
+    const remove=remaining=>{
+      try{rmdirSync(dir);}catch{if(remaining>0)setTimeout(()=>remove(remaining-1),100).unref?.();}
+    };
+    remove(20);
+  };
+  try{
+    for(const [name,value] of Object.entries({"memory.max":memory,"memory.swap.max":0,
+      "memory.oom.group":1,"pids.max":pids,"cpu.max":`${cpu} 100000`,"cpu.weight":20}))
+      writeFileSync(path.join(dir,name),String(value));
+    fd=openSync(path.join(dir,"cgroup.procs"),fsConstants.O_WRONLY|fsConstants.O_NOFOLLOW);
+    return {fd,cleanup,closeDescriptor(){if(fd!==undefined){closeSync(fd);fd=undefined;}}};
+  }catch(error){cleanup();throw Object.assign(new Error("Project resource setup failed"),{status:503});}
+}
+class ProjectToolSandbox {
+  constructor(scope){this.scope=scope;this.child=null;this.pending=new Map();this.closed=false;}
+  start(){
+    if(this.closed)return Promise.reject(new Error("Project isolation is closed"));
+    if(this.ready)return this.ready;
+    this.ready=new Promise((resolve,reject)=>{
+      this.rejectStartup=reject;
+      const plan=projectSandboxPlan(this.scope);
+      try{
+        if(this.scope.account){
+          this.limits=projectToolResourceLimits(this.scope);
+          plan.args.splice(plan.args.indexOf("--"),0,"--setenv","PI_PROJECT_LIMITS_FD","4",
+            "--setenv","PI_PROJECT_NETWORK_FD","5");
+        }
+        const diagnostic=process.argv.includes("--isolation-probe");
+        this.child=withWorkspaceDirectory(this.scope,"",fd=>spawn(plan.file,plan.args,{
+          cwd:"/",env:plan.env,stdio:["pipe","pipe",diagnostic?"pipe":"ignore",fd,this.limits?.fd??"ignore",
+            this.scope.account?"pipe":"ignore"],detached:true}));
+        if(diagnostic)this.child.stderr.on("data",chunk=>{
+          this.startupDiagnostic=((this.startupDiagnostic||"")+chunk.toString()).slice(0,4000);
+        });
+        if(this.scope.account)this.network=projectNetworkBridge(this.child.stdio[5]);
+      }catch(error){this.close();throw error;}
+      finally{this.limits?.closeDescriptor();}
+      const currentChild=this.child;
+      const failed=()=>{if(!this.closed&&this.child===currentChild)this.close();};
+      let buffer="";
+      this.startTimer=setTimeout(()=>this.close(),10000);
+      this.child.once("error",failed);
+      this.child.once("exit",failed);
+      this.child.stdin.on("error",failed);
+      this.child.stdout.setEncoding("utf8");
+      this.child.stdout.on("data",chunk=>{
+        if(this.closed||this.child!==currentChild)return;
+        buffer+=chunk;
+        if(Buffer.byteLength(buffer)>16*1024*1024){this.close();return;}
+        let newline;
+        while((newline=buffer.indexOf("\n"))>=0){
+          const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);
+          let msg;try{msg=JSON.parse(line);}catch{this.close();return;}
+          if(msg.ready){clearTimeout(this.startTimer);resolve();continue;}
+          const request=this.pending.get(msg.id);if(!request)continue;
+          if(msg.update){try{request.update?.(msg.update);}catch{}continue;}
+          request.finish(msg.error?new Error(msg.error):null,msg.result);
+        }
+      });
+    });
+    return this.ready;
+  }
+  async execute(name,id,args,signal,update,context){
+    if(!PROJECT_TOOL_NAMES.includes(name)&&name!=="__git_read")throw Error("Unsupported project tool");
+    if(signal?.aborted)throw Error("Project tool cancelled");
+    if(this.closed&&this.restartAllowed){
+      this.closed=false;this.restartAllowed=false;this.child=null;this.ready=null;
+    }
+    await this.start();
+    if(this.closed||signal?.aborted)throw Error("Project tool cancelled or isolation closed");
+    if(this.pending.size>=32)throw Error("Project tool queue limit reached");
+    // Transfer only tool arguments and public image capabilities, never the
+    // SDK context, model headers, credentials, environment or control grants.
+    const model=context?.model?{input:context.model.input,
+      inputLimits:{images:{resize:context.model.inputLimits?.images?.resize}}}:undefined;
+    const key=randomUUID();
+    const line=JSON.stringify({id:key,name,args,model})+"\n";
+    if(Buffer.byteLength(line)>4*1024*1024)throw Error("Project tool input exceeds limit");
+    return new Promise((resolve,reject)=>{
+      let cancelTimer;
+      const timer=setTimeout(()=>this.close(),30*60_000);
+      const finish=(error,result)=>{
+        clearTimeout(timer);clearTimeout(cancelTimer);
+        signal?.removeEventListener("abort",cancel);this.pending.delete(key);
+        error?reject(error):resolve(result);
+      };
+      const cancel=()=>{
+        if(this.closed)return;
+        this.child.stdin.write(JSON.stringify({id:key,cancel:true})+"\n");
+        // A stuck child must not survive Stop. Killing PID 1 of this private
+        // namespace tears down its descendants; never fall back to host tools.
+        cancelTimer=setTimeout(()=>{this.close();this.restartAllowed=true;},1500);
+      };
+      this.pending.set(key,{finish,update});
+      signal?.addEventListener("abort",cancel,{once:true});
+      this.child.stdin.write(line,error=>{if(error)this.close();});
+    });
+  }
+  definitions(sdk){
+    return PROJECT_TOOL_NAMES.map(name=>{
+      const factory=sdk[name==="powershell"?"createPowerShellToolDefinition":
+        "create"+name[0].toUpperCase()+name.slice(1)+"ToolDefinition"];
+      if(typeof factory!=="function")throw Error("Installed Pi lacks native tool definitions");
+      return {...factory(this.scope.directory,
+        ["bash","powershell"].includes(name)?{exposeSessionEnvironment:false}:undefined),
+        execute:(id,args,signal,update,context)=>{
+          assertProjectAuthority(this.scope);
+          return this.execute(name,id,args,signal,update,context);
+        }};
+    });
+  }
+  close(){
+    this.restartAllowed=false;
+    if(this.closed)return;this.closed=true;clearTimeout(this.startTimer);
+    this.rejectStartup?.(new Error("Project isolation unavailable"));
+    for(const request of [...this.pending.values()])request.finish(new Error("Project isolation closed"));
+    try{this.child?.stdin.destroy();}catch{}
+    // Only the dedicated group created by spawn; no shared Pi processes.
+    if(this.child?.pid)try{process.kill(-this.child.pid,"SIGKILL");}catch{}
+    this.limits?.cleanup();this.limits=null;
+    this.network?.close();this.network=null;
+  }
+}
+async function probeProjectToolSandbox(){
+  // Explicit operator-only CLI probe. No listener, production project,
+  // provider call, credential lookup or service restart is involved.
+  const roots=[],checks=[];let boundary,phase="create-test-projects";
+  const check=(condition,label)=>{if(!condition)throw Error(label);checks.push(label);};
+  try{
+    for(let i=0;i<2;i++){
+      const owner=path.join("/var/lib/opencode-workspaces",randomUUID());
+      mkdirSync(owner,{mode:0o700});roots.push(owner);
+      mkdirSync(path.join(owner,randomUUID(),"repo"),{recursive:true,mode:0o700});
+    }
+    const directories=roots.map(owner=>path.join(owner,readdirSync(owner)[0],"repo"));
+    const [directory,other]=directories;
+    writeFileSync(path.join(other,"isolation-canary.txt"),randomUUID(),{mode:0o600});
+    // Exercise the same cgroup and egress setup as a real customer worker.
+    // A namespace-only fixture must not be reported as full activation proof.
+    boundary=new ProjectToolSandbox({directory,account:{workspace_root:"/var/lib/opencode-workspaces"}});
+    const run=async(name,args)=>{
+      phase=name;
+      return boundary.execute(name,randomUUID(),args,AbortSignal.timeout(8000));
+    };
+    const text=result=>(result.content||[]).filter(part=>part.type==="text").map(part=>part.text).join("\n");
+    await run("write",{path:"isolation-sample.txt",content:"OWN_ALPHA\n"});checks.push("native-write");
+    await run("edit",{path:"isolation-sample.txt",edits:[{oldText:"OWN_ALPHA",newText:"OWN_BETA"}]});checks.push("native-edit");
+    check(text(await run("read",{path:"isolation-sample.txt"})).includes("OWN_BETA"),"native-read");
+    check(text(await run("ls",{path:"."})).includes("isolation-sample.txt"),"native-ls");
+    check(text(await run("grep",{pattern:"OWN_BETA",path:"."})).includes("OWN_BETA"),"native-grep");
+    check(text(await run("find",{pattern:"isolation-sample.txt",path:"."})).includes("isolation-sample.txt"),"native-find");
+    phase="deny-other-project";
+    let denied=false;
+    try{await run("read",{path:path.join(other,"isolation-canary.txt")});}catch{denied=true;}
+    check(denied,"deny-other-project");
+    const netNamespace=readlinkSync("/proc/self/ns/net");
+    const program=`const fs=require("fs");if(fs.existsSync(${JSON.stringify(other)})||`+
+      `fs.existsSync("/etc/hostname")||fs.existsSync("/run/pi-central/pi.sock")||`+
+      `fs.existsSync("/run/docker.sock")||fs.readlinkSync("/proc/self/ns/net")===${JSON.stringify(netNamespace)})process.exit(7);`+
+      `console.log("ISOLATED_NODE_OK")`;
+    // Every interpolated value is a generated UUID path or a kernel namespace
+    // identifier, encoded in JavaScript literals, never user-supplied shell.
+    check(!program.includes("'"),"probe-command-encoding");
+    const runtime=await run("bash",{command:"python3 -c 'print(\"ISOLATED_PYTHON_OK\")' && node -e '"+program+"'",timeout:5});
+    check(text(runtime).includes("ISOLATED_PYTHON_OK")&&text(runtime).includes("ISOLATED_NODE_OK"),
+      "native-bash-python-node-host-and-network-boundaries");
+    phase="native-stop";
+    const stop=new AbortController();
+    const pending=boundary.execute("bash",randomUUID(),{command:"sleep 30",timeout:35},stop.signal);
+    const timer=setTimeout(()=>stop.abort(),200);
+    let cancelled=false;try{await pending;}catch{cancelled=true;}finally{clearTimeout(timer);}
+    check(cancelled,"native-stop");
+    check(text(await run("read",{path:"isolation-sample.txt"})).includes("OWN_BETA"),"read-after-stop");
+    console.log(JSON.stringify({probe:"PASS",checks,notes:[
+      "No model, payment or administration endpoint was called.",
+      "This is a tool compatibility gate, not complete tenant-isolation or performance acceptance."]}));
+  }catch(error){
+    console.error(JSON.stringify({probe:"FAIL",phase,checks,error:String(error.message).slice(0,1000),
+      workerExit:boundary?.child?.exitCode,diagnostic:boundary?.startupDiagnostic||""}));
+    throw Error("Project tool isolation probe did not pass");
+  }finally{
+    boundary?.close();
+    for(const root of roots)rmSync(root,{recursive:true,force:true});
+  }
+}
 class SdkAgent {
   static async create(scope) {
     const sdk=await import("@earendil-works/pi-coding-agent");
@@ -320,6 +856,8 @@ class SdkAgent {
     // open() takes only the native session path. Keep the external Gateway
     // session id deterministic while Pi persists its own native JSONL id.
     const existing=await sdk.SessionManager.list(scope.directory,sessionDir);
+    if(existing.some(entry=>entry.cwd!==scope.directory))
+      throw Object.assign(new Error("Native session belongs to a different workspace root"),{status:403});
     if(existing.length>1)
       throw Object.assign(new Error("Multiple native project sessions require deliberate recovery"),{status:409});
     if(!existing.length && readdirSync(sessionDir).some(name=>name.endsWith(".jsonl")))
@@ -330,6 +868,13 @@ class SdkAgent {
     // Use the complete existing Pi installation for every account.
     // Pi SDK remains the only agent, tool, skill and extension executor.
     const settingsManager=sdk.SettingsManager.inMemory();
+    // A customer repository is data, not trusted code for this shared
+    // credential-bearing process. Keep Pi's built-ins and user/global
+    // extensions, but never auto-load project-local executable extensions.
+    // Such extensions may be enabled only inside a verified project sandbox.
+    if(typeof settingsManager.setProjectTrusted!=="function")
+      throw Object.assign(new Error("Installed Pi lacks project trust isolation"),{status:503});
+    settingsManager.setProjectTrusted(false);
     // Reuse installed todo extensions where present. Otherwise load the
     // replacement-friendly Pi extension with native session tool results.
     let todoFallback=[];
@@ -378,20 +923,36 @@ class SdkAgent {
         "fails, explain the limitation clearly; do not fabricate tool calls."
       ],
       noExtensions:false,noSkills:false,
-      noPromptTemplates:false,noContextFiles:false
+      noPromptTemplates:false,noContextFiles:true,
+      // Native ancestor discovery follows AGENTS links and walks above the
+      // owned root. Feed only the bounded, descriptor-pinned project document.
+      agentsFilesOverride:()=>({agentsFiles:projectContextFiles(scope)})
     });
     await resourceLoader.reload();
-    const {session}=await sdk.createAgentSession({
+    if(projectSandboxEnabled(scope.origin)){
+      // A global extension can execute model-selected code outside custom
+      // tools. Do not advertise isolation while an unreviewed extension can
+      // bypass it; keep this staged mode closed pending extension inventory.
+      const external=resourceLoader.getExtensions().extensions.filter(extension=>
+        !String(extension.path).startsWith("<inline:"));
+      if(external.length)
+        throw Object.assign(new Error("Project isolation requires review of installed extension execution"),{status:503});
+    }
+    const projectSandbox=projectSandboxEnabled(scope.origin)?new ProjectToolSandbox(scope):null;
+    let session;
+    try{({session}=await sdk.createAgentSession({
       cwd:scope.directory,agentDir:PI_AGENT_DIR,
       modelRuntime:runtime,sessionManager:manager,settingsManager,
-      resourceLoader,noTools:false
-    });
+      resourceLoader,noTools:false,
+      ...(projectSandbox?{customTools:projectSandbox.definitions(sdk)}:{})
+    }));}catch(error){projectSandbox?.close();throw error;}
     // Activate every tool already registered in Pi, including the seven
     // built-ins and installed extension tools. No new tools or APIs are added.
     if(typeof session.getAllTools==="function"&&
        typeof session.setActiveToolsByName==="function")
       session.setActiveToolsByName(session.getAllTools().map(tool=>tool.name));
     const agent=new SdkAgent(scope,session,runtime);
+    agent.projectSandbox=projectSandbox;
     // Bind the SDK's existing extension UI channel to the same Pi session.
     // Dialog requests are handled by the existing Workspace question form.
     try{
@@ -725,6 +1286,9 @@ class SdkAgent {
   }
   close(){
     if(this.closed)return;this.closed=true;
+    this.projectSandbox?.close();
+    try{this.session.agent?.abort();}catch{}
+    this.clearCredential().catch(()=>{});
     for(const request of this.uiRequests.values())try{request.answer({reject:true});}catch{}
     this.uiRequests.clear();this.uiWidgets.clear();
     releaseExecution(this);
@@ -758,15 +1322,26 @@ function nativeCredential(scope,provider,modelId){
   throw Object.assign(new Error("Model is not enabled for the connected Pi account"),{status:403});
 }
 async function agent(s) {
+  assertProjectAuthority(s);
   const id=projectIdFor(s);
   const current=pool.get(id);
   if(current&&!current.closed){
+    if(current.scope.origin!==s.origin||current.scope.directory!==s.directory)
+      throw Object.assign(new Error("Project session scope mismatch"),{status:403});
+    // Renew local authority without rebuilding Pi or the tool namespace.
+    current.scope.account=s.account;
     // Tool availability is no longer role-dependent; reuse this project's
     // existing Pi SDK session without closing or resetting conversations.
     return current;
   }
   const pending=creating.get(id);
-  if(pending)return pending;
+  if(pending){
+    const worker=await pending;
+    assertProjectAuthority(s);
+    if(worker.scope.origin!==s.origin||worker.scope.directory!==s.directory)
+      throw Object.assign(new Error("Project session scope mismatch"),{status:403});
+    return worker;
+  }
   // Include in-flight SDK initializations in the worker cap. Concurrent
   // file/status/prompt requests must not spawn multiple sessions for a project.
   if(pool.size+creating.size>=MAX_PROCS){
@@ -778,6 +1353,7 @@ async function agent(s) {
     throw Object.assign(new Error("Pi worker capacity reached"),{status:429});
   const creatingSession=(async()=>{
     const worker=await SdkAgent.create(s);
+    try{assertProjectAuthority(s);}catch(error){worker.close();throw error;}
     pool.set(id,worker);
     try{await worker.command("get_state");return worker;}
     catch(e){worker.close();throw e;}
@@ -801,30 +1377,72 @@ function cleanPiStagedDirectories(scope,sessionId,staged=[]){
     if(path.dirname(absolute)!==base||
        !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(path.basename(absolute)))continue;
     try{
-      if(existsSync(absolute)&&!lstatSync(absolute).isSymbolicLink())
-        rmSync(absolute,{recursive:true,force:true,maxRetries:2,retryDelay:50});
+      withWorkspaceDirectory(scope,path.relative(root,base),fd=>{
+        rmSync(`/proc/self/fd/${fd}/${path.basename(absolute)}`,
+          {recursive:true,force:true,maxRetries:2,retryDelay:50});
+      });
     }catch(e){console.warn("Pi temporary file cleanup failed:",e.code||e.name);}
   }
 }
 function cleanPiFinishedFiles(scope,sessionId){
   const root=path.resolve(scope.directory);
   const base=path.resolve(root,".pi-uploads",sessionId);
-  if(!base.startsWith(root+path.sep)||!existsSync(base))return;
+  if(!base.startsWith(root+path.sep))return;
   try{
-    if(lstatSync(base).isSymbolicLink()||realpathSync(base)!==base)return;
-    const list=readdirSync(base,{withFileTypes:true})
-      .filter(x=>x.isDirectory())
-      .map(x=>path.join(base,x.name));
-    cleanPiStagedDirectories(scope,sessionId,list);
+    withWorkspaceDirectory(scope,path.relative(root,base),fd=>{
+      for(const entry of readdirSync(`/proc/self/fd/${fd}`,{withFileTypes:true})){
+        if(!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(entry.name))continue;
+        rmSync(`/proc/self/fd/${fd}/${entry.name}`,{recursive:true,force:true,maxRetries:2,retryDelay:50});
+      }
+    });
   }catch(e){console.warn("Pi completed upload cleanup failed:",e.code||e.name);}
+}
+function piImagePixels(data,mime){
+  let width=0,height=0;
+  if(mime==="image/png"&&data.length>=24){width=data.readUInt32BE(16);height=data.readUInt32BE(20);}
+  else if(mime==="image/jpeg"){
+    let offset=2;
+    while(offset+4<=data.length){
+      if(data[offset++]!==255)break;
+      while(data[offset]===255)offset++;
+      const marker=data[offset++];
+      if(marker===0xda||marker===0xd9)break;
+      if(marker===1||marker>=0xd0&&marker<=0xd7)continue;
+      if(offset+2>data.length)break;
+      const size=data.readUInt16BE(offset);
+      if(size<2||offset+size>data.length)break;
+      if([0xc0,0xc1,0xc2,0xc3,0xc5,0xc6,0xc7,0xc9,0xca,0xcb,0xcd,0xce,0xcf].includes(marker)&&size>=8){
+        height=data.readUInt16BE(offset+3);width=data.readUInt16BE(offset+5);break;
+      }
+      offset+=size;
+    }
+  }else if(mime==="image/webp"){
+    let offset=12;
+    while(offset+8<=data.length){
+      const kind=data.subarray(offset,offset+4).toString(),size=data.readUInt32LE(offset+4),start=offset+8;
+      if(size>data.length-start)break;
+      if(kind==="VP8X"&&size>=10){width=1+data.readUIntLE(start+4,3);height=1+data.readUIntLE(start+7,3);break;}
+      if(kind==="VP8L"&&size>=5&&data[start]===0x2f){
+        const bits=data.readUInt32LE(start+1);width=(bits&0x3fff)+1;height=((bits>>>14)&0x3fff)+1;break;
+      }
+      if(kind==="VP8 "&&size>=10&&data.subarray(start+3,start+6).equals(Buffer.from([157,1,42]))){
+        width=data.readUInt16LE(start+6)&0x3fff;height=data.readUInt16LE(start+8)&0x3fff;break;
+      }
+      offset=start+size+(size%2);
+    }
+  }
+  if(!width||!height||width>8192||height>8192||width*height>16000000)
+    throw Object.assign(new Error("Image dimensions exceed safe attachment limits or are invalid"),{status:422,receipt:"not_submitted"});
+  return width*height;
 }
 function piPromptParts(rawParts, scope, sessionId) {
   // The existing browser form sends file parts as data URLs or file:// URLs.
   // Images go directly to Pi RPC; other files are staged *inside* the owned
   // Pi workspace and referenced by path for Pi's native tools to inspect.
   const parts=Array.isArray(rawParts)?rawParts:[];
+  if(parts.length>100)throw Object.assign(new Error("Too many message parts"),{status:413});
   const messages=[], images=[], staged=[];
-  let totalInlineBytes=0;
+  let totalInlineBytes=0,totalImagePixels=0;
   try{
   for(const p of parts) {
     if(p?.type==="text") {
@@ -833,6 +1451,8 @@ function piPromptParts(rawParts, scope, sessionId) {
     }
     if(p?.type!=="file")continue;
     const filename=path.basename(String(p.filename||"attachment")).replace(/[\x00-\x1F]/g,"_").slice(0,140)||"attachment";
+    if(filename==="."||filename==="..")
+      throw Object.assign(new Error("Invalid attachment filename"),{status:422});
     const source=String(p.url||"");
     if(source.startsWith("file:")) {
       const u=new URL(source);
@@ -878,17 +1498,32 @@ function piPromptParts(rawParts, scope, sessionId) {
       try{new TextDecoder("utf-8",{fatal:true}).decode(data)}catch{failAttachment("Invalid UTF-8 attachment")}
     }
     if(isImage){
+      totalImagePixels+=piImagePixels(data,mime);
+      if(images.length>=8||totalImagePixels>32000000)failAttachment("Image count or combined dimensions exceed safe limits");
       images.push({type:"image",source:{type:"base64",mediaType:mime,data:match[2]}});
       messages.push("Attached image: "+filename);
       continue;
     }
     const target=path.join(scope.directory,".pi-uploads",sessionId,randomUUID(),filename);
     const folder=path.dirname(target);
-    mkdirSync(folder,{recursive:true,mode:0o700});
-    if(realpathSync(folder)!==path.resolve(folder))
-      throw Object.assign(new Error("Unsafe Pi attachment directory"),{status:403});
-    writeFileSync(target,data,{mode:0o600,flag:"wx"});
     staged.push(folder);
+    withWorkspaceDirectory(scope,"",rootFd=>{
+      let parent=rootFd,owned;
+      try{
+        for(const component of [".pi-uploads",sessionId,path.basename(folder)]){
+          if(!/^[A-Za-z0-9_.-]+$/.test(component)||component==="."||component==="..")
+            throw Object.assign(new Error("Invalid attachment directory"),{status:422});
+          const nextPath=`/proc/self/fd/${parent}/${component}`;
+          try{mkdirSync(nextPath,{mode:0o700});}catch(error){if(error.code!=="EEXIST")throw error;}
+          const next=openSync(nextPath,fsConstants.O_RDONLY|fsConstants.O_DIRECTORY|fsConstants.O_NOFOLLOW);
+          if(owned!==undefined)closeSync(owned);
+          parent=owned=next;
+        }
+        const fd=openSync(`/proc/self/fd/${parent}/${filename}`,
+          fsConstants.O_WRONLY|fsConstants.O_CREAT|fsConstants.O_EXCL|fsConstants.O_NOFOLLOW,0o600);
+        try{writeFileSync(fd,data);}finally{closeSync(fd);}
+      }finally{if(owned!==undefined)closeSync(owned);}
+    });
     const relative=path.relative(scope.directory,target);
     if(mime==="application/pdf")
       messages.push("USER-ATTACHED PDF: "+filename+" at "+relative+
@@ -930,46 +1565,154 @@ function workspaceFile(scope,relative,allowRoot=false) {
     throw Object.assign(new Error("Project file outside workspace"),{status:403});
   return file;
 }
+function withWorkspaceDirectory(scope,relative,operation) {
+  // Client explorer only. Pin every directory with O_NOFOLLOW instead of
+  // resolving a string and reopening it after a concurrent tool changed it.
+  // This is not a sandbox for the SDK's execution tools.
+  if(process.platform!=="linux"||!fsConstants.O_NOFOLLOW||!fsConstants.O_DIRECTORY)
+    throw Object.assign(new Error("Secure project file access unavailable"),{status:503});
+  let fd;
+  try{
+    if(!path.isAbsolute(scope.directory)||path.resolve(scope.directory)!==scope.directory)
+      throw Object.assign(new Error("Unsafe project directory"),{status:403});
+    fd=openSync("/",fsConstants.O_RDONLY|fsConstants.O_DIRECTORY|fsConstants.O_NOFOLLOW);
+    const parts=[...scope.directory.split("/").filter(Boolean),...relative.split("/").filter(Boolean)];
+    for(const part of parts){
+      if(part==="."||part==="..")
+        throw Object.assign(new Error("Unsafe project directory"),{status:403});
+      const next=openSync(`/proc/self/fd/${fd}/${part}`,
+        fsConstants.O_RDONLY|fsConstants.O_DIRECTORY|fsConstants.O_NOFOLLOW);
+      closeSync(fd);fd=next;
+    }
+    return operation(fd);
+  }catch(e){
+    if(e.status)throw e;
+    const status=e.code==="ENOENT"?404:
+      ["ELOOP","ENOTDIR","EACCES","EPERM"].includes(e.code)?403:503;
+    throw Object.assign(new Error(status===404?"Project file not found":
+      status===403?"Project file access denied":"Project file access unavailable"),{status});
+  }finally{if(fd!==undefined)closeSync(fd);}
+}
+function projectGitRead(scope,args) {
+  if(PROJECT_SANDBOX_ENABLED&&projectSandboxEnabled(scope.origin)){
+    return agent(scope).then(worker=>worker.projectSandbox.execute('__git_read',randomUUID(),args,AbortSignal.timeout(9000)))
+      .then(result=>{
+        if(typeof result?.output!=="string")throw Error("Invalid isolated Git metadata");
+        return result.output;
+      });
+  }
+  // Customer explorer metadata only. Never inherit provider keys, Git
+  // configuration injection or global credential helpers from Pi's process.
+  const env={PATH:"/usr/bin:/bin",HOME:"/nonexistent",XDG_CONFIG_HOME:"/nonexistent",
+    LANG:"C.UTF-8",GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null",
+    GIT_ATTR_NOSYSTEM:"1",GIT_TERMINAL_PROMPT:"0",GIT_OPTIONAL_LOCKS:"0",
+    GIT_NO_REPLACE_OBJECTS:"1",GIT_ALLOW_PROTOCOL:""};
+  const fixed=["-c","core.hooksPath=/dev/null","-c","core.fsmonitor=false",
+    "-c","credential.helper=","-c","protocol.file.allow=never",
+    "-c","core.worktree="+scope.directory];
+  return new Promise((resolve,reject)=>{
+    const child=spawn("/usr/bin/git",[...fixed,...args],{
+      cwd:scope.directory,env,detached:true,stdio:["ignore","pipe","ignore"]});
+    let done=false,size=0,chunks=[];
+    const finish=error=>{
+      if(done)return;done=true;clearTimeout(timer);
+      const output=error?null:Buffer.concat(chunks,size).toString("utf8");
+      chunks=[];
+      error?reject(new Error("Project Git information unavailable")):resolve(output);
+    };
+    const stop=()=>{
+      // Kill only the dedicated process group created by this invocation.
+      if(Number.isSafeInteger(child.pid)&&child.pid>0)
+        try{process.kill(-child.pid,"SIGKILL");}catch{try{child.kill("SIGKILL");}catch{}}
+    };
+    const timer=setTimeout(()=>{stop();finish(true);},8000);
+    timer.unref();
+    child.once("error",()=>finish(true));
+    child.stdout.on("data",chunk=>{
+      if(done)return;
+      if(size+chunk.length>1024*1024){stop();finish(true);return;}
+      size+=chunk.length;chunks.push(chunk);
+    });
+    child.once("close",code=>finish(code!==0));
+  });
+}
 function projectFileRequest(scope,pathname,query) {
   const relative=query.get("path")||"";
   if(pathname==="/file"){
-    const dir=workspaceFile(scope,relative,true);
-    if(!lstatSync(dir).isDirectory())
-      throw Object.assign(new Error("Not a project directory"),{status:404});
-    return readdirSync(dir,{withFileTypes:true})
+    workspaceFile(scope,relative,true);
+    return withWorkspaceDirectory(scope,relative,fd=>readdirSync(`/proc/self/fd/${fd}`,{withFileTypes:true})
       .filter(x=>!x.isSymbolicLink()&&![".git",".ssh",".pi","auth.json"].includes(x.name)
         &&!x.name.startsWith(".env"))
       .slice(0,2000).map(x=>({name:x.name,
         path:[relative,x.name].filter(Boolean).join("/"),
-        type:x.isDirectory()?"directory":"file"}));
+        type:x.isDirectory()?"directory":"file"})));
   }
   if(pathname==="/file/content"){
-    const file=workspaceFile(scope,relative);
-    if(!lstatSync(file).isFile())
-      throw Object.assign(new Error("Not a regular project file"),{status:404});
-    if(lstatSync(file).size>1024*1024)
-      throw Object.assign(new Error("File exceeds 1 MB preview limit"),{status:413});
-    const data=readFileSync(file);
-    if(data.includes(0))throw Object.assign(new Error("Binary file cannot be previewed as text"),{status:415});
-    return {content:new TextDecoder("utf-8",{fatal:true}).decode(data)};
+    workspaceFile(scope,relative);
+    const parts=relative.split("/").filter(Boolean),name=parts.pop();
+    return withWorkspaceDirectory(scope,parts.join("/"),dirfd=>{
+      let fd;
+      try{
+        fd=openSync(`/proc/self/fd/${dirfd}/${name}`,
+          fsConstants.O_RDONLY|fsConstants.O_NOFOLLOW|fsConstants.O_NONBLOCK);
+        const info=fstatSync(fd);
+        if(!info.isFile())
+          throw Object.assign(new Error("Not a regular project file"),{status:404});
+        // Hard links can name an inode originating outside this project.
+        if(info.nlink!==1)
+          throw Object.assign(new Error("Linked project files are not accessible"),{status:403});
+        const limit=1024*1024;
+        if(info.size>limit)
+          throw Object.assign(new Error("File exceeds 1 MB preview limit"),{status:413});
+        // Bound the actual read as well: a tool may grow the file after stat.
+        // Small source files should not allocate/zero a full megabyte.
+        let buffer=Buffer.allocUnsafe(Math.min(limit+1,Math.max(4096,info.size+1))),size=0;
+        while(size<=limit){
+          if(size===buffer.length){
+            const grown=Buffer.allocUnsafe(Math.min(limit+1,buffer.length*2));
+            buffer.copy(grown,0,0,size);buffer=grown;
+          }
+          const count=readSync(fd,buffer,size,buffer.length-size,null);
+          if(!count)break;size+=count;
+        }
+        if(size>limit)
+          throw Object.assign(new Error("File exceeds 1 MB preview limit"),{status:413});
+        const data=buffer.subarray(0,size);
+        if(data.includes(0))
+          throw Object.assign(new Error("Binary file cannot be previewed as text"),{status:415});
+        try{return {content:new TextDecoder("utf-8",{fatal:true}).decode(data)};}
+        catch{throw Object.assign(new Error("File cannot be previewed as UTF-8 text"),{status:415});}
+      }finally{if(fd!==undefined)closeSync(fd);}
+    });
   }
   // Read-only Git information for the existing project panel; model edits and
   // shell commands still execute with Pi's native tools, never this route.
-  const git=(args)=>execFileSync("git",args,{cwd:scope.directory,encoding:"utf8",
-    timeout:8000,maxBuffer:1024*1024,stdio:["ignore","pipe","ignore"]}).trim();
   if(pathname==="/vcs"){
-    try{return {branch:git(["branch","--show-current"])};}catch{return {branch:""};}
+    return projectGitRead(scope,["branch","--show-current"])
+      .then(output=>({branch:output.trim()}),()=>({branch:""}));
   }
   if(pathname==="/file/status"){
-    try{
-      const output=git(["status","--porcelain=v1","-uno"]);
-      return output.split("\n").filter(Boolean).map(line=>({
+    return projectGitRead(scope,["status","--porcelain=v1","-uno"])
+      .then(output=>output.trimEnd().split("\n").filter(Boolean).map(line=>({
         status:line.slice(0,2).trim()||"modified",
         path:line.slice(3).replace(/^"(.*)"$/,"$1")
-      }));
-    }catch{return [];}
+      })),()=>[]);
   }
   throw Object.assign(new Error("Unsupported project file operation"),{status:404});
+}
+function projectContextFiles(scope){
+  for(const filename of ["AGENTS.override.md","AGENTS.md","AGENTS.MD","CLAUDE.md","CLAUDE.MD"]){
+    try{
+      const result=projectFileRequest(scope,"/file/content",new URLSearchParams({path:filename}));
+      if(typeof result?.content==="string"&&Buffer.byteLength(result.content)<=64*1024)
+        return [{path:path.join(scope.directory,filename),content:result.content.replace(/^\uFEFF/,"")}];
+    }catch(error){
+      // Unsafe, missing, binary or oversized context must never cause a host
+      // fallback. The project remains usable through its normal file tools.
+      if(![400,403,404,413,415].includes(error.status))throw error;
+    }
+  }
+  return [];
 }
 function piNativeTodos(messages){
   // Only the existing Pi todo extension's tool results represent real state.
@@ -1152,22 +1895,35 @@ const server=http.createServer(async(req,res)=>{
          !/^[0-9a-f-]{36}$/i.test(payload.user_id)||
          !Array.isArray(payload.workspaces)||!payload.personal||!payload.shared)
         return error(res,422,"Invalid account handoff");
+      if(!projectSandboxEnabled(gatewayOrigin(req))&&!payload.origin&&!payload.auth_session_id){
+        const stamp=Date.now();
+        Object.assign(payload,{origin:gatewayOrigin(req),auth_session_id:payload.user_id,
+          auth_created_at:stamp,issued_at:stamp,expires_at:stamp+PI_SESSION_DURATION_MS,
+          workspace_root:process.env.PI_GATEWAY_TEST_ROOT||"/var/lib/opencode-workspaces-test"});
+      }
+      if(payload.origin!==gatewayOrigin(req)||!accountGrantCurrent(payload)||!grantWorkspaceRootsValid(payload)||
+         payload.issued_at<Date.now()-45000)
+        return error(res,401,"Invalid or superseded account authority");
       const ticket=randomUUID();
       pendingTickets.set(ticket,{account:payload,expires:Date.now()+45000});
       return json(res,200,{ticket});
     }
     if(pathname==="/internal/invalidate"&&req.method==="POST"){
       if(!fromGateway(req))return error(res,403,"Local Gateway invalidation only");
-      const payload=await body(req),uid=payload?.user_id;
+      const payload=await body(req),uid=payload?.user_id,auth=payload?.session_id;
       if(uid!=null&&(typeof uid!=="string"||!/^[0-9a-f-]{36}$/i.test(uid)))
         return error(res,422,"Invalid account ID");
-      revokeBrowserGrants(uid||null);
+      if(auth!=null&&(typeof auth!=="string"||!/^[0-9a-f-]{36}$/i.test(auth)))
+        return error(res,422,"Invalid authentication session ID");
+      revokeBrowserGrants(uid||null,gatewayOrigin(req),auth||null,payload?.revoke_login===true);
       return json(res,200,{invalidated:true});
     }
     if(pathname==="/logout"&&req.method==="POST"){
       const raw=String(req.headers.cookie||"");
       const sid=raw.match(/(?:^|;\s*)pi_test_session=([0-9a-f-]{36})(?:;|$)/i)?.[1];
-      if(sid)browserGrants.delete(sid);
+      const grant=sid?browserGrants.get(sid):null;
+      if(grant&&new URL(grant.account.origin).host===req.headers.host)
+        revokeBrowserGrants(grant.account.user_id,grant.account.origin,grant.account.auth_session_id);
       res.writeHead(204,{"set-cookie":PI_COOKIE+
         "=; Path=/native-direct/api/; Max-Age=0; HttpOnly; Secure; SameSite=Strict",
         "cache-control":"no-store"});
@@ -1180,7 +1936,7 @@ const server=http.createServer(async(req,res)=>{
       if(!grant||grant.expires<=Date.now())
         return error(res,401,"Pi handoff ticket expired");
       pendingTickets.delete(ticket);
-      return issueBrowserGrant(res,grant.account);
+      return issueBrowserGrant(res,grant.account,req);
     }
     const s=await scope(req,query);
     // Signed-in account execution lookup. Works from both the account catalog
@@ -1240,6 +1996,22 @@ const server=http.createServer(async(req,res)=>{
         return error(res,403,"Unsafe Pi session path");
       if(req.method==="DELETE"){
         const id=sessionMatch[1],current=pool.get(id);
+        if(current&&(current.scope.origin!==s.origin||current.scope.directory!==s.directory))
+          return error(res,403,"Native session belongs to a different workspace root");
+        // Historical IDs predate separate LIVE/TEST roots. Inspect native
+        // headers before deletion as well as before opening a conversation.
+        for(const name of readdirSync(dir)){
+          if(!name.endsWith(".jsonl"))continue;
+          let fd;
+          try{
+            fd=openSync(path.join(dir,name),fsConstants.O_RDONLY|fsConstants.O_NOFOLLOW|fsConstants.O_NONBLOCK);
+            const info=fstatSync(fd),head=Buffer.alloc(65536);
+            if(!info.isFile()||info.nlink!==1)throw Error("Unsafe history file");
+            const bytes=readSync(fd,head,0,head.length,0),line=head.subarray(0,bytes).toString("utf8").split("\n")[0];
+            if(JSON.parse(line).cwd!==s.directory)throw Error("History workspace mismatch");
+          }catch{return error(res,403,"Native history scope could not be verified; files preserved");}
+          finally{if(fd!==undefined)closeSync(fd);}
+        }
         if(creating.has(id)||current?.active||current?.running||current?.busy||executing.has(current))
           return error(res,409,"Pi session is busy; stop it before deleting the project");
         if(current)current.close();
@@ -1253,7 +2025,7 @@ const server=http.createServer(async(req,res)=>{
     // File tree reads should not consume an agent process or compete with a
     // running Pi conversation for RPC worker slots.
     if(req.method==="GET"&&["/file","/file/content","/file/status","/vcs"].includes(pathname))
-      return json(res,200,projectFileRequest(s,pathname,query));
+      return json(res,200,await projectFileRequest(s,pathname,query));
     const a=await agent(s);
     if(pathname==="/question"&&req.method==="GET")
       return json(res,200,a.pendingUI());
@@ -1506,6 +2278,10 @@ const server=http.createServer(async(req,res)=>{
       isPrompt&&(!promptDispatched||e.receipt==="not_submitted")?"not_submitted":undefined);
   }
 });
+if(process.argv.includes("--isolation-probe")){
+  try{await probeProjectToolSandbox();process.exit(0);}
+  catch{process.exit(1);}
+}
 server.on("clientError",(_,s)=>s.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 mkdirSync(path.dirname(SOCK),{recursive:true,mode:0o700});
 if(existsSync(SOCK))unlinkSync(SOCK);
@@ -1515,5 +2291,7 @@ setInterval(()=>{
   const current=Date.now();
   for(const [id,entry] of browserGrants)if(entry.expires<=current)browserGrants.delete(id);
   for(const [id,entry] of pendingTickets)if(entry.expires<=current)pendingTickets.delete(id);
+  for(const map of [revokedAccounts,revokedSessions,revokedOrigins,revokedLogins])
+    for(const [id,stamp] of map)if(stamp<current-PI_SESSION_DURATION_MS-60000)map.delete(id);
 },60000).unref();
 process.on("SIGTERM",()=>{server.close();for(const a of pool.values())a.close();});

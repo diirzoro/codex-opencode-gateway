@@ -12,6 +12,7 @@ class ContainerSpec:
     argv: tuple[str, ...]
     project_mount: str
     internal_port: int = 8080
+    build_only: bool = False
 
 
 class UnsafeContainerSpec(ValueError):
@@ -21,23 +22,26 @@ class UnsafeContainerSpec(ValueError):
 def argv_for(spec: ContainerSpec) -> tuple[str, ...]:
     """Fixed Docker arguments; no shell, user-supplied flags, ports or mounts."""
     if not isinstance(spec.image, str) or re.fullmatch(
-        r"[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}", spec.image
+        r"(?:[a-z0-9][a-z0-9._/-]*@)?sha256:[0-9a-f]{64}", spec.image
     ) is None:
         raise UnsafeContainerSpec("Verified SHA256 image digest required")
-    if (not spec.argv or spec.internal_port != 8080 or
+    if (not spec.argv or spec.internal_port != 8080 or not isinstance(spec.build_only,bool) or
             re.fullmatch(r"/var/lib/preview-worker/jobs/[a-zA-Z0-9_-]{1,64}/src", spec.project_mount) is None or
             any(not isinstance(part, str) or not part or any(ord(ch) < 32 or ord(ch) == 127 for ch in part) for part in spec.argv)):
         raise UnsafeContainerSpec("Invalid fixed worker launch contract")
     # This is a *configuration contract*, not a complete sandbox security proof.
     # No -p, --privileged, host namespaces, Docker socket or secret volumes.
     return (
-        "docker", "run", "--rm", "--network", "none",
+        "docker", "run", "--network", "none",
         "--read-only", "--user", "10001:10001",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--security-opt", "apparmor=opencode-preview",
         "--memory", "768m", "--memory-swap", "768m",
-        "--cpus", "1", "--pids-limit", "128",
+        "--cpus", "0.5", "--pids-limit", "128",
         "--tmpfs", "/tmp:rw,nosuid,noexec,size=64m",
+        *(("--tmpfs","/build:rw,nosuid,nodev,size=384m,mode=1777") if spec.build_only else ()),
         "--mount", f"type=bind,src={spec.project_mount},dst=/workspace,readonly",
+        *(("--mount",f"type=bind,src={spec.project_mount[:-4]}/packages,dst=/preview-packages,readonly") if spec.build_only else ()),
         "--workdir", "/workspace", "--env", "PORT=8080",
         "--env", "HOST=0.0.0.0", spec.image, *spec.argv,
     )

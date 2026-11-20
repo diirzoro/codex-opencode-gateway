@@ -42,8 +42,8 @@ def records():
 
 def test_missing_sandbox_order_can_be_cancelled_idempotently(records,monkeypatch):
     db,actor,customer,sub,order,plan = records
-    monkeypatch.setattr(paypal,'settings',SimpleNamespace(paypal_environment='sandbox',paypal_client_id='',paypal_client_secret='',paypal_merchant_id=''))
-    def missing(row,**kwargs): raise paypal.OrderNotFound()
+    monkeypatch.setattr(paypal,'settings',SimpleNamespace(paypal_environment='sandbox'))
+    def missing(row): raise paypal.OrderNotFound()
     monkeypatch.setattr(paypal,'show_order',missing)
     assert billing.cancellation_status(order.id,customer,db)['can_cancel']
     result = billing.cancel_unpaid_order(db,order,actor)
@@ -56,9 +56,9 @@ def test_missing_sandbox_order_can_be_cancelled_idempotently(records,monkeypatch
 @pytest.mark.parametrize('remote', ['APPROVED','COMPLETED','ERROR','MISSING_LIVE'])
 def test_uncertain_live_or_approved_payments_are_not_cancelled(records,monkeypatch,remote):
     db,actor,customer,sub,order,plan = records
-    monkeypatch.setattr(paypal,'settings',SimpleNamespace(paypal_environment='sandbox',paypal_client_id='',paypal_client_secret='',paypal_merchant_id=''))
+    monkeypatch.setattr(paypal,'settings',SimpleNamespace(paypal_environment='sandbox'))
     if remote=='MISSING_LIVE': order.provider_environment='live'
-    def show(row,**kwargs):
+    def show(row):
         if remote=='ERROR': raise HTTPException(503,'private upstream failure')
         if remote=='MISSING_LIVE': raise paypal.OrderNotFound()
         return {'status':remote}
@@ -153,10 +153,6 @@ def test_customer_stripe_hosted_readiness_does_not_require_publishable_key(monke
     monkeypatch.setattr(credentials,'available',lambda:True)
     monkeypatch.setattr(stripe_test_checkout,'test_credentials',lambda db:{
         'mode':mode,'secret_key':secret,'publishable_key':''})
-    if hasattr(billing,'StripeLiveCheckoutInput'):
-        from app.services import stripe_live_checkout
-        monkeypatch.setattr(stripe_live_checkout,'_profile',lambda db:{})
-        monkeypatch.setattr(stripe_live_checkout,'status',lambda db:{'live_checkout_enabled':False,'paypal_customer_visible':False})
     result=billing.stripe_status(SimpleNamespace(id='customer'),None)
     assert result['test_checkout_available'] is expected
     assert result['live_checkout_available'] is False

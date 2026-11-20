@@ -22,11 +22,13 @@ class StaticPreview(HTMLParser):
         if not value or ':' in value or value.startswith('//') or value.startswith('#'):
             return None
         name=posixpath.normpath(value.lstrip('/') if value.startswith('/') else posixpath.join(self.parent,value.split('?',1)[0]))
-        path=workspaces.safe_path(self.workspace,name)
-        if not path.is_file() or path.stat().st_size>1000000:return None
-        self.bytes+=path.stat().st_size
+        try:data=workspaces.file_bytes(self.workspace,name)
+        except HTTPException as error:
+            if error.status_code in {403,404,413}:return None
+            raise
+        self.bytes+=len(data)
         if self.bytes>5000000:raise HTTPException(413,'Preview assets exceed 5 MB')
-        return path
+        return name,data
 
     def handle_starttag(self,tag,attrs):
         values=dict(attrs)
@@ -34,16 +36,16 @@ class StaticPreview(HTMLParser):
         if tag=='link' and values.get('rel')=='stylesheet':
             path=self.local(values.get('href'))
             if path:
-                self.parts.append('<style>'+path.read_text(encoding='utf-8').replace('</style','<\\/style')+'</style>');return
+                self.parts.append('<style>'+path[1].decode('utf-8').replace('</style','<\\/style')+'</style>');return
         if tag=='script' and values.get('src'):
             path=self.local(values['src'])
             if path:
-                self.parts.append('<script>'+path.read_text(encoding='utf-8').replace('</script','<\\/script')+'</script>')
+                self.parts.append('<script>'+path[1].decode('utf-8').replace('</script','<\\/script')+'</script>')
             self.skip_script=True;return
         if tag=='img' and values.get('src'):
             path=self.local(values['src'])
             if path:
-                values['src']='data:'+(mimetypes.guess_type(path.name)[0] or 'application/octet-stream')+';base64,'+base64.b64encode(path.read_bytes()).decode()
+                values['src']='data:'+(mimetypes.guess_type(path[0])[0] or 'application/octet-stream')+';base64,'+base64.b64encode(path[1]).decode()
         self.parts.append('<'+tag+''.join(' '+name+('="'+html.escape(value,quote=True)+'"' if value is not None else '') for name,value in values.items())+'>')
 
     def handle_endtag(self,tag):
@@ -84,18 +86,19 @@ def detect(workspace):
         ("artisan", "laravel"), ("composer.json", "php"),
         ("Cargo.toml", "rust"), ("go.mod", "go"), ("pubspec.yaml", "flutter"),
         ("pom.xml", "java"), ("build.gradle", "java"),
-        ("server.js", "node"), ("index.html", "html"),
+        ("Main.java", "java"), ("server.js", "node"), ("index.html", "html"),
     )
     found = []
     manifest = {}
     for filename, kind in candidates:
-        target = workspaces.safe_path(workspace, filename)
-        if not target.is_file() or target.is_symlink() or target.stat().st_size > 250_000:
-            continue
+        try:manifest_bytes=workspaces.file_bytes(workspace,filename,250000)
+        except HTTPException as error:
+            if error.status_code in {403,404,413}:continue
+            raise
         found.append(filename)
         if filename == "package.json":
             try:
-                data = json.loads(target.read_text(encoding="utf-8"))
+                data = json.loads(manifest_bytes.decode("utf-8"))
                 if isinstance(data, dict):
                     base_deps = data.get("dependencies")
                     dev_deps = data.get("devDependencies")
@@ -124,7 +127,7 @@ def detect(workspace):
     elif "Cargo.toml" in files: kind = "rust"
     elif "go.mod" in files: kind = "go"
     elif "pubspec.yaml" in files: kind = "flutter"
-    elif "pom.xml" in files or "build.gradle" in files: kind = "java"
+    elif "pom.xml" in files or "build.gradle" in files or "Main.java" in files: kind = "java"
     # A dependency-free Node HTTP server needs no package.json. Prefer this
     # explicit server entry over index.html so its routes reach the isolated
     # runner. A generic index.js may be a browser asset, so is not sufficient.

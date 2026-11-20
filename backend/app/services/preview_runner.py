@@ -9,9 +9,12 @@ from fastapi import HTTPException
 from . import preview, preview_scheduling, preview_package_manager, workspaces
 from .preview_readiness import PreviewReadiness
 from .preview_launch_profiles import LaunchProfile, PROFILES
+from threading import BoundedSemaphore
+
+_PACKAGE_PREPARATION=BoundedSemaphore(1)
 
 # Fixed security contract: clients cannot loosen these limits via API input.
-LIMITS={"cpu_cores":1,"memory_mb":768,"disk_mb":1024,"processes":128,
+LIMITS={"cpu_cores":0.5,"memory_mb":768,"disk_mb":1024,"processes":128,
         "execution_seconds":900,"log_bytes":100000,"uid":10001,
         "read_only_root":True,"drop_capabilities":["ALL"],"no_new_privileges":True,
         "network":"none","public_ports":[],"docker_socket":False,
@@ -58,6 +61,9 @@ def launch_options(workspace):
     detected = preview.detect(workspace)
     framework = detected['framework']
     profile = PROFILES.get(framework)
+    if framework == 'java' and not workspaces.safe_path(workspace, 'Main.java').is_file():
+        # Maven/Gradle projects require their own dependency/build stage.
+        profile = None
     if framework in {'react', 'vue', 'svelte'}:
         # These libraries alone do not establish a server/start command.
         profile = None
@@ -75,7 +81,15 @@ def launch_options(workspace):
                 break
     if framework == 'php' and workspaces.safe_path(workspace, 'index.php').is_file():
         profile = LaunchProfile('php', ('php', '-S', '0.0.0.0:8080'))
-    return {'framework': framework, 'profile_available': profile is not None,
+    prebuilt_static=False
+    import os
+    build_static=framework in {'vite','react'} and os.environ.get('PREVIEW_REACT_BUILD_ENABLED')=='1'
+    if build_static:
+        profile=LaunchProfile('react_build',('node',))
+    elif framework in {'vite','react'} and workspaces.safe_path(workspace,'dist/index.html').is_file():
+        profile=LaunchProfile('static',())
+        prebuilt_static=True
+    return {'framework': framework, 'prebuilt_static':prebuilt_static, 'build_static':build_static, 'profile_available': profile is not None,
             'runtime_family': profile.family if profile else None,
             'argv': list(profile.argv) if profile else [],
             'internal_port': profile.internal_port if profile else None,
@@ -90,7 +104,7 @@ def _worker():
     except PreviewWorkerUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
     if client is None:
-        raise HTTPException(503, "Test Preview worker is not configured")
+        raise HTTPException(503, "Preview worker is not configured")
     return client
 
 
@@ -112,11 +126,20 @@ def status(workspace):
             "browser_access_required": bool(os.environ.get('PREVIEW_PUBLIC_ORIGIN')),
             "runner_available": client is not None,
             "state": result.get("state", base["state"]),
+            "mode":result.get('mode',base['mode']),"failure_code":result.get('failure_code'),
             "url": result.get("url"), "logs": [],
             "reason": None if result else "No prepared Preview job is available"}
 
 
 def start(workspace, *, fresh=False):
+    if not launch_options(workspace).get('build_static'):
+        return _start(workspace,fresh=fresh)
+    if not _PACKAGE_PREPARATION.acquire(blocking=False):
+        raise HTTPException(429,'Another preview dependency preparation is in progress; retry shortly')
+    try:return _start(workspace,fresh=fresh)
+    finally:_PACKAGE_PREPARATION.release()
+
+def _start(workspace, *, fresh=False):
     import base64
     import tempfile
     from .preview_snapshot import export
@@ -129,32 +152,57 @@ def start(workspace, *, fresh=False):
         raise HTTPException(422, "No executable Preview profile for this workspace")
     try:
         client = _worker()
+        existing={};compare_static=False
         # Opening Preview twice must not re-upload a snapshot over a live job.
         # Return the existing tenant-owned workspace relay instead.
         try:
-            existing = client.request("status", {"job_id": _job_id(workspace)})
+            existing = client.request("status", {"job_id": _job_id(workspace), "user_activity": True})
+            if existing.get('state')=='building' and not fresh:
+                return {'state':'building','mode':'offline_build','url':None}
+            if existing.get('state')=='building' and fresh:
+                if client.request('stop',{'job_id':_job_id(workspace)}).get('state')!='stopped':
+                    raise PreviewWorkerUnavailable('Preview build stop was not confirmed')
             if existing.get("state") == "running":
-                if not fresh:
+                if info.get('build_static') and not fresh:
+                    compare_static=True
+                elif not fresh and not info.get("prebuilt_static"):
                     return {"state": "running",
                             "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/",
                             "execution_enabled": True, "reused": True}
-                stopped=client.request("stop", {"job_id": _job_id(workspace)})
-                if stopped.get('state')!='stopped':
-                    raise PreviewWorkerUnavailable('Preview stop did not confirm shutdown; fresh preview was not started')
+                if not compare_static:
+                    stopped=client.request("stop", {"job_id": _job_id(workspace)})
+                    if stopped.get('state')!='stopped':
+                        raise PreviewWorkerUnavailable('Preview stop did not confirm shutdown; fresh preview was not started')
         except PreviewWorkerUnavailable as exc:
             if "unregistered_job" not in str(exc):
                 raise
         with tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024) as spool:
             export(workspace, spool)
             spool.seek(0)
-            archive = base64.b64encode(spool.read()).decode("ascii")
+            snapshot=spool.read()
+        if compare_static:
+            import hashlib
+            if existing.get('source_digest')==hashlib.sha256(snapshot).hexdigest():
+                return {'state':'running','mode':'built_static','execution_enabled':False,'reused':True,
+                        'url':'/api/workspaces/'+_job_id(workspace)+'/preview/live/'}
+            if client.request('stop',{'job_id':_job_id(workspace)}).get('state')!='stopped':
+                raise PreviewWorkerUnavailable('Preview shutdown was not confirmed')
+        packages=[]
+        if info.get('build_static'):
+            from .preview_npm_cache import prepare,PackagePreparationError
+            try:packages=prepare(snapshot)
+            except PackagePreparationError as exc:raise HTTPException(422,str(exc)) from exc
+            if len(snapshot)+sum(len(item['body'])*3//4 for item in packages)>50*1024*1024:
+                raise HTTPException(413,'Combined preview source and packages exceed 50 MiB')
+        archive = base64.b64encode(snapshot).decode("ascii")
         client.request("prepare", {"job_id": _job_id(workspace),
-                                   "framework": framework, "entrypoint": info["argv"][-1] if framework == "node" else ("main.py" if "main:app" in info["argv"] else "app.py" if "app:app" in info["argv"] else "index.php" if framework == "php" else None), "archive": archive})
+                                   "framework": framework, "build_static":info.get('build_static',False),"packages":packages, "prebuilt_static": info.get('prebuilt_static',False), "entrypoint": info["argv"][-1] if framework in {"node","java"} else ("main.py" if "main:app" in info["argv"] else "app.py" if "app:app" in info["argv"] else "index.php" if framework == "php" else None), "archive": archive})
         response = client.request("start", {"job_id": _job_id(workspace)})
+        if response.get('state')=='building':return {**response,'url':None}
         # No iframe URL is provided until dedicated browser routing exists.
         if response.get("state") != "running":
             raise HTTPException(503, "Preview container did not start")
-        return {**response, "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/", "execution_enabled": True}
+        return {**response, "url": "/api/workspaces/" + _job_id(workspace) + "/preview/live/", "execution_enabled": response.get("execution_enabled",True)}
     except PreviewWorkerUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -181,7 +229,7 @@ def fetch_asset(workspace, path: str, *, relay_prefix: str | None = None, browse
             payload['browser_lease'] = browser_lease
         result = _worker().request("fetch", payload)
         body = base64.b64decode(result["body"], validate=True)
-        if len(body) > 262144:
+        if len(body) > (2*1024*1024 if result.get('mode')=='prebuilt_static' else 262144):
             raise ValueError("Oversized preview response")
         status_code = int(result["status"])
         if not 200 <= status_code <= 599:
@@ -189,8 +237,13 @@ def fetch_asset(workspace, path: str, *, relay_prefix: str | None = None, browse
         media_type = str(result.get("type") or "application/octet-stream").split(";")[0]
         if media_type not in ("text/html", "text/css", "application/javascript",
                               "text/javascript", "application/json", "image/png",
-                              "image/jpeg", "image/svg+xml", "text/plain"):
+                              "image/jpeg", "image/svg+xml", "image/gif", "image/webp", "image/x-icon",
+                              "font/woff", "font/woff2", "font/ttf", "font/otf", "application/manifest+json", "text/plain"):
             media_type = "application/octet-stream"
+        if result.get('mode')=='prebuilt_static' and status_code<400:
+            from .preview_static_artifact import rewrite_references
+            prefix=relay_prefix or "/api/workspaces/"+_job_id(workspace)+"/preview/live/"
+            body=rewrite_references(body,media_type,prefix)
         if media_type == "text/html" and status_code < 400:
             from html import escape
             import re
@@ -205,10 +258,17 @@ def fetch_asset(workspace, path: str, *, relay_prefix: str | None = None, browse
             # Rewrite customer root-relative references before adding our base.
             # Otherwise the injected href is prefixed again and relative assets
             # and nested-page links resolve to a duplicated Gateway API path.
-            page = re.sub(r"""((?:src|href)\s*=\s*["'])/(?!/)""", lambda m: m.group(1) + prefix, page)
+            references=0
+            def rebase_attribute(match):
+                nonlocal references
+                references+=1
+                if references>512:raise ValueError('Preview reference limit exceeded')
+                return match.group(1)+prefix
+            page = re.sub(r"""((?:src|href)\s*=\s*["'])/(?!/)""", rebase_attribute, page)
             head = re.search(r"<head\b[^>]*>", page, re.IGNORECASE)
             page = page[:head.end()] + base + page[head.end():] if head else base + page
             body = page.encode("utf-8")
+            if len(body)>2*1024*1024:raise ValueError('Preview response exceeds asset limit')
         return Response(content=body, status_code=status_code, media_type=media_type,
                         headers={"Cache-Control": "no-store",
                                  "Content-Security-Policy": "sandbox allow-scripts"})

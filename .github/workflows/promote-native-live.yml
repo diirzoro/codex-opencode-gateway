@@ -40,6 +40,7 @@ jobs:
           node --check app.js
           node --check native-session-client.js
           node --check dashboards.js
+          node --check enhancements.js
           python3 -m compileall -q backend/app backend/alembic
 
       - name: Connect using existing protected VPS secrets

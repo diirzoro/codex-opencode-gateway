@@ -12,13 +12,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Plan, Subscription, User, PaymentOrder,BillingMethod,AccountAudit,Country,Region,City
-from ..services.storage_policy import PLAN_MB
 from .dependencies import require_user,require_admin,require_billing_user,access_payload
 from ..services import paypal
 
 LEGACY_PLAN_CODES = frozenset(('monthly', 'two_months', 'three_months'))
 from ..services.location_validation import validate_locations
 from ..services.billing_methods import method_payload
+from ..services.stripe_checkout import status as stripe_checkout_status
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 PAYMENT_MESSAGE = "Payment integration not available yet"
@@ -43,7 +43,8 @@ def plan_payload(plan):
     if plan is None:
         return None
     return {"id": plan.id, "code": plan.code, "name": plan.name, "price_cents": plan.price_cents, "currency": plan.currency, "duration_days": plan.duration_days,
-            "storage_mb": PLAN_MB.get(plan.code, 50), "includes_ai_api": False,
+            "storage_mb": plan.storage_mb, "description_ar": plan.description_ar,
+            "description_en": plan.description_en, "includes_ai_api": False,
             "service_description": "Gateway platform and shared local/GitHub storage only; connect your own AI models/API keys."}
 
 def subscription_payload(db, user) -> dict:
@@ -69,7 +70,11 @@ def subscription_payload(db, user) -> dict:
         "paid_entitlement": {"active": paid_active, "ends_at": paid_end,
                              "remaining_days": paid_remaining if paid_active else 0,
                              "plan_id": row.plan_id if paid_active else None},
-        "payment": {"available": bool(db.scalar(select(BillingMethod.id).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)).limit(1))), "message": "Choose checkout; activation requires verified payment" if db.scalar(select(BillingMethod.id).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True)).limit(1)) else PAYMENT_MESSAGE},
+        "payment": {"available": bool(
+            db.scalar(select(BillingMethod.id).where(
+                BillingMethod.user_id.is_(None), BillingMethod.enabled.is_(True)).limit(1))
+            or stripe_checkout_status(db)["checkout_available"]
+        ), "message": "Choose checkout; activation requires verified payment"},
         "access": access,
     }
 
@@ -209,16 +214,12 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
         host=(__import__('urllib.parse',fromlist=['urlsplit']).urlsplit(details['details'].get('payment_url') or '').hostname or '').lower()
         if not details['details'].get('payment_url') or host=='example.com' or host.endswith(('.invalid','.test','.example','.local','.localhost')):
             raise HTTPException(503,'The payment provider for this method is not connected. Administration must configure a real processor checkout link. No payment was made.')
-    if details['details'].get('checkout_mode')=='paypal' or method.kind=='paypal':
-        from ..services.stripe_live_checkout import paypal_visible
-        if not paypal_visible(db):
-            raise HTTPException(409, 'PayPal is hidden for new checkouts by platform administration')
-        if not paypal.configured(db):
-            raise HTTPException(503,'PayPal provider is not connected. Ask administration to configure the merchant account.')
+    if details['details'].get('checkout_mode')=='paypal' and not paypal.configured():
+        raise HTTPException(503,'PayPal provider is not connected. Ask administration to configure the merchant account.')
     if plan.price_cents<=0 or plan.duration_days<=0: raise HTTPException(422,'Plan requires valid paid price and duration')
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.user_id==user.id,PaymentOrder.plan_id==plan.id,PaymentOrder.method_id==method.id,PaymentOrder.status.in_(['awaiting_payment','pending_review'])))
     if row is None:
-        row=PaymentOrder(user_id=user.id,plan_id=plan.id,method_id=method.id,plan_name=plan.name,method_label=method.label,amount_cents=plan.price_cents,currency=plan.currency,duration_days=plan.duration_days,provider_environment=paypal.admin_config(db)['environment'] if details['details'].get('checkout_mode')=='paypal' else None,billing_note=data.billing_note or None,payer_name=data.payer_name or user.username,payer_email=data.payer_email or user.email,payer_country=country.name if country else data.payer_country or None,payer_region=region.name if region else None,payer_city=city.name if city else None)
+        row=PaymentOrder(user_id=user.id,plan_id=plan.id,method_id=method.id,plan_name=plan.name,method_label=method.label,amount_cents=plan.price_cents,currency=plan.currency,duration_days=plan.duration_days,provider_environment=paypal.settings.paypal_environment if details['details'].get('checkout_mode')=='paypal' else None,billing_note=data.billing_note or None,payer_name=data.payer_name or user.username,payer_email=data.payer_email or user.email,payer_country=country.name if country else data.payer_country or None,payer_region=region.name if region else None,payer_city=city.name if city else None)
         db.add(row);db.commit();db.refresh(row)
     elif row.status=='awaiting_payment' and not row.provider_order_id:
         row.payer_name=data.payer_name or user.username;row.payer_email=data.payer_email or user.email
@@ -229,15 +230,15 @@ def checkout(data:Checkout,user:User=Depends(require_billing_user),db:Session=De
     if details['details'].get('checkout_mode')=='paypal':
         row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==row.id).with_for_update())
         if row.provider_order_id:
-            payload=paypal.show_order(row,db=db)
+            payload=paypal.show_order(row)
             if payload.get('status') in {'APPROVED','COMPLETED'}:return {'order':order_payload(row),'method':details,'automatic_processing':True,'approval_url':None,'message':'Payment is awaiting server verification. Confirm it to reconcile.'}
         else:
-            payload=paypal.create_order(row,db=db)
+            payload=paypal.create_order(row)
             provider_id=payload.get('id','')
             import re
             if not re.fullmatch(r'[A-Z0-9]{5,100}',provider_id):raise HTTPException(502,'PayPal returned an invalid order')
-            row.provider_order_id=provider_id;row.provider_environment=paypal.admin_config(db)['environment']
-        url=paypal.approval_url(payload,db=db);db.commit()
+            row.provider_order_id=provider_id;row.provider_environment=paypal.settings.paypal_environment
+        url=paypal.approval_url(payload);db.commit()
         return {'order':order_payload(row),'method':details,'automatic_processing':True,'approval_url':url,'message':'Approve payment on PayPal, then confirm payment here. Only verified completed captures activate subscriptions.'}
     return {'order':order_payload(row),'method':details,'payment_url':details['details'].get('payment_url') if details['details'].get('checkout_mode')=='link' else None,'automatic_processing':False,'message':'Complete payment, then submit its reference. Administration must verify receipt before activation.'}
 @router.get('/orders')
@@ -268,8 +269,14 @@ def cancellation_status(order_id:uuid.UUID,user:User=Depends(require_billing_use
     allowed=row.status in {'awaiting_payment','pending_review','failed','rejected'} and not row.provider_capture_id and not row.paid_at
     provider_status=None
     if allowed and row.provider_order_id:
-        provider_status=paypal.cancellation_state(row,db=db)
-        allowed=provider_status in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED','NOT_FOUND_SANDBOX'}
+        if row.provider_order_id.startswith("cs_"):
+            # A Stripe Checkout session could still complete remotely.
+            # Do not cancel its local order before provider reconciliation.
+            allowed=False
+            provider_status="STRIPE_REQUIRES_RECONCILIATION"
+        else:
+            provider_status=paypal.cancellation_state(row)
+            allowed=provider_status in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED','NOT_FOUND_SANDBOX'}
     return {'can_cancel':allowed,'provider_status':provider_status}
 
 @router.post('/orders/{order_id}/cancel')
@@ -284,7 +291,9 @@ def cancel_unpaid_order(db,row,actor):
     if row.status not in {'awaiting_payment','pending_review','failed','rejected','cancelled'}:
         raise HTTPException(409,'This payment cannot be cancelled after acceptance')
     if row.provider_order_id:
-        provider_status=paypal.cancellation_state(row,db=db)
+        if row.provider_order_id.startswith("cs_"):
+            raise HTTPException(409, "Stripe Checkout may still complete. Confirm or expire the Stripe session before cancelling the local order.")
+        provider_status=paypal.cancellation_state(row)
         if provider_status not in {'CREATED','SAVED','PAYER_ACTION_REQUIRED','VOIDED','NOT_FOUND_SANDBOX'}:
             raise HTTPException(409,'This PayPal order is approved or completed. Confirm its payment status before cancelling; no refund has been issued.')
     row.status='cancelled'
@@ -377,7 +386,7 @@ class AdminConfirm(BaseModel):
 def confirm_payment(order_id:uuid.UUID,data:AdminConfirm,user:User=Depends(require_admin),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
-    if row.provider_environment:raise HTTPException(409,'Online processor payments require provider verification and cannot be manually confirmed')
+    if row.provider_environment:raise HTTPException(409,'Provider API payments cannot be manually confirmed')
     if row.status=='paid':return order_payload(row)
     if row.status!='pending_review':raise HTTPException(409,'A submitted payment reference is required before review')
     activate_order(db,row,user.id,data.reference)
@@ -386,7 +395,7 @@ def confirm_payment(order_id:uuid.UUID,data:AdminConfirm,user:User=Depends(requi
 def reject_payment(order_id:uuid.UUID,data:RejectRequest,user:User=Depends(require_admin),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
-    if row.provider_environment:raise HTTPException(409,'Online processor payments require provider verification and cannot be manually rejected')
+    if row.provider_environment:raise HTTPException(409,'Provider API payments cannot be manually rejected')
     if row.status in {'paid','rejected'}:return order_payload(row)
     if row.status!='pending_review':raise HTTPException(409,'Only payments under review can be rejected')
     row.status='rejected';row.reject_reason=data.reason;row.reviewed_by=user.id
@@ -422,16 +431,15 @@ def activate_order(db,row,actor_id,reference):
 def capture_paypal(order_id:uuid.UUID,user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
     row=db.scalar(select(PaymentOrder).where(PaymentOrder.id==order_id,PaymentOrder.user_id==user.id).with_for_update())
     if not row:raise HTTPException(404,'Payment order not found')
-    if row.method_label=='Stripe' or (row.provider_order_id or '').startswith(('cs_live_','cs_test_')):
-        raise HTTPException(409,'Stripe orders cannot be captured through PayPal')
-    if not row.provider_order_id:raise HTTPException(409,'This is not a PayPal API payment')
+    if not row.provider_order_id or row.provider_order_id.startswith("cs_"):
+        raise HTTPException(409, 'This is not a PayPal API payment')
     if row.status in {'paid','sandbox_paid'}:return order_payload(row)
     if row.status in {'cancelled','rejected','failed'}:
-        payload=paypal.show_order(row,db=db)
+        payload=paypal.show_order(row)
         if payload.get('status')!='COMPLETED':raise HTTPException(409,'This payment request was cancelled. Start a new checkout; no new charge was made.')
     else:
-        payload=paypal.capture_order(row,db=db)
-    capture_id=paypal.verified_capture(row,payload,db=db)
+        payload=paypal.capture_order(row)
+    capture_id=paypal.verified_capture(row,payload)
     row.provider_capture_id=capture_id
     if row.provider_environment=='sandbox':
         row.status='sandbox_paid';row.payment_reference=capture_id
@@ -471,52 +479,54 @@ def stripe_test_checkout_status(
 
 @router.get('/stripe/status')
 def stripe_status(user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
-    """Customer-safe readiness; Stripe keys never leave the backend."""
-    from ..services.stripe_test_checkout import test_credentials
-    from ..services import credentials, stripe_live_checkout
-    cfg=test_credentials(db)
-    ready=bool(credentials.available() and cfg.get('mode')=='test'
-        and str(cfg.get('secret_key') or '').startswith('sk_test_')
-        and not stripe_live_checkout._profile(db))
-    live=stripe_live_checkout.status(db)
-    return {'provider':'stripe','environment':'live' if live['live_checkout_enabled'] else cfg.get('mode') or 'not_configured',
-            'test_checkout_available':ready and not live['live_checkout_enabled'],
-            'live_checkout_available':live['live_checkout_enabled'],
-            'paypal_customer_visible':live['paypal_customer_visible']}
-
-
-class StripeLiveCheckoutInput(BaseModel):
-    model_config=ConfigDict(extra='forbid')
-    plan_id:int=Field(ge=1)
+    """Read the currently selected Stripe environment and readiness from DB."""
+    from ..services.stripe_checkout import status
+    return status(db)
 
 
 @router.post('/stripe/checkout')
-def start_stripe_live_checkout(
-    data:StripeLiveCheckoutInput,user:User=Depends(require_billing_user),
-    db:Session=Depends(get_db),
+def stripe_unified_checkout(
+    data: StripeTestCheckoutInput,
+    user: User = Depends(require_billing_user),
+    db: Session = Depends(get_db),
 ):
     from ..config import settings
-    from ..services.stripe_live_checkout import start_checkout
-    return start_checkout(db,user,data.plan_id,origin=settings.public_base_url)
+    from ..services.stripe_checkout import create_checkout
+    return create_checkout(db, user, data.plan_id, settings.public_base_url)
 
 
 @router.get('/stripe/checkout/{session_id}')
-def stripe_live_checkout_status(
-    session_id:str,user:User=Depends(require_billing_user),
-    db:Session=Depends(get_db),
+def stripe_checkout_result(
+    session_id: str,
+    user: User = Depends(require_billing_user),
+    db: Session = Depends(get_db),
 ):
-    from ..services.stripe_live_checkout import customer_status
-    return customer_status(db,user,session_id)
+    """Return existing order state, never treat browser redirect as payment."""
+    import re
+    if not re.fullmatch(r'cs_(?:test|live)_[A-Za-z0-9_]{4,180}', session_id):
+        raise HTTPException(422, "Invalid Stripe session ID")
+    if session_id.startswith('cs_test_'):
+        return {"environment": "test", "status": "diagnostic", "subscription_activated": False}
+    row = db.scalar(select(PaymentOrder).where(
+        PaymentOrder.user_id == user.id,
+        PaymentOrder.provider_order_id == session_id,
+        PaymentOrder.provider_environment == 'live'))
+    if row is None:
+        raise HTTPException(404, "Stripe checkout not found")
+    return {"environment": "live", "status": row.status,
+            "subscription_activated": row.status == "paid"}
 
 
-@router.post('/webhooks/stripe')
-async def stripe_live_webhook(request:Request,db:Session=Depends(get_db)):
-    """Stripe-signed server event; no browser authentication or client trust."""
-    from ..services.stripe_live_checkout import process_webhook
-    raw=await request.body()
-    return process_webhook(db,raw,request.headers.get('stripe-signature',''))
+@router.post('/stripe/webhook')
+async def stripe_signed_webhook(request: Request, db: Session = Depends(get_db)):
+    """Public Stripe callback; signed payload required, never browser-authenticated."""
+    from ..services.stripe_checkout import webhook
+    if int(request.headers.get('content-length', '0') or '0') > 65536:
+        raise HTTPException(413, "Webhook is too large")
+    raw = await request.body()
+    return webhook(db, raw, request.headers.get('stripe-signature', ''))
 
 
 @router.get('/paypal/status')
-def paypal_status(user:User=Depends(require_billing_user),db:Session=Depends(get_db)):
-    return {'configured':paypal.configured(db),'environment':paypal.admin_config(db)['environment'],'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','sdk_available':bool(paypal.admin_config(db)['client_id']),'client_id':paypal.admin_config(db)['client_id']}
+def paypal_status(user:User=Depends(require_billing_user)):
+    return {'configured':paypal.configured(),'environment':paypal.settings.paypal_environment,'sandbox_decline_test':paypal.settings.paypal_sandbox_decline,'card_checkout':'Provider eligibility determines guest card availability','sdk_available':bool(paypal.settings.paypal_client_id),'client_id':paypal.settings.paypal_client_id}

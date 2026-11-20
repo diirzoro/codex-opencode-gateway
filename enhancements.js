@@ -592,7 +592,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     [['#icon-user', tr('Username', 'اسم المستخدم'), user.username], ['#icon-file', tr('Email', 'البريد'), user.email], ['#icon-shield', tr('Role', 'الدور'), user.role], ['#icon-clock', tr('Trial', 'التجربة'), (typeof user.trial_remaining_days === 'number' ? user.trial_remaining_days + ' ' + tr('days remaining', 'يوم متبقٍ') : '—')]].forEach(function (r) { var c = listCard(r[0], r[1], r[2]); box.append(c); });
   }
 
-  var ADMIN_LOADERS = { overview: loadAdminOverview, projects: loadAdminProjects, workspaces: loadAdminWorkspaces, users: loadAdminUsersData, plans: loadAdminPlans, billing: loadAdminBilling, reports: loadAdminReports, audit: async function () {}, health: loadAdminHealth, policy: loadAdminPolicy, github: loadAdminGithubAdmin, email: async function(){ if(window.gatewayLoadServiceCenter) await window.gatewayLoadServiceCenter(); }, trial: loadAdminTrial, settings: async function () {}, security: async function () {}, account: loadAdminAccount };
+  var ADMIN_LOADERS = { overview: loadAdminOverview, projects: loadAdminProjects, workspaces: loadAdminWorkspaces, users: loadAdminUsersData, plans: gridPlans, billing: loadAdminBilling, reports: loadAdminReports, audit: async function () {}, health: loadAdminHealth, policy: loadAdminPolicy, github: loadAdminGithubAdmin, email: async function(){ if(window.gatewayLoadServiceCenter) await window.gatewayLoadServiceCenter(); }, trial: loadAdminTrial, settings: async function () {}, security: async function () {}, account: loadAdminAccount };
 
   function setAdminView(name) {
     if (!['overview','users','plans','billing','reports','audit','health','policy','github','email','trial','settings','security','account'].includes(name)) name='overview';
@@ -660,11 +660,14 @@ window.renderGithubConfirmation=function(root,status,refresh){
   }
 
   function planDisplayName(plan) {
-    const names={gateway_100:['Basic · 100 MB','أساسية · 100 ميجابايت'],gateway_150:['Standard · 150 MB','متوسطة · 150 ميجابايت'],gateway_250:['Plus · 250 MB','متقدمة · 250 ميجابايت']};
-    return names[plan.code]?tr(...names[plan.code]):plan.name;
+    return plan.name;
   }
   function planDisplayTerm(plan) {
     return (plan.storage_mb||50)+' MB · '+planDurationLabel(plan.duration_days);
+  }
+  function planDescription(plan) {
+    return tr(plan.description_en, plan.description_ar) || tr(plan.description_ar, plan.description_en) ||
+      tr('Local and GitHub combined · one account quota', 'المشاريع المحلية وGitHub معًا · حصة واحدة للحساب');
   }
   function platformOnlyNote(){
     return tr('Gateway platform access, free available services and ONE shared quota for local + GitHub projects. AI subscriptions, paid models, API keys and tokens are NOT included: connect your own AI provider.',
@@ -699,7 +702,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
         card.append(textElement('b', money(plan.price_cents)));
         card.append(textElement('span', main));
         card.append(textElement('small', sub));
-        card.append(textElement('small',tr('Local and GitHub combined · one account quota','المشاريع المحلية وGitHub معًا · حصة واحدة للحساب')));
+        card.append(textElement('small',planDescription(plan)));
         card.append(textElement('small',platformCardNote()));
         var choose=textElement('button',tr('Subscribe','اشترك'),'button small');choose.type='button';choose.dataset.planId=plan.id;choose.onclick=async function(){window.pendingCheckoutPlan=plan.id;if(currentUser){await window.openClientView('billing');await window.beginCheckout(plan.id);}else await page('authPage');};card.append(choose);
         cards.append(card);
@@ -738,29 +741,12 @@ window.renderGithubConfirmation=function(root,status,refresh){
     applyPrefs();
   };
 
-  async function loadAdminPlans() {
-    var body = document.getElementById('adminPlansBody');
-    if (!body) return;
-    try {
-      var plans = await api('/api/admin/plans', { cache: 'no-store' });
-      body.replaceChildren();
-      plans.forEach(function (plan) {
-        var row = document.createElement('tr');
-        [plan.code, plan.name, money(plan.price_cents), planDisplayTerm(plan), plan.active ? 'yes' : 'no'].forEach(function (text) { row.append(textElement('td', text)); });
-        var action = document.createElement('td');
-        var toggle = textElement('button', plan.active ? 'Deactivate' : 'Activate', 'button ghost small');
-        toggle.onclick = async function () { try { await api('/api/admin/plans/' + plan.id, { method: 'PATCH', body: JSON.stringify({ active: !plan.active }) }); await loadAdminPlans(); } catch (error) { toast(error.message); } };
-        action.append(toggle); row.append(action); body.append(row);
-      });
-    } catch (error) { toast(error.message); }
-  }
-
   var planForm = document.getElementById('adminPlanForm');
   if (planForm) planForm.onsubmit = async function (event) {
     event.preventDefault();
     try {
-      await api('/api/admin/plans', { method: 'POST', body: JSON.stringify({ code: value('planCode'), name: value('planName'), price_cents: Number(value('planPrice')), currency: 'USD', duration_days: Number(value('planDays')), active: true, sort_order: 90 }) });
-      apiMessage('adminPlanMessage', 'Plan created'); planForm.reset(); await loadAdminPlans(); await renderPricing();
+      await api('/api/admin/plans', { method: 'POST', body: JSON.stringify({ code: value('planCode'), name: value('planName'), price_cents: Number(value('planPrice')), currency: 'USD', duration_days: Number(value('planDays')), storage_mb: Number(value('planStorage')), description_ar: value('planDescriptionAr'), description_en: value('planDescriptionEn'), active: true, sort_order: 90 }) });
+      apiMessage('adminPlanMessage', 'Plan created'); planForm.reset(); await gridPlans(); await renderPricing();
     } catch (error) { apiMessage('adminPlanMessage', error.message, true); }
   };
 
@@ -829,8 +815,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
     if (tools) tools.onclick = openToolsPanel;
   }
 
-  Object.assign(copy.en, { clientNavTitle: 'Client', clientDashboard: 'Dashboard', clientProjects: 'Projects', clientSessions: 'Sessions', clientAi: 'OpenCode', clientAccount: 'Account / Profile', clientDashboardLead: 'Your trial, connections, projects and recent activity in one place.', clientRecentLabel: 'RECENT', clientRecentProjects: 'Projects and workspaces', adminNavTitle: 'Administration', adminConsole: 'Admin Console', adminOverview: 'Overview', adminUsers: 'Users', adminProjects: 'Projects', adminWorkspaces: 'Workspaces', adminSessions: 'Sessions', adminPlans: 'Plans & Offers', adminPolicy: 'AI / OpenCode Policy', adminGithub: 'GitHub', adminAudit: 'Audit / Activity', adminSettings: 'Platform Settings', adminPersonal: 'Personal account', adminOverviewLead: 'Real backend metrics only. Metrics without a real query show "Not available yet".', adminPlatformStatus: 'PLATFORM STATUS', adminIntegrations: 'Integrations', adminUsersLead: 'Real account records. Role, status and trial changes call the admin API.', adminActions: 'Actions', adminProjectsLead: 'Metadata only. Customer source code is never shown here.', adminWorkspacesLead: 'Real workspace metadata. The physical path is never exposed.', adminSessionsLead: 'Real OpenCode conversation metadata.', adminPlansLead: 'Published offers are read by the public landing page through the plans API.', adminPolicyLead: 'These settings persist and limit what clients can select. User API keys and OAuth credentials are never shown here.', adminBilling: 'Billing / Subscriptions', adminReports: 'Reports', adminHealth: 'Platform Logs / Health', adminGithubSettings: 'GitHub Integration Settings', adminTrial: 'Trial / Entitlement Settings', adminSecurity: 'Security', clientRecentSessionsTitle: 'Recent sessions', clientProjectsLead: 'Your projects and workspaces.', clientSessionsLead: 'Workspaces and their OpenCode sessions.', clientAiLead: 'Runtime, provider and tool status for your workspaces.', clientGithubLead: 'Connect your GitHub account, then choose a repository and branch.', clientBillingLead: "Your own subscription only. Other customers' billing is never shown here.", clientPlansTitle: 'Plans & offers', clientCancel: 'Cancel subscription', clientReactivate: 'Reactivate', clientRenew: 'Renew subscription', clientInvoicesTitle: 'Invoices & payments', clientAccountLead: 'Personal details and preferences.', clientPersonalInfo: 'Personal information', clientUsername: 'Username', clientEmail: 'Email', clientPhone: 'Phone', clientLocation: 'Location / postal code', clientPreferences: 'Language / theme', clientSecurityNote: 'Use Password & security to change your password, revoke sign-ins, or suspend your account.', clientSecurityLead: 'Session and account security.', clientSecurity: 'Password & Security', clientDashboardBadge: 'CLIENT DASHBOARD', adminConsoleBadge: 'ADMIN CONSOLE', adminBillingLead: 'Business finance view, separate from the client billing page.', adminReportsLead: 'Real platform counts. Revenue appears only when backed by real payment data.', aUsername: 'Username', aEmail: 'Email', aRole: 'Role', aStatus: 'Status', aTrialRemaining: 'Trial remaining', aTrialEnd: 'Trial end', aPlan: 'Plan', aLastLogin: 'Last login', aCreated: 'Created', aProjectsWorkspaces: 'Projects / Workspaces', aCode: 'Code', aName: 'Name', aPrice: 'Price (USD)', aDays: 'Duration', aActive: 'Active', aAddPlan: 'Add plan', aSubscriptionsSmall: 'SUBSCRIPTIONS', aSubsTitle: 'Subscriptions across users', aOwner: 'Owner', aStarted: 'Started', aPeriodEnd: 'Period end', aCancelled: 'Cancelled', aTransactionsSmall: 'TRANSACTIONS', aTransactions: 'Payment transactions', aRevenueSmall: 'REVENUE', aRevenue: 'Revenue', aNay: 'Not available yet.', aAuditLogging: 'Audit logging is not available yet.', aHealthLead: 'Runtime health from the real backend.', aLoading: 'Loading…', aEnabledProviders: 'Enabled providers (comma separated)', aAllowedModels: 'Allowed models (comma separated)', aEnabledTools: 'Enabled tools / capabilities (comma separated)', aRequireApproval: 'Require approval before running tools', aSavePolicy: 'Save policy', aGithubLead: 'GitHub App configuration, database readiness, and account connections.', aLoadingStatus: 'Loading status…', aTrialLead: 'Trial entitlement overview. Editing trial defaults is not available yet.', aPlatformSettings: 'Platform settings are not available yet.', aAdminSecurityNotAvail: 'Admin security settings are not available yet.', aPersonalLead: 'Your own account. Administrative controls are on the other pages.' });
-  Object.assign(copy.ar, { clientNavTitle: 'العميل', clientDashboard: 'لوحة المعلومات', clientProjects: 'المشاريع', clientSessions: 'الجلسات', clientAi: 'OpenCode', clientAccount: 'الحساب / الملف', clientDashboardLead: 'تجربتك واتصالاتك ومشاريعك ونشاطك الأخير في مكان واحد.', clientRecentLabel: 'الأحدث', clientRecentProjects: 'المشاريع ومساحات العمل', adminNavTitle: 'الإدارة', adminConsole: 'لوحة الإدارة', adminOverview: 'نظرة عامة', adminUsers: 'المستخدمون', adminProjects: 'المشاريع', adminWorkspaces: 'مساحات العمل', adminSessions: 'الجلسات', adminPlans: 'الخطط والعروض', adminPolicy: 'سياسة الذكاء / OpenCode', adminGithub: 'GitHub', adminAudit: 'التدقيق / النشاط', adminSettings: 'إعدادات المنصة', adminPersonal: 'الحساب الشخصي', adminOverviewLead: 'مؤشرات حقيقية فقط. ما لا يوجد له استعلام حقيقي يظهر "غير متاح بعد".', adminPlatformStatus: 'حالة المنصة', adminIntegrations: 'التكاملات', adminUsersLead: 'سجلات حقيقية. تغيير الدور والحالة والتجربة يستدعي واجهة الإدارة.', adminActions: 'إجراءات', adminProjectsLead: 'بيانات وصفية فقط. لا يظهر كود العميل هنا.', adminWorkspacesLead: 'بيانات مساحة العمل الحقيقية. لا يُكشف المسار الفيزيائي.', adminSessionsLead: 'بيانات محادثات OpenCode الحقيقية.', adminPlansLead: 'تُقرأ العروض المنشورة في صفحة الهبوط عبر واجهة الخطط.', adminPolicyLead: 'تُحفظ هذه الإعدادات وتحدّ من اختيارات العملاء. لا تظهر مفاتيح المستخدمين أو رموز OAuth هنا.', adminBilling: 'الفوترة / الاشتراكات', adminReports: 'التقارير', adminHealth: 'سجلات المنصة / الحالة', adminGithubSettings: 'إعدادات تكامل GitHub', adminTrial: 'إعدادات التجربة / الاستحقاق', adminSecurity: 'الأمان', clientRecentSessionsTitle: 'الجلسات الأخيرة', clientProjectsLead: 'مشاريعك ومساحات العمل.', clientSessionsLead: 'مساحات العمل وجلسات OpenCode الخاصة بها.', clientAiLead: 'حالة وقت التشغيل والمزوّد والأدوات لمساحات عملك.', clientGithubLead: 'حالة الاتصال. التدفق الحقيقي للترخيص مرحلة لاحقة.', clientBillingLead: 'اشتراكك فقط. لا تظهر فوترة العملاء الآخرين هنا.', clientPlansTitle: 'الخطط والعروض', clientCancel: 'إلغاء الاشتراك', clientReactivate: 'إعادة التفعيل', clientRenew: 'تجديد الاشتراك', clientInvoicesTitle: 'الفواتير والمدفوعات', clientAccountLead: 'بياناتك وتفضيلاتك. لوحة المعلومات صفحة منفصلة.', clientPersonalInfo: 'المعلومات الشخصية', clientUsername: 'اسم المستخدم', clientEmail: 'البريد الإلكتروني', clientPhone: 'الهاتف', clientLocation: 'الموقع / الرمز البريدي', clientPreferences: 'اللغة / المظهر', clientSecurityNote: 'تغيير كلمة المرور وإدارة الأجهزة غير متاحين بعد. جلستك تستخدم ملف تعريف ارتباط HttpOnly وSameSite=Strict.', clientSecurityLead: 'أمان الجلسة والحساب.', clientSecurity: 'كلمة المرور والأمان', clientDashboardBadge: 'لوحة العميل', adminConsoleBadge: 'لوحة الإدارة', adminBillingLead: 'عرض مالي للعمل، منفصل عن صفحة فوترة العميل.', adminReportsLead: 'مؤشرات المنصة الحقيقية. تظهر الإيرادات فقط عند توفر بيانات دفع حقيقية.', aUsername: 'اسم المستخدم', aEmail: 'البريد الإلكتروني', aRole: 'الدور', aStatus: 'الحالة', aTrialRemaining: 'المتبقي من التجربة', aTrialEnd: 'نهاية التجربة', aPlan: 'الخطة', aLastLogin: 'آخر دخول', aCreated: 'تاريخ الإنشاء', aProjectsWorkspaces: 'المشاريع / مساحات العمل', aCode: 'الرمز', aName: 'الاسم', aPrice: 'السعر (سنتات)', aDays: 'الأيام', aActive: 'نشط', aAddPlan: 'إضافة خطة', aSubscriptionsSmall: 'الاشتراكات', aSubsTitle: 'الاشتراكات عبر المستخدمين', aOwner: 'المالك', aStarted: 'البدء', aPeriodEnd: 'نهاية الفترة', aCancelled: 'ملغى', aTransactionsSmall: 'المعاملات', aTransactions: 'معاملات الدفع', aRevenueSmall: 'الإيرادات', aRevenue: 'الإيرادات', aNay: 'غير متاح بعد.', aAuditLogging: 'سجل التدقيق غير متاح بعد.', aHealthLead: 'حالة وقت التشغيل من الخلفية الحقيقية.', aLoading: 'جارٍ التحميل…', aEnabledProviders: 'المزوّدون المفعّلون (مفصولة بفواصل)', aAllowedModels: 'النماذج المسموحة (مفصولة بفواصل)', aEnabledTools: 'الأدوات المفعّلة (مفصولة بفواصل)', aRequireApproval: 'تتطلب الموافقة قبل تشغيل الأدوات', aSavePolicy: 'حفظ السياسة', aGithubLead: 'إعداد تطبيق GitHub وجاهزية قاعدة البيانات واتصالات الحسابات.', aLoadingStatus: 'جارٍ تحميل الحالة…', aTrialLead: 'نظرة عامة على استحقاق التجربة. تعديل مدة التجربة الافتراضية غير متاح بعد.', aPlatformSettings: 'إعدادات المنصة غير متاحة بعد.', aAdminSecurityNotAvail: 'إعدادات أمان الإدارة غير متاحة بعد.', aPersonalLead: 'حسابك الخاص. عناصر التحكم الإدارية في الصفحات الأخرى.' });
+  Object.assign(copy.en, { clientNavTitle: 'Client', clientDashboard: 'Dashboard', clientProjects: 'Projects', clientSessions: 'Sessions', clientAi: 'OpenCode', clientAccount: 'Account / Profile', clientDashboardLead: 'Your trial, connections, projects and recent activity in one place.', clientRecentLabel: 'RECENT', clientRecentProjects: 'Projects and workspaces', adminNavTitle: 'Administration', adminConsole: 'Admin Console', adminOverview: 'Overview', adminUsers: 'Users', adminProjects: 'Projects', adminWorkspaces: 'Workspaces', adminSessions: 'Sessions', adminPlans: 'Plans & Offers', adminPolicy: 'AI / OpenCode Policy', adminGithub: 'GitHub', adminAudit: 'Audit / Activity', adminSettings: 'Platform Settings', adminPersonal: 'Personal account', adminOverviewLead: 'Real backend metrics only. Metrics without a real query show "Not available yet".', adminPlatformStatus: 'PLATFORM STATUS', adminIntegrations: 'Integrations', adminUsersLead: 'Real account records. Role, status and trial changes call the admin API.', adminActions: 'Actions', adminProjectsLead: 'Metadata only. Customer source code is never shown here.', adminWorkspacesLead: 'Real workspace metadata. The physical path is never exposed.', adminSessionsLead: 'Real OpenCode conversation metadata.', adminPlansLead: 'Published offers are read by the public landing page through the plans API.', adminPolicyLead: 'These settings persist and limit what clients can select. User API keys and OAuth credentials are never shown here.', adminBilling: 'Billing / Subscriptions', adminReports: 'Reports', adminHealth: 'Platform Logs / Health', adminGithubSettings: 'GitHub Integration Settings', adminTrial: 'Trial / Entitlement Settings', adminSecurity: 'Security', clientRecentSessionsTitle: 'Recent sessions', clientProjectsLead: 'Your projects and workspaces.', clientSessionsLead: 'Workspaces and their OpenCode sessions.', clientAiLead: 'Runtime, provider and tool status for your workspaces.', clientGithubLead: 'Connect your GitHub account, then choose a repository and branch.', clientBillingLead: "Your own subscription only. Other customers' billing is never shown here.", clientPlansTitle: 'Plans & offers', clientCancel: 'Cancel subscription', clientReactivate: 'Reactivate', clientRenew: 'Renew subscription', clientInvoicesTitle: 'Invoices & payments', clientAccountLead: 'Personal details and preferences.', clientPersonalInfo: 'Personal information', clientUsername: 'Username', clientEmail: 'Email', clientPhone: 'Phone', clientLocation: 'Location / postal code', clientPreferences: 'Language / theme', clientSecurityNote: 'Use Password & security to change your password, revoke sign-ins, or suspend your account.', clientSecurityLead: 'Session and account security.', clientSecurity: 'Password & Security', clientDashboardBadge: 'CLIENT DASHBOARD', adminConsoleBadge: 'ADMIN CONSOLE', adminBillingLead: 'Business finance view, separate from the client billing page.', adminReportsLead: 'Real platform counts. Revenue appears only when backed by real payment data.', aUsername: 'Username', aEmail: 'Email', aRole: 'Role', aStatus: 'Status', aTrialRemaining: 'Trial remaining', aTrialEnd: 'Trial end', aPlan: 'Plan', aLastLogin: 'Last login', aCreated: 'Created', aProjectsWorkspaces: 'Projects / Workspaces', aCode: 'Code', aName: 'Name', aPrice: 'Price (USD)', aDays: 'Duration', aActive: 'Active', aAddPlan: 'Add plan', aStorage: 'Storage (MiB)', aPlanDescriptionAr: 'Arabic plan description', aPlanDescriptionEn: 'English plan description', aSubscriptionsSmall: 'SUBSCRIPTIONS', aSubsTitle: 'Subscriptions across users', aOwner: 'Owner', aStarted: 'Started', aPeriodEnd: 'Period end', aCancelled: 'Cancelled', aTransactionsSmall: 'TRANSACTIONS', aTransactions: 'Payment transactions', aRevenueSmall: 'REVENUE', aRevenue: 'Revenue', aNay: 'Not available yet.', aAuditLogging: 'Audit logging is not available yet.', aHealthLead: 'Runtime health from the real backend.', aLoading: 'Loading…', aEnabledProviders: 'Enabled providers (comma separated)', aAllowedModels: 'Allowed models (comma separated)', aEnabledTools: 'Enabled tools / capabilities (comma separated)', aRequireApproval: 'Require approval before running tools', aSavePolicy: 'Save policy', aGithubLead: 'GitHub App configuration, database readiness, and account connections.', aLoadingStatus: 'Loading status…', aTrialLead: 'Trial entitlement overview. Editing trial defaults is not available yet.', aPlatformSettings: 'Platform settings are not available yet.', aAdminSecurityNotAvail: 'Admin security settings are not available yet.', aPersonalLead: 'Your own account. Administrative controls are on the other pages.' });
+  Object.assign(copy.ar, { clientNavTitle: 'العميل', clientDashboard: 'لوحة المعلومات', clientProjects: 'المشاريع', clientSessions: 'الجلسات', clientAi: 'OpenCode', clientAccount: 'الحساب / الملف', clientDashboardLead: 'تجربتك واتصالاتك ومشاريعك ونشاطك الأخير في مكان واحد.', clientRecentLabel: 'الأحدث', clientRecentProjects: 'المشاريع ومساحات العمل', adminNavTitle: 'الإدارة', adminConsole: 'لوحة الإدارة', adminOverview: 'نظرة عامة', adminUsers: 'المستخدمون', adminProjects: 'المشاريع', adminWorkspaces: 'مساحات العمل', adminSessions: 'الجلسات', adminPlans: 'الخطط والعروض', adminPolicy: 'سياسة الذكاء / OpenCode', adminGithub: 'GitHub', adminAudit: 'التدقيق / النشاط', adminSettings: 'إعدادات المنصة', adminPersonal: 'الحساب الشخصي', adminOverviewLead: 'مؤشرات حقيقية فقط. ما لا يوجد له استعلام حقيقي يظهر "غير متاح بعد".', adminPlatformStatus: 'حالة المنصة', adminIntegrations: 'التكاملات', adminUsersLead: 'سجلات حقيقية. تغيير الدور والحالة والتجربة يستدعي واجهة الإدارة.', adminActions: 'إجراءات', adminProjectsLead: 'بيانات وصفية فقط. لا يظهر كود العميل هنا.', adminWorkspacesLead: 'بيانات مساحة العمل الحقيقية. لا يُكشف المسار الفيزيائي.', adminSessionsLead: 'بيانات محادثات OpenCode الحقيقية.', adminPlansLead: 'تُقرأ العروض المنشورة في صفحة الهبوط عبر واجهة الخطط.', adminPolicyLead: 'تُحفظ هذه الإعدادات وتحدّ من اختيارات العملاء. لا تظهر مفاتيح المستخدمين أو رموز OAuth هنا.', adminBilling: 'الفوترة / الاشتراكات', adminReports: 'التقارير', adminHealth: 'سجلات المنصة / الحالة', adminGithubSettings: 'إعدادات تكامل GitHub', adminTrial: 'إعدادات التجربة / الاستحقاق', adminSecurity: 'الأمان', clientRecentSessionsTitle: 'الجلسات الأخيرة', clientProjectsLead: 'مشاريعك ومساحات العمل.', clientSessionsLead: 'مساحات العمل وجلسات OpenCode الخاصة بها.', clientAiLead: 'حالة وقت التشغيل والمزوّد والأدوات لمساحات عملك.', clientGithubLead: 'حالة الاتصال. التدفق الحقيقي للترخيص مرحلة لاحقة.', clientBillingLead: 'اشتراكك فقط. لا تظهر فوترة العملاء الآخرين هنا.', clientPlansTitle: 'الخطط والعروض', clientCancel: 'إلغاء الاشتراك', clientReactivate: 'إعادة التفعيل', clientRenew: 'تجديد الاشتراك', clientInvoicesTitle: 'الفواتير والمدفوعات', clientAccountLead: 'بياناتك وتفضيلاتك. لوحة المعلومات صفحة منفصلة.', clientPersonalInfo: 'المعلومات الشخصية', clientUsername: 'اسم المستخدم', clientEmail: 'البريد الإلكتروني', clientPhone: 'الهاتف', clientLocation: 'الموقع / الرمز البريدي', clientPreferences: 'اللغة / المظهر', clientSecurityNote: 'تغيير كلمة المرور وإدارة الأجهزة غير متاحين بعد. جلستك تستخدم ملف تعريف ارتباط HttpOnly وSameSite=Strict.', clientSecurityLead: 'أمان الجلسة والحساب.', clientSecurity: 'كلمة المرور والأمان', clientDashboardBadge: 'لوحة العميل', adminConsoleBadge: 'لوحة الإدارة', adminBillingLead: 'عرض مالي للعمل، منفصل عن صفحة فوترة العميل.', adminReportsLead: 'مؤشرات المنصة الحقيقية. تظهر الإيرادات فقط عند توفر بيانات دفع حقيقية.', aUsername: 'اسم المستخدم', aEmail: 'البريد الإلكتروني', aRole: 'الدور', aStatus: 'الحالة', aTrialRemaining: 'المتبقي من التجربة', aTrialEnd: 'نهاية التجربة', aPlan: 'الخطة', aLastLogin: 'آخر دخول', aCreated: 'تاريخ الإنشاء', aProjectsWorkspaces: 'المشاريع / مساحات العمل', aCode: 'الرمز', aName: 'الاسم', aPrice: 'السعر (سنتات)', aDays: 'الأيام', aActive: 'نشط', aAddPlan: 'إضافة خطة', aStorage: 'التخزين (MiB)', aPlanDescriptionAr: 'وصف الخطة بالعربية', aPlanDescriptionEn: 'وصف الخطة بالإنجليزية', aSubscriptionsSmall: 'الاشتراكات', aSubsTitle: 'الاشتراكات عبر المستخدمين', aOwner: 'المالك', aStarted: 'البدء', aPeriodEnd: 'نهاية الفترة', aCancelled: 'ملغى', aTransactionsSmall: 'المعاملات', aTransactions: 'معاملات الدفع', aRevenueSmall: 'الإيرادات', aRevenue: 'الإيرادات', aNay: 'غير متاح بعد.', aAuditLogging: 'سجل التدقيق غير متاح بعد.', aHealthLead: 'حالة وقت التشغيل من الخلفية الحقيقية.', aLoading: 'جارٍ التحميل…', aEnabledProviders: 'المزوّدون المفعّلون (مفصولة بفواصل)', aAllowedModels: 'النماذج المسموحة (مفصولة بفواصل)', aEnabledTools: 'الأدوات المفعّلة (مفصولة بفواصل)', aRequireApproval: 'تتطلب الموافقة قبل تشغيل الأدوات', aSavePolicy: 'حفظ السياسة', aGithubLead: 'إعداد تطبيق GitHub وجاهزية قاعدة البيانات واتصالات الحسابات.', aLoadingStatus: 'جارٍ تحميل الحالة…', aTrialLead: 'نظرة عامة على استحقاق التجربة. تعديل مدة التجربة الافتراضية غير متاح بعد.', aPlatformSettings: 'إعدادات المنصة غير متاحة بعد.', aAdminSecurityNotAvail: 'إعدادات أمان الإدارة غير متاحة بعد.', aPersonalLead: 'حسابك الخاص. عناصر التحكم الإدارية في الصفحات الأخرى.' });
   applyPrefs();
 
   // Re-render the active surface after a language switch so dynamic panels match the shell.
@@ -999,7 +985,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
         var duration = plan.durationLabel || planDurationLabel(plan.duration_days);
         card.append(textElement('span', planDisplayName(plan)));
         card.append(textElement('small', planDisplayTerm(plan)));
-        card.append(textElement('small',tr('Shared account storage: GitHub + local workspaces','مساحة الحساب مشتركة: GitHub + المشاريع المحلية')));
+        card.append(textElement('small',planDescription(plan)));
         card.append(textElement('small',platformOnlyNote()));
         var select = textElement('button', isCurrent ? tr('Current plan', 'الخطة الحالية') : (isSelected ? tr('Selected', 'محددة') : tr('Select', 'اختيار')), 'button small');
         if (isCurrent || isSelected) select.className = 'button small';
@@ -1827,7 +1813,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     plans.forEach(function (plan) {
       var row = document.createElement('tr');
       row.append(el('td', '', plan.code), el('td', '', plan.name), el('td', '', money(plan.price_cents)),
-        el('td', '', plan.duration_days), el('td', '', plan.active ? tr('Yes', 'نعم') : tr('No', 'لا')));
+        el('td', '', plan.duration_days), el('td', '', plan.storage_mb), el('td', '', plan.active ? tr('Yes', 'نعم') : tr('No', 'لا')));
       body.append(row);
     });
     enhanceGrid(body, {
@@ -1839,11 +1825,28 @@ window.renderGithubConfirmation=function(root,status,refresh){
               [tr('Code', 'الرمز'), plan.code], [tr('Name', 'الاسم'), plan.name],
               [tr('Price (USD cents)', 'السعر (سنت)'), String(plan.price_cents)],
               [tr('Days', 'الأيام'), String(plan.duration_days)],
+              [tr('Storage (MiB)', 'التخزين (MiB)'), String(plan.storage_mb)],
+              [tr('Description', 'الوصف'), planDescription(plan)],
               [tr('Active', 'نشط'), plan.active ? tr('Yes', 'نعم') : tr('No', 'لا')],
               [tr('Sort order', 'ترتيب العرض'), String(plan.sort_order)],
             ]), []);
           }],
           ['icon-edit', tr('Edit plan', 'تعديل الخطة'), function () { openPlanModal(plan); }],
+          [plan.active ? 'icon-stop' : 'icon-plus', plan.active ? tr('Deactivate plan', 'إيقاف الخطة') : tr('Activate plan', 'تفعيل الخطة'), async function () {
+            try {
+              await api('/api/admin/plans/' + plan.id, { method: 'PATCH', body: JSON.stringify({ active: !plan.active }) });
+              await gridPlans();
+              await renderPricing();
+            } catch (error) { toast(error.message); }
+          }],
+          ['icon-trash', tr('Delete inactive plan', 'حذف الخطة الموقوفة'), async function () {
+            if (!window.confirm(tr('Permanently delete this inactive plan?', 'حذف هذه الخطة الموقوفة نهائيًا؟'))) return;
+            try {
+              await api('/api/admin/plans/' + plan.id, { method: 'DELETE' });
+              await gridPlans();
+              await renderPricing();
+            } catch (error) { toast(error.message); }
+          }, plan.active],
 
         ]);
       },
@@ -1860,6 +1863,17 @@ window.renderGithubConfirmation=function(root,status,refresh){
     var nameIn = document.createElement('input'); nameIn.value = plan.name;
     var priceIn = document.createElement('input'); priceIn.type = 'number'; priceIn.min = '0'; priceIn.value = String(plan.price_cents);
     var daysIn = document.createElement('input'); daysIn.type = 'number'; daysIn.min = '1'; daysIn.max = '3650'; daysIn.value = String(plan.duration_days);
+    var storageIn = document.createElement('input'); storageIn.type = 'number'; storageIn.min = '1'; storageIn.max = '1048576'; storageIn.required = true; storageIn.value = String(plan.storage_mb);
+    var arDescription = document.createElement('textarea');
+    arDescription.dir = 'rtl';
+    arDescription.maxLength = 2000;
+    arDescription.rows = 3;
+    arDescription.value = plan.description_ar || '';
+    var enDescription = document.createElement('textarea');
+    enDescription.dir = 'ltr';
+    enDescription.maxLength = 2000;
+    enDescription.rows = 3;
+    enDescription.value = plan.description_en || '';
     var activeSel = document.createElement('select');
     [[true, tr('Active', 'نشط')], [false, tr('Inactive', 'غير نشط')]].forEach(function (p) {
       var o = document.createElement('option'); o.value = String(p[0]); o.textContent = p[1];
@@ -1868,17 +1882,24 @@ window.renderGithubConfirmation=function(root,status,refresh){
     });
     var body = el('div');
     body.append(labeled(tr('Name', 'الاسم'), nameIn), labeled(tr('Price (USD cents)', 'السعر (سنت)'), priceIn),
-      labeled(tr('Duration days', 'المدة بالأيام'), daysIn), labeled(tr('Status', 'الحالة'), activeSel));
+      labeled(tr('Duration days', 'المدة بالأيام'), daysIn),
+      labeled(tr('Storage (MiB)', 'التخزين (MiB)'), storageIn),
+      labeled(tr('Arabic plan description', 'وصف الخطة بالعربية'), arDescription),
+      labeled(tr('English plan description', 'وصف الخطة بالإنجليزية'), enDescription),
+      labeled(tr('Status', 'الحالة'), activeSel));
     var save = el('button', 'button small', tr('Save', 'حفظ'));
     save.type = 'button';
     save.onclick = async function () {
+      if (!storageIn.reportValidity()) return;
       save.disabled = true;
       try {
         await api('/api/admin/plans/' + plan.id, {
           method: 'PATCH',
           body: JSON.stringify({
             name: nameIn.value, price_cents: Number(priceIn.value),
-            duration_days: Number(daysIn.value), active: activeSel.value === 'true',
+            duration_days: Number(daysIn.value), storage_mb: Number(storageIn.value),
+            description_ar: arDescription.value, description_en: enDescription.value,
+            active: activeSel.value === 'true',
           }),
         });
         toast(tr('Plan updated', 'تم تحديث الخطة'));
@@ -2845,7 +2866,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     ['api',tr('API integration (credentials only)','API (حفظ بيانات الربط فقط)')]
   ];
   const environments=[['test',tr('Test / Sandbox','تجريبي / Sandbox')],
-                      ['live',tr('LIVE credentials — requires separate activation','مفاتيح حقيقية — تتطلب تفعيلًا مستقلاً')]];
+                      ['live',tr('Live credentials — storage only','مفاتيح حقيقية — تخزين فقط')]];
   const fieldKinds=[
     ['text',tr('Text / identifier','نص / معرّف')],
     ['secret',tr('Secret / API key','مفتاح سري / API')],
@@ -2870,7 +2891,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     {code:'paypal',name:'PayPal',label:'PayPal',slug:'paypal',
      category:'processor',mode:'api',fields:[['merchant_id','Merchant ID','text'],['client_id','Client ID','text'],['client_secret','Client secret','secret'],['webhook_id','Webhook ID','text']]},
     {code:'stripe',name:'Stripe',label:'Stripe',slug:'stripe',
-     category:'processor',mode:'api',fields:[['publishable_key','Publishable key (pk_live_)','text'],['secret_key','API secret key (sk_live_)','secret'],['webhook_secret','LIVE webhook signing secret (whsec_)','secret']]},
+     category:'processor',mode:'api',fields:[['publishable_key','Publishable key','text'],['secret_key','API secret key','secret'],['webhook_secret','Webhook signing secret','secret']]},
     {code:'cryptomus',name:'Cryptomus',label:'Cryptomus',slug:'cryptomus',
      category:'crypto',mode:'api',fields:[['merchant_id','Merchant ID','text'],['payment_api_key','Payment API key','secret'],['payout_api_key','Payout API key (optional)','secret']]},
     {code:'bank',name:tr('Bank transfer template','نموذج حساب بنكي'),label:'',slug:'',
@@ -2893,41 +2914,29 @@ window.renderGithubConfirmation=function(root,status,refresh){
   }
 
   function stripeTestTools(card,actions){
-          const feedback=el('p',tr('Stripe TEST not yet checked.','لم يتم فحص Stripe التجريبي.'),
-            'dynamic-provider-feedback');
-          const verify=button(tr('Verify Stripe TEST API','فحص اتصال Stripe التجريبي'),async()=>{
-            verify.disabled=true;
-            try{
-              const result=await api('/api/admin/payment-gateways/stripe/verify',{method:'POST'});
-              feedback.textContent=tr('Stripe verified: ','اتصال Stripe موثق: ')+(result.account_id||result.environment);
-            }catch(error){feedback.textContent=error.message;}finally{verify.disabled=false;}
-          },'button small');
-          const checkout=button(tr('Open Stripe TEST checkout','فتح الدفع التجريبي Stripe'),async()=>{
-            checkout.disabled=true;
-            try{
-              const result=await api('/api/admin/payment-gateways/stripe/test-checkout',{method:'POST'});
-              const url=new URL(result.checkout_url);
-              if(url.protocol!=='https:'||!['checkout.stripe.com','checkout.stripe.dev'].includes(url.hostname))
-                throw Error('Unexpected Stripe checkout destination');
-              feedback.replaceChildren();
-              const link=el('a',tr('Open Stripe test payment page','فتح صفحة دفع Stripe التجريبية'));
-              link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';
-              feedback.append(link);
-              const check=button(tr('Check test payment status','فحص حالة الدفع التجريبي'),async()=>{
-                check.disabled=true;
-                try{
-                  const status=await api('/api/admin/payment-gateways/stripe/test-checkout/'+encodeURIComponent(result.session_id));
-                  feedback.append(el('p',tr('TEST payment: ','الدفع التجريبي: ')+
-                    (status.payment_status||status.status||'unknown')+
-                    tr(' · No subscription activated',' · لم يُفعّل اشتراك')));
-                }catch(error){feedback.append(el('p',error.message));}
-                finally{check.disabled=false;}
-              },'button ghost small');
-              feedback.append(check);
-            }catch(error){feedback.textContent=error.message;}
-            finally{checkout.disabled=false;}
-          },'button small');
-          actions.append(verify,checkout);card.append(feedback);
+    const feedback=el('p',tr('Stripe TEST uses the same checkout system as LIVE.',
+      'يستخدم Stripe TEST نفس نظام الدفع المستخدم في LIVE.'),'dynamic-provider-feedback');
+    const verify=button(tr('Verify Stripe TEST API','فحص اتصال Stripe التجريبي'),async()=>{
+      verify.disabled=true;
+      try{
+        const result=await api('/api/admin/payment-gateways/profiles/stripe/verify',{method:'POST'});
+        feedback.textContent=result.verified
+          ?tr('Stripe API verified: ','تم التحقق من Stripe API: ')+(result.account_id||result.environment)
+          :result.message||result.result;
+      }catch(error){feedback.textContent=error.message;}finally{verify.disabled=false;}
+    },'button small');
+    const checkout=button(tr('Open unified Stripe TEST checkout','فتح دفع Stripe التجريبي الموحد'),async()=>{
+      checkout.disabled=true;
+      try{
+        const plans=await api('/api/plans');
+        const choices=Array.isArray(plans)?plans:(plans.plans||[]);
+        const plan=choices.find(p=>p.active!==false&&p.price_cents>0&&p.currency==='USD');
+        if(!plan)throw Error(tr('No active USD paid plan configured','لا توجد خطة مدفوعة نشطة بالدولار'));
+        if(typeof window.beginCheckout!=='function')throw Error('Checkout interface unavailable');
+        await window.beginCheckout(plan.id,'stripe-test');
+      }catch(error){feedback.textContent=error.message;}finally{checkout.disabled=false;}
+    },'button small');
+    actions.append(verify,checkout);card.append(feedback);
   }
 
   async function load(){
@@ -2970,68 +2979,6 @@ window.renderGithubConfirmation=function(root,status,refresh){
     toolbar.append(search,state,add,addBank);host.append(toolbar);
     const count=el('p','','dynamic-provider-hint'),list=el('div','','admin-payment-catalog');
     host.append(count,list);
-    // Production payment controls are part of the EXISTING Admin Dashboard.
-    // Saving an API profile alone never enables REAL charges.
-    if(location.hostname==='opencode-gateway.codes'){
-      const settings=el('section','','dynamic-provider-card');
-      settings.setAttribute('aria-label',tr('Customer payment controls','إدارة الدفع للعملاء'));
-      host.append(settings);
-      (async()=>{
-        try{
-          const state=await api('/api/admin/payment-gateways/stripe/live/status',{cache:'no-store'});
-          if(sequence!==revision)return;
-          settings.replaceChildren(
-            el('h3',tr('Stripe LIVE & PayPal visibility','Stripe الحقيقي وإظهار PayPal')),
-            el('p',tr('Configure the Stripe LIVE profile above with pk_live_, sk_live_ and the webhook signing secret whsec_ first. Saving fields never starts real payments.',
-              'احفظ ملف Stripe الحقيقي أعلاه بمفاتيح pk_live_ وsk_live_ وسر توقيع Webhook الذي يبدأ بـ whsec_. مجرد حفظ الحقول لا يبدأ التحصيل.')),
-            el('p',tr('Stripe LIVE: ','Stripe الحقيقي: ')+(state.live_checkout_enabled?
-              tr('Enabled','مفعّل'):tr('Disabled','غير مفعّل'))+
-              ' · '+tr('LIVE credentials: ','مفاتيح LIVE: ')+(state.live_keys_configured?
-                tr('Configured','محفوظة'):tr('Incomplete','غير مكتملة'))),
-            el('p',tr('PayPal visible to customers: ','إظهار PayPal للعملاء: ')+
-              (state.paypal_customer_visible?tr('Yes','نعم'):tr('No','لا'))),
-            el('p',tr('Webhook endpoint: ','عنوان Webhook: ')+state.webhook_url)
-          );
-          const help=el('p',tr(
-            'In your Stripe Dashboard, register this HTTPS endpoint for checkout.session.completed and checkout.session.async_payment_succeeded; paste its LIVE signing secret in the Stripe profile. Only verified Stripe payments activate access. New checkout is one-time, not automatic renewal.',
-            'من لوحة Stripe أنشئ Webhook لهذا العنوان، واختر checkout.session.completed وcheckout.session.async_payment_succeeded، ثم الصق سر التوقيع الحقيقي في ملف Stripe. لا يُفعّل الاشتراك إلا بعد تحقق Stripe. الدفع لمرة واحدة وليس تجديدًا تلقائيًا.'
-          ),'dynamic-provider-hint');
-          settings.append(help);
-          const actions=el('div','','dynamic-provider-actions');settings.append(actions);
-          const change=async(enabled,showPayPal)=>{
-            if(enabled){
-              if(!state.live_keys_configured)
-                throw Error(tr('Complete Stripe LIVE keys first','أكمل مفاتيح Stripe الحقيقية أولاً'));
-              if(typeof window.confirmAction==='function' &&
-                !await window.confirmAction(tr(
-                  'Enable REAL Stripe charges? Customers may be charged actual money. PayPal visibility will follow your selection.',
-                  'تفعيل مدفوعات Stripe الحقيقية؟ قد تُخصم أموال فعلية من العملاء. سيُطبّق اختيارك لإظهار PayPal.'
-                )))return;
-            }
-            await api('/api/admin/payment-gateways/stripe/live',{
-              method:'PUT',body:JSON.stringify({enabled,show_paypal:showPayPal})});
-            await load();
-          };
-          const activate=button(tr('Enable Stripe LIVE · hide PayPal','تفعيل Stripe الحقيقي وإخفاء PayPal'),
-            async()=>{activate.disabled=true;try{await change(true,false);}catch(error){settings.append(el('p',error.message,'api-message'));activate.disabled=false;}},
-            'button small');
-          activate.disabled=state.live_checkout_enabled||!state.live_keys_configured;
-          actions.append(activate);
-          const disable=button(tr('Disable new Stripe checkouts','إيقاف طلبات Stripe الجديدة'),
-            async()=>{disable.disabled=true;try{await change(false,state.paypal_customer_visible);}catch(error){settings.append(el('p',error.message,'api-message'));disable.disabled=false;}},
-            'button ghost small');
-          disable.disabled=!state.live_checkout_enabled;actions.append(disable);
-          const paypalToggle=button(state.paypal_customer_visible?
-            tr('Hide PayPal from customers','إخفاء PayPal عن العملاء'):
-            tr('Show PayPal to customers','إظهار PayPal للعملاء'),
-            async()=>{paypalToggle.disabled=true;try{await change(state.live_checkout_enabled,!state.paypal_customer_visible);}catch(error){settings.append(el('p',error.message,'api-message'));paypalToggle.disabled=false;}},
-            'button ghost small');
-          actions.append(paypalToggle);
-        }catch(error){if(sequence===revision)settings.replaceChildren(el('p',
-          tr('Unable to load payment settings: ','تعذر تحميل إعدادات الدفع: ')+(typeof error.message==='string'?error.message:'Unknown error'),
-          'api-message'));}
-      })();
-    }
     const detail=el('div','','dynamic-provider-cards');
     detail.hidden=true;host.append(detail);
     if(!profileMap.has('stripe')){
@@ -3045,6 +2992,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
     const statusText=entry=>
       entry.status==='suspended'?tr('Suspended','معلقة'):
       entry.customer_checkout_enabled?tr('Enabled for new customers','مفعلة للعملاء'):
+      entry.status==='api_verified'?tr('API verified','اتصال API موثّق'):
       entry.status==='configured_unverified'?tr('Configured, not verified','إعداد محفوظ غير موثق'):
       entry.status==='draft'?tr('Draft','مسودة'):
       entry.status==='disabled_existing'?tr('Disabled','معطلة'):
@@ -3071,20 +3019,68 @@ window.renderGithubConfirmation=function(root,status,refresh){
         el('p',profile.category+' · '+profile.connection_mode+' · '+profile.environment));
       head.append(icon,names);
       const fields=profile.fields.filter(f=>f.configured).length;
-      const status=el('span',profile.configured?tr('Fields saved','الحقول محفوظة'):tr('Incomplete draft','مسودة غير مكتملة'),
+      const status=el('span',profile.api_verified?tr('Stripe API verified','اتصال Stripe API موثّق'):profile.configured?tr('Fields saved','الحقول محفوظة'):tr('Incomplete draft','مسودة غير مكتملة'),
         'dynamic-provider-status');
       head.append(status);
       card.append(head,
         el('p',tr('Stored fields: ','الحقول المحفوظة: ')+fields+' / '+profile.fields.length,
            'dynamic-provider-description'),
-        el('p',tr('Settings only · Automatic checkout is not activated.',
-          'إعدادات الربط فقط · التحصيل الآلي غير مفعل.'),
+        el('p',profile.slug==='stripe'
+          ?(profile.checkout_enabled
+            ?(profile.environment==='test'
+              ?tr('Stripe TEST checkout ready · no real subscription activation.',
+                  'Stripe TEST جاهز للاختبار · لا يُفعّل اشتراكات حقيقية.')
+              :tr('Stripe LIVE checkout enabled · signed webhook confirmation required to activate subscriptions.',
+                  'Stripe LIVE مفعّل · يلزم تأكيد Webhook الموقّع لتفعيل الاشتراكات.'))
+            :tr('Stripe checkout is not ready. Check the active mode, API key, webhook secret and suspension state.',
+                'Stripe غير جاهز للدفع. راجع البيئة والمفتاح وسر Webhook وحالة التعليق.'))
+          :tr('Saved connection details · customer checkout requires activation.',
+              'بيانات الربط محفوظة · يلزم تفعيل وسيلة الدفع للعملاء.'),
           'dynamic-provider-hint'));
       const actions=el('div','','dynamic-provider-actions');
       actions.append(button(tr('Edit connection','تعديل بيانات الربط'),()=>editor(profile),'button small'));
+      const verifyFeedback=el('p',profile.api_verified
+        ?tr('Last successful Stripe API verification: ','آخر تحقق ناجح من Stripe API: ')+(profile.verified_at||'')+
+          tr(' · Checkout and webhook not verified.',' · لم يتم التحقق من Checkout وWebhook.')
+        :tr('Not checked yet.','لم يتم التحقق بعد.'),'dynamic-provider-feedback');
+      verifyFeedback.setAttribute('role','status');
+      const verifyProfile=button(tr('Verify connection / details','التحقق من الربط / البيانات'),async()=>{
+        verifyProfile.disabled=true;
+        verifyFeedback.textContent=tr('Checking saved details…','جارٍ فحص البيانات المحفوظة…');
+        try{
+          const result=await api('/api/admin/payment-gateways/profiles/'+encodeURIComponent(profile.slug)+'/verify',{method:'POST'});
+          if(result.result==='api_verified'){
+            verifyFeedback.textContent=tr('Stripe API verified (','تم توثيق اتصال Stripe API (')+
+              (result.environment||'')+' · '+(result.account_id||'')+
+              tr('). Checkout and webhook are NOT verified.','‎). الدفع والويب هوك لم يتم التحقق منهما.');
+            status.textContent=tr('Stripe API verified','اتصال Stripe API موثّق');
+            const currentEntry=entries.find(entry=>entry.source==='dynamic'&&entry.slug===profile.slug);
+            if(currentEntry){
+              currentEntry.status='api_verified';
+              render();
+            }
+          }else if(result.result==='manual_review_required'){
+            verifyFeedback.textContent=tr(
+              'Fields complete — bank/wallet ownership and receiving ability require independent manual confirmation.',
+              'الحقول مكتملة، لكن ملكية الحساب البنكي/المحفظة وإمكانية الاستلام تتطلب تأكيدًا يدويًا مستقلًا.');
+          }else if(result.result==='incomplete'){
+            verifyFeedback.textContent=tr('Missing required fields: ','الحقول المطلوبة الناقصة: ')+(result.missing_fields||[]).join(', ');
+          }else{
+            verifyFeedback.textContent=tr('Not verified: ','لم يتم التحقق: ')+(result.message||result.result||'');
+          }
+        }catch(error){verifyFeedback.textContent=tr('Verification failed: ','فشل التحقق: ')+(error.message||String(error));}
+        finally{verifyProfile.disabled=false;}
+      },'button ghost small');
+      actions.append(verifyProfile);
+      card.append(verifyFeedback);
+
       if(profile.connection_mode==='api'){
-        card.append(el('p',tr('API credentials remain encrypted. Stripe TEST Checkout does not activate subscriptions.',
-          'تبقى مفاتيح API مشفرة. دفع Stripe التجريبي لا يفعّل الاشتراكات.'),'dynamic-provider-hint'));
+        card.append(el('p',tr('API credentials remain encrypted. TEST checkout never activates paid subscriptions.',
+          'مفاتيح API مشفرة، ودفع TEST لا يفعّل اشتراكات مدفوعة.'),'dynamic-provider-hint'));
+        if(profile.slug==='stripe'){
+          const endpoint=location.origin+'/api/billing/stripe/webhook';
+          card.append(el('p',tr('Stripe webhook destination: ','عنوان Stripe Webhook: ')+endpoint,'dynamic-provider-hint'));
+        }
         if(profile.slug==='stripe'&&profile.environment==='test'){
           stripeTestTools(card,actions);
         }
@@ -3140,7 +3136,8 @@ window.renderGithubConfirmation=function(root,status,refresh){
         const category=categories.find(([value])=>value===entry.category)?.[1]||entry.category||'—';
         const mode=entry.source==='legacy'?tr('Existing method','وسيلة سابقة'):
           entry.connection_mode==='api'?'API':entry.connection_mode==='manual'?tr('Manual transfer','تحويل يدوي'):tr('Hosted link','رابط دفع');
-        const badge=el('span',statusText(entry),'finance-status');badge.dataset.status=entry.customer_checkout_enabled?'paid':'disabled';
+        const badge=el('span',statusText(entry),'finance-status');
+        badge.dataset.status=entry.status==='api_verified'?'paid':entry.customer_checkout_enabled?'paid':'disabled';
         const stateCell=el('td');stateCell.append(badge);
         row.append(info,el('td',category),el('td',mode),el('td',entry.environment==='live'?tr('Live','حقيقي'):entry.environment==='test'?tr('Test','تجريبي'):'—'),stateCell);
         const actions=el('div','','admin-payment-entry-actions');
@@ -3363,7 +3360,7 @@ window.renderGithubConfirmation=function(root,status,refresh){
       'مسودة إعدادات فقط: تُحفظ المفاتيح مشفّرة ولا تُعرض ثانيةً، ولا يُفعّل هذا النموذج التحصيل الآلي.'),'dynamic-provider-hint');
     const feedback=el('p','','dynamic-provider-feedback');
     const controls=el('div','','dynamic-provider-actions');
-    const save=el('button',tr('Save encrypted settings','حفظ الإعدادات المشفّرة'),'button');
+    const save=el('button',profile?tr('Save changes','حفظ التغييرات'):tr('Save encrypted settings','حفظ الإعدادات المشفّرة'),'button');
     save.type='submit';
     controls.append(save,button(tr('Cancel','إلغاء'),()=>area.close(),'button ghost small'));
     form.append(note,controls,feedback);area.append(form);

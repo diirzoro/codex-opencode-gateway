@@ -1,0 +1,111 @@
+name: Preview | Existing worker operations
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Existing preview worker operation
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - prepare
+          - activate
+          - verify
+          - react_inspect
+          - audit
+          - audit_full
+          - react_activate
+          - java_activate
+          - java_verify
+          - react_build_activate
+permissions:
+  contents: read
+concurrency:
+  group: opencode-preview-operations
+  cancel-in-progress: false
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read existing preview server state
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${VPS_HOST:?}" "${VPS_USER:?}" "${VPS_SSH_KEY:?}" "${VPS_SUDO_PASSWORD:?}"
+          port="${VPS_SSH_PORT:-22}"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          if [[ -n "$VPS_SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -p "$port" -H "$VPS_HOST" > "$HOME/.ssh/known_hosts"
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+          [[ "$OPERATION" == inspect || "$OPERATION" == prepare || "$OPERATION" == activate || "$OPERATION" == verify || "$OPERATION" == react_inspect || "$OPERATION" == audit || "$OPERATION" == audit_full || "$OPERATION" == react_activate || "$OPERATION" == java_activate || "$OPERATION" == java_verify || "$OPERATION" == react_build_activate ]]
+          ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            'mkdir -p /home/tahir/preview-activation'
+          mkdir -p preview-wheels
+          mkdir -p preview-react-fixture
+          if [[ "$OPERATION" == react_build_activate ]]; then
+            node -e 'require("fs").writeFileSync("preview-react-fixture/package.json",JSON.stringify({name:"pi-preview-react-fixture",version:"1.0.0",private:true,scripts:{build:"vite build --base=./"},dependencies:{react:"^19.0.0","react-dom":"^19.0.0"},devDependencies:{vite:"^7.0.0"}}))'
+            mkdir -p /tmp/pi-preview-npm-home
+            (cd preview-react-fixture && env -i PATH="$PATH" HOME=/tmp/pi-preview-npm-home npm install --package-lock-only --ignore-scripts --include=dev --no-audit --no-fund --registry=https://registry.npmjs.org)
+          fi
+          if [[ "$OPERATION" == prepare ]]; then
+            python3 -m pip download --only-binary=:all: --python-version 312 \
+              --platform manylinux_2_17_x86_64 --implementation cp --abi cp312 \
+              --dest preview-wheels 'fastapi>=0.115.6,<1' 'uvicorn>=0.34.0,<1'
+            (cd preview-wheels && sha256sum *.whl > SHA256SUMS)
+          fi
+          if [[ "$OPERATION" == java_activate ]]; then
+            docker pull eclipse-temurin:21-jdk-jammy
+            java_base=$(docker image inspect --format '{{index .RepoDigests 0}}' eclipse-temurin:21-jdk-jammy)
+            [[ "$java_base" =~ ^eclipse-temurin@sha256:[0-9a-f]{64}$ ]]
+            mkdir -p /tmp/preview-java-build
+            cp deploy/PreviewFetch.java /tmp/preview-java-build/
+            printf 'FROM %s\nCOPY PreviewFetch.java /opt/preview/PreviewFetch.java\nRUN javac -d /opt/preview /opt/preview/PreviewFetch.java && rm /opt/preview/PreviewFetch.java\n' "$java_base" > /tmp/preview-java-build/Dockerfile
+            docker build --network none -t opencode-preview-java:21 /tmp/preview-java-build
+            docker image inspect --format '{{.Id}}' opencode-preview-java:21 > /tmp/preview-java-runtime.id
+            docker save opencode-preview-java:21 | gzip -1 > /tmp/preview-java-runtime.tar.gz
+            sha256sum /tmp/preview-java-runtime.tar.gz | cut -d ' ' -f1 > /tmp/preview-java-runtime.sha256
+            scp -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              /tmp/preview-java-runtime.tar.gz /tmp/preview-java-runtime.id /tmp/preview-java-runtime.sha256 \
+              "$VPS_USER@$VPS_HOST:/home/tahir/preview-activation/"
+            ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+              'chmod 644 /home/tahir/preview-activation/preview-java-runtime.tar.gz'
+          fi
+          tar -czf /tmp/preview-activation.tgz scripts/preview-host-*.sh scripts/preview-react-inspect.py scripts/preview-runtime-audit.py dashboards.js deploy/apparmor-preview deploy/PreviewFetch.java backend/app/services/preview*.py preview-wheels preview-react-fixture
+          scp -P "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            /tmp/preview-activation.tgz "$VPS_USER@$VPS_HOST:/home/tahir/preview-activation.tgz"
+          ssh -T -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            'tar -xzf /home/tahir/preview-activation.tgz -C /home/tahir/preview-activation'
+          script=preview-host-inspect.sh
+          [[ "$OPERATION" != prepare ]] || script=preview-host-prepare.sh
+          [[ "$OPERATION" != activate ]] || script=preview-host-activate.sh
+          [[ "$OPERATION" != verify ]] || script=preview-host-verify.sh
+          [[ "$OPERATION" != react_inspect ]] || script=preview-host-react-inspect.sh
+          [[ "$OPERATION" != audit ]] || script=preview-host-audit.sh
+          [[ "$OPERATION" != audit_full ]] || script=preview-host-audit-full.sh
+          [[ "$OPERATION" != react_activate ]] || script=preview-host-react-activate.sh
+          [[ "$OPERATION" != java_activate ]] || script=preview-host-java-activate.sh
+          [[ "$OPERATION" != java_verify ]] || script=preview-host-java-activate.sh
+          [[ "$OPERATION" != react_build_activate ]] || script=preview-host-react-build-activate.sh
+          printf '%s\n' "$VPS_SUDO_PASSWORD" | ssh -T -p "$port" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            "sudo -S -p '' bash /home/tahir/preview-activation/scripts/$script"

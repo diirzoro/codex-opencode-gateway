@@ -33,7 +33,7 @@ class DockerProvisioner:
     run: Run = subprocess.run
     docker_binary: str = "/usr/bin/docker"
 
-    def _call(self, args: tuple[str, ...], *, timeout: int = 20) -> str:
+    def _call(self, args: tuple[str, ...], *, timeout: int = 20, include_stderr: bool = False) -> str:
         try:
             completed = self.run(
                 (self.docker_binary, *args), capture_output=True, text=True,
@@ -48,7 +48,7 @@ class DockerProvisioner:
         except OSError as exc:
             code = 'docker_binary_missing' if isinstance(exc, FileNotFoundError) else 'docker_operation_failed'
             raise PreviewProvisioningError(MESSAGES[code], code=code, operation=args[0]) from exc
-        return completed.stdout.strip()
+        return (completed.stdout + ((completed.stderr or '') if include_stderr else '')).strip()
 
     def launch_smoke(self, job_id: str, spec: ContainerSpec) -> str:
         """Run a pinned, network-disconnected smoke container.
@@ -70,8 +70,8 @@ class DockerProvisioner:
         args = ("run", "--detach", "--pull", "never", "--name", f"preview-{job_id}",
                 "--label", "opencode.preview.managed=true",
                 "--label", f"opencode.preview.job={job_id}", *base[2:])
-        # The run --rm contract removes stopped containers. Worker must separately
-        # persist job->container mapping and verify cleanup on process restart.
+        # Explicit stop removes the container after bounded logs are collected.
+        # Worker reconciles ownership labels after a process restart.
         container_id = self._call(args, timeout=60)
         if CONTAINER_ID.fullmatch(container_id) is None:
             raise PreviewProvisioningError("Docker returned an invalid container identifier")
@@ -86,7 +86,7 @@ class DockerProvisioner:
         import base64
         from urllib.parse import urlsplit
         self._require_owned(container_id, job_id)
-        if family not in ("node", "python", "php") or not isinstance(path, str):
+        if family not in ("node", "python", "php", "java") or not isinstance(path, str):
             raise PreviewProvisioningError("Unsupported preview runtime")
         parsed = urlsplit(path)
         if (not path.startswith("/") or path.startswith("//") or
@@ -110,8 +110,14 @@ class DockerProvisioner:
         )
         if family == "php":
             raise PreviewProvisioningError("PHP relay not yet available")
-        binary = "node" if family == "node" else "python"
-        output = self._call(("exec", container_id, binary, "-e" if family == "node" else "-c", script, path), timeout=12)
+        if family == 'java':
+            command = ('java','-Xmx32m','-XX:ActiveProcessorCount=1','-XX:+UseSerialGC',
+                       '-Xlog:disable','-Xlog:all=warning:stderr',
+                       '-cp','/opt/preview','PreviewFetch',path)
+        else:
+            binary = "node" if family == "node" else "python"
+            command = (binary,"-e" if family == "node" else "-c",script,path)
+        output = self._call(("exec", container_id, *command), timeout=12)
         try:
             result = __import__("json").loads(output)
             if not isinstance(result, dict) or not 200 <= result.get("status", 0) <= 599:
@@ -128,6 +134,35 @@ class DockerProvisioner:
             raise PreviewProvisioningError("Unknown sandbox state")
         return state
 
+    def build_ready(self,container_id,job_id):
+        self._require_owned(container_id,job_id)
+        return self._call(('exec',container_id,'node','-e',
+            "process.stdout.write(require('fs').existsSync('/build/complete')?'ready':'building')"),timeout=10)=='ready'
+
+    def export_build(self,container_id,job_id):
+        """Stream a bounded tar from the sandbox; never buffer arbitrary cp output."""
+        import os,select,time
+        from .preview_react_build import MAX_ARTIFACT
+        self._require_owned(container_id,job_id)
+        process=subprocess.Popen((self.docker_binary,'cp',container_id+':/build/project/dist/.','-'),
+                                 stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+        result=bytearray();deadline=time.monotonic()+20
+        try:
+            while True:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise PreviewProvisioningError('Build artifact export timed out')
+                readable,_,_=select.select([process.stdout],[],[],min(1,remaining))
+                if not readable:continue
+                chunk=os.read(process.stdout.fileno(),65536)
+                if not chunk:break
+                result.extend(chunk)
+                if len(result)>MAX_ARTIFACT+1024*1024:raise PreviewProvisioningError('Build artifact exceeds quota')
+            if process.wait(timeout=2)!=0:raise PreviewProvisioningError('Build artifact export failed')
+            return bytes(result)
+        finally:
+            if process.poll() is None:process.kill();process.wait(timeout=3)
+            process.stdout.close()
+
     def _require_owned(self, container_id: str, job_id: str) -> None:
         if CONTAINER_ID.fullmatch(container_id) is None or JOB_ID.fullmatch(job_id) is None:
             raise PreviewProvisioningError("Invalid sandbox identity")
@@ -137,12 +172,37 @@ class DockerProvisioner:
         if labels != f"{job_id}|true":
             raise PreviewProvisioningError("Refusing access to an unowned container")
 
+    def managed_containers(self) -> tuple[tuple[str, str], ...]:
+        """Inventory only labelled previews; verify ownership before cleanup."""
+        output = self._call(('ps', '--all', '--quiet', '--no-trunc',
+                             '--filter', 'label=opencode.preview.managed=true'))
+        result = []
+        for cid in output.splitlines():
+            if CONTAINER_ID.fullmatch(cid) is None:
+                raise PreviewProvisioningError('Invalid managed container identity')
+            job_id = self._call(('inspect', '--format',
+                                '{{index .Config.Labels "opencode.preview.job"}}', cid))
+            self._require_owned(cid, job_id)
+            result.append((job_id, cid))
+        return tuple(result)
+
     def stop(self, container_id: str, job_id: str) -> None:
         """Stop only a matching Preview container; never touch unrelated jobs."""
+        if CONTAINER_ID.fullmatch(container_id) is None or JOB_ID.fullmatch(job_id) is None:
+            raise PreviewProvisioningError('Invalid sandbox identity')
+        # --rm containers may already be gone after an early application exit.
+        # Only a successful Docker inventory can establish absence.
+        present = self._call(('ps', '--all', '--quiet', '--no-trunc',
+                              '--filter', 'id=' + container_id)).splitlines()
+        if not present:
+            return
+        if present != [container_id]:
+            raise PreviewProvisioningError('Ambiguous sandbox identity')
         self._require_owned(container_id, job_id)
         self._call(("stop", "--time", "2", container_id), timeout=15)
+        self._call(("rm", container_id), timeout=15)
 
     def logs(self, container_id: str, job_id: str) -> str:
         """Bound logs and verify job identity before reading."""
         self._require_owned(container_id, job_id)
-        return self._call(("logs", "--tail", "100", container_id), timeout=10)[-100000:]
+        return self._call(("logs", "--tail", "100", container_id), timeout=10, include_stderr=True)[-100000:]

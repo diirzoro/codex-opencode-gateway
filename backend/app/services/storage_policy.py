@@ -11,14 +11,6 @@ from ..models import PaymentOrder, Plan, Subscription, User
 MIB = 1024 * 1024
 TRIAL_MB = 50
 MAX_PLAN_MB = 250
-# Legacy paid subscriptions retain the remaining purchased period. The existing
-# 2/3/5 USD plan names map to equivalent tiers, not new charges.
-PLAN_MB = {
-    "gateway_100": 100, "gateway_150": 150, "gateway_250": 250,
-    "monthly": 100, "two_months": 150, "three_months": 250,
-}
-
-
 def quota_mb(db, user_id):
     user = db.get(User, user_id)
     if user is None:
@@ -41,7 +33,7 @@ def quota_mb(db, user_id):
     if not approved:
         return TRIAL_MB
     plan = db.get(Plan, row.plan_id)
-    return PLAN_MB.get(plan.code, TRIAL_MB) if plan else TRIAL_MB
+    return plan.storage_mb if plan else TRIAL_MB
 
 
 def capacity_label(db, user_id):

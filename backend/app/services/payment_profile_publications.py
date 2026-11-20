@@ -55,6 +55,8 @@ def management_catalog(db):
     Do not disclose credentials or encrypted method details.
     """
     dynamic = profiles.list_profiles(db)
+    from .stripe_checkout import status as stripe_status
+    stripe = stripe_status(db)
     result = []
     linked_ids = set()
     for item in dynamic:
@@ -62,6 +64,7 @@ def management_catalog(db):
         linked_id = publication.get("method_id")
         if linked_id:
             linked_ids.add(linked_id)
+        stripe_checkout_enabled = bool(item["slug"] == "stripe" and stripe["checkout_available"])
         result.append({
             "source": "dynamic",
             "slug": item["slug"],
@@ -70,10 +73,10 @@ def management_catalog(db):
             "connection_mode": item["connection_mode"],
             "environment": item["environment"],
             "configured": item["configured"],
-            "status": "suspended" if item.get('admin_suspended') else "enabled_manual" if publication["published"] else (
-                "configured_unverified" if item["configured"] else "draft"
+            "status": "suspended" if item.get('admin_suspended') else "enabled_api" if stripe_checkout_enabled else "enabled_manual" if publication["published"] else (
+                "api_verified" if item.get("api_verified") else "configured_unverified" if item["configured"] else "draft"
             ),
-            "customer_checkout_enabled": bool(publication["published"]),
+            "customer_checkout_enabled": bool(publication["published"] or stripe_checkout_enabled),
             "method_id": linked_id,
             "automatic_capture": False,
         })
@@ -108,6 +111,34 @@ def disable_on_edit(db, slug):
     if method is not None:
         method.enabled = False
         db.flush()
+
+
+def sync_published_profile_on_edit(db, slug, actor_id):
+    """Refresh an existing enabled customer method from the saved admin profile.
+
+    Retain the original currency, plan targeting, instructions, and country
+    restrictions. Disabled methods remain disabled; edits never publish drafts.
+    Invalid new receiving details fail the whole edit instead of silently
+    removing checkout or exposing stale bank details.
+    """
+    method = _linked_method(db, slug, lock=True)
+    if method is None or not method.enabled:
+        return False
+    details = json.loads(credentials.decrypt(method.details))
+    row = profiles._one(db, slug)
+    if row is None or row.get("admin_suspended") or row["connection_mode"] == "api":
+        disable_on_edit(db, slug)
+        return False
+    # publish() updates the SAME linked method and commits both profile and
+    # method in one transaction; no duplicate method or payment order is made.
+    publish(
+        db, slug, actor_id,
+        currency=details.get("currency", "USD"),
+        instructions=details.get("instructions") or "",
+        plan_id=details.get("plan_id"),
+        available_country_codes=details.get("available_country_codes") or [],
+    )
+    return True
 
 
 def forget_profile(db, slug):

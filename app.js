@@ -72,7 +72,7 @@ window.nativeDirectTest=(()=>{
     if(typeof file!=='string'||!file.startsWith('file:'))return null;
     try{return decodeURIComponent(new URL(file).pathname).replace(/\/+$/,'');}catch{return null;}
   };
-  let piGrantOwner="",piGrantExpires=0,piGrantPending=null;
+  let piGrantOwner="",piGrantExpires=0,piGrantPending=null,piGrantRenewal=null;
   async function ensureSession({force=false}={}){
     const owner=String(currentUser?.id||"");
     if(!owner)throw Error("Sign in to open the Pi session");
@@ -93,7 +93,15 @@ window.nativeDirectTest=(()=>{
       });
       if(!linked.ok)throw Error("Pi session activation HTTP "+linked.status);
       if(owner!==String(currentUser?.id||""))throw Error("Account changed during Pi handoff");
-      piGrantOwner=owner;piGrantExpires=Date.now()+11*60_000;
+      const expires=Number(data.expires_at);
+      if(!Number.isSafeInteger(expires)||expires<=Date.now())throw Error("Pi session grant expired");
+      piGrantOwner=owner;piGrantExpires=Math.min(Date.now()+11*60_000,expires-10000);
+      clearTimeout(piGrantRenewal);
+      // Renew the same authority without recreating a worker or interrupting
+      // SSE. This does not extend Gateway's existing user-idle timeout.
+      piGrantRenewal=setTimeout(()=>{
+        if(owner===String(currentUser?.id||""))ensureSession({force:true}).catch(()=>{});
+      },10*60_000);
     })();
     piGrantPending=task;
     try{return await task;}finally{if(piGrantPending===task)piGrantPending=null;}
@@ -169,6 +177,7 @@ window.nativeDirectTest=(()=>{
     return user;
   }
   function forget({fresh=false,keepSession=false}={}){
+    clearTimeout(piGrantRenewal);
     piGrantExpires=0;
     presentationRevision++;
     catalogSnapshot=agentsSnapshot=workspaceSnapshot=configuredSnapshot=null;
@@ -259,11 +268,18 @@ window.nativeDirectTest=(()=>{
     if(workspacePending)return workspacePending;
     // Provider/model choices must still render if optional Pi command discovery
     // fails (e.g. an agent endpoint 404). Execution authorization is separate.
-    const job=Promise.all([configuredProviders({force}),agents({force}).catch(()=>[])])
-      .then(([data,agentRows])=>{
+    // Optional command discovery must not hold up provider/model loading.
+    // The explicit agent picker still awaits agents() when it needs the list.
+    agents({force}).then(rows=>{
+      if(ownerScope()!==user||revision!==presentationRevision)return;
+      if(workspaceSnapshot)workspaceSnapshot.agents=rows;
+      window.dispatchEvent(new CustomEvent('native-agent-inventory-updated',{detail:{owner:user}}));
+    }).catch(()=>{});
+    const job=configuredProviders({force})
+      .then(data=>{
         if(ownerScope()!==user)throw Error('Account changed during Pi workspace discovery');
         if(revision!==presentationRevision)throw Error('Pi state changed; retry discovery');
-        workspaceSnapshot={data,agents:agentRows};
+        workspaceSnapshot={data,agents:agentsSnapshot||[]};
         return workspaceSnapshot;
       });
     workspacePending=job;

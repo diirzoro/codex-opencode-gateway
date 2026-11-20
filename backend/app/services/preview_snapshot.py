@@ -16,7 +16,8 @@ MAX_FILES = 10000
 MAX_ENTRIES = 20000
 MAX_DEPTH = 32
 EXCLUDED = {'.git', '.ssh', '.aws', '.azure', '.config', 'node_modules', '.venv',
-            'venv', '__pycache__', '.next', 'vendor', 'opencode.json', 'opencode.jsonc'}
+            'venv', '__pycache__', '.next', 'vendor', 'opencode.json', 'opencode.jsonc',
+            '.npmrc', '.yarnrc', '.yarnrc.yml', '.netrc'}
 
 
 def private(name):

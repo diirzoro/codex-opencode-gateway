@@ -16,21 +16,32 @@ import uuid
 import json
 import os
 import logging
+import time
+import signal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import RLock
+from threading import RLock, Event, Thread
 
 from .preview_docker_provisioner import DockerProvisioner, PreviewProvisioningError
 from .preview_worker_archive import extract_into_sandbox
 from .preview_container_spec import ContainerSpec
 from .preview_launch_profiles import PROFILES, LaunchProfile
 from .preview_diagnostics import MESSAGES
+from .preview_host_probe import read_host_telemetry
+from .preview_host_gate import permit_preview
+from .preview_scheduling import DYNAMIC_IDLE_TIMEOUT_SECONDS
+from . import preview_static_artifact
+from . import preview_npm_cache, preview_react_build
 
 MAX_BODY = 72 * 1024 * 1024
 JOB_NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}' + chr(36))
 LOCK = RLock()
 JOBS = {}
 LOGGER = logging.getLogger('preview.worker')
+MAX_RUNTIME_SECONDS = 900
+STATIC_CACHE_TTL_SECONDS = 900
+JOB_ROOT = Path("/var/lib/preview-worker/jobs")
+STATIC_MARKER = ".prebuilt-static"
 
 
 def register_local_job(job_id: str, image: str, argv: tuple[str, ...]):
@@ -51,12 +62,139 @@ def register_local_job(job_id: str, image: str, argv: tuple[str, ...]):
 class WorkerServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
-    def __init__(self, addr, token: str, provisioner=None):
+    def __init__(self, addr, token: str, provisioner=None, *, clock=time.monotonic,
+                 jobs=None, admission=None):
         if len(token) < 32:
             raise ValueError("Worker token must contain at least 32 characters")
         super().__init__(addr, WorkerHandler)
         self.token = token
         self.provisioner = provisioner or DockerProvisioner()
+        self.jobs = JOBS if jobs is None else jobs
+        self.clock = clock
+        self.admission = admission or self._host_admission
+        self.reconciled = False
+        self.reaper_stop = Event()
+        self.reaper = Thread(target=self._reap_loop, name='preview-expiry', daemon=True)
+        self.reaper.start()
+
+    def _host_admission(self):
+        try:
+            telemetry = read_host_telemetry(storage=Path('/var/lib/preview-worker/jobs'),
+                                           active_previews=0, trusted_collector=True)
+            return permit_preview(telemetry)['admitted']
+        except (OSError, ValueError):
+            return False
+
+    def reconcile_orphans(self):
+        """Before any new launch, stop only labelled sandboxes left by a restart."""
+        if self.reconciled:
+            return
+        known = {job.get('container_id') for job in self.jobs.values()}
+        for job_id, cid in self.provisioner.managed_containers():
+            if cid not in known:
+                self.provisioner.stop(cid, job_id)
+        # Restart loses in-memory static leases, so their snapshots are stale.
+        if JOB_ROOT.is_dir() and not JOB_ROOT.is_symlink():
+            for root in JOB_ROOT.iterdir():
+                marker=root/STATIC_MARKER
+                if (JOB_NAME.fullmatch(root.name) and root.name not in self.jobs
+                    and root.is_dir() and not root.is_symlink()
+                    and marker.is_file() and not marker.is_symlink()):
+                    shutil.rmtree(root)
+        self.reconciled = True
+
+    def cleanup_static_snapshot(self, job_id):
+        if JOB_NAME.fullmatch(job_id) is None:
+            raise ValueError('Invalid static snapshot identity')
+        root=JOB_ROOT/job_id
+        if root.is_symlink():raise ValueError('Unsafe static snapshot directory')
+        if root.exists():shutil.rmtree(root)
+
+    def stop_job(self, job_id, job, reason):
+        job['state'] = 'stopping'
+        job['stop_reason'] = reason
+        cid = job.get('container_id')
+        if cid:
+            # Keep the allocation occupied until Docker confirms cleanup.
+            self.provisioner.stop(cid, job_id)
+        if job.get('artifact_root') or job.get('family')=='react_build':
+            self.cleanup_static_snapshot(job_id)
+        job.update(state='stopped', container_id=None, stop_reason=reason)
+
+    def complete_react_build(self,job_id,job,cid):
+        deadline=time.monotonic()+preview_react_build.BUILD_SECONDS
+        try:
+            while not self.reaper_stop.is_set():
+                with LOCK:
+                    if job.get('state')!='building' or job.get('container_id')!=cid:return
+                if self.provisioner.build_ready(cid,job_id):break
+                if self.provisioner.status(cid,job_id)!='running':
+                    raise PreviewProvisioningError('Offline build exited before completion')
+                if time.monotonic()>=deadline:raise PreviewProvisioningError('Offline build time limit exceeded')
+                self.reaper_stop.wait(1)
+            else:return
+            raw=self.provisioner.export_build(cid,job_id)
+            with LOCK:
+                if job.get('state')!='building' or job.get('container_id')!=cid:return
+                root=JOB_ROOT/job_id
+                output=root/'output'
+                preview_react_build.extract_artifact(raw,output)
+                self.provisioner.stop(cid,job_id)
+                job.update(state='running',container_id=None,spec=None,family='static',
+                    artifact_root=str(output),artifact_lease=uuid.uuid4().hex+uuid.uuid4().hex,
+                    built_static=True,started_monotonic=self.clock())
+        except (PreviewProvisioningError,OSError,ValueError,tarfile.TarError):
+            with LOCK:
+                if job.get('state')!='building' or job.get('container_id')!=cid:return
+                try:job['failure_logs']=self.provisioner.logs(cid,job_id)[-100000:]
+                except PreviewProvisioningError:job['failure_logs']=''
+                try:self.stop_job(job_id,job,'build_failed')
+                except (PreviewProvisioningError,OSError):pass
+                if not job.get('container_id'):job['state']='failed'
+                job['failure_code']='build_failed'
+
+    def reap_expired(self):
+        with LOCK:
+            now = self.clock()
+            for job_id, job in self.jobs.items():
+                if not job.get('container_id'):
+                    if job.get('artifact_root') and job.get('state') in {'running','stopping'}:
+                        started=job.get('started_monotonic')
+                        if job.get('state')=='stopping' or started is None or now-started>=STATIC_CACHE_TTL_SECONDS:
+                            try:self.stop_job(job_id,job,job.get('stop_reason') or 'artifact_cache_expired')
+                            except (OSError,ValueError):LOGGER.warning('Static snapshot cleanup pending')
+                    continue
+                started = job.get('started_monotonic')
+                active = job.get('activity_monotonic')
+                reason = ('runtime_limit' if started is None or now-started >= MAX_RUNTIME_SECONDS
+                          else 'idle_timeout' if active is None or now-active >= DYNAMIC_IDLE_TIMEOUT_SECONDS
+                          else None)
+                if reason or job.get('state') == 'stopping':
+                    try:
+                        self.stop_job(job_id, job, reason or job.get('stop_reason', 'cleanup_retry'))
+                    except PreviewProvisioningError:
+                        LOGGER.warning('Preview cleanup pending; allocation remains occupied')
+
+    def _reap_loop(self):
+        while not self.reaper_stop.wait(5):
+            try:
+                with LOCK:
+                    self.reconcile_orphans()
+                    self.reap_expired()
+            except (PreviewProvisioningError, OSError):
+                LOGGER.warning('Preview reconciliation pending; new launches remain gated')
+
+    def server_close(self):
+        self.reaper_stop.set()
+        self.reaper.join(timeout=20)
+        with LOCK:
+            for job_id, job in self.jobs.items():
+                if job.get('container_id'):
+                    try:
+                        self.stop_job(job_id, job, 'worker_shutdown')
+                    except PreviewProvisioningError:
+                        LOGGER.warning('Preview shutdown cleanup incomplete; restart reconciliation required')
+        super().server_close()
 
 
 class WorkerHandler(BaseHTTPRequestHandler):
@@ -115,15 +253,21 @@ class WorkerHandler(BaseHTTPRequestHandler):
             return
         with LOCK:
             if operation == "prepare":
-                if job_id in JOBS:
-                    previous = JOBS[job_id]
-                    if previous.get("container_id") and previous.get("state") == "running":
+                if job_id in self.server.jobs:
+                    previous = self.server.jobs[job_id]
+                    if previous.get("container_id"):
                         self.reply(409, {"error": "job_already_running"})
                         return
-                    JOBS.pop(job_id, None)
-                    shutil.rmtree(Path("/var/lib/preview-worker/jobs") / job_id, ignore_errors=True)
+                    self.server.jobs.pop(job_id, None)
+                    shutil.rmtree(JOB_ROOT / job_id, ignore_errors=True)
                 framework = request.get("framework")
                 profile = PROFILES.get(framework) if isinstance(framework, str) else None
+                build_static=request.get('build_static') is True and framework in {'vite','react'}
+                if build_static:profile=LaunchProfile('react_build',('node','--max-old-space-size=256','-e',preview_react_build.BUILD_SCRIPT))
+                if framework == 'java' and request.get('entrypoint') != 'Main.java':
+                    profile = None
+                if not build_static and request.get('prebuilt_static') is True and framework in {'vite','react'}:
+                    profile=LaunchProfile('static',())
                 selected = request.get("entrypoint")
                 if framework == "python" and selected in ("main.py", "app.py"):
                     profile = LaunchProfile("python", ("python", "-m", "uvicorn", selected[:-3] + ":app", "--host", "0.0.0.0", "--port", "8080"))
@@ -139,7 +283,10 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     snapshot = base64.b64decode(encoded, validate=True)
                     if len(snapshot) > 50 * 1024 * 1024:
                         raise ValueError("oversized snapshot")
-                    root = Path("/var/lib/preview-worker/jobs") / job_id
+                    if profile.family in {'static','react_build'} and shutil.disk_usage(JOB_ROOT).free < 5120*1024*1024+len(snapshot):
+                        self.reply(503,{'error':'preview_disk_headroom_insufficient'})
+                        return
+                    root = JOB_ROOT / job_id
                     if root.exists():
                         # The Worker process may have restarted while a
                         # previous sandbox snapshot remained on disk.
@@ -174,11 +321,21 @@ class WorkerHandler(BaseHTTPRequestHandler):
                             elif path.is_file():
                                 path.chmod(0o644)
                         source.chmod(0o755)
-                        image = os.environ.get('PREVIEW_IMAGE_' + profile.family.upper(), '')
-                        if not image:
-                            raise ValueError('Worker runtime image is not configured')
-                        JOBS[job_id] = {"spec": ContainerSpec(image, profile.argv, str(source)),
-                                        "container_id": None, "state": "ready", "family": profile.family}
+                        if profile.family=='static':
+                            (root/STATIC_MARKER).write_text('prebuilt-static-v1\n')
+                            self.server.jobs[job_id]={'spec':None,'container_id':None,'state':'ready',
+                                'family':'static','artifact_root':preview_static_artifact.artifact_root(source),
+                                'artifact_lease':uuid.uuid4().hex+uuid.uuid4().hex}
+                        else:
+                            if profile.family=='react_build':
+                                preview_npm_cache.stage(request.get('packages'),root/'packages')
+                                (root/STATIC_MARKER).write_text('react-build-v1\n')
+                            image = os.environ.get('PREVIEW_IMAGE_' + ('NODE' if profile.family=='react_build' else profile.family.upper()), '')
+                            if not image:
+                                raise ValueError('Worker runtime image is not configured')
+                            self.server.jobs[job_id] = {"spec": ContainerSpec(image, profile.argv, str(source),build_only=profile.family=='react_build'),
+                                            "container_id": None, "state": "ready", "family": profile.family,
+                                            "source_digest":hashlib.sha256(snapshot).hexdigest()}
                     except Exception:
                         shutil.rmtree(root)
                         raise
@@ -186,7 +343,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                 except (ValueError, tarfile.TarError, OSError):
                     self.reply(400, {"error": "invalid_snapshot"})
                 return
-            job = JOBS.get(job_id)
+            job = self.server.jobs.get(job_id)
             if job is None:
                 self.reply(404, {"error": "unregistered_job"})
                 return
@@ -195,6 +352,12 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     if job["state"] != "ready":
                         self.reply(409, {"error": "job_already_started"})
                         return
+                    if job.get('artifact_root'):
+                        job['state']='running'
+                        job['started_monotonic']=self.server.clock()
+                        self.reply(200,{'state':'running','job_id':job_id,'url':None,
+                                        'mode':'prebuilt_static','execution_enabled':False})
+                        return
                     # Source archives deliberately exclude node_modules. A
                     # copied snapshot is not an installed/built application.
                     entrypoint = job['spec'].argv[0]
@@ -202,19 +365,38 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         self.reply(503, {'error': 'dependency_preparation_required',
                                          'message': MESSAGES['dependency_preparation_required']})
                         return
+                    self.server.reconcile_orphans()
+                    self.server.reap_expired()
+                    if any(item.get('container_id') for item in self.server.jobs.values()):
+                        self.reply(409, {'error': 'preview_capacity_reached'})
+                        return
+                    if not self.server.admission():
+                        self.reply(503, {'error': 'preview_host_headroom_insufficient'})
+                        return
                     job["state"] = "launching"
                     try:
                         cid = self.server.provisioner.launch_smoke(job_id, job["spec"])
                     except Exception:
                         job["state"] = "failed"
                         raise
+                    job["started_monotonic"] = self.server.clock()
+                    job["activity_monotonic"] = self.server.clock()
                     job["container_id"] = cid
+                    if job['family']=='react_build':
+                        job['state']='building'
+                        Thread(target=self.server.complete_react_build,args=(job_id,job,cid),daemon=True).start()
+                        self.reply(200,{'state':'building','job_id':job_id,'url':None,'mode':'offline_build','execution_enabled':True})
+                        return
                     job["state"] = "running"
                     # Docker accepted the container; that is not proof the HTTP
                     # app has started. Gate the iframe URL on a real response.
                     import time
                     ready = False
-                    for _ in range(12):
+                    relay_failure = None
+                    readiness_deadline = time.monotonic() + (30 if job['family']=='java' else 10)
+                    for _ in range(30 if job['family']=='java' else 12):
+                        if time.monotonic() >= readiness_deadline:
+                            break
                         try:
                             if self.server.provisioner.status(cid, job_id) != "running":
                                 job['failure_code'] = 'application_exited_early'
@@ -224,44 +406,56 @@ class WorkerHandler(BaseHTTPRequestHandler):
                             ready = 200 <= response["status"] < 500
                             if ready:
                                 break
-                        except (PreviewProvisioningError, OSError, ValueError):
-                            pass
+                        except (PreviewProvisioningError, OSError, ValueError) as exc:
+                            relay_failure = str(exc) if isinstance(exc, PreviewProvisioningError) else type(exc).__name__
                         time.sleep(0.5)
                     if not ready:
                         job["state"] = "failed"
                         try:
-                            self.server.provisioner.stop(cid, job_id)
+                            job['failure_logs'] = self.server.provisioner.logs(cid, job_id)[-100000:]
+                        except PreviewProvisioningError:
+                            job['failure_logs'] = ''
+                        if relay_failure:
+                            job['failure_logs'] += '\nPreview relay check: ' + relay_failure[:256]
+                        try:
+                            self.server.stop_job(job_id, job, "application_not_ready")
                         except PreviewProvisioningError:
                             pass
                         self.reply(503, {"error": job.get('failure_code', 'application_not_ready')})
                         return
                     result = {"state": "running", "job_id": job_id, "container_id": cid, "url": None}
                 elif operation == "status":
+                    self.server.reap_expired()
+                    if request.get('user_activity') is True and job.get('state') == 'running':
+                        job['activity_monotonic'] = self.server.clock()
                     cid = job["container_id"]
-                    state = self.server.provisioner.status(cid, job_id) if cid else job["state"]
-                    result = {"state": state, "job_id": job_id, "url": None,
-                              "browser_lease": hashlib.sha256(cid.encode()).hexdigest() if cid and state == 'running' else None}
+                    state = (job['state'] if job['state']!='running' else self.server.provisioner.status(cid, job_id)) if cid else job["state"]
+                    result = {"state": state, "job_id": job_id, "url": None, "stop_reason": job.get("stop_reason"),
+                              "mode": 'built_static' if job.get('built_static') else 'prebuilt_static' if job.get('artifact_root') else 'offline_build' if job.get('family')=='react_build' else 'dynamic',
+                              "failure_code":job.get('failure_code'),
+                              "source_digest":job.get('source_digest'),
+                              "browser_lease": (job.get('artifact_lease') if job.get('artifact_root') else hashlib.sha256(cid.encode()).hexdigest() if cid else None) if state=='running' else None}
                 elif operation == "fetch":
+                    # Enforce the deadline on the read itself, even between
+                    # reaper ticks. A cached browser grant cannot extend it.
+                    self.server.reap_expired()
                     cid = job["container_id"]
-                    if not cid or job["state"] != "running":
+                    if (not cid and not job.get('artifact_root')) or job["state"] != "running":
                         self.reply(409, {"error": "not_running"})
                         return
                     expected = request.get('browser_lease')
                     if expected is not None and (not isinstance(expected,str) or
-                        not hmac.compare_digest(expected,hashlib.sha256(cid.encode()).hexdigest())):
+                        not hmac.compare_digest(expected,job['artifact_lease'] if job.get('artifact_root') else hashlib.sha256(cid.encode()).hexdigest())):
                         self.reply(409, {'error':'stale_preview_lease'})
                         return
-                    result = self.server.provisioner.fetch(
-                        cid, job_id, job["family"], request.get("path", "/"))
+                    result = (preview_static_artifact.fetch(job['artifact_root'],request.get('path','/'))
+                              if job.get('artifact_root') else self.server.provisioner.fetch(
+                                  cid, job_id, job["family"], request.get("path", "/")))
                 elif operation == "logs":
                     cid = job["container_id"]
-                    result = {"logs": self.server.provisioner.logs(cid, job_id) if cid else ""}
+                    result = {"logs": self.server.provisioner.logs(cid, job_id) if cid else job.get("failure_logs", "")}
                 else:
-                    cid = job["container_id"]
-                    if cid:
-                        self.server.provisioner.stop(cid, job_id)
-                    job["state"] = "stopped"
-                    job["container_id"] = None
+                    self.server.stop_job(job_id, job, 'user_stop')
                     result = {"state": "stopped", "job_id": job_id}
                 self.reply(200, result)
             except (PreviewProvisioningError, OSError, ValueError) as exc:
@@ -274,7 +468,17 @@ class WorkerHandler(BaseHTTPRequestHandler):
 def main():
     token = os.environ.get("PREVIEW_WORKER_TOKEN", "")
     # Do not bind all interfaces or auto-register arbitrary customer jobs.
-    WorkerServer(("127.0.0.1", 8791), token).serve_forever()
+    server = WorkerServer(("127.0.0.1", 8791), token)
+    def shutdown(signum, frame):
+        Thread(target=server.shutdown, daemon=True).start()
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    try:
+        with LOCK:
+            server.reconcile_orphans()
+        server.serve_forever()
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

@@ -24,6 +24,34 @@ def aware(date): return date if date.tzinfo else date.replace(tzinfo=timezone.ut
 def audit(db,user,action,subject=None): db.add(AccountAudit(actor_id=user.id if user else None,subject_id=subject or (user.id if user else None),action=action))
 def revoke(db,user):
     db.execute(update(AuthSession).where(AuthSession.user_id==user.id,AuthSession.revoked_at.is_(None)).values(revoked_at=now()))
+    # Revoke Pi only after the database commit: the timestamp then rejects
+    # handoffs racing the transaction, including concurrent old-login sessions.
+    from sqlalchemy import event
+    db.info.setdefault('pi_revoke_logins', set()).add(str(user.id))
+    if not db.info.get('pi_revoke_hook'):
+        db.info['pi_revoke_hook'] = True
+        @event.listens_for(db, 'after_commit')
+        def invalidate_pi_logins(session):
+            for identifier in session.info.pop('pi_revoke_logins', set()):
+                _ai_pi_invalidate(identifier, revoke_login=True)
+        @event.listens_for(db, 'after_rollback')
+        def discard_pi_revocations(session):
+            session.info.pop('pi_revoke_logins', None)
+def stop_work(db, user):
+    """Stop account-owned workspace session bookkeeping on administrative disable.
+
+    Authentication revocation is handled separately by revoke(). This does not
+    terminate Pi Central or delete native session history, project files or
+    payment records. Further authenticated requests are rejected after disable.
+    """
+    from ..models import WorkspaceSession
+    db.execute(
+        update(WorkspaceSession)
+        .where(WorkspaceSession.user_id == user.id,
+               WorkspaceSession.status.in_(('running', 'streaming', 'busy')))
+        .values(status='stopped')
+    )
+
 class PasswordInput(BaseModel):
     model_config=ConfigDict(extra='forbid')
     current_password: str=Field(min_length=1,max_length=128)
@@ -207,6 +235,7 @@ def logout_session(session_id:uuid.UUID,user:User=Depends(require_user),db:Sessi
     row=db.get(AuthSession,session_id)
     if not row or row.user_id!=user.id: raise HTTPException(404,'Session not found')
     row.revoked_at=now(); audit(db,user,'session.revoked'); db.commit()
+    _ai_pi_invalidate(user.id, session_id=session_id)
 
 class MethodInput(BaseModel):
     model_config=ConfigDict(extra='forbid',str_strip_whitespace=True)
@@ -292,14 +321,11 @@ def receiving(plan_id:int|None=Query(default=None,ge=1),include_unavailable:bool
     ranked=[]
     for row in db.scalars(select(BillingMethod).where(BillingMethod.user_id.is_(None),BillingMethod.enabled.is_(True))):
         payload=method_payload(row); details=payload['details']; mode=details.get('checkout_mode','manual')
-        from ..services.stripe_live_checkout import paypal_visible
-        if (mode=='paypal' or row.kind=='paypal') and not paypal_visible(db):
-            continue
         allowed_countries=[c.upper() for c in (details.get('available_country_codes') or [])]
         if allowed_countries and (not user_code or user_code not in allowed_countries): continue
         if plan is not None and (details.get('currency')!=plan.currency or details.get('plan_id') not in (None,plan.id)): continue
         reason=None
-        if mode=='paypal' and not paypal.configured(db): reason='provider_not_connected'
+        if mode=='paypal' and not paypal.configured(): reason='provider_not_connected'
         elif mode=='link':
             host=(urlsplit(details.get('payment_url') or '').hostname or '').lower()
             if not details.get('payment_url') or not details.get('plan_id') or host=='example.com' or host.endswith(('.invalid','.test','.example','.local','.localhost')): reason='processor_not_connected'
@@ -312,6 +338,23 @@ def receiving(plan_id:int|None=Query(default=None,ge=1),include_unavailable:bool
         else:
             payload['available']=True
         ranked.append((0 if (allowed_countries and user_code in allowed_countries) else 1,payload))
+    # Stripe is a virtual provider-backed method, not a duplicate BillingMethod.
+    # Its current TEST/LIVE state is read from the encrypted admin profile.
+    from ..services.stripe_checkout import status as stripe_status
+    stripe = stripe_status(db)
+    if stripe["configured"]:
+        available = stripe["checkout_available"] and (plan is None or plan.currency == "USD")
+        if available or include_unavailable:
+            ranked.append((0, {
+                "id": "stripe-" + stripe["environment"],
+                "kind": "stripe", "label": "Stripe" + (
+                    " (TEST)" if stripe["environment"] == "test" else ""),
+                "enabled": stripe["enabled"], "available": available,
+                "available_reason": None if available else "processor_not_connected",
+                "details": {"checkout_mode": "stripe",
+                            "environment": stripe["environment"],
+                            "currency": "USD", "plan_id": None}
+            }))
     ranked.sort(key=lambda item:item[0])
     return [payload for _,payload in ranked]
 @router.post('/billing/methods',status_code=201)
@@ -934,27 +977,45 @@ def _ai_save(data, user, db, replace=False):
 
 
 # Account-management handoff: Python never handles Pi prompts, SSE or tools.
-def _ai_pi_invalidate(user_id=None):
+def _ai_pi_control_headers():
+    from ..config import settings
+    headers = {"Host": "pi-internal", "x-pi-gateway-origin": settings.public_base_url.rstrip('/')}
+    token = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
+    if 32 <= len(token) <= 4096:
+        headers["x-pi-gateway-token"] = token
+    return headers
+
+
+def _ai_pi_invalidate(user_id=None, *, session_id=None, revoke_login=False):
     try:
         with _ai_httpx.Client(
                 transport=_ai_httpx.HTTPTransport(
                     uds=os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")),
                 timeout=4, trust_env=False) as client:
             client.post("http://pi/internal/invalidate",
-                        headers={"Host": "pi-internal"},
-                        json={"user_id": str(user_id) if user_id else None}).raise_for_status()
+                        headers=_ai_pi_control_headers(),
+                        json={"user_id": str(user_id) if user_id else None,
+                              "session_id": str(session_id) if session_id else None,
+                              "revoke_login": bool(revoke_login)}).raise_for_status()
     except (_ai_httpx.HTTPError, OSError):
-        pass
+        raise HTTPException(503, "Access changed, but Pi revocation was not acknowledged; retry before continuing") from None
 
 
 @router.post("/opencode/pi-bootstrap")
-def ai_pi_bootstrap(user: User = Depends(require_user),
+def ai_pi_bootstrap(request: Request, user: User = Depends(require_user),
                     db: Session = Depends(get_db)):
     """Issue a one-use Pi ticket from current authorized account data, not per chat."""
+    issued = now()
+    auth_session = request.state.auth_session
+    from ..security.sessions import idle_expires_at
+    from ..config import settings
+    expires = min(idle_expires_at(auth_session), issued + timedelta(minutes=14))
     _ai_schema(db)
     from ..services import workspaces as workspace_manager
     owned_roots = []
     for workspace in db.scalars(select(Workspace).where(Workspace.user_id == user.id)):
+        if workspace.status != "ready":
+            continue
         project = db.get(Project, workspace.project_id)
         if (project is None or project.user_id != user.id or
                 project.archived_at is not None or
@@ -992,6 +1053,12 @@ def ai_pi_bootstrap(user: User = Depends(require_user),
     for record in personal.values():
         record.pop("_disabled", None)
     grant = {"user_id": str(user.id), "role": user.role,
+             "origin": settings.public_base_url.rstrip('/'),
+             "workspace_root": str(settings.workspace_root.resolve()),
+             "auth_session_id": str(auth_session.id),
+             "auth_created_at": int(aware(auth_session.created_at).timestamp()*1000),
+             "issued_at": int(issued.timestamp()*1000),
+             "expires_at": int(expires.timestamp()*1000),
              "workspaces": owned_roots, "personal": personal, "shared": shared}
     try:
         with _ai_httpx.Client(
@@ -999,14 +1066,14 @@ def ai_pi_bootstrap(user: User = Depends(require_user),
                     uds=os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")),
                 timeout=12, trust_env=False) as client:
             result = client.post("http://pi/internal/bootstrap",
-                                 headers={"Host": "pi-internal"}, json=grant)
+                                 headers=_ai_pi_control_headers(), json=grant)
             result.raise_for_status()
             ticket = result.json().get("ticket")
     except (_ai_httpx.HTTPError, ValueError, OSError):
         raise HTTPException(503, "Pi session handoff unavailable") from None
     if not isinstance(ticket, str) or not ticket:
         raise HTTPException(503, "Pi session handoff returned no ticket")
-    return {"ticket": ticket}
+    return {"ticket": ticket, "expires_at": grant['expires_at']}
 
 
 @router.post("/opencode/connections", status_code=201)
@@ -1248,10 +1315,7 @@ def _ai_refresh_selected_provider(db, provider_id):
     lock = db.execute(_ai_text("SELECT pg_try_advisory_xact_lock(732062611)")).scalar_one()
     if not lock:
         raise HTTPException(503, "Pi catalog maintenance is active; retry setup")
-    token = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
-    headers = {"Host": "pi-internal"}
-    if len(token) >= 32:
-        headers["x-pi-gateway-token"] = token
+    headers = _ai_pi_control_headers()
     try:
         with _ai_httpx.Client(
             transport=_ai_httpx.HTTPTransport(uds=os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")),
@@ -1481,10 +1545,7 @@ def _ai_catalog_refresh_if_due(*, force=False):
             # Only PUBLIC model metadata is fetched over the existing local
             # filesystem-protected Pi UNIX socket. Customer API credentials
             # still require the separate authenticated internal token.
-            internal_token = os.getenv("PI_GATEWAY_INTERNAL_TOKEN", "")
-            headers = {"Host": "pi-internal"}
-            if len(internal_token) >= 32:
-                headers["x-pi-gateway-token"] = internal_token
+            headers = _ai_pi_control_headers()
             with _ai_httpx.Client(transport=_ai_httpx.HTTPTransport(uds=sock),
                                   timeout=60, trust_env=False) as client:
                 result = client.get("http://pi/provider", params={
