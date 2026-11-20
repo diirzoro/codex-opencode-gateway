@@ -668,7 +668,7 @@ console.log('PASS');
 
 @pytest.mark.parametrize('action',[
     'control-token','origin-binding','expired','late-handoff','login-revocation',
-    'workspace-scope','lease-expiry','renewal-order'])
+    'workspace-scope','lease-expiry','renewal-order','live-only-scope'])
 def test_customer_pi_authority_is_local_session_bound_and_revocable(action):
     import shutil
     import subprocess
@@ -698,7 +698,20 @@ const request={headers:{host:'opencode-gateway.codes'}};
 const response={writeHead(status,headers){this.status=status;this.headers=headers;},end(){}};
 context.request=request;context.response=response;
 function issue(value=account){context.account=value;run('issueBrowserGrant(response,account,request)');}
-if(input.action==='control-token'){
+if(input.action==='live-only-scope'){
+ context.process.env.PI_PROJECT_SANDBOX_ORIGIN=account.origin;
+ assert.equal(run('projectSandboxEnabled(account.origin)'),true);
+ assert.equal(run('projectSandboxEnabled("https://test.opencode-gateway.codes")'),false);
+ assert.equal(run('projectSandboxEnabled(undefined)'),false);
+ const req={headers:{host:'pi-internal','x-pi-gateway-origin':account.origin}};context.req=req;
+ assert.equal(run('fromGateway(req)'),false);
+ req.headers['x-pi-gateway-token']='a'.repeat(48);assert.equal(run('fromGateway(req)'),true);
+ req.headers['x-pi-gateway-origin']='https://test.opencode-gateway.codes';
+ delete req.headers['x-pi-gateway-token'];delete context.process.env.PI_GATEWAY_TEST_TOKEN;
+ assert.equal(run('fromGateway(req)'),true);
+ delete req.headers['x-pi-gateway-origin'];
+ assert.equal(run('gatewayOrigin(req)'),'https://test.opencode-gateway.codes');
+}else if(input.action==='control-token'){
  const req={headers:{host:'pi-internal','x-pi-gateway-origin':account.origin}};
  context.req=req;
  assert.equal(run('fromGateway(req)'),false);

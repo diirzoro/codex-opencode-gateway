@@ -90,6 +90,10 @@ function cleanPath(uri) {
 const BOOTSTRAP_HOST="pi-internal";
 const PI_COOKIE="pi_test_session";
 const PI_SESSION_DURATION_MS=14*60_000;
+function projectSandboxEnabled(origin){
+  return PROJECT_SANDBOX_ENABLED&&(!process.env.PI_PROJECT_SANDBOX_ORIGIN||
+    process.env.PI_PROJECT_SANDBOX_ORIGIN===origin);
+}
 const browserGrants=new Map();
 const pendingTickets=new Map();
 const sessionAuthorities=new Map();
@@ -102,7 +106,7 @@ function gatewayOrigin(req){
   if(["https://opencode-gateway.codes","https://test.opencode-gateway.codes"].includes(origin))return origin;
   // The still-running older TEST Gateway has no origin header. Preserve its
   // existing channel only during staged rollout, never after full activation.
-  return !PROJECT_SANDBOX_ENABLED&&!origin&&req.headers.host===BOOTSTRAP_HOST?
+  return !projectSandboxEnabled("https://test.opencode-gateway.codes")&&!origin&&req.headers.host===BOOTSTRAP_HOST?
     "https://test.opencode-gateway.codes":null;
 }
 function fromGateway(req){
@@ -113,7 +117,7 @@ function fromGateway(req){
     process.env.PI_GATEWAY_LIVE_TOKEN||process.env.PI_GATEWAY_INTERNAL_TOKEN;
   // Rollout keeps the existing control path working until the one-time
   // server activation. Isolation never activates without authenticated control.
-  if(!expected||expected.length<32)return !PROJECT_SANDBOX_ENABLED;
+  if(!expected||expected.length<32)return !projectSandboxEnabled(origin);
   const supplied=req.headers["x-pi-gateway-token"];
   return !!origin&&typeof supplied==="string"&&supplied.length<=4096&&
     Buffer.byteLength(supplied)===Buffer.byteLength(expected)&&
@@ -142,7 +146,7 @@ function assertProjectAuthority(scope){
 function grantWorkspaceRootsValid(account){
   const expected=account.origin==="https://opencode-gateway.codes"?
     process.env.PI_GATEWAY_LIVE_ROOT:process.env.PI_GATEWAY_TEST_ROOT;
-  if(PROJECT_SANDBOX_ENABLED&&(!expected||account.workspace_root!==expected))return false;
+  if(projectSandboxEnabled(account.origin)&&(!expected||account.workspace_root!==expected))return false;
   const root=account.workspace_root;
   if(typeof root!=="string"||!path.isAbsolute(root)||path.resolve(root)!==root||root==="/")return false;
   return account.workspaces.every(work=>
@@ -388,6 +392,9 @@ function piTodoExtension(Type){
 // Pi's model runtime and credentials never enter this process. One namespace
 // is reused for all tool calls during this project session, not per message.
 const PROJECT_SANDBOX_ENABLED=process.env.PI_PROJECT_SANDBOX==="1";
+if(PROJECT_SANDBOX_ENABLED&&process.env.PI_PROJECT_SANDBOX_ORIGIN&&
+   !["https://opencode-gateway.codes","https://test.opencode-gateway.codes"].includes(process.env.PI_PROJECT_SANDBOX_ORIGIN))
+  throw Error("Invalid project isolation origin; refusing unsafe startup");
 const PROJECT_TOOL_NAMES=["read","bash","edit","write","grep","find","ls","powershell"];
 async function projectToolWorkerMain() {
   // Serialized into `node -e` inside bwrap; no application file is created.
@@ -912,7 +919,7 @@ class SdkAgent {
       agentsFilesOverride:()=>({agentsFiles:projectContextFiles(scope)})
     });
     await resourceLoader.reload();
-    if(PROJECT_SANDBOX_ENABLED){
+    if(projectSandboxEnabled(scope.origin)){
       // A global extension can execute model-selected code outside custom
       // tools. Do not advertise isolation while an unreviewed extension can
       // bypass it; keep this staged mode closed pending extension inventory.
@@ -921,7 +928,7 @@ class SdkAgent {
       if(external.length)
         throw Object.assign(new Error("Project isolation requires review of installed extension execution"),{status:503});
     }
-    const projectSandbox=PROJECT_SANDBOX_ENABLED?new ProjectToolSandbox(scope):null;
+    const projectSandbox=projectSandboxEnabled(scope.origin)?new ProjectToolSandbox(scope):null;
     let session;
     try{({session}=await sdk.createAgentSession({
       cwd:scope.directory,agentDir:PI_AGENT_DIR,
@@ -1577,7 +1584,7 @@ function withWorkspaceDirectory(scope,relative,operation) {
   }finally{if(fd!==undefined)closeSync(fd);}
 }
 function projectGitRead(scope,args) {
-  if(PROJECT_SANDBOX_ENABLED){
+  if(PROJECT_SANDBOX_ENABLED&&projectSandboxEnabled(scope.origin)){
     return agent(scope).then(worker=>worker.projectSandbox.execute('__git_read',randomUUID(),args,AbortSignal.timeout(9000)))
       .then(result=>{
         if(typeof result?.output!=="string")throw Error("Invalid isolated Git metadata");
@@ -1878,7 +1885,7 @@ const server=http.createServer(async(req,res)=>{
          !/^[0-9a-f-]{36}$/i.test(payload.user_id)||
          !Array.isArray(payload.workspaces)||!payload.personal||!payload.shared)
         return error(res,422,"Invalid account handoff");
-      if(!PROJECT_SANDBOX_ENABLED&&!payload.origin&&!payload.auth_session_id){
+      if(!projectSandboxEnabled(gatewayOrigin(req))&&!payload.origin&&!payload.auth_session_id){
         const stamp=Date.now();
         Object.assign(payload,{origin:gatewayOrigin(req),auth_session_id:payload.user_id,
           auth_created_at:stamp,issued_at:stamp,expires_at:stamp+PI_SESSION_DURATION_MS,
