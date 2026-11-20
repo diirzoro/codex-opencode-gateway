@@ -163,7 +163,25 @@ def deploy(revision):
     gateway_changed = any(name.startswith("backend/") for name in changed_source)
 
     if migration_changed:
-        sudo(GATE, "upgrade")
+        try:
+            sudo(GATE, "upgrade")
+        except subprocess.CalledProcessError as error:
+            diagnostics = (error.stderr or b"").decode(errors="replace")
+            for kind in ("DuplicateColumn", "DuplicateTable", "UndefinedColumn",
+                         "UndefinedTable", "ForeignKeyViolation", "PermissionDenied",
+                         "OperationalError", "ModuleNotFoundError", "MultipleHeads"):
+                if kind in diagnostics:
+                    print("TEST_MIGRATION_ERROR_TYPE", kind, flush=True)
+            missing = re.search(r"Can.t locate revision identified by ['\"]([a-zA-Z0-9_]+)['\"]", diagnostics)
+            if missing:
+                print("TEST_MIGRATION_MISSING_REVISION", missing.group(1), flush=True)
+            for marker in ("not allowed to execute", "incorrect password",
+                           "command not found", "No such file or directory"):
+                if marker in diagnostics:
+                    print("TEST_MIGRATION_HOST_ERROR", marker, flush=True)
+            if not diagnostics:
+                print("TEST_MIGRATION_STDERR_EMPTY", flush=True)
+            raise
         print("TEST_MIGRATIONS_APPLIED", flush=True)
     if gateway_changed:
         sudo("/usr/bin/systemctl", "restart", "opencode-gateway-test.service")
