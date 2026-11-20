@@ -88,6 +88,35 @@ token=live_env.get('PI_GATEWAY_INTERNAL_TOKEN','')
 if not re.fullmatch(r'[A-Za-z0-9_-]{32,256}',token):token=secrets.token_urlsafe(48)
 workspace_root=live_env.get('WORKSPACE_ROOT','/var/lib/opencode-workspaces')
 require(workspace_root=='/var/lib/opencode-workspaces','Unexpected LIVE workspace root; files preserved')
+# Both existing services use tahir, but their primary groups differ. Grant
+# that already approved UID read/execute on the root-owned helper itself;
+# never add www-data membership or make the userns helper world executable.
+import errno,struct
+helper_fd=os.open(helper,os.O_RDONLY|os.O_NOFOLLOW)
+try:
+    info=os.fstat(helper_fd)
+    try:
+        raw=os.getxattr(helper_fd,'system.posix_acl_access')
+        require(len(raw)>=4 and struct.unpack('<I',raw[:4])[0]==2 and (len(raw)-4)%8==0,
+                'Unsupported helper ACL; nothing changed')
+        entries=[list(struct.unpack('<HHI',raw[i:i+8])) for i in range(4,len(raw),8)]
+    except OSError as error:
+        if error.errno!=errno.ENODATA:raise
+        entries=[[1,(info.st_mode>>6)&7,0xffffffff],
+                 [4,(info.st_mode>>3)&7,0xffffffff],[32,info.st_mode&7,0xffffffff]]
+    for uid in sorted({value[0] for value in identities.values()}):
+        entry=next((row for row in entries if row[0]==2 and row[2]==uid),None)
+        if entry is None:entries.append([2,5,uid])
+        else:entry[1]|=5
+    mask=next((row for row in entries if row[0]==16),None)
+    if mask is None:entries.append([16,((info.st_mode>>3)&7)|5,0xffffffff])
+    else:mask[1]|=5
+    entries.sort(key=lambda row:(row[0],row[2]))
+    updated=struct.pack('<I',2)+b''.join(struct.pack('<HHI',*row) for row in entries)
+    if 'raw' not in locals() or raw!=updated:
+        os.setxattr(helper_fd,'system.posix_acl_access',updated)
+        print('LIVE_GIT_HELPER_ACCESS_READY=1; existing service UID only; no group expansion.')
+finally:os.close(helper_fd)
 def running_environment(unit):
     pid=int(run('systemctl','show',unit,'-p','MainPID','--value'))
     return dict(item.split(b'=',1) for item in (Path('/proc')/str(pid)/'environ').read_bytes().split(b'\0') if b'=' in item)
