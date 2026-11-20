@@ -668,7 +668,7 @@ console.log('PASS');
 
 @pytest.mark.parametrize('action',[
     'control-token','origin-binding','expired','late-handoff','login-revocation',
-    'workspace-scope','lease-expiry','renewal-order','live-only-scope'])
+    'workspace-scope','lease-expiry','renewal-order','live-only-scope','control-root-binding'])
 def test_customer_pi_authority_is_local_session_bound_and_revocable(action):
     import shutil
     import subprocess
@@ -676,13 +676,13 @@ def test_customer_pi_authority_is_local_session_bound_and_revocable(action):
     node=shutil.which('node')
     if not node: pytest.skip('Node runtime unavailable')
     script=r'''
-import fs from 'node:fs';import vm from 'node:vm';import assert from 'node:assert/strict';
+import fs from 'node:fs';import vm from 'node:vm';import assert from 'node:assert/strict';import path from 'node:path';
 import {randomUUID,timingSafeEqual} from 'node:crypto';
 const input=JSON.parse(fs.readFileSync(0,'utf8'));
 const source=fs.readFileSync(input.source,'utf8');
 let clock=1800000000000,next=0;const timers=new Map(),pool=new Map();
 class Clock extends Date{static now(){return clock;}}
-const context={Date:Clock,Buffer,URL,randomUUID,timingSafeEqual,pool,
+const context={Date:Clock,Buffer,URL,randomUUID,timingSafeEqual,pool,path,
  PROJECT_SANDBOX_ENABLED:true,
  process:{env:{PI_GATEWAY_LIVE_TOKEN:'a'.repeat(48),PI_GATEWAY_TEST_TOKEN:'b'.repeat(48)}},
  setTimeout(fn,ms){const id=++next;timers.set(id,{fn,ms});return id;},
@@ -711,6 +711,20 @@ if(input.action==='live-only-scope'){
  assert.equal(run('fromGateway(req)'),true);
  delete req.headers['x-pi-gateway-origin'];
  assert.equal(run('gatewayOrigin(req)'),'https://test.opencode-gateway.codes');
+ req.headers['x-pi-gateway-origin']='https://unrecognized.invalid';
+ assert.equal(run('fromGateway(req)'),false);
+}else if(input.action==='control-root-binding'){
+ context.process.env.PI_PROJECT_SANDBOX_ORIGIN=account.origin;
+ account.workspace_root='/var/lib/opencode-workspaces';
+ account.workspaces[0].directory=path.join(account.workspace_root,account.user_id,account.workspaces[0].id,'repo');
+ assert.equal(run('grantWorkspaceRootsValid(account)'),true);
+ account.origin='https://test.opencode-gateway.codes';
+ assert.equal(run('grantWorkspaceRootsValid(account)'),false);
+ account.workspace_root='/var/lib/opencode-workspaces-test';
+ account.workspaces[0].directory=path.join(account.workspace_root,account.user_id,account.workspaces[0].id,'repo');
+ assert.equal(run('grantWorkspaceRootsValid(account)'),true);
+ account.origin='https://unrecognized.invalid';
+ assert.equal(run('grantWorkspaceRootsValid(account)'),false);
 }else if(input.action==='control-token'){
  const req={headers:{host:'pi-internal','x-pi-gateway-origin':account.origin}};
  context.req=req;
