@@ -43,7 +43,8 @@ def plan_payload(plan):
     if plan is None:
         return None
     return {"id": plan.id, "code": plan.code, "name": plan.name, "price_cents": plan.price_cents, "currency": plan.currency, "duration_days": plan.duration_days,
-            "storage_mb": plan.storage_mb, "includes_ai_api": False,
+            "storage_mb": plan.storage_mb, "description_ar": plan.description_ar,
+            "description_en": plan.description_en, "includes_ai_api": False,
             "service_description": "Gateway platform and shared local/GitHub storage only; connect your own AI models/API keys."}
 
 def subscription_payload(db, user) -> dict:

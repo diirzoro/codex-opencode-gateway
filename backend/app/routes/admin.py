@@ -25,6 +25,8 @@ class PlanIn(BaseModel):
     currency: str = Field(default="USD", min_length=3, max_length=3)
     duration_days: int = Field(ge=1, le=3650)
     storage_mb: int = Field(default=50, ge=1, le=1048576)
+    description_ar: str = Field(default="", max_length=2000)
+    description_en: str = Field(default="", max_length=2000)
     active: bool = True
     sort_order: int = Field(default=0, ge=0, le=10000)
 
@@ -35,6 +37,8 @@ class PlanPatch(BaseModel):
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     duration_days: int | None = Field(default=None, ge=1, le=3650)
     storage_mb: int = Field(default=50, ge=1, le=1048576)
+    description_ar: str = Field(default="", max_length=2000)
+    description_en: str = Field(default="", max_length=2000)
     active: bool | None = None
     sort_order: int | None = Field(default=None, ge=0, le=10000)
 
@@ -74,6 +78,7 @@ def _runtime_health():
 
 def plan_payload(row: Plan) -> dict:
     return {"id": row.id, "code": row.code, "name": row.name, "price_cents": row.price_cents, "currency": row.currency, "duration_days": row.duration_days, "active": bool(row.active), "sort_order": row.sort_order, "storage_mb": row.storage_mb,
+            "description_ar": row.description_ar, "description_en": row.description_en,
             "includes_ai_api": False}
 
 @router.get("/users")
