@@ -454,6 +454,45 @@ def clone_github(workspace, clone_url, branch, token, working_paths=None):
     if result.returncode:
         raise HTTPException(409, "GitHub clone failed; the selected repository or branch may be unavailable")
 
+def require_live_project_quota(db, user_id):
+    root = settings.workspace_root
+    if root != Path("/var/lib/opencode-workspaces"):
+        return
+
+    import fcntl
+    import struct
+
+    from .storage_policy import MIB, quota_mb
+
+    expected = quota_mb(db, user_id) * MIB
+    # Linux FS_IOC_FSGETXATTR returns the XFS project ID and inheritance flag.
+    fsxattr = bytearray(28)
+    try:
+        fd = os.open(root / str(user_id), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fcntl.ioctl(fd, 0x801C581F, fsxattr)
+            flags, _, _, project_id = struct.unpack_from("=IIII", fsxattr)
+            capacity = os.fstatvfs(fd)
+            filesystem = os.statvfs(root)
+        finally:
+            os.close(fd)
+        visible_limit = capacity.f_blocks * capacity.f_frsize
+        filesystem_size = filesystem.f_blocks * filesystem.f_frsize
+        # XFS reports the active project limit in statvfs on an inheriting
+        # directory. A project tag alone can exist before cron sets its limit.
+        if (project_id != 0 and flags & 0x00000200 and
+                visible_limit == expected and visible_limit < filesystem_size):
+            return
+    except OSError:
+        pass
+
+    raise HTTPException(
+        status_code=503,
+        detail="Project storage is being provisioned or updated. Please retry shortly.",
+        headers={"Retry-After": "60"},
+    )
+
+
 def create(db, user, name, source_type, template=None, repository=None, branch=None, github_source=None):
     if source_type == "github":
         if github_source is None:
@@ -467,6 +506,7 @@ def create(db, user, name, source_type, template=None, repository=None, branch=N
             raise HTTPException(422, "Unsupported template")
         if repository or branch:
             raise HTTPException(422, "Repository and branch apply to GitHub projects only")
+    require_live_project_quota(db, user.id)
     project = Project(id=uuid.uuid4(), user_id=user.id, name=name, source_type=source_type, template=template, default_branch="work")
     if source_type == "github":
         project.repository = repository
