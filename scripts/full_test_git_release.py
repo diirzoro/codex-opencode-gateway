@@ -11,7 +11,6 @@ import sys
 import tempfile
 
 ROOT = Path("/home/tahir/opencode-gateway-test")
-PI_TARGET = Path("/home/tahir/pi-test/pi-central.mjs")
 REVISION = ROOT / ".test-full-release-revision"
 LOCK = Path("/home/tahir/.gateway-test-deploy.lock")
 GATE = "/usr/local/sbin/opencode-gateway-test-migrate"
@@ -80,11 +79,11 @@ def paths(revision):
     return result
 
 def check_destination(p):
-    if not (p.is_relative_to(ROOT) or p == PI_TARGET):
+    if not p.is_relative_to(ROOT):
         raise RuntimeError("Destination outside TEST source")
     if p.is_symlink() or (p.exists() and (not p.is_file() or p.stat().st_nlink != 1)):
         raise RuntimeError("Unsafe source-file destination: " + str(p))
-    boundary = ROOT if p.is_relative_to(ROOT) else PI_TARGET.parent
+    boundary = ROOT
     parent = p.parent
     while parent != boundary:
         if parent.is_symlink():
@@ -151,35 +150,29 @@ def deploy(revision):
             removed.append(name)
             print("REMOVED_OBSOLETE_SOURCE", name, flush=True)
 
-    # The installed Pi executable, its auth.json, sessions and service unit
-    # are not modified. Update the one existing bridge source used by its unit.
-    if not PI_TARGET.is_file():
-        raise RuntimeError("Existing Pi Central bridge source is missing")
-    pi_changed = write_if_changed(PI_TARGET, (ROOT / "integration/pi-central.mjs").read_bytes())
-
+    changed_source = set(changed) | set(removed)
+    # After a failed release files may already be copied, but the revision
+    # marker still points to the last release whose migrations completed.
+    if before != revision:
+        changed_source.update(git("diff", "--name-only", before, revision).decode().splitlines())
     migration_changed = any(
-        x.startswith("backend/alembic/versions/")
-        or x in {"backend/alembic/env.py", "backend/alembic.ini"}
-        for x in changed
+        name.startswith("backend/alembic/versions/")
+        or name in {"backend/alembic/env.py", "backend/alembic.ini"}
+        for name in changed_source
     )
-    gateway_changed = any(x.startswith("backend/") for x in changed + removed)
+    gateway_changed = any(name.startswith("backend/") for name in changed_source)
 
-    # Migrations and restarts only on actual changes. No health probing,
-    # Nginx changes, service/unit installation or configuration rewrite.
     if migration_changed:
         sudo(GATE, "upgrade")
         print("TEST_MIGRATIONS_APPLIED", flush=True)
     if gateway_changed:
         sudo("/usr/bin/systemctl", "restart", "opencode-gateway-test.service")
         print("TEST_GATEWAY_RESTARTED", flush=True)
-    if pi_changed:
-        sudo("/usr/bin/systemctl", "restart", "pi-central.service")
-        print("PI_CENTRAL_RESTARTED", flush=True)
 
     write_if_changed(REVISION, (revision + "\n").encode())
     print("DEPLOY_COMPLETE", "updated", len(changed), "removed", len(removed),
           "migration", migration_changed, "gateway_restart", gateway_changed,
-          "pi_restart", pi_changed, flush=True)
+          flush=True)
 
 def main():
     parser = argparse.ArgumentParser()
