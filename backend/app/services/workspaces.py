@@ -245,7 +245,7 @@ def _git_execution_scope(cwd, arguments, env, workspace=None):
     root=Path(cwd)
     if not root.is_absolute() or '..' in root.parts:
         raise HTTPException(503,'Invalid isolated Git directory')
-    fds=[];group=None;temp=None
+    fds=[];group=None;temp=None;phase='project-directory'
     try:
         # Walk from / with openat and O_NOFOLLOW; do not reopen a checked path.
         fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
@@ -258,16 +258,20 @@ def _git_execution_scope(cwd, arguments, env, workspace=None):
         git_fd=None
         if not initial:
             git_fd=os.open('.git',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd);fds.append(git_fd)
+        phase='resource-root'
         cg_root=Path(os.environ['PI_SANDBOX_CGROUP_ROOT'])
         if not str(cg_root).startswith('/sys/fs/cgroup/') or cg_root.resolve()!=cg_root:
             raise ValueError('Invalid resource delegation')
         if not {'cpu','memory','pids'}.issubset(set((cg_root/'cgroup.subtree_control').read_text().split())):
             raise ValueError('Resource controllers unavailable')
+        phase='resource-group'
         group=cg_root/('pi-project-'+str(uuid.uuid4()));group.mkdir()
+        phase='resource-limits'
         for name,value in {'memory.max':768*1024*1024,'memory.swap.max':0,
                            'memory.oom.group':1,'pids.max':128,'cpu.max':'100000 100000','cpu.weight':20}.items():
             (group/name).write_text(str(value))
         limit_fd=os.open(group/'cgroup.procs',os.O_WRONLY|os.O_NOFOLLOW);fds.append(limit_fd)
+        phase='git-configuration'
         args=['/usr/local/libexec/pi-project-bwrap','--unshare-user','--unshare-pid',
               '--unshare-ipc','--unshare-uts','--hostname','project','--disable-userns',
               '--die-with-parent','--new-session','--cap-drop','ALL']
@@ -326,9 +330,13 @@ def _git_execution_scope(cwd, arguments, env, workspace=None):
             '[os.close(x) for x in [root,meta,limit] if x>=0];'
             'os.execve("/usr/bin/git",["git",*sys.argv[4:]],os.environ)')
         args+=['--','/usr/bin/python3','-c',bootstrap,str(fd),str(git_fd if git_fd is not None else -1),str(limit_fd),*fixed,*arguments]
+        phase='git-launch'
         yield args,tuple(fds),child_env
-    except (OSError,ValueError,KeyError,UnicodeError,subprocess.TimeoutExpired):
-        raise HTTPException(503,'Isolated Git execution unavailable; project files preserved') from None
+    except (OSError,ValueError,KeyError,UnicodeError,subprocess.TimeoutExpired) as error:
+        # Fixed stages and numeric OS codes diagnose containment failures
+        # without exposing server paths, environment or repository contents.
+        code=error.errno if isinstance(error,OSError) else type(error).__name__
+        raise HTTPException(503,f'Isolated Git execution unavailable ({phase}: {code}); project files preserved') from None
     finally:
         for fd in fds:
             try:os.close(fd)
