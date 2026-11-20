@@ -9,8 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
-from ..models import GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, Subscription, User, Workspace, WorkspaceSession
-from ..services.storage_policy import PLAN_MB
+from ..models import BillingMethod, GithubConnection, PaymentOrder, Plan, PlatformPolicy, Project, Subscription, User, Workspace, WorkspaceSession
 from ..models.platform import get_policy
 from ..services import github
 from ..services.accounts import user_payload
@@ -25,6 +24,7 @@ class PlanIn(BaseModel):
     price_cents: int = Field(ge=0, le=10000000)
     currency: str = Field(default="USD", min_length=3, max_length=3)
     duration_days: int = Field(ge=1, le=3650)
+    storage_mb: int = Field(default=50, ge=1, le=1048576)
     active: bool = True
     sort_order: int = Field(default=0, ge=0, le=10000)
 
@@ -34,6 +34,7 @@ class PlanPatch(BaseModel):
     price_cents: int | None = Field(default=None, ge=0, le=10000000)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     duration_days: int | None = Field(default=None, ge=1, le=3650)
+    storage_mb: int = Field(default=50, ge=1, le=1048576)
     active: bool | None = None
     sort_order: int | None = Field(default=None, ge=0, le=10000)
 
@@ -72,7 +73,7 @@ def _runtime_health():
 
 
 def plan_payload(row: Plan) -> dict:
-    return {"id": row.id, "code": row.code, "name": row.name, "price_cents": row.price_cents, "currency": row.currency, "duration_days": row.duration_days, "active": bool(row.active), "sort_order": row.sort_order, "storage_mb": PLAN_MB.get(row.code,50),
+    return {"id": row.id, "code": row.code, "name": row.name, "price_cents": row.price_cents, "currency": row.currency, "duration_days": row.duration_days, "active": bool(row.active), "sort_order": row.sort_order, "storage_mb": row.storage_mb,
             "includes_ai_api": False}
 
 @router.get("/users")
@@ -906,13 +907,35 @@ def create_plan(data: PlanIn, _: User = Depends(require_admin), db: Session = De
 
 @router.patch("/plans/{plan_id}")
 def update_plan(plan_id: int, data: PlanPatch, _: User = Depends(require_admin), db: Session = Depends(get_db)):
-    row = db.get(Plan, plan_id)
+    row = db.scalar(select(Plan).where(Plan.id == plan_id).with_for_update())
     if row is None:
         raise HTTPException(404, "Plan not found")
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(row, key, value)
     db.commit(); db.refresh(row)
     return plan_payload(row)
+
+@router.delete("/plans/{plan_id}", status_code=204)
+def delete_plan(plan_id: int, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    row = db.scalar(select(Plan).where(Plan.id == plan_id).with_for_update())
+    if row is None:
+        raise HTTPException(404, "Plan not found")
+    if row.active:
+        raise HTTPException(409, "Deactivate the plan before deleting it")
+    for details in db.scalars(select(BillingMethod.details)):
+        try:
+            config = json.loads(details)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(config, dict) and str(config.get("plan_id")) == str(plan_id):
+            raise HTTPException(409, "This plan is linked to a payment method. Keep it inactive")
+    db.delete(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "This plan is in use. Keep it inactive to preserve account and payment history") from None
+
 
 @router.get("/policy")
 def read_policy(_: User = Depends(require_admin), db: Session = Depends(get_db)):
