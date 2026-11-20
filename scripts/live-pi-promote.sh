@@ -183,8 +183,12 @@ try:
     probe=subprocess.run(['/usr/bin/nsenter','-t',str(pi_pid),'-m','--','/usr/bin/python3','-c',
                           bootstrap,control_procs,node,str(source),'--isolation-probe'],
                          env=probe_env,capture_output=True,text=True,timeout=60)
-    try:proof=json.loads(probe.stdout.strip().splitlines()[-1])
+    try:proof=json.loads((probe.stdout if probe.returncode==0 else probe.stderr).strip().splitlines()[-1])
     except (ValueError,IndexError):proof={}
+    if probe.returncode!=0 or proof.get('probe')!='PASS':
+        diagnostic=backup/'native-worker-proof.json'
+        diagnostic.write_text(json.dumps(proof));diagnostic.chmod(0o600)
+        print('LIVE_NATIVE_TOOL_BOUNDARY_FAIL '+json.dumps(proof))
     require(probe.returncode==0 and proof.get('probe')=='PASS',
             'Native LIVE project worker acceptance failed; configuration will be restored')
     print('LIVE_NATIVE_TOOL_BOUNDARY=PASS; disposable canaries removed; no model/payment call.')

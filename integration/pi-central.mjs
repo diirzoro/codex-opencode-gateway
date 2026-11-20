@@ -502,8 +502,9 @@ async function projectToolWorkerMain() {
               const result=await tools[msg.name].execute(msg.id,msg.args,controller.signal,
                 update=>emit({id:msg.id,update}),{cwd,model:msg.model});
               emit({id:msg.id,result});
-            }catch{emit({id:msg.id,error:controller.signal.aborted?
-              "Project tool cancelled":"Project tool failed inside isolation"});}
+            }catch(error){emit({id:msg.id,error:controller.signal.aborted?
+              "Project tool cancelled":"Project tool failed inside isolation"+
+              (process.env.PI_PROJECT_PROBE_DIAGNOSTICS==="1"?": "+String(error?.message||error).slice(0,1000):"")});}
             finally{controllers.delete(msg.id);}
           });
         }
@@ -524,6 +525,7 @@ function projectSandboxPlan(scope,node=process.execPath) {
   const env={PATH:"/usr/local/bin:/usr/bin:/bin",HOME:"/tmp/home",TMPDIR:"/tmp",
     LANG:"C.UTF-8",XDG_CONFIG_HOME:"/tmp/home/.config",
     GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null",GIT_TERMINAL_PROMPT:"0"};
+  if(process.argv.includes("--isolation-probe"))env.PI_PROJECT_PROBE_DIAGNOSTICS="1";
   const args=["--unshare-user","--unshare-pid","--unshare-net","--unshare-ipc",
     "--unshare-uts","--hostname","project","--disable-userns","--die-with-parent","--new-session","--cap-drop","ALL",
     "--clearenv"];
@@ -675,9 +677,13 @@ class ProjectToolSandbox {
           plan.args.splice(plan.args.indexOf("--"),0,"--setenv","PI_PROJECT_LIMITS_FD","4",
             "--setenv","PI_PROJECT_NETWORK_FD","5");
         }
+        const diagnostic=process.argv.includes("--isolation-probe");
         this.child=withWorkspaceDirectory(this.scope,"",fd=>spawn(plan.file,plan.args,{
-          cwd:"/",env:plan.env,stdio:["pipe","pipe","ignore",fd,this.limits?.fd??"ignore",
+          cwd:"/",env:plan.env,stdio:["pipe","pipe",diagnostic?"pipe":"ignore",fd,this.limits?.fd??"ignore",
             this.scope.account?"pipe":"ignore"],detached:true}));
+        if(diagnostic)this.child.stderr.on("data",chunk=>{
+          this.startupDiagnostic=((this.startupDiagnostic||"")+chunk.toString()).slice(0,4000);
+        });
         if(this.scope.account)this.network=projectNetworkBridge(this.child.stdio[5]);
       }catch(error){this.close();throw error;}
       finally{this.limits?.closeDescriptor();}
@@ -821,7 +827,8 @@ async function probeProjectToolSandbox(){
       "No model, payment or administration endpoint was called.",
       "This is a tool compatibility gate, not complete tenant-isolation or performance acceptance."]}));
   }catch(error){
-    console.error(JSON.stringify({probe:"FAIL",phase,checks,error:String(error.message).slice(0,200)}));
+    console.error(JSON.stringify({probe:"FAIL",phase,checks,error:String(error.message).slice(0,1000),
+      workerExit:boundary?.child?.exitCode,diagnostic:boundary?.startupDiagnostic||""}));
     throw Error("Project tool isolation probe did not pass");
   }finally{
     boundary?.close();
