@@ -196,3 +196,46 @@ def test_nvidia_inference_failure_prevents_key_persistence(monkeypatch):
         management._ai_save(SimpleNamespace(provider_id="nvidia",
              api_key="dummy-key-for-test"), SimpleNamespace(id="account-id"), FakeDB())
     assert exc.value.status_code == 403
+
+
+
+def test_nvidia_accepts_a_current_catalog_model_not_in_old_fixed_list(monkeypatch):
+    class Client:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def get(self, url, headers):
+            return SimpleNamespace(status_code=200, json=lambda: {
+                "data": [{"id": "moonshotai/kimi-k2.6-instruct"}]})
+        def post(self, url, headers, json):
+            assert json["model"] == "moonshotai/kimi-k2.6-instruct"
+            assert json["max_tokens"] == 1
+            return SimpleNamespace(status_code=200, json=lambda: {
+                "choices": [{"message": {"role": "assistant", "content": "OK"}}]})
+    monkeypatch.setattr(management._ai_httpx, "Client", Client)
+    assert management._ai_verify("nvidia", "dummy-key-for-test") == "unknown"
+
+
+def test_nvidia_rejects_embedding_only_catalog(monkeypatch):
+    patch_http(monkeypatch, SimpleNamespace(status_code=200, json=lambda: {
+        "data": [{"id": "nvidia/nv-embed-qa"}]}))
+    with pytest.raises(HTTPException) as exc:
+        management._ai_verify("nvidia", "dummy-key-for-test")
+    assert exc.value.status_code == 503
+
+
+def test_admin_curated_model_policy_filters_execution_not_just_ui():
+    rules = {
+        "allowed_models": [], "hidden_models": {}, "hidden_providers": [],
+        "selected_models": {"nvidia": ["model-a"]}}
+    assert management._ai_personal_allowed(None, "nvidia", "model-a", rules=rules)
+    assert not management._ai_personal_allowed(None, "nvidia", "model-b", rules=rules)
+    assert management._ai_personal_allowed(None, "openai", "model-b", rules=rules)
+    assert not management._ai_allowed(None, "nvidia", "model-b", rules=rules)
+
+
+def test_admin_can_disable_all_models_for_one_provider():
+    rules = {"allowed_models": [], "hidden_models": {}, "hidden_providers": [],
+             "selected_models": {"nvidia": []}}
+    assert not management._ai_personal_allowed(None, "nvidia", "any", rules=rules)
+    assert management._ai_personal_allowed(None, "deepseek", "any", rules=rules)
