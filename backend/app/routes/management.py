@@ -475,7 +475,7 @@ _AI_VERIFY_URLS = {
     "cerebras": "https://api.cerebras.ai/v1/models",
     # Authenticated, non-inference OpenCode Console and Go API endpoints.
     "opencode": "https://opencode.ai/console/api/v1/models",
-    "opencode-go": "https://opencode.ai/inference/go/v1/usage",
+    "opencode-go": "https://opencode.ai/console/api/v1/models",
 }
 _AI_REFRESH_DAYS = 14
 _AI_STALE_DAYS = 14
@@ -915,13 +915,13 @@ def _ai_verify(provider_id, key):
         if not isinstance(entry, dict) or entry.get("id") != "opencode" or not isinstance(entry.get("models"), dict):
             raise HTTPException(503, "OpenCode account verification was inconclusive")
     elif provider_id == "opencode-go":
-        # Go's usage endpoint is authenticated and requires an active Go plan.
-        # Reject generic 200 responses lacking recognizable usage meters.
-        usage = document.get("usage")
-        if (not isinstance(usage, dict) or
-                not all(isinstance(usage.get(name), dict)
-                        for name in ("rolling", "weekly", "monthly"))):
-            raise HTTPException(503, "OpenCode Go verification returned no valid usage meters")
+        # Console's authenticated provider list includes opencode-go only when
+        # the API key belongs to a workspace with an active Go subscription.
+        entry = document.get("opencode-go")
+        if (not isinstance(entry, dict) or entry.get("id") != "opencode-go"
+                or not isinstance(entry.get("models"), dict)
+                or not entry["models"]):
+            raise HTTPException(403, "This API key has no active OpenCode Go model access")
     elif provider_id not in ("openrouter", "deepseek", "opencode", "opencode-go") and not isinstance(document.get("data"), (list, dict)):
         raise HTTPException(503, "Model-provider verification was inconclusive")
     credit = "unknown"
