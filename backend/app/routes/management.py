@@ -1560,7 +1560,8 @@ def _ai_catalog_refresh_if_due(*, force=False):
             last = registry.get("synced_at")
             if not force and isinstance(last, str):
                 try:
-                    if now() - aware(datetime.fromisoformat(last.replace("Z", "+00:00"))) < timedelta(days=_AI_REFRESH_DAYS):
+                    if (isinstance(registry.get("auth_methods"), dict) and
+                            now() - aware(datetime.fromisoformat(last.replace("Z", "+00:00"))) < timedelta(days=_AI_REFRESH_DAYS)):
                         return True
                 except (ValueError, OverflowError):
                     pass
