@@ -971,7 +971,12 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
     if isinstance(pi_registry, dict):
         provider_rules['pi_registry'] = pi_registry
     row.allowed_providers = json.dumps(provider_rules)
-    row.allowed_models = json.dumps({'allowed':sorted({m.strip() for m in data.allowed_models if m.strip()}),'hidden':{key:sorted(set(values)) for key,values in selection.items()}})
+    # Do not erase model curation when editing unrelated general policy.
+    row.allowed_models = json.dumps({
+        'allowed':sorted({m.strip() for m in data.allowed_models if m.strip()}),
+        'hidden':{key:sorted(set(values)) for key,values in selection.items()},
+        'selected':previous.get('selected_models') or {}
+    })
     row.allowed_tools = json.dumps(sorted({t.strip() for t in data.allowed_tools if t.strip()}))
     row.require_tool_approval = data.require_tool_approval
     db.commit(); db.refresh(row)
