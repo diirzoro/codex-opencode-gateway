@@ -915,9 +915,13 @@ def _ai_verify(provider_id, key):
         if not isinstance(entry, dict) or entry.get("id") != "opencode" or not isinstance(entry.get("models"), dict):
             raise HTTPException(503, "OpenCode account verification was inconclusive")
     elif provider_id == "opencode-go":
-        # Go's usage endpoint requires auth and is not a billable model call.
-        if not document or not isinstance(document, dict):
-            raise HTTPException(503, "OpenCode Go verification returned no account data")
+        # Go's usage endpoint is authenticated and requires an active Go plan.
+        # Reject generic 200 responses lacking recognizable usage meters.
+        usage = document.get("usage")
+        if (not isinstance(usage, dict) or
+                not all(isinstance(usage.get(name), dict)
+                        for name in ("rolling", "weekly", "monthly"))):
+            raise HTTPException(503, "OpenCode Go verification returned no valid usage meters")
     elif provider_id not in ("openrouter", "deepseek", "opencode", "opencode-go") and not isinstance(document.get("data"), (list, dict)):
         raise HTTPException(503, "Model-provider verification was inconclusive")
     credit = "unknown"
