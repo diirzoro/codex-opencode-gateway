@@ -476,7 +476,7 @@ _AI_VERIFY_URLS = {
     "nvidia": "https://integrate.api.nvidia.com/v1/models",
     # Authenticated, non-inference OpenCode Console and Go API endpoints.
     "opencode": "https://opencode.ai/console/api/v1/models",
-    "opencode-go": "https://opencode.ai/console/api/v1/models",
+    "opencode-go": "https://opencode.ai/inference/go/v1/usage",
 }
 _AI_REFRESH_DAYS = 14
 _AI_STALE_DAYS = 14
@@ -900,6 +900,9 @@ def _ai_verify(provider_id, key):
     if status == 402:
         raise HTTPException(402, "Provider reports insufficient balance; authentication was not independently confirmed")
     if status == 403:
+        if provider_id == "opencode-go":
+            raise HTTPException(403,
+                "OpenCode authenticated the request but denied Go entitlement; verify the Go subscription and key workspace; key was not stored")
         raise HTTPException(403, "Provider denied API access; key was not stored")
     if status == 429:
         raise HTTPException(429, "Provider verification rate limited; retry later")
@@ -980,13 +983,16 @@ def _ai_verify(provider_id, key):
         if not isinstance(entry, dict) or entry.get("id") != "opencode" or not isinstance(entry.get("models"), dict):
             raise HTTPException(503, "OpenCode account verification was inconclusive")
     elif provider_id == "opencode-go":
-        # Console's authenticated provider list includes opencode-go only when
-        # the API key belongs to a workspace with an active Go subscription.
-        entry = document.get("opencode-go")
-        if (not isinstance(entry, dict) or entry.get("id") != "opencode-go"
-                or not isinstance(entry.get("models"), dict)
-                or not entry["models"]):
-            raise HTTPException(403, "This API key has no active OpenCode Go model access")
+        # Verify the key directly with Go's authenticated usage API, not
+        # Console's model catalog. The latter may omit provider entries
+        # for account/key scoping reasons unrelated to API-key validity.
+        usage = document.get("usage")
+        if (not isinstance(usage, dict) or
+                any(not isinstance(usage.get(period), dict)
+                    or usage[period].get("status") not in ("ok", "rate-limited")
+                    for period in ("rolling", "weekly", "monthly"))):
+            raise HTTPException(503,
+                "OpenCode Go did not return authenticated usage meters; key was not stored")
     elif provider_id not in ("openrouter", "deepseek", "opencode", "opencode-go") and not isinstance(document.get("data"), (list, dict)):
         raise HTTPException(503, "Model-provider verification was inconclusive")
     credit = "unknown"
