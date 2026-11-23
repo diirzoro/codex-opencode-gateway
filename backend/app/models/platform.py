@@ -43,6 +43,10 @@ class PlatformPolicy(Base):
             "hidden_providers": provider_rules.get('hidden',[]) if isinstance(provider_rules,dict) else [],
             "allowed_models": model_rules.get('allowed',[]) if isinstance(model_rules,dict) else model_rules,
             "hidden_models": model_rules.get('hidden',{}) if isinstance(model_rules,dict) else {},
+            # Per-provider administrator-curated personal-model selection.
+            # A missing entry means legacy unrestricted BYOK; an empty list
+            # deliberately disables all customer models for that provider.
+            "selected_models": model_rules.get('selected',{}) if isinstance(model_rules,dict) else {},
             # Provider/model IDs enabled by an administrator for all accounts.
             # The owner_id points to an encrypted, verified administrator key;
             # NEVER include the key itself in this policy.
