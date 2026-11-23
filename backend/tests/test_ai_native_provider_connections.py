@@ -63,22 +63,23 @@ def test_zen_rejects_public_openai_list_shape(monkeypatch):
     assert exc.value.status_code == 503
 
 
-def test_go_rejects_200_without_go_subscription(monkeypatch):
+def test_go_rejects_200_without_authenticated_usage_meters(monkeypatch):
     patch_http(monkeypatch, SimpleNamespace(status_code=200, json=lambda: {
         "opencode": {"id": "opencode", "models": {"example": {}}}}))
     with pytest.raises(HTTPException) as exc:
         management._ai_verify("opencode-go", "dummy-key-for-test")
-    assert exc.value.status_code == 403
+    assert exc.value.status_code == 503
 
 
-def test_go_accepts_authenticated_active_go_models(monkeypatch):
+def test_go_accepts_real_authenticated_usage_meters(monkeypatch):
     response = SimpleNamespace(status_code=200, json=lambda: {
-        "opencode-go": {
-            "id": "opencode-go",
-            "models": {"example-go-model": {"id": "example-go-model"}}}})
+        "usage": {
+            "rolling": {"status": "ok", "percent": 0},
+            "weekly": {"status": "rate-limited", "percent": 100},
+            "monthly": {"status": "ok", "percent": 10}}})
     client = patch_http(monkeypatch, response)
     assert management._ai_verify("opencode-go", "dummy-key-for-test") == "unknown"
-    assert client.calls[0][0] == "https://opencode.ai/console/api/v1/models"
+    assert client.calls[0][0] == "https://opencode.ai/inference/go/v1/usage"
 
 
 @pytest.mark.parametrize("provider,status,expected", [
