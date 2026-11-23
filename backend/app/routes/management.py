@@ -922,60 +922,69 @@ def _ai_verify(provider_id, key):
         if not isinstance(document.get("models"), list):
             raise HTTPException(503, "Google Gemini model verification was inconclusive")
     elif provider_id == "nvidia":
-        # NVIDIA may return a model catalog for keys without inference access.
-        # A successful catalog GET alone is not proof that Pi can use this
-        # customer's credential. Make one tiny, bounded inference request
-        # against a known chat model actually listed for this key. This may
-        # consume a small amount of the provider's allowance.
+        # NVIDIA model IDs change frequently and a key may be scoped to a
+        # specific model. Never hardcode three model names as a requirement.
+        # Catalog access alone is insufficient evidence of inference access.
         items = document.get("data")
         if not isinstance(items, list) or not items:
-            raise HTTPException(503, "NVIDIA did not return a usable model catalog")
-        names = {item.get("id") for item in items
-                 if isinstance(item, dict) and isinstance(item.get("id"), str)}
-        preferred = (
-            "meta/llama-3.1-8b-instruct",
-            "meta/llama-3.2-3b-instruct",
-            "mistralai/mistral-7b-instruct-v0.3",
-        )
-        chosen = next((name for name in preferred if name in names), None)
-        if chosen is None:
+            raise HTTPException(503, "NVIDIA returned no model catalog; key was not stored")
+        ids = sorted({item["id"] for item in items
+                      if isinstance(item, dict) and isinstance(item.get("id"), str)
+                      and 0 < len(item["id"]) <= 200})
+        def _chat_candidate(model_id):
+            lower = model_id.lower()
+            return (not any(term in lower for term in (
+                "embed", "retriev", "rerank", "ranker", "safety", "guard",
+                "vision", "vlm", "video", "audio", "speech", "asr", "tts",
+                "image", "diffusion", "ocr", "reward", "classification"))
+                and any(term in lower for term in (
+                    "instruct", "chat", "llama", "qwen", "mistral",
+                    "deepseek", "nemotron", "gemma", "kimi", "glm")))
+        candidates = [model_id for model_id in ids if _chat_candidate(model_id)]
+        if not candidates:
             raise HTTPException(503,
-                "NVIDIA returned no supported low-cost model for connection verification; key was not stored")
-        try:
-            with _ai_httpx.Client(timeout=20, follow_redirects=False, trust_env=False) as verify_client:
-                check = verify_client.post(
-                    "https://integrate.api.nvidia.com/v1/chat/completions",
-                    headers={**headers, "Content-Type": "application/json"},
-                    json={"model": chosen,
-                          "messages": [{"role": "user", "content": "Reply OK."}],
-                          "max_tokens": 1, "stream": False})
-        except _ai_httpx.RequestError:
-            raise HTTPException(503,
-                "NVIDIA inference verification unavailable; key was not stored") from None
-        if check.status_code == 401:
-            raise HTTPException(422, "NVIDIA rejected this API key; key was not stored")
-        if check.status_code == 403:
-            raise HTTPException(403,
-                "NVIDIA key lacks Public API Endpoints/inference permission; key was not stored")
-        if check.status_code == 402:
-            raise HTTPException(402,
-                "NVIDIA has insufficient quota for a verification request; key was not stored")
-        if check.status_code == 429:
-            raise HTTPException(429,
-                "NVIDIA inference verification was rate limited; key was not stored")
-        if check.status_code != 200:
-            raise HTTPException(503,
-                "NVIDIA inference verification did not succeed; key was not stored")
-        try:
-            outcome = check.json()
-        except ValueError:
-            raise HTTPException(503,
-                "NVIDIA inference verification returned invalid data; key was not stored") from None
-        if (not isinstance(outcome, dict) or
-                not isinstance(outcome.get("choices"), list) or
-                not outcome["choices"]):
-            raise HTTPException(503,
-                "NVIDIA did not confirm successful model access; key was not stored")
+                "NVIDIA returned no chat models eligible for a safe verification request; key was not stored")
+        # Test at most three distinct catalog-listed chat models with a
+        # one-token output limit. Avoid assuming every public model is
+        # callable with the customer's credential.
+        last_status = None
+        verified = False
+        for chosen in candidates[:3]:
+            try:
+                with _ai_httpx.Client(timeout=20, follow_redirects=False,
+                                      trust_env=False) as verify_client:
+                    check = verify_client.post(
+                        "https://integrate.api.nvidia.com/v1/chat/completions",
+                        headers={**headers, "Content-Type": "application/json"},
+                        json={"model": chosen,
+                              "messages": [{"role": "user", "content": "Say OK."}],
+                              "max_tokens": 1, "stream": False})
+            except _ai_httpx.RequestError:
+                raise HTTPException(503,
+                    "NVIDIA inference verification unavailable; key was not stored") from None
+            last_status = check.status_code
+            if last_status == 401:
+                raise HTTPException(422, "NVIDIA rejected this API key; key was not stored")
+            if last_status == 402:
+                raise HTTPException(402, "NVIDIA quota was insufficient; key was not stored")
+            if last_status == 429:
+                raise HTTPException(429, "NVIDIA verification was rate limited; key was not stored")
+            if last_status != 200:
+                # Unsupported model access is not proof that the entire key
+                # is invalid; try another model already in NVIDIA's catalog.
+                continue
+            try:
+                outcome = check.json()
+            except ValueError:
+                continue
+            if (isinstance(outcome, dict) and
+                    isinstance(outcome.get("choices"), list) and
+                    outcome["choices"]):
+                verified = True
+                break
+        if not verified:
+            raise HTTPException(403 if last_status == 403 else 503,
+                "NVIDIA could not confirm inference access to a tested model; key was not stored")
     elif provider_id == "opencode":
         # Unlike the public /inference/v1/models list, Console requires
         # authentication and returns an object keyed by provider ID.
