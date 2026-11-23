@@ -198,6 +198,24 @@
       const host=node('div'),f=node('form','','manage-form');
       const providerField=replaceExisting?null:input(f,tr('Find a supported provider','ابحث عن اسم المزوّد'),'provider_id');
       let approvedProviders=[],suggestions=null,providerHint=null,searchProviderButton=null;
+      // Reflect the authentication methods reported by the installed Pi
+      // integration. Only a provider-verified API key may currently be saved.
+      let methodHint=null;
+      const authDescription=p=>{
+        const declared=new Set(Array.isArray(p?.auth_methods)?p.auth_methods:[]);
+        const methods=[];
+        if(p?.api_key_supported)methods.push(tr('API key — verified before saving',
+          'مفتاح API — يتم التحقق منه قبل الحفظ'));
+        else if(declared.has('apiKey'))methods.push(tr(
+          'API key — awaiting a safe provider verification method',
+          'مفتاح API — يحتاج آلية تحقق آمنة قبل تفعيله'));
+        if(declared.has('oauth'))methods.push(tr(
+          'Account sign-in / OAuth — offered by Pi, not yet enabled securely in Gateway',
+          'تسجيل الحساب / OAuth — يدعمه Pi، لكن الربط الآمن غير مفعّل بعد في Gateway'));
+        return methods.length?methods.join(' · '):tr(
+          'No verified connection method available in Gateway',
+          'لا توجد طريقة ربط موثقة متاحة حاليًا في Gateway');
+      };
       const selectedProvider=()=>{
         const text=providerField?.value.trim().toLowerCase()||'';
         return approvedProviders.find(p=>p.api_key_supported===true&&
@@ -234,6 +252,11 @@
       }
       const key=input(f,tr('Personal API key','مفتاح API الشخصي'),'api_key');
       key.type='password';key.required=true;key.autocomplete='off';key.maxLength=8192;
+      methodHint=node('p','','provider-picker-help');
+      methodHint.setAttribute('role','status');
+      methodHint.textContent=tr('Choose a provider to see available authentication methods.',
+        'اختر مزوّدًا لمعرفة طرق المصادقة المتاحة.');
+      f.append(methodHint);
       f.append(node('p',tr('The key is verified with the provider before encrypted storage. It is never returned to your browser.','يتم التحقق من المفتاح لدى المزوّد قبل حفظه مشفرًا، ولا يُعاد إلى المتصفح.')));
       const feedback=node('p','','provider-feedback');feedback.setAttribute('role','status');f.append(feedback);
       const submit=node('button',replaceExisting?tr('Verify and replace','تحقق واستبدل'):tr('Verify and connect','تحقق واربط'),'button');
@@ -253,16 +276,18 @@
             const option=node('button','','provider-real-option');option.type='button';
             option.setAttribute('role','option');
             option.append(node('strong',item.name),node('small',
-              item.api_key_supported?item.id:
-              tr('Pi supported · API key verification unavailable',
-                 'يدعمه Pi · ربط API غير متاح حاليًا')));
-            option.disabled=item.api_key_supported!==true;
+              authDescription(item)));
+            // Discovery is useful for all Pi providers, even ones whose
+            // OAuth flow has not been safely connected to Gateway yet.
+            option.disabled=false;
             option.onclick=()=>{
               providerField.value=item.id;
               suggestions.hidden=true;
               providerField.setAttribute('aria-expanded','false');
               providerHint.textContent=tr('Selected provider: ','المزوّد المختار: ')+item.name;
-              submit.disabled=false;key.focus();
+              methodHint.textContent=authDescription(item);
+              submit.disabled=!item.api_key_supported;
+              if(item.api_key_supported)key.focus();
             };
             suggestions.append(option);
           }
@@ -273,6 +298,7 @@
             tr('Pi provider selected: ','تم اختيار مزوّد من Pi: ')+matched.name:
             tr('Results come from the installed Pi provider registry. Only verified API-key integrations can be linked.',
               'النتائج مأخوذة من سجل المزوّدين في Pi. الربط متاح فقط حيث يدعم Gateway التحقق من المفتاح.');
+          methodHint.textContent=authDescription(matched);
           submit.disabled=!matched;
         };
         // Clicking Search explicitly opens real, backend-supported names.
@@ -303,18 +329,19 @@
           approvedProviders=data.connectable.filter(p=>p&&
             typeof p.id==='string'&&typeof p.name==='string'&&
             /^[a-zA-Z0-9._-]{1,120}$/.test(p.id)).map(p=>({
-              id:p.id,name:p.name,api_key_supported:p.api_key_supported===true
+              id:p.id,name:p.name,api_key_supported:p.api_key_supported===true,
+              auth_methods:Array.isArray(p.auth_methods)?p.auth_methods.filter(
+                method=>method==='apiKey'||method==='oauth'):[]
             }));
           if(!approvedProviders.length)throw Error(tr(
             'No saved Pi providers are available yet.',
             'لم تُحفظ قائمة مزوّدات Pi بعد.'));
-          if(!approvedProviders.some(p=>p.api_key_supported))
-            throw Error(tr('Pi providers were found, but API-key verification is not configured for any of them.',
-              'عُثر على مزوّدات Pi، لكن التحقق من مفاتيح API غير مهيأ لأي منها.'));
+          // Authentication methods may be discoverable before a verifier is
+          // implemented. Never hide the providers or fabricate a connection.
           searchProviderButton.disabled=false;
           providerHint.textContent=tr(
-            'Search the Pi-supported provider names saved by Gateway (updated every 14 days). Unsupported API-key methods cannot be linked.',
-            'ابحث في أسماء مزوّدات Pi المحفوظة في Gateway (تُحدّث كل 14 يومًا). لا يمكن ربط مزوّد دون آلية آمنة للتحقق من مفتاحه.');
+            'Browse Pi-supported providers and view the authentication methods available in Gateway. Only verified methods can connect.',
+            'تصفّح مزوّدي Pi وطرق المصادقة المتاحة في Gateway. لا يتم الربط إلا بعد التحقق الحقيقي.');
           if(dialog.open&&providerField.value.trim())showMatches();
         }).catch(error=>{
           if(host.isConnected){providerHint.textContent=error.message;submit.disabled=true;}

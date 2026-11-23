@@ -509,9 +509,18 @@ def _ai_pi_supported_providers(db):
            and 0 < len(pid) <= 120}
     rows = list(db.scalars(select(AiProviderCatalog).where(
         AiProviderCatalog.id.in_(ids)).order_by(AiProviderCatalog.name).limit(1000)))
+    methods_by_provider = saved.get("auth_methods")
+    if not isinstance(methods_by_provider, dict):
+        methods_by_provider = {}
     return [
         {"id": row.id, "name": row.name,
-         "api_key_supported": row.id in _AI_VERIFY_URLS}
+         "auth_methods": [method for method in
+             methods_by_provider.get(row.id, []) if method in ("apiKey", "oauth")]
+             if isinstance(methods_by_provider.get(row.id), list) else [],
+         # An API key may be offered by Pi but must still have an approved,
+         # independently authenticated verifier before Gateway accepts it.
+         "api_key_supported": row.id in _AI_VERIFY_URLS,
+         "oauth_link_available": False}
         for row in rows if row.id in ids
     ]
 
@@ -1551,7 +1560,8 @@ def _ai_catalog_refresh_if_due(*, force=False):
             last = registry.get("synced_at")
             if not force and isinstance(last, str):
                 try:
-                    if now() - aware(datetime.fromisoformat(last.replace("Z", "+00:00"))) < timedelta(days=_AI_REFRESH_DAYS):
+                    if (isinstance(registry.get("auth_methods"), dict) and
+                            now() - aware(datetime.fromisoformat(last.replace("Z", "+00:00"))) < timedelta(days=_AI_REFRESH_DAYS)):
                         return True
                 except (ValueError, OverflowError):
                     pass
@@ -1579,6 +1589,7 @@ def _ai_catalog_refresh_if_due(*, force=False):
             # downloads of paid or unrelated provider model definitions.
             known = {row.id: row for row in db.scalars(select(AiProviderCatalog))}
             valid = {}
+            auth_methods = {}
             for item in all_rows:
                 if not isinstance(item, dict):
                     continue
@@ -1594,6 +1605,13 @@ def _ai_catalog_refresh_if_due(*, force=False):
                 if pid != "openrouter" and incoming:
                     raise ValueError("Pi names-only response contained unexpected model data")
                 valid[pid] = (str(item.get("name") or pid)[:200], incoming)
+                # Read only Pi-owned public auth METHOD TYPES; no credentials,
+                # login sessions, account emails or OAuth tokens are copied.
+                methods = item.get("auth_methods")
+                if isinstance(methods, list):
+                    auth_methods[pid] = [
+                        method for method in ("apiKey", "oauth")
+                        if method in methods]
                 if pid not in known:
                     row = AiProviderCatalog(id=pid, name=valid[pid][0])
                     db.add(row)
@@ -1664,7 +1682,8 @@ def _ai_catalog_refresh_if_due(*, force=False):
             if not isinstance(rules, dict):
                 raise ValueError("Invalid existing Gateway provider policy")
             rules["pi_registry"] = {"synced_at": stamped.isoformat(),
-                                    "provider_ids": sorted(valid)}
+                                    "provider_ids": sorted(valid),
+                                    "auth_methods": auth_methods}
             policy.allowed_providers = json.dumps(rules, separators=(",", ":"))
             db.commit()
             return True
