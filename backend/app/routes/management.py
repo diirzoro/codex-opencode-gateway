@@ -473,6 +473,7 @@ _AI_VERIFY_URLS = {
     "xai": "https://api.x.ai/v1/models",
     "together": "https://api.together.xyz/v1/models",
     "cerebras": "https://api.cerebras.ai/v1/models",
+    "nvidia": "https://integrate.api.nvidia.com/v1/models",
     # Authenticated, non-inference OpenCode Console and Go API endpoints.
     "opencode": "https://opencode.ai/console/api/v1/models",
     "opencode-go": "https://opencode.ai/console/api/v1/models",
@@ -917,6 +918,61 @@ def _ai_verify(provider_id, key):
     if provider_id == "google":
         if not isinstance(document.get("models"), list):
             raise HTTPException(503, "Google Gemini model verification was inconclusive")
+    elif provider_id == "nvidia":
+        # NVIDIA may return a model catalog for keys without inference access.
+        # A successful catalog GET alone is not proof that Pi can use this
+        # customer's credential. Make one tiny, bounded inference request
+        # against a known chat model actually listed for this key. This may
+        # consume a small amount of the provider's allowance.
+        items = document.get("data")
+        if not isinstance(items, list) or not items:
+            raise HTTPException(503, "NVIDIA did not return a usable model catalog")
+        names = {item.get("id") for item in items
+                 if isinstance(item, dict) and isinstance(item.get("id"), str)}
+        preferred = (
+            "meta/llama-3.1-8b-instruct",
+            "meta/llama-3.2-3b-instruct",
+            "mistralai/mistral-7b-instruct-v0.3",
+        )
+        chosen = next((name for name in preferred if name in names), None)
+        if chosen is None:
+            raise HTTPException(503,
+                "NVIDIA returned no supported low-cost model for connection verification; key was not stored")
+        try:
+            with _ai_httpx.Client(timeout=20, follow_redirects=False, trust_env=False) as verify_client:
+                check = verify_client.post(
+                    "https://integrate.api.nvidia.com/v1/chat/completions",
+                    headers={**headers, "Content-Type": "application/json"},
+                    json={"model": chosen,
+                          "messages": [{"role": "user", "content": "Reply OK."}],
+                          "max_tokens": 1, "stream": False})
+        except _ai_httpx.RequestError:
+            raise HTTPException(503,
+                "NVIDIA inference verification unavailable; key was not stored") from None
+        if check.status_code == 401:
+            raise HTTPException(422, "NVIDIA rejected this API key; key was not stored")
+        if check.status_code == 403:
+            raise HTTPException(403,
+                "NVIDIA key lacks Public API Endpoints/inference permission; key was not stored")
+        if check.status_code == 402:
+            raise HTTPException(402,
+                "NVIDIA has insufficient quota for a verification request; key was not stored")
+        if check.status_code == 429:
+            raise HTTPException(429,
+                "NVIDIA inference verification was rate limited; key was not stored")
+        if check.status_code != 200:
+            raise HTTPException(503,
+                "NVIDIA inference verification did not succeed; key was not stored")
+        try:
+            outcome = check.json()
+        except ValueError:
+            raise HTTPException(503,
+                "NVIDIA inference verification returned invalid data; key was not stored") from None
+        if (not isinstance(outcome, dict) or
+                not isinstance(outcome.get("choices"), list) or
+                not outcome["choices"]):
+            raise HTTPException(503,
+                "NVIDIA did not confirm successful model access; key was not stored")
     elif provider_id == "opencode":
         # Unlike the public /inference/v1/models list, Console requires
         # authentication and returns an object keyed by provider ID.
