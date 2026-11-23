@@ -553,6 +553,9 @@ def _ai_allowed(db, provider_id, model_id=None, rules=None):
     if allowed and provider_id not in allowed:
         return False
     if model_id is not None:
+        selected = rules.get("selected_models") or {}
+        if isinstance(selected, dict) and provider_id in selected and model_id not in selected[provider_id]:
+            return False
         allowed_models = rules.get("allowed_models") or []
         hidden = rules.get("hidden_models") or {}
         if model_id in hidden.get(provider_id, []):
@@ -574,6 +577,9 @@ def _ai_personal_allowed(db, provider_id, model_id=None, rules=None):
     if provider_id in (rules.get("hidden_providers") or []):
         return False
     if model_id is not None:
+        selected = rules.get("selected_models") or {}
+        if isinstance(selected, dict) and provider_id in selected and model_id not in selected[provider_id]:
+            return False
         hidden = rules.get("hidden_models") or {}
         if model_id in hidden.get(provider_id, []) or (
                 provider_id + "/" + model_id) in hidden.get(provider_id, []):
@@ -1469,6 +1475,91 @@ def _ai_refresh_selected_provider(db, provider_id):
 class AiPlatformDefaultIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class AiProviderModelSelectionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_ids: list[str] = Field(default_factory=list, max_length=10000)
+    # Setting restricted=False clears this provider's selection to inherit
+    # the older default behavior; restricted=True with [] blocks all models.
+    restricted: bool = True
+
+
+@router.get("/admin/ai-catalog/providers/{provider_id}/models")
+def ai_admin_provider_model_catalog(provider_id: str, refresh: bool = False,
+                                    _: User = Depends(require_admin),
+                                    db: Session = Depends(get_db)):
+    """All Pi-known models for ONE provider; admin-only, no credentials exposed."""
+    _ai_schema(db)
+    ids = {row["id"] for row in _ai_pi_supported_providers(db)}
+    if provider_id not in ids:
+        raise HTTPException(404, "Provider not found in installed Pi catalog")
+    if refresh:
+        _ai_refresh_selected_provider(db, provider_id)
+    models = list(db.scalars(select(AiProviderModel).where(
+        AiProviderModel.provider_id == provider_id,
+        AiProviderModel.active.is_(True)).order_by(
+            AiProviderModel.name).limit(10000)))
+    rules = _ai_policy(db)
+    selected = rules.get("selected_models") or {}
+    configured = provider_id in selected
+    allowed = set(selected.get(provider_id, [])) if configured else set()
+    return {"provider_id": provider_id, "restricted": configured,
+            "count": len(models), "models": [
+                {"id": model.model_id, "name": model.name,
+                 "selected": model.model_id in allowed if configured else True,
+                 "free_eligible": _ai_model_zero_price(model),
+                 **_ai_model_display_info(model)}
+                for model in models]}
+
+
+@router.put("/admin/ai-catalog/providers/{provider_id}/selection")
+def ai_admin_select_provider_models(provider_id: str,
+                                    data: AiProviderModelSelectionIn,
+                                    user: User = Depends(require_admin),
+                                    db: Session = Depends(get_db)):
+    """Curate BYOK model execution with one atomic existing policy update."""
+    _ai_schema(db)
+    ids = {row["id"] for row in _ai_pi_supported_providers(db)}
+    if provider_id not in ids:
+        raise HTTPException(404, "Provider not found in installed Pi catalog")
+    models = data.model_ids
+    if len(models) != len(set(models)) or any(
+            not isinstance(mid, str) or not 0 < len(mid) <= 300 for mid in models):
+        raise HTTPException(422, "Invalid or duplicate model ID")
+    if data.restricted:
+        valid = set(db.scalars(select(AiProviderModel.model_id).where(
+            AiProviderModel.provider_id == provider_id,
+            AiProviderModel.model_id.in_(models),
+            AiProviderModel.active.is_(True))))
+        if valid != set(models):
+            raise HTTPException(422, "Selected models are not in the saved Pi catalog")
+    from ..models import PlatformPolicy
+    _ai_get_policy(db)
+    row = db.scalar(select(PlatformPolicy).where(
+        PlatformPolicy.id == 1).with_for_update())
+    try:
+        payload = json.loads(row.allowed_models or "[]")
+    except (ValueError, TypeError):
+        raise HTTPException(503, "Saved model policy is invalid") from None
+    if isinstance(payload, list):
+        payload = {"allowed": payload, "hidden": {}}
+    if not isinstance(payload, dict):
+        raise HTTPException(503, "Saved model policy is invalid")
+    selected = payload.get("selected")
+    if not isinstance(selected, dict):
+        selected = {}
+    if data.restricted:
+        selected[provider_id] = sorted(models)
+    else:
+        selected.pop(provider_id, None)
+    payload["selected"] = selected
+    row.allowed_models = json.dumps(payload, separators=(",", ":"))
+    audit(db, user, "ai.provider_models.curated")
+    db.commit()
+    _ai_pi_invalidate()
+    return {"provider_id": provider_id, "restricted": data.restricted,
+            "selected_count": len(models) if data.restricted else None}
 
 
 @router.get("/admin/ai-catalog")
