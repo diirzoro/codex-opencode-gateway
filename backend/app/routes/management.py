@@ -473,7 +473,16 @@ _AI_VERIFY_URLS = {
     "xai": "https://api.x.ai/v1/models",
     "together": "https://api.together.xyz/v1/models",
     "cerebras": "https://api.cerebras.ai/v1/models",
+    # OpenCode Console model and Go usage APIs require account-key authorization.
+    "opencode": "https://opencode.ai/inference/v1/models",
+    "opencode-go": "https://opencode.ai/inference/go/v1/usage",
 }
+# The Pi provider catalog is authoritative. Some native providers only expose
+# OAuth, which cannot be connected by submitting an arbitrary API key.
+_AI_OAUTH_ONLY_PROVIDERS = frozenset({
+    "openai-codex", "github-copilot", "google-gemini-cli", "google-antigravity",
+})
+_AI_PERSONAL_STATUSES = ("verified", "untested")
 _AI_REFRESH_DAYS = 14
 _AI_STALE_DAYS = 14
 _AI_SCHEMA_OK_UNTIL = 0.0
@@ -508,7 +517,7 @@ def _ai_pi_supported_providers(db):
         AiProviderCatalog.id.in_(ids)).order_by(AiProviderCatalog.name).limit(1000)))
     return [
         {"id": row.id, "name": row.name,
-         "api_key_supported": row.id in _AI_VERIFY_URLS}
+         "api_key_supported": row.id not in _AI_OAUTH_ONLY_PROVIDERS
         for row in rows if row.id in ids
     ]
 
@@ -652,8 +661,10 @@ def _ai_active_platform_defaults(db):
 def _ai_connection_payload(row):
     return {"connection_id": str(row.id), "provider_id": row.provider_id,
             "auth_status": row.auth_status, "credit_status": row.credit_status,
-            "last4": row.last4, "verified_at": row.verified_at,
-            "connected": row.auth_status == "verified", "verified": row.auth_status == "verified"}
+            "last4": row.last4,
+            "verified_at": row.verified_at if row.auth_status == "verified" else None,
+            "connected": row.auth_status in _AI_PERSONAL_STATUSES,
+            "verified": row.auth_status == "verified"}
 
 
 def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, provider_id=None, connected_only=False):
@@ -661,7 +672,7 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
     owned = {row.provider_id: row for row in db.scalars(
         select(AiUserConnection).where(AiUserConnection.user_id == user_id))}
     connected = {pid: row for pid, row in owned.items()
-                 if row.auth_status == "verified"}
+                 if row.auth_status in _AI_PERSONAL_STATUSES}
     platform = _ai_active_platform_defaults(db)
     provider_query = select(AiProviderCatalog).order_by(AiProviderCatalog.name)
     if connected_only:
@@ -725,7 +736,7 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
         item = {"id": provider.id, "name": provider.name,
                 "model_count": provider.model_count, "models": {},
                 "connected": bool(record or shared),
-                "verified": bool(record or shared),
+                "verified": bool((record and record.auth_status == "verified") or shared),
                 "personal_connected": bool(record),
                 "personal_status": owned[provider.id].auth_status if provider.id in owned else "not_connected",
                 # Only the requesting user's own short key fingerprint is
@@ -737,7 +748,7 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                 "platform_models": sorted(shared["models"]) if shared else [],
                 "credential_stored": False,
                 "credential_source": "platform" if shared and not record else "gateway" if record else "none",
-                "api_key_supported": provider.id in _AI_VERIFY_URLS,
+                "api_key_supported": provider.id not in _AI_OAUTH_ONLY_PROVIDERS,
                 "auth_status": owned[provider.id].auth_status if provider.id in owned else "not_connected",
                 "credit_status": record.credit_status if record else "unknown",
                 "last_synced_at": provider.models_synced_at, "stale": stale}
@@ -866,7 +877,11 @@ class AiKeyInput(BaseModel):
 def _ai_verify(provider_id, key):
     url = _AI_VERIFY_URLS.get(provider_id)
     if not url:
-        raise HTTPException(422, "This provider has no approved real API-key verification method yet")
+        # Pi supports more BYOK providers than have a safe, non-billable
+        # credential-introspection endpoint. Persist encrypted but mark the
+        # key as UNTESTED; do not misrepresent it as independently verified.
+        # The provider itself authenticates on the first Pi model request.
+        return "untested"
     # Only fixed trusted HTTPS endpoints; no user-supplied URLs or SSRF.
     try:
         with _ai_httpx.Client(timeout=12, follow_redirects=False, trust_env=False) as client:
@@ -905,7 +920,11 @@ def _ai_verify(provider_id, key):
     if provider_id == "google":
         if not isinstance(document.get("models"), list):
             raise HTTPException(503, "Google Gemini model verification was inconclusive")
-    elif provider_id not in ("openrouter", "deepseek") and not isinstance(document.get("data"), (list, dict)):
+    elif provider_id == "opencode-go":
+        # Go usage endpoint is authenticated and does not consume inference.
+        if not document:
+            raise HTTPException(503, "OpenCode Go did not return authenticated usage data")
+    elif provider_id not in ("openrouter", "deepseek", "opencode-go") and not isinstance(document.get("data"), (list, dict)):
         raise HTTPException(503, "Model-provider verification was inconclusive")
     credit = "unknown"
     if provider_id == "deepseek":
@@ -921,8 +940,8 @@ def _ai_save(data, user, db, replace=False):
     native = _ai_pi_supported_providers(db)
     if data.provider_id not in {provider["id"] for provider in native}:
         raise HTTPException(422, "Provider is not supported by the installed Pi runtime")
-    if data.provider_id not in _AI_VERIFY_URLS:
-        raise HTTPException(422, "Pi supports this provider but Gateway cannot yet verify its API key")
+    if data.provider_id in _AI_OAUTH_ONLY_PROVIDERS:
+        raise HTTPException(422, "This provider requires an OAuth sign-in, not a personal API key")
     if not credentials.available():
         raise HTTPException(503, "Encrypted credential storage is not configured")
     existing = db.scalar(select(AiUserConnection).where(
@@ -935,6 +954,7 @@ def _ai_save(data, user, db, replace=False):
     if existing is None and replace:
         raise HTTPException(404, "Connection not found")
     credit = _ai_verify(data.provider_id, data.api_key)
+    auth_state = "untested" if credit == "untested" else "verified"
     # An explicitly verified connection may be the very first record for
     # this provider. Do not require an unrelated periodic catalog download
     # before the user can securely link their key.
@@ -949,16 +969,16 @@ def _ai_save(data, user, db, replace=False):
     if existing is None:
         existing = AiUserConnection(user_id=user.id, provider_id=data.provider_id,
                                     ciphertext=cipher, last4=data.api_key[-4:],
-                                    auth_status="verified", credit_status=credit,
+                                    auth_status=auth_state, credit_status=credit,
                                     verified_at=now())
         db.add(existing)
     else:
         existing.ciphertext = cipher
         existing.last4 = data.api_key[-4:]
-        existing.auth_status = "verified"
+        existing.auth_status = auth_state
         existing.credit_status = credit
         existing.verified_at = now()
-    audit(db, user, "ai.connection.verified")
+    audit(db, user, "ai.connection." + ("saved_untested" if auth_state == "untested" else "verified"))
     try:
         db.commit()
     except _AiIntegrityError:
@@ -1033,7 +1053,7 @@ def ai_pi_bootstrap(request: Request, user: User = Depends(require_user),
     personal = {}
     for connection in db.scalars(select(AiUserConnection).where(
             AiUserConnection.user_id == user.id,
-            AiUserConnection.auth_status == "verified")):
+            AiUserConnection.auth_status.in_(_AI_PERSONAL_STATUSES))):
         key, disabled = _ai_connection_secret_and_models(connection)
         personal[connection.provider_id] = {"key": key, "models": [], "_disabled": disabled}
     shared = {}
@@ -1232,7 +1252,7 @@ def ai_my_connection_models(provider_id: str, user: User = Depends(require_user)
     record = db.scalar(select(AiUserConnection).where(
         AiUserConnection.user_id == user.id,
         AiUserConnection.provider_id == provider_id,
-        AiUserConnection.auth_status == "verified"))
+        AiUserConnection.auth_status.in_(_AI_PERSONAL_STATUSES)))
     if record is None:
         raise HTTPException(404, "Verified personal connection not found")
     return _ai_models_for_connection(db, record, provider_id)
@@ -1245,7 +1265,7 @@ def ai_set_connection_model(provider_id: str, data: AiModelPreference,
     record = db.scalar(select(AiUserConnection).where(
         AiUserConnection.user_id == user.id,
         AiUserConnection.provider_id == provider_id,
-        AiUserConnection.auth_status == "verified").with_for_update())
+        AiUserConnection.auth_status.in_(_AI_PERSONAL_STATUSES)).with_for_update())
     if record is None:
         raise HTTPException(404, "Verified personal connection not found")
     return _ai_update_connection_models(db, record, provider_id,
@@ -1259,7 +1279,7 @@ def ai_set_connection_models_bulk(provider_id: str, data: AiBulkModelPreference,
     record = db.scalar(select(AiUserConnection).where(
         AiUserConnection.user_id == user.id,
         AiUserConnection.provider_id == provider_id,
-        AiUserConnection.auth_status == "verified").with_for_update())
+        AiUserConnection.auth_status.in_(_AI_PERSONAL_STATUSES)).with_for_update())
     if record is None:
         raise HTTPException(404, "Verified personal connection not found")
     return _ai_update_connection_models(db, record, provider_id,
