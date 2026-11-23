@@ -386,7 +386,7 @@
           if(!dialog.open)return;
           const text=providerField.value.trim().toLowerCase();
           const matches=approvedProviders.filter(p=>!text||
-            p.name.toLowerCase().includes(text)||p.id.toLowerCase().includes(text)).slice(0,12);
+            p.name.toLowerCase().includes(text)||p.id.toLowerCase().includes(text));
           suggestions.replaceChildren();
           for(const item of matches){
             const option=node('button','','provider-real-option');option.type='button';
@@ -529,15 +529,25 @@
         models.append(node('p',tr('No models are stored for this provider yet.','لا توجد نماذج محفوظة لهذا المزوّد بعد.')));
         return;
       }
-      records.sort((a,b)=>Number(b.price_type==='free')-Number(a.price_type==='free')||
-        String(a.name||a.id).localeCompare(String(b.name||b.id)));
+      records.sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)));
       const panelTitle=node('p',tr(
         'Choose models for your personal API key. Platform defaults are managed separately. Restricted models cannot run until an administrator allows them.',
         'اختر نماذج مفتاح API الشخصي. نماذج المنصة يديرها الأدمن بشكل مستقل. النموذج المحجوب لا يعمل حتى تسمح به الإدارة.'),'provider-model-help');
       const filter=node('input','','provider-model-search');filter.type='search';
       filter.placeholder=tr('Search models within this provider…','ابحث في نماذج هذا المزوّد…');
-      const onlyFree=node('label','','provider-free-filter'),freeCheck=node('input');
-      freeCheck.type='checkbox';onlyFree.append(freeCheck,node('span',tr('Show free models only','عرض المجانية فقط')));
+      const priceLabel=node('label','','provider-free-filter');
+      const priceFilter=node('select');
+      for(const [value,label] of [
+        ['',tr('All prices','كل الأسعار')],
+        ['free',tr('Free','مجاني')],
+        ['paid',tr('Paid','مدفوع')],
+        ['unknown',tr('Price unknown','السعر غير معروف')]
+      ]){
+        const option=node('option',label);
+        option.value=value;
+        priceFilter.append(option);
+      }
+      priceLabel.append(node('span',tr('Price','السعر')),priceFilter);
       const bar=node('div','','provider-model-toolbar');
       const shown=node('small','','provider-model-counter');
       const selectAll=button(tr('Enable all','تحديد الكل'),()=>bulk(true));
@@ -556,7 +566,7 @@
           const m=item.model;
           item.row.hidden=(!!search&&!String(m.name||m.id).toLowerCase().includes(search)
             &&!m.id.toLowerCase().includes(search))||
-            (freeCheck.checked&&m.price_type!=='free');
+            (priceFilter.value!==''&&(m.price_type||'unknown')!==priceFilter.value);
         }
         updateCounter();
       }
@@ -646,8 +656,8 @@
         }
         list.append(row);items.push({row,toggle,model:m});
       }
-      filter.oninput=repaint;freeCheck.onchange=repaint;
-      bar.append(shown,selectAll,clearAll,onlyFree);
+      filter.oninput=repaint;priceFilter.onchange=repaint;
+      bar.append(shown,selectAll,clearAll,priceLabel);
       models.append(panelTitle,filter,bar,list);
       updateCounter();
       if(platform&&admin()&&!isCustomerAdmin){

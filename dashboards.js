@@ -1744,7 +1744,119 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const picks=textElement('div','','composer-picks'),utilities=textElement('div','','composer-utilities'),actions=textElement('div','','composer-actions');
   const selectIcons=['<circle cx="12" cy="7" r="3"/><path d="M5 21v-3a7 7 0 0 1 14 0v3"/>','<path d="M7 18a5 5 0 0 1-1-10 6 6 0 0 1 11-1 5.5 5.5 0 0 1 1 11Z"/>','<path d="m12 3 9 5v8l-9 5-9-5V8Z M3 8l9 5 9-5M12 13v8"/>'];
   [agent,q('providerSelect'),q('modelSelect')].forEach((select,index)=>{const label=textElement('label','','composer-select');label.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">'+selectIcons[index]+'</svg>';label.append(select);picks.append(label);});
-  picks.append(nativeVariant);
+  const chatVisibility = textElement('button', tr('Visible models', 'النماذج الظاهرة'), 'button');
+  chatVisibility.type = 'button';
+  picks.append(nativeVariant, chatVisibility);
+
+  // These preferences only narrow the conversation picker on this browser.
+  // Pi's account and workspace grants still determine what may run.
+  let chatProviderSnapshot;
+  function chatVisibilityKey(owner) {
+    return 'og-chat-model-visibility:' + owner;
+  }
+  function readChatVisibility(owner) {
+    try {
+      const stored = JSON.parse(localStorage.getItem(chatVisibilityKey(owner)));
+      return new Set(Array.isArray(stored) ? stored : []);
+    } catch {
+      return new Set();
+    }
+  }
+  const providerVisibilityId = providerId => JSON.stringify([providerId]);
+  const modelVisibilityId = (providerId, modelId) => JSON.stringify([providerId, modelId]);
+
+  chatVisibility.onclick = () => {
+    const owner = currentUser?.id;
+    const workspaceId = activeWorkspace?.id;
+    const snapshot = chatProviderSnapshot;
+    if (!owner || !workspaceId || !snapshot) return;
+    const hidden = readChatVisibility(owner);
+    const available = (snapshot.providers || []).filter(p => p.connected && p.allowed !== false);
+    const dialog = document.createElement('dialog');
+    const title = textElement('h2', tr('Conversation visibility', 'الظهور في المحادثات'));
+    dialog.setAttribute('aria-label', title.textContent);
+    const picker = document.createElement('select');
+    picker.setAttribute('aria-label', tr('Provider', 'المزوّد'));
+    for (const provider of available) picker.add(new Option(provider.name, provider.id));
+    const rows = document.createElement('div');
+    rows.style.maxHeight = '45vh';
+    rows.style.overflow = 'auto';
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.placeholder = tr('Search models', 'ابحث عن نموذج');
+    search.oninput = () => {
+      const query = search.value.trim().toLowerCase();
+      for (const row of rows.querySelectorAll('label[data-model]')) {
+        row.hidden = !row.dataset.model.includes(query);
+      }
+    };
+    const setVisible = (key, visible) => visible ? hidden.delete(key) : hidden.add(key);
+    function checkbox(label, key) {
+      const row = document.createElement('label');
+      row.style.display = 'block';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !hidden.has(key);
+      input.onchange = () => setVisible(key, input.checked);
+      row.append(input, document.createTextNode(' ' + label));
+      return row;
+    }
+    const providerToggle = document.createElement('div');
+    let loadRevision = 0;
+    picker.onchange = async () => {
+      const providerId = picker.value;
+      const revision = ++loadRevision;
+      rows.replaceChildren();
+      providerToggle.replaceChildren();
+      if (!providerId) return;
+      providerToggle.append(checkbox(tr('Show this provider in conversations', 'إظهار هذا المزوّد في المحادثات'),
+        providerVisibilityId(providerId)));
+      rows.textContent = tr('Loading models…', 'جارٍ تحميل النماذج…');
+      try {
+        const data = await window.workspaceRuntime.loadModels(workspaceId, providerId);
+        if (!dialog.open || revision !== loadRevision || currentUser?.id !== owner) return;
+        rows.replaceChildren();
+        for (const model of data.models || []) {
+          if (model.allowed === false || model.visible === false) continue;
+          const label = model.name || model.id;
+          const row = checkbox(label, modelVisibilityId(providerId, model.id));
+          row.dataset.model = (label + ' ' + model.id).toLowerCase();
+          rows.append(row);
+        }
+        if (!rows.children.length) rows.textContent = tr('No available models', 'لا توجد نماذج متاحة');
+        search.oninput();
+      } catch {
+        if (dialog.open && revision === loadRevision) {
+          rows.textContent = tr('Could not load models', 'تعذر تحميل النماذج');
+        }
+      }
+    };
+    const save = textElement('button', tr('Save', 'حفظ'), 'button');
+    const cancel = textElement('button', tr('Cancel', 'إلغاء'), 'button');
+    cancel.onclick = () => dialog.close();
+    save.onclick = () => {
+      if (currentUser?.id !== owner || activeWorkspace?.id !== workspaceId) {
+        dialog.close();
+        return;
+      }
+      try {
+        localStorage.setItem(chatVisibilityKey(owner), JSON.stringify([...hidden]));
+      } catch {
+        toast(tr('Could not save visibility preferences', 'تعذر حفظ تفضيلات الظهور'));
+        return;
+      }
+      dialog.close();
+      renderProviders(chatProviderSnapshot);
+    };
+    dialog.append(title, textElement('p', tr('Choose which connected providers and models appear in conversations on this browser.',
+      'اختر المزوّدين والنماذج المرتبطة التي تظهر في المحادثات على هذا المتصفح.')),
+      picker, providerToggle, search, rows, save, cancel);
+    dialog.addEventListener('close', () => dialog.remove(), {once: true});
+    document.body.append(dialog);
+    dialog.showModal();
+    if (available.some(p => p.id === chosenProvider)) picker.value = chosenProvider;
+    picker.onchange();
+  };
   utilities.append(attach);
   projectPanelBrand.append(q('chatGithub'),q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
   const choices=textElement('button','','icon-btn composer-choice-toggle');choices.type='button';choices.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
@@ -1850,7 +1962,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   function renderProviders(snapshot,preferredProvider=''){
     // Workspace shows Pi-configured connections only. New provider discovery
     // belongs to Connections; neither config nor model listing proves credits.
-    providers=snapshot.providers||[];
+    chatProviderSnapshot=snapshot;
+    const hidden=readChatVisibility(currentUser?.id);
+    providers=(snapshot.providers||[]).filter(p=>!hidden.has(providerVisibilityId(p.id)));
     const linkedGroup=document.createElement('optgroup');
     linkedGroup.label=tr('My connected providers','المزوّدون المربوطون');
     const browseGroup=document.createElement('optgroup');
@@ -1899,7 +2013,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const render=rows=>{
       const zeroPrice=m=>typeof m.cost?.input==='number'&&m.cost.input===0&&
         typeof m.cost?.output==='number'&&m.cost.output===0;
-      rows=rows.filter(m=>m.visible!==false||m.id===chosenModel)
+      const hidden=readChatVisibility(currentUser?.id);
+      rows=rows.filter(m=>(m.visible!==false||m.id===chosenModel)&&
+        !hidden.has(modelVisibilityId(selected?.id,m.id)))
         .sort((a,b)=>Number(zeroPrice(b))-Number(zeroPrice(a))||
           String(a.name||a.id).localeCompare(String(b.name||b.id)));
       q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));
@@ -1957,7 +2073,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));
     if(!await usableWorkspace(workspace)){toast(tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.'));if(navigate)await page('workspaceHomePage');return;}
     saveNativeDraft();window.closeNativeFile?.();if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}detailLoads.delete(workspace.id);stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;restoreNativeDraft();window.resetWorkspaceQueue?.();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
-    discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewStatus.textContent=tr('Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
+    discovery++;modelRequest++;chatProviderSnapshot=null;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewStatus.textContent=tr('Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
     renderWorkspaceEmpty();q('promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('Pi default','افتراضي Pi'),''));updateSend();
     if(!navigate){
