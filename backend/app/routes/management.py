@@ -908,11 +908,17 @@ def _ai_verify(provider_id, key):
     if provider_id == "google":
         if not isinstance(document.get("models"), list):
             raise HTTPException(503, "Google Gemini model verification was inconclusive")
+    elif provider_id == "opencode":
+        # Unlike the public /inference/v1/models list, Console requires
+        # authentication and returns an object keyed by provider ID.
+        entry = document.get("opencode")
+        if not isinstance(entry, dict) or entry.get("id") != "opencode" or not isinstance(entry.get("models"), dict):
+            raise HTTPException(503, "OpenCode account verification was inconclusive")
     elif provider_id == "opencode-go":
-        # The authenticated Go usage endpoint is not an inference request.
+        # Go's usage endpoint requires auth and is not a billable model call.
         if not document or not isinstance(document, dict):
             raise HTTPException(503, "OpenCode Go verification returned no account data")
-    elif provider_id not in ("openrouter", "deepseek") and not isinstance(document.get("data"), (list, dict)):
+    elif provider_id not in ("openrouter", "deepseek", "opencode", "opencode-go") and not isinstance(document.get("data"), (list, dict)):
         raise HTTPException(503, "Model-provider verification was inconclusive")
     credit = "unknown"
     if provider_id == "deepseek":
