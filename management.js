@@ -172,6 +172,113 @@
           ' · '+tr('Automatic: every 14 days','تلقائي: كل 14 يومًا');
       }
       inventory.append(status,update);
+      // Admin curation: discover all Pi-known models for the selected provider
+      // only on an explicit click, then enforce the saved selection server-side.
+      const curate=section(inventory,tr('Choose allowed models by provider',
+        'تحديد النماذج المسموحة لكل مزوّد'));
+      const providerPick=document.createElement('select');
+      const placeholder=document.createElement('option');
+      placeholder.value='';
+      placeholder.textContent=tr('Choose a provider…','اختر المزوّد…');
+      providerPick.append(placeholder);
+      const modelStatus=node('p',tr('Choose a provider, then load its complete Pi catalog.',
+        'اختر المزوّد، ثم اجلب جميع نماذجه من Pi.'),'provider-picker-help');
+      modelStatus.setAttribute('role','status');
+      const modelControls=node('div');modelControls.hidden=true;
+      const search=document.createElement('input');
+      search.type='search';
+      search.placeholder=tr('Find a model…','ابحث عن نموذج…');
+      const modelsList=node('div','','provider-model-catalog');
+      modelsList.style.maxHeight='420px';
+      modelsList.style.overflowY='auto';
+      modelsList.style.padding='8px';
+      const selection=new Map();
+      const makeControl=(text,fn)=>{
+        const control=document.createElement('button');
+        control.type='button';control.textContent=text;
+        control.addEventListener('click',fn);
+        return control;
+      };
+      const setChecked=value=>{
+        for(const box of selection.values())box.checked=value;
+      };
+      const saveModels=makeControl(tr('Save selected models','حفظ النماذج المحددة'),async()=>{
+        saveModels.disabled=true;
+        modelStatus.textContent=tr('Saving administrator selection…','جارٍ حفظ اختيارات الإدارة…');
+        try{
+          const ids=[...selection].filter(([,box])=>box.checked).map(([id])=>id);
+          await api('/api/admin/ai-catalog/providers/'+encodeURIComponent(providerPick.value)+'/selection',{
+            method:'PUT',body:JSON.stringify({model_ids:ids,restricted:true})
+          });
+          modelStatus.textContent=tr('Allowed model selection saved and enforced.',
+            'تم حفظ النماذج المسموحة وتطبيق الصلاحيات.');
+        }catch(error){modelStatus.textContent=error.message||String(error);}
+        finally{saveModels.disabled=false;}
+      });
+      const resetModels=makeControl(tr('Allow all Pi models (remove restriction)',
+        'السماح بكل نماذج Pi (إزالة التقييد)'),async()=>{
+        resetModels.disabled=true;
+        try{
+          await api('/api/admin/ai-catalog/providers/'+encodeURIComponent(providerPick.value)+'/selection',{
+            method:'PUT',body:JSON.stringify({model_ids:[],restricted:false})
+          });
+          setChecked(true);
+          modelStatus.textContent=tr('This provider is unrestricted by model selection.',
+            'تمت إزالة تقييد نماذج هذا المزوّد.');
+        }catch(error){modelStatus.textContent=error.message||String(error);}
+        finally{resetModels.disabled=false;}
+      });
+      const toolbar=node('div','','provider-model-toolbar');
+      toolbar.append(search,
+        makeControl(tr('Select all','تحديد الكل'),()=>setChecked(true)),
+        makeControl(tr('Select none','إلغاء الكل'),()=>setChecked(false)),
+        saveModels,resetModels);
+      modelControls.append(toolbar,modelsList);
+      const loadModels=makeControl(tr('Load all provider models','جلب جميع نماذج المزوّد'),async()=>{
+        if(!providerPick.value)return;
+        loadModels.disabled=true;
+        modelControls.hidden=true;
+        modelStatus.textContent=tr('Reading models from installed Pi…',
+          'جارٍ قراءة النماذج من Pi…');
+        try{
+          const data=await api('/api/admin/ai-catalog/providers/'+
+            encodeURIComponent(providerPick.value)+'/models?refresh=true');
+          if(!alive())return;
+          selection.clear();modelsList.replaceChildren();
+          const fragment=document.createDocumentFragment();
+          for(const item of data.models||[]){
+            const line=document.createElement('label');
+            line.className='provider-model-choice';
+            const box=document.createElement('input');box.type='checkbox';
+            box.checked=item.selected===true;
+            const name=document.createElement('span');
+            name.textContent=(item.name||item.id)+' ('+item.id+')';
+            line.append(box,name);fragment.append(line);
+            selection.set(item.id,box);
+          }
+          modelsList.append(fragment);
+          modelControls.hidden=false;
+          modelStatus.textContent=(data.count||0)+' '+tr('Pi models loaded. Select allowed models and save.',
+            'نموذج من Pi. حدد المسموح ثم احفظ.');
+        }catch(error){modelStatus.textContent=error.message||String(error);}
+        finally{loadModels.disabled=false;}
+      });
+      search.addEventListener('input',()=>{
+        const query=search.value.trim().toLowerCase();
+        for(const [id,checkbox] of selection){
+          checkbox.parentElement.hidden=Boolean(query)&&
+            !checkbox.parentElement.textContent.toLowerCase().includes(query);
+        }
+      });
+      curate.append(providerPick,loadModels,modelStatus,modelControls);
+      api('/api/opencode/catalog/providers?pi_supported=true').then(data=>{
+        if(!alive())return;
+        for(const item of data.connectable||[]){
+          const option=document.createElement('option');
+          option.value=item.id;option.textContent=item.name||item.id;
+          providerPick.append(option);
+        }
+      }).catch(error=>{if(alive())modelStatus.textContent=error.message||String(error);});
       showInventory().catch(error=>{if(alive())status.textContent=error.message||String(error);});
     }
     const connectedBox=section(body,tr('Connected providers and models','المزوّدون المربوطون والنماذج'));
