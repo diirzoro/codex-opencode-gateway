@@ -1261,7 +1261,7 @@ def _ai_models_for_connection(db, record, provider_id):
     def saved_models():
         return list(db.scalars(select(AiProviderModel).where(
             AiProviderModel.provider_id == provider_id,
-            AiProviderModel.active.is_(True)).order_by(AiProviderModel.name).limit(2000)))
+            AiProviderModel.active.is_(True)).order_by(AiProviderModel.name).limit(10000)))
 
     models = saved_models()
     if not models:
