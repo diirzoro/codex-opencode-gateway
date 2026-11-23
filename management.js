@@ -285,7 +285,10 @@
               suggestions.hidden=true;
               providerField.setAttribute('aria-expanded','false');
               providerHint.textContent=tr('Selected provider: ','المزوّد المختار: ')+item.name;
-              methodHint.textContent=authDescription(item);
+              methodHint.textContent=authDescription(item)+(item.id==='nvidia'
+                ?tr(' · A small real NVIDIA model request is required to confirm inference access and may consume a small amount of NVIDIA API quota.',
+                  ' · يلزم إجراء طلب صغير إلى نموذج NVIDIA للتأكد من صلاحية الاستخدام، وقد يستهلك جزءًا بسيطًا من رصيد NVIDIA.')
+                :'');
               submit.disabled=!item.api_key_supported;
               if(item.api_key_supported)key.focus();
             };
