@@ -1794,8 +1794,13 @@ function providerCatalog(models,providerDefinitions=[],mode="full",selectedProvi
   for(const provider of providerDefinitions){
     if(typeof provider?.id!=="string"||!provider.id)continue;
     const row=grouped.get(provider.id);
-    if(row)row.name=provider.name||row.name;
-    else grouped.set(provider.id,{id:provider.id,name:provider.name||provider.id,models:{}});
+    if(row){
+      row.name=provider.name||row.name;
+      row.auth_methods=provider.auth_methods||[];
+    }else grouped.set(provider.id,{
+      id:provider.id,name:provider.name||provider.id,models:{},
+      auth_methods:provider.auth_methods||[]
+    });
   }
   // Free-mode snapshots include ALL provider names supplied by installed Pi,
   // but include model details ONLY for selected :free OpenRouter models.
@@ -1811,7 +1816,8 @@ function providerCatalog(models,providerDefinitions=[],mode="full",selectedProvi
       ?Object.fromEntries(Object.entries(row.models).filter(([id,m])=>
         id.endsWith(":free")&&m.cost?.input===0&&m.cost?.output===0))
       :{};
-    return {...row,model_count:count,models:show?row.models:free};
+    return {...row,auth_methods:row.auth_methods||[],
+      model_count:count,models:show?row.models:free};
   });
   return {all,connected:[],default:{}};
 }
