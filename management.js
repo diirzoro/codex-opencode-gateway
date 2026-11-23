@@ -368,15 +368,6 @@
       }
       const key=input(f,tr('Personal API key','مفتاح API الشخصي'),'api_key');
       key.type='password';key.required=true;key.autocomplete='off';key.maxLength=8192;
-      const verificationModel=input(f,tr('NVIDIA model ID (optional)','معرّف نموذج NVIDIA (اختياري)'),'model_id');
-      verificationModel.maxLength=200;
-      verificationModel.autocomplete='off';
-      const modelLabel=verificationModel.closest('label');
-      const showVerificationModel=provider=>{
-        modelLabel.hidden=provider?.id!=='nvidia';
-        verificationModel.disabled=modelLabel.hidden;
-      };
-      showVerificationModel(p);
       methodHint=node('p','','provider-picker-help');
       methodHint.setAttribute('role','status');
       methodHint.textContent=tr('Choose a provider to see available authentication methods.',
@@ -410,11 +401,7 @@
               suggestions.hidden=true;
               providerField.setAttribute('aria-expanded','false');
               providerHint.textContent=tr('Selected provider: ','المزوّد المختار: ')+item.name;
-              methodHint.textContent=authDescription(item)+(item.id==='nvidia'
-                ?tr(' · A small real NVIDIA model request is required to confirm inference access and may consume a small amount of NVIDIA API quota.',
-                  ' · يلزم إجراء طلب صغير إلى نموذج NVIDIA للتأكد من صلاحية الاستخدام، وقد يستهلك جزءًا بسيطًا من رصيد NVIDIA.')
-                :'');
-              showVerificationModel(item);
+              methodHint.textContent=authDescription(item);
               submit.disabled=!item.api_key_supported;
               if(item.api_key_supported)key.focus();
             };
@@ -427,7 +414,6 @@
             tr('Pi provider selected: ','تم اختيار مزوّد من Pi: ')+matched.name:
             tr('Results come from the installed Pi provider registry. Only verified API-key integrations can be linked.',
               'النتائج مأخوذة من سجل المزوّدين في Pi. الربط متاح فقط حيث يدعم Gateway التحقق من المفتاح.');
-          showVerificationModel(matched);
           methodHint.textContent=authDescription(matched);
           submit.disabled=!matched;
         };
@@ -490,8 +476,7 @@
         const providerId=replaceExisting?p.id:selectedProvider().id;
         try{
           const result=await api('/api/opencode/connections'+(replaceExisting?'/'+encodeURIComponent(providerId):''),{
-            method:replaceExisting?'PUT':'POST',body:JSON.stringify({provider_id:providerId,api_key:value,
-              ...(providerId==='nvidia'&&verificationModel.value.trim()?{model_id:verificationModel.value.trim()}:{})})});
+            method:replaceExisting?'PUT':'POST',body:JSON.stringify({provider_id:providerId,api_key:value})});
           if(result?.provider_id!==providerId||result.auth_status!=='verified')
             throw Error(tr('Provider did not confirm authentication','لم يؤكد المزوّد صلاحية المفتاح'));
           dialog.close();await reload();

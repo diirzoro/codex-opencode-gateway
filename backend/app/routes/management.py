@@ -473,7 +473,7 @@ _AI_VERIFY_URLS = {
     "xai": "https://api.x.ai/v1/models",
     "together": "https://api.together.xyz/v1/models",
     "cerebras": "https://api.cerebras.ai/v1/models",
-    "nvidia": "https://integrate.api.nvidia.com/v1/models",
+    "nvidia": "https://api.ngc.nvidia.com/v2/users/me",
     # Authenticated, non-inference OpenCode Console and Go API endpoints.
     "opencode": "https://opencode.ai/console/api/v1/models",
     "opencode-go": "https://opencode.ai/inference/go/v1/usage",
@@ -880,10 +880,9 @@ class AiKeyInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     provider_id: str = Field(pattern=r"^[a-zA-Z0-9._-]{1,120}$")
     api_key: str = Field(min_length=8, max_length=8192)
-    model_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
-def _ai_verify(provider_id, key, model_id=None):
+def _ai_verify(provider_id, key):
     url = _AI_VERIFY_URLS.get(provider_id)
     if not url:
         raise HTTPException(422, "This provider has no approved real API-key verification method yet")
@@ -929,77 +928,10 @@ def _ai_verify(provider_id, key, model_id=None):
         if not isinstance(document.get("models"), list):
             raise HTTPException(503, "Google Gemini model verification was inconclusive")
     elif provider_id == "nvidia":
-        # NVIDIA model IDs change frequently and a key may be scoped to a
-        # specific model. Never hardcode three model names as a requirement.
-        # Catalog access alone is insufficient evidence of inference access.
-        items = document.get("data")
-        if not isinstance(items, list) or not items:
-            raise HTTPException(503, "NVIDIA returned no model catalog; key was not stored")
-        ids = sorted({item["id"] for item in items
-                      if isinstance(item, dict) and isinstance(item.get("id"), str)
-                      and 0 < len(item["id"]) <= 200})
-        def _chat_candidate(model_id):
-            lower = model_id.lower()
-            return (not any(term in lower for term in (
-                "embed", "retriev", "rerank", "ranker", "safety", "guard",
-                "vision", "vlm", "video", "audio", "speech", "asr", "tts",
-                "image", "diffusion", "ocr", "reward", "classification"))
-                and any(term in lower for term in (
-                    "instruct", "chat", "llama", "qwen", "mistral",
-                    "deepseek", "nemotron", "gemma", "kimi", "glm")))
-        if model_id is not None and model_id not in ids:
-            raise HTTPException(422, "The selected NVIDIA model is missing from its current catalog")
-        candidates = [model_id] if model_id else [
-            candidate for candidate in ids if _chat_candidate(candidate)
-        ]
-        if not candidates:
-            raise HTTPException(503,
-                "NVIDIA returned no chat models eligible for a safe verification request; key was not stored")
-        # Test at most three distinct catalog-listed chat models with a
-        # one-token output limit. Avoid assuming every public model is
-        # callable with the customer's credential.
-        last_status = None
-        inference_unavailable = False
-        verified = False
-        for chosen in candidates[:3]:
-            try:
-                with _ai_httpx.Client(timeout=20, follow_redirects=False,
-                                      trust_env=False) as verify_client:
-                    check = verify_client.post(
-                        "https://integrate.api.nvidia.com/v1/chat/completions",
-                        headers={**headers, "Content-Type": "application/json"},
-                        json={"model": chosen,
-                              "messages": [{"role": "user", "content": "Say OK."}],
-                              "max_tokens": 1, "stream": False})
-            except _ai_httpx.RequestError:
-                inference_unavailable = True
-                continue
-            last_status = check.status_code
-            if last_status == 401:
-                raise HTTPException(422, "NVIDIA rejected this API key; key was not stored")
-            if last_status == 402:
-                raise HTTPException(402, "NVIDIA quota was insufficient; key was not stored")
-            if last_status == 429:
-                raise HTTPException(429, "NVIDIA verification was rate limited; key was not stored")
-            if last_status != 200:
-                # Unsupported model access is not proof that the entire key
-                # is invalid; try another model already in NVIDIA's catalog.
-                continue
-            try:
-                outcome = check.json()
-            except ValueError:
-                continue
-            if (isinstance(outcome, dict) and
-                    isinstance(outcome.get("choices"), list) and
-                    outcome["choices"]):
-                verified = True
-                break
-        if not verified:
-            if inference_unavailable:
-                raise HTTPException(503,
-                    "NVIDIA inference verification did not complete for all tested models; key was not stored")
-            raise HTTPException(403 if last_status == 403 else 503,
-                "NVIDIA could not confirm inference access to a tested model; key was not stored")
+        # NGC authenticates the key independently of inference entitlement.
+        account = document.get("user")
+        if not isinstance(account, dict) or not account:
+            raise HTTPException(503, "NVIDIA did not return an authenticated account; key was not stored")
     elif provider_id == "opencode":
         # Unlike the public /inference/v1/models list, Console requires
         # authentication and returns an object keyed by provider ID.
@@ -1046,11 +978,7 @@ def _ai_save(data, user, db, replace=False):
         raise HTTPException(409, "Connection already exists; use replace")
     if existing is None and replace:
         raise HTTPException(404, "Connection not found")
-    model_id = getattr(data, "model_id", None)
-    if model_id is not None and data.provider_id != "nvidia":
-        raise HTTPException(422, "A verification model is only supported for NVIDIA")
-    credit = (_ai_verify(data.provider_id, data.api_key, model_id)
-              if model_id else _ai_verify(data.provider_id, data.api_key))
+    credit = _ai_verify(data.provider_id, data.api_key)
     # An explicitly verified connection may be the very first record for
     # this provider. Do not require an unrelated periodic catalog download
     # before the user can securely link their key.
