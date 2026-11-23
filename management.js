@@ -253,7 +253,12 @@
             box.checked=item.selected===true;
             const name=document.createElement('span');
             name.textContent=(item.name||item.id)+' ('+item.id+')';
-            line.append(box,name);fragment.append(line);
+            const price=document.createElement('span');
+            price.className='provider-model-tag';
+            price.textContent=item.price_type==='free'
+              ?tr('Free','مجاني'):item.price_type==='paid'
+                ?tr('Paid','مدفوع'):tr('Price unknown','السعر غير معروف');
+            line.append(box,name,price);fragment.append(line);
             selection.set(item.id,box);
           }
           modelsList.append(fragment);
