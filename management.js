@@ -174,8 +174,9 @@
       inventory.append(status,update);
       // Admin curation: discover all Pi-known models for the selected provider
       // only on an explicit click, then enforce the saved selection server-side.
-      const curate=section(inventory,tr('Choose allowed models by provider',
-        'تحديد النماذج المسموحة لكل مزوّد'));
+      const curate=document.createElement('details');
+      curate.append(node('summary',tr('Administrator model policy','سياسة النماذج للإدارة')));
+      inventory.append(curate);
       const providerPick=document.createElement('select');
       const placeholder=document.createElement('option');
       placeholder.value='';
@@ -276,7 +277,9 @@
         }
       });
       curate.append(providerPick,loadModels,modelStatus,modelControls);
-      api('/api/opencode/catalog/providers?pi_supported=true').then(data=>{
+      curate.addEventListener('toggle',()=>{
+        if(!curate.open||providerPick.options.length>1)return;
+        api('/api/opencode/catalog/providers?pi_supported=true').then(data=>{
         if(!alive())return;
         for(const item of data.connectable||[]){
           const option=document.createElement('option');
@@ -284,6 +287,7 @@
           providerPick.append(option);
         }
       }).catch(error=>{if(alive())modelStatus.textContent=error.message||String(error);});
+      });
       showInventory().catch(error=>{if(alive())status.textContent=error.message||String(error);});
     }
     const connectedBox=section(body,tr('Connected providers and models','المزوّدون المربوطون والنماذج'));
@@ -364,6 +368,15 @@
       }
       const key=input(f,tr('Personal API key','مفتاح API الشخصي'),'api_key');
       key.type='password';key.required=true;key.autocomplete='off';key.maxLength=8192;
+      const verificationModel=input(f,tr('NVIDIA model ID (optional)','معرّف نموذج NVIDIA (اختياري)'),'model_id');
+      verificationModel.maxLength=200;
+      verificationModel.autocomplete='off';
+      const modelLabel=verificationModel.closest('label');
+      const showVerificationModel=provider=>{
+        modelLabel.hidden=provider?.id!=='nvidia';
+        verificationModel.disabled=modelLabel.hidden;
+      };
+      showVerificationModel(p);
       methodHint=node('p','','provider-picker-help');
       methodHint.setAttribute('role','status');
       methodHint.textContent=tr('Choose a provider to see available authentication methods.',
@@ -401,6 +414,7 @@
                 ?tr(' · A small real NVIDIA model request is required to confirm inference access and may consume a small amount of NVIDIA API quota.',
                   ' · يلزم إجراء طلب صغير إلى نموذج NVIDIA للتأكد من صلاحية الاستخدام، وقد يستهلك جزءًا بسيطًا من رصيد NVIDIA.')
                 :'');
+              showVerificationModel(item);
               submit.disabled=!item.api_key_supported;
               if(item.api_key_supported)key.focus();
             };
@@ -413,6 +427,7 @@
             tr('Pi provider selected: ','تم اختيار مزوّد من Pi: ')+matched.name:
             tr('Results come from the installed Pi provider registry. Only verified API-key integrations can be linked.',
               'النتائج مأخوذة من سجل المزوّدين في Pi. الربط متاح فقط حيث يدعم Gateway التحقق من المفتاح.');
+          showVerificationModel(matched);
           methodHint.textContent=authDescription(matched);
           submit.disabled=!matched;
         };
@@ -475,7 +490,8 @@
         const providerId=replaceExisting?p.id:selectedProvider().id;
         try{
           const result=await api('/api/opencode/connections'+(replaceExisting?'/'+encodeURIComponent(providerId):''),{
-            method:replaceExisting?'PUT':'POST',body:JSON.stringify({provider_id:providerId,api_key:value})});
+            method:replaceExisting?'PUT':'POST',body:JSON.stringify({provider_id:providerId,api_key:value,
+              ...(providerId==='nvidia'&&verificationModel.value.trim()?{model_id:verificationModel.value.trim()}:{})})});
           if(result?.provider_id!==providerId||result.auth_status!=='verified')
             throw Error(tr('Provider did not confirm authentication','لم يؤكد المزوّد صلاحية المفتاح'));
           dialog.close();await reload();

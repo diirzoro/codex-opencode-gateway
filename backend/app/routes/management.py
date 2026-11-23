@@ -880,9 +880,10 @@ class AiKeyInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     provider_id: str = Field(pattern=r"^[a-zA-Z0-9._-]{1,120}$")
     api_key: str = Field(min_length=8, max_length=8192)
+    model_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
-def _ai_verify(provider_id, key):
+def _ai_verify(provider_id, key, model_id=None):
     url = _AI_VERIFY_URLS.get(provider_id)
     if not url:
         raise HTTPException(422, "This provider has no approved real API-key verification method yet")
@@ -908,7 +909,7 @@ def _ai_verify(provider_id, key):
     if status == 403:
         if provider_id == "opencode-go":
             raise HTTPException(403,
-                "OpenCode authenticated the request but denied Go entitlement; verify the Go subscription and key workspace; key was not stored")
+                "OpenCode Go denied access (403); verify the Go subscription and that the key belongs to its workspace; key was not stored")
         raise HTTPException(403, "Provider denied API access; key was not stored")
     if status == 429:
         raise HTTPException(429, "Provider verification rate limited; retry later")
@@ -946,7 +947,11 @@ def _ai_verify(provider_id, key):
                 and any(term in lower for term in (
                     "instruct", "chat", "llama", "qwen", "mistral",
                     "deepseek", "nemotron", "gemma", "kimi", "glm")))
-        candidates = [model_id for model_id in ids if _chat_candidate(model_id)]
+        if model_id is not None and model_id not in ids:
+            raise HTTPException(422, "The selected NVIDIA model is missing from its current catalog")
+        candidates = [model_id] if model_id else [
+            candidate for candidate in ids if _chat_candidate(candidate)
+        ]
         if not candidates:
             raise HTTPException(503,
                 "NVIDIA returned no chat models eligible for a safe verification request; key was not stored")
@@ -954,6 +959,7 @@ def _ai_verify(provider_id, key):
         # one-token output limit. Avoid assuming every public model is
         # callable with the customer's credential.
         last_status = None
+        inference_unavailable = False
         verified = False
         for chosen in candidates[:3]:
             try:
@@ -966,8 +972,8 @@ def _ai_verify(provider_id, key):
                               "messages": [{"role": "user", "content": "Say OK."}],
                               "max_tokens": 1, "stream": False})
             except _ai_httpx.RequestError:
-                raise HTTPException(503,
-                    "NVIDIA inference verification unavailable; key was not stored") from None
+                inference_unavailable = True
+                continue
             last_status = check.status_code
             if last_status == 401:
                 raise HTTPException(422, "NVIDIA rejected this API key; key was not stored")
@@ -989,6 +995,9 @@ def _ai_verify(provider_id, key):
                 verified = True
                 break
         if not verified:
+            if inference_unavailable:
+                raise HTTPException(503,
+                    "NVIDIA inference verification did not complete for all tested models; key was not stored")
             raise HTTPException(403 if last_status == 403 else 503,
                 "NVIDIA could not confirm inference access to a tested model; key was not stored")
     elif provider_id == "opencode":
@@ -1037,7 +1046,11 @@ def _ai_save(data, user, db, replace=False):
         raise HTTPException(409, "Connection already exists; use replace")
     if existing is None and replace:
         raise HTTPException(404, "Connection not found")
-    credit = _ai_verify(data.provider_id, data.api_key)
+    model_id = getattr(data, "model_id", None)
+    if model_id is not None and data.provider_id != "nvidia":
+        raise HTTPException(422, "A verification model is only supported for NVIDIA")
+    credit = (_ai_verify(data.provider_id, data.api_key, model_id)
+              if model_id else _ai_verify(data.provider_id, data.api_key))
     # An explicitly verified connection may be the very first record for
     # this provider. Do not require an unrelated periodic catalog download
     # before the user can securely link their key.
