@@ -647,7 +647,7 @@
           // saving fails, restore the exact previous state for this row.
           void sendBulk([m.id],enabled,new Map([[m.id,!enabled]]));
         });
-        if(platform&&admin()&&!isCustomerAdmin&&m.free_eligible&&m.admin_allowed!==false){
+        if(platform&&admin()&&!isCustomerAdmin&&m.platform_selectable===true){
           const adminLabel=node('label','','provider-platform-choice');
           const platformCheck=node('input');platformCheck.type='checkbox';
           platformCheck.checked=m.platform_locked===true;
@@ -663,7 +663,10 @@
       if(platform&&admin()&&!isCustomerAdmin){
         const adminBar=node('div','','provider-platform-controls');
         const platformAll=button(tr('Select all free for platform','اختيار جميع المجانية للمنصة'),()=>{
-          for(const check of platformChoices.values())check.checked=true;
+          for(const {model} of items){
+            const check=platformChoices.get(model.id);
+            if(check&&model.free_eligible&&(p.id!=='openrouter'||model.id.endsWith(':free')))check.checked=true;
+          }
         });
         const platformNone=button(tr('Clear platform selection','إلغاء جميع اختيارات المنصة'),()=>{
           for(const check of platformChoices.values())check.checked=false;
@@ -681,7 +684,7 @@
           }catch(error){toast(error.message||String(error));}
           finally{saving=false;save.disabled=false;}
         });
-        adminBar.append(node('p',tr('Administrator defaults: only verified free models are eligible.','اختيارات الأدمن للمنصة: النماذج المجانية المتحقَّق منها فقط.')),
+        adminBar.append(node('p',tr('Choose the models to publish to customers. Paid or unpriced models may charge the platform provider account.','اختر النماذج التي تنشرها للعملاء. قد تُخصم تكلفة النماذج المدفوعة أو مجهولة السعر من حساب المنصة لدى المزوّد.')),
           platformAll,platformNone,save);
         models.append(adminBar);
       }

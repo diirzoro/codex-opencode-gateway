@@ -1233,6 +1233,7 @@ def _ai_models_for_connection(db, record, provider_id):
              model.model_id not in disabled and
              _ai_personal_allowed(db, provider_id, model.model_id, rules=rules)),
          "platform_locked": model.model_id in locked,
+         "platform_selectable": _ai_allowed(db, provider_id, model.model_id, rules=rules),
          "admin_allowed": _ai_personal_allowed(db, provider_id, model.model_id, rules=rules),
          "restriction_reason": ("Disabled by administrator policy"
                                 if not _ai_personal_allowed(
@@ -1576,18 +1577,11 @@ def ai_platform_set_provider(provider_id: str, data: AiPlatformDefaultIn,
             AiProviderModel.model_id.in_(ids), AiProviderModel.active.is_(True)))}
         if set(available) != ids:
             raise HTTPException(422, "Selected Pi models are not in the saved provider catalog")
-        for mid, model in available.items():
+        for mid in ids:
             if not _ai_allowed(db, provider_id, mid):
                 raise HTTPException(403, "Model is disabled by administrator access policy")
-            try:
-                cost = json.loads(model.details_json or "{}").get("cost", {})
-            except ValueError:
-                cost = {}
-            if not isinstance(cost, dict) or cost.get("input") != 0 or cost.get("output") != 0:
-                raise HTTPException(422, "Only models listed at zero input/output cost can be enabled as platform defaults")
-            if provider_id == "openrouter" and not mid.endswith(":free"):
-                raise HTTPException(422, "Only OpenRouter :free models are allowed as platform defaults")
-        if provider_id == "openrouter":
+        openrouter_free_ids = {mid for mid in ids if mid.endswith(":free")} if provider_id == "openrouter" else set()
+        if openrouter_free_ids:
             # One explicit setup-time check against OpenRouter's currently
             # published free models. This does NOT run per prompt or workspace.
             admin_key, _ = _ai_connection_secret_and_models(connection)
@@ -1609,7 +1603,7 @@ def ai_platform_set_provider(provider_id: str, data: AiPlatformDefaultIn,
                          and isinstance(entry.get("pricing"), dict)
                          and str(entry["pricing"].get("prompt")) in {"0", "0.0", "0.000"}
                          and str(entry["pricing"].get("completion")) in {"0", "0.0", "0.000"}}
-            if not ids.issubset(confirmed):
+            if not openrouter_free_ids.issubset(confirmed):
                 raise HTTPException(422, "A selected free model is no longer published by OpenRouter")
     # Lock the existing row so two administrators cannot overwrite selections.
     from ..models import PlatformPolicy
