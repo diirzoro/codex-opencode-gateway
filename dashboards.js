@@ -2011,17 +2011,19 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const current=()=>stamp===modelRequest&&activeWorkspace?.id===workspaceId&&q('providerSelect').value===selected?.id;
     modelsReady=false;retryModels.hidden=true;
     const render=rows=>{
-      const zeroPrice=m=>typeof m.cost?.input==='number'&&m.cost.input===0&&
-        typeof m.cost?.output==='number'&&m.cost.output===0;
       const hidden=readChatVisibility(currentUser?.id);
       rows=rows.filter(m=>(m.visible!==false||m.id===chosenModel)&&
         !hidden.has(modelVisibilityId(selected?.id,m.id)))
-        .sort((a,b)=>Number(zeroPrice(b))-Number(zeroPrice(a))||
-          String(a.name||a.id).localeCompare(String(b.name||b.id)));
+        .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)));
       q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));
       for(const model of rows){
-        const option=new Option((model.name||model.id)+
-          (zeroPrice(model)?tr(' · $0 listed price',' · سعر مدرج $0'):''),model.id);
+        const {input,output}=model.cost||{};
+        const paid=[input,output].some(price=>typeof price==='number'&&price>0);
+        const free=input===0&&output===0&&
+          (selected?.id!=='openrouter'||model.id.endsWith(':free'));
+        const price=paid?tr('Paid list price','سعر مدرج مدفوع'):
+          free?tr('$0 list price','سعر مدرج $0'):tr('Price unknown','السعر غير معروف');
+        const option=new Option((model.name||model.id)+' · '+price,model.id);
         option.disabled=model.allowed===false;
         option.title=tr('Pi model · remaining credits not confirmed','نموذج Pi · الرصيد المتبقي غير مؤكد');
         q('modelSelect').add(option);

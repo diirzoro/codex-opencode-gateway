@@ -1427,11 +1427,7 @@ class AiProviderModelSelectionIn(BaseModel):
     restricted: bool = True
 
 
-@router.get("/admin/ai-catalog/providers/{provider_id}/models")
-def ai_admin_provider_model_catalog(provider_id: str, refresh: bool = False,
-                                    _: User = Depends(require_admin),
-                                    db: Session = Depends(get_db)):
-    """All Pi-known models for ONE provider; admin-only, no credentials exposed."""
+def _ai_catalog_models(db, provider_id, *, refresh=False):
     _ai_schema(db)
     ids = {row["id"] for row in _ai_pi_supported_providers(db)}
     if provider_id not in ids:
@@ -1442,6 +1438,25 @@ def ai_admin_provider_model_catalog(provider_id: str, refresh: bool = False,
         AiProviderModel.provider_id == provider_id,
         AiProviderModel.active.is_(True)).order_by(
             AiProviderModel.name).limit(10000)))
+    return models
+
+
+@router.get("/opencode/catalog/providers/{provider_id}/models")
+def ai_customer_provider_model_catalog(provider_id: str,
+                                       _: User = Depends(require_user),
+                                       db: Session = Depends(get_db)):
+    models = _ai_catalog_models(db, provider_id)
+    return {"provider_id": provider_id, "count": len(models), "models": [
+        {"id": model.model_id, "name": model.name, **_ai_model_display_info(model)}
+        for model in models
+    ]}
+
+
+@router.get("/admin/ai-catalog/providers/{provider_id}/models")
+def ai_admin_provider_model_catalog(provider_id: str, refresh: bool = False,
+                                    _: User = Depends(require_admin),
+                                    db: Session = Depends(get_db)):
+    models = _ai_catalog_models(db, provider_id, refresh=refresh)
     rules = _ai_policy(db)
     selected = rules.get("selected_models") or {}
     configured = provider_id in selected
@@ -1649,15 +1664,13 @@ def _ai_catalog_refresh_if_due(*, force=False):
             return False
         try:
             _ai_schema(db)
-            # The Pi-backed PROVIDER NAMES are refreshed once every 14 days;
-            # only free OpenRouter model details accompany this light snapshot.
-            # The last successful registry stamp is separate from per-provider
-            # model sync timestamps, so linking a key cannot delay a refresh.
+            # A legacy names-only snapshot must not delay the first full sync.
             registry = _ai_pi_registry(db)
             last = registry.get("synced_at")
             if not force and isinstance(last, str):
                 try:
-                    if (isinstance(registry.get("auth_methods"), dict) and
+                    if (registry.get("model_scope") == "full" and
+                            isinstance(registry.get("auth_methods"), dict) and
                             now() - aware(datetime.fromisoformat(last.replace("Z", "+00:00"))) < timedelta(days=_AI_REFRESH_DAYS)):
                         return True
                 except (ValueError, OverflowError):
@@ -1674,16 +1687,13 @@ def _ai_catalog_refresh_if_due(*, force=False):
                                   timeout=60, trust_env=False) as client:
                 result = client.get("http://pi/provider", params={
                     "directory": os.getenv("PI_CATALOG_DIRECTORY", "/home/tahir/pi-test"),
-                    "models": "free", "providerID": "openrouter"}, headers=headers)
+                    "models": "full"}, headers=headers)
                 result.raise_for_status()
                 payload = result.json()
             all_rows = payload.get("all")
             if not isinstance(all_rows, list) or not all_rows:
                 raise ValueError("Pi returned an empty provider catalog")
             stamped = now()
-            # One light Pi SDK snapshot with all provider names and ONLY
-            # verified zero-priced OpenRouter model metadata. No bulk
-            # downloads of paid or unrelated provider model definitions.
             known = {row.id: row for row in db.scalars(select(AiProviderCatalog))}
             valid = {}
             auth_methods = {}
@@ -1697,10 +1707,6 @@ def _ai_catalog_refresh_if_due(*, force=False):
                         not pid.replace("-", "").replace("_", "").replace(".", "").isalnum()
                         or not isinstance(incoming, dict)):
                     continue
-                # A malicious, incompatible or incomplete payload must never
-                # push non-free models into the periodic catalog.
-                if pid != "openrouter" and incoming:
-                    raise ValueError("Pi names-only response contained unexpected model data")
                 valid[pid] = (str(item.get("name") or pid)[:200], incoming)
                 # Read only Pi-owned public auth METHOD TYPES; no credentials,
                 # login sessions, account emails or OAuth tokens are copied.
@@ -1716,18 +1722,14 @@ def _ai_catalog_refresh_if_due(*, force=False):
             if not valid:
                 raise ValueError("Pi catalog contains no valid providers")
             db.flush()  # parent rows must exist before model foreign keys
-            # Existing model rows for other providers remain untouched.
-            prior = {model.model_id: model for model in db.scalars(
-                select(AiProviderModel).where(
-                    AiProviderModel.provider_id == "openrouter"))}
+            prior = {}
+            for model in db.scalars(select(AiProviderModel).where(
+                    AiProviderModel.provider_id.in_(valid))):
+                prior.setdefault(model.provider_id, {})[model.model_id] = model
             for pid, (name, incoming) in valid.items():
                 row = known[pid]
                 row.name = name
-                if pid != "openrouter":
-                    # Only the name is synchronized. Keep all previously
-                    # imported personal models/counts/status as-is.
-                    continue
-                old_models = prior
+                old_models = prior.get(pid, {})
                 # Never deactivate a healthy saved catalog because a provider
                 # temporarily returned an empty or incomplete inventory.
                 if not incoming and old_models:
@@ -1750,15 +1752,12 @@ def _ai_catalog_refresh_if_due(*, force=False):
                         metadata = json.dumps({"id": model_id, "name": model.name})
                     model.details_json = metadata
                     model.active = True
-                # Periodic discovery intentionally returns only OpenRouter
-                # :free models. Preserve other models that customers had
-                # explicitly linked previously; never deactivate a paid
-                # model from an intentionally incomplete free-only snapshot.
+                if not seen and old_models:
+                    continue
                 for model_id, previous in old_models.items():
-                    if model_id not in seen and (pid != "openrouter" or
-                                                 model_id.endswith(":free")):
+                    if model_id not in seen:
                         previous.active = False
-                row.model_count = len(set(old_models) | seen)
+                row.model_count = len(seen)
                 row.models_synced_at = stamped
                 row.last_sync_error = None
             # Store the provenance of supported providers in the EXISTING
@@ -1779,6 +1778,7 @@ def _ai_catalog_refresh_if_due(*, force=False):
             if not isinstance(rules, dict):
                 raise ValueError("Invalid existing Gateway provider policy")
             rules["pi_registry"] = {"synced_at": stamped.isoformat(),
+                                    "model_scope": "full",
                                     "provider_ids": sorted(valid),
                                     "auth_methods": auth_methods}
             policy.allowed_providers = json.dumps(rules, separators=(",", ":"))

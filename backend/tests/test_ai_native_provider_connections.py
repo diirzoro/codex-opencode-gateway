@@ -184,3 +184,25 @@ def test_admin_can_disable_all_models_for_one_provider():
              "selected_models": {"nvidia": []}}
     assert not management._ai_personal_allowed(None, "nvidia", "any", rules=rules)
     assert management._ai_personal_allowed(None, "deepseek", "any", rules=rules)
+
+
+def test_customer_catalog_shows_all_price_types_without_admin_selection(monkeypatch):
+    rows = [
+        SimpleNamespace(provider_id="groq", model_id="free", name="Free",
+                        details_json='{"cost":{"input":0,"output":0}}'),
+        SimpleNamespace(provider_id="groq", model_id="paid", name="Paid",
+                        details_json='{"cost":{"input":1,"output":2}}'),
+        SimpleNamespace(provider_id="groq", model_id="unknown", name="Unknown",
+                        details_json="{}"),
+    ]
+
+    def read_catalog(db, provider_id, *, refresh=False):
+        assert provider_id == "groq"
+        assert refresh is False
+        return rows
+
+    monkeypatch.setattr(management, "_ai_catalog_models", read_catalog)
+    result = management.ai_customer_provider_model_catalog("groq", db=None)
+    assert result["count"] == 3
+    assert [model["price_type"] for model in result["models"]] == ["free", "paid", "unknown"]
+    assert all("selected" not in model for model in result["models"])

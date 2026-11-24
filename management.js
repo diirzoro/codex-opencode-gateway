@@ -147,7 +147,8 @@
     progress.setAttribute('aria-live','polite');box.append(progress);
     // Admin-only inventory controls reuse this SAME page and the SAME
     // persisted Pi catalog; customer workspaces never download the directory.
-    if(platform&&admin()){
+    {
+      const canCurate=platform&&admin();
       const inventory=section(body,tr('Pi supported provider inventory','فهرس مزوّدات Pi المحفوظ'));
       const status=node('p',tr('Reading saved provider count…','جارٍ قراءة عدد المزوّدات المحفوظة…'),'provider-picker-help');
       status.setAttribute('role','status');
@@ -171,11 +172,11 @@
           (data.last_synced_at?new Date(data.last_synced_at).toLocaleString(lang):tr('Pending','لم يكتمل بعد'))+
           ' · '+tr('Automatic: every 14 days','تلقائي: كل 14 يومًا');
       }
-      inventory.append(status,update);
+      if(canCurate)inventory.append(status,update);
       // Admin curation: discover all Pi-known models for the selected provider
       // only on an explicit click, then enforce the saved selection server-side.
       const curate=document.createElement('details');
-      curate.append(node('summary',tr('Administrator model policy','سياسة النماذج للإدارة')));
+      curate.append(node('summary',canCurate?tr('Administrator model policy','سياسة النماذج للإدارة'):tr('Browse provider models','تصفح نماذج المزوّدين')));
       inventory.append(curate);
       const providerPick=document.createElement('select');
       const placeholder=document.createElement('option');
@@ -230,26 +231,39 @@
         finally{resetModels.disabled=false;}
       });
       const toolbar=node('div','','provider-model-toolbar');
-      toolbar.append(search,
+      const catalogPrice=document.createElement('select');
+      catalogPrice.setAttribute('aria-label',tr('Filter by price','تصفية بحسب السعر'));
+      for(const [value,label] of [
+        ['',tr('All prices','كل الأسعار')],['free',tr('Free','مجاني')],
+        ['paid',tr('Paid','مدفوع')],['unknown',tr('Price unknown','السعر غير معروف')]
+      ])catalogPrice.add(new Option(label,value));
+      const shownModels=node('span');
+      shownModels.setAttribute('role','status');
+      toolbar.append(search,catalogPrice,shownModels);
+      if(canCurate)toolbar.append(
         makeControl(tr('Select all','تحديد الكل'),()=>setChecked(true)),
         makeControl(tr('Select none','إلغاء الكل'),()=>setChecked(false)),
         saveModels,resetModels);
       modelControls.append(toolbar,modelsList);
       const loadModels=makeControl(tr('Load all provider models','جلب جميع نماذج المزوّد'),async()=>{
-        if(!providerPick.value)return;
+        const providerId=providerPick.value;
+        if(!providerId)return;
+        providerPick.disabled=true;
         loadModels.disabled=true;
         modelControls.hidden=true;
         modelStatus.textContent=tr('Reading models from installed Pi…',
-          'جارٍ قراءة النماذج من Pi…');
+          'جارٍ تحميل كتالوج النماذج…');
         try{
-          const data=await api('/api/admin/ai-catalog/providers/'+
-            encodeURIComponent(providerPick.value)+'/models?refresh=true');
+          const base=canCurate?'/api/admin/ai-catalog/providers/':'/api/opencode/catalog/providers/';
+          const data=await api(base+encodeURIComponent(providerId)+
+            (canCurate?'/models?refresh=true':'/models'));
           if(!alive())return;
           selection.clear();modelsList.replaceChildren();
           const fragment=document.createDocumentFragment();
           for(const item of data.models||[]){
             const line=document.createElement('label');
             line.className='provider-model-choice';
+            line.dataset.price=item.price_type||'unknown';
             const box=document.createElement('input');box.type='checkbox';
             box.checked=item.selected===true;
             const name=document.createElement('span');
@@ -259,22 +273,36 @@
             price.textContent=item.price_type==='free'
               ?tr('Free','مجاني'):item.price_type==='paid'
                 ?tr('Paid','مدفوع'):tr('Price unknown','السعر غير معروف');
+            box.hidden=!canCurate;
             line.append(box,name,price);fragment.append(line);
             selection.set(item.id,box);
           }
           modelsList.append(fragment);
           modelControls.hidden=false;
-          modelStatus.textContent=(data.count||0)+' '+tr('Pi models loaded. Select allowed models and save.',
-            'نموذج من Pi. حدد المسموح ثم احفظ.');
+          filterCatalog();
+          modelStatus.textContent=canCurate?tr('Select allowed models and save.',
+            'حدد النماذج المسموحة ثم احفظ.'):'';
         }catch(error){modelStatus.textContent=error.message||String(error);}
-        finally{loadModels.disabled=false;}
+        finally{loadModels.disabled=false;providerPick.disabled=false;}
       });
-      search.addEventListener('input',()=>{
+      function filterCatalog(){
         const query=search.value.trim().toLowerCase();
-        for(const [id,checkbox] of selection){
-          checkbox.parentElement.hidden=Boolean(query)&&
-            !checkbox.parentElement.textContent.toLowerCase().includes(query);
+        let shown=0;
+        for(const checkbox of selection.values()){
+          const row=checkbox.parentElement;
+          row.hidden=(query&&!row.textContent.toLowerCase().includes(query))||
+            (catalogPrice.value!==''&&row.dataset.price!==catalogPrice.value);
+          if(!row.hidden)shown++;
         }
+        shownModels.textContent=shown+' / '+selection.size+' '+tr('models','نموذج');
+      }
+      search.addEventListener('input',filterCatalog);
+      catalogPrice.addEventListener('change',filterCatalog);
+      providerPick.addEventListener('change',()=>{
+        modelControls.hidden=true;
+        selection.clear();
+        modelsList.replaceChildren();
+        modelStatus.textContent='';
       });
       curate.append(providerPick,loadModels,modelStatus,modelControls);
       curate.addEventListener('toggle',()=>{
@@ -288,7 +316,7 @@
         }
       }).catch(error=>{if(alive())modelStatus.textContent=error.message||String(error);});
       });
-      showInventory().catch(error=>{if(alive())status.textContent=error.message||String(error);});
+      if(canCurate)showInventory().catch(error=>{if(alive())status.textContent=error.message||String(error);});
     }
     const connectedBox=section(body,tr('Connected providers and models','المزوّدون المربوطون والنماذج'));
     // Provider credentials are account-wide and must not switch projects.
