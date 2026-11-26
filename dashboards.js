@@ -1570,13 +1570,38 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   linkGithub.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});projectBuckets.get('github').summary.append(linkGithub);
   const linkLocal=btn('linkWorkspaceLocalProject','New project','مشروع جديد',async()=>{
     const owner=currentUser?.id;
-    const result=await window.requestForm(tr('New project','مشروع جديد'),[{name:'name',label:tr('Project name','اسم المشروع'),required:true,maxLength:120}],tr('Create project','إنشاء مشروع'));
+    const choice=await window.requestForm(tr('New project','مشروع جديد'),[{
+      name:'source',label:tr('Project source','مصدر المشروع'),options:[
+        {value:'blank',label:tr('Blank project','مشروع فارغ')},
+        {value:'github',label:tr('GitHub project','مشروع GitHub')},
+        {value:'zip',label:tr('Upload a ZIP project','رفع مشروع ZIP')}
+      ]
+    }],tr('Continue','متابعة'));
+    if(!choice||currentUser?.id!==owner)return;
+    if(choice.source==='github')return window.openGithubProject();
+    const fields=[{name:'name',label:tr('Project name','اسم المشروع'),required:true,maxLength:120}];
+    if(choice.source==='zip')fields.push({
+      name:'file',label:tr('Project ZIP archive','ملف المشروع ZIP'),type:'file',
+      accept:'.zip,application/zip',required:true
+    });
+    const result=await window.requestForm(tr('New project','مشروع جديد'),fields,
+      choice.source==='zip'?tr('Upload project','رفع المشروع'):tr('Create project','إنشاء مشروع'));
     if(!result||currentUser?.id!==owner)return;
     const name=String(result.name||'').trim();if(!name)return;
+    linkLocal.disabled=true;
     try{
-      const created=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'blank',project_name:name})});
+      let created;
+      if(choice.source==='zip'){
+        const form=new FormData();
+        form.append('project_name',name);
+        form.append('file',result.file);
+        created=await api('/api/projects/import',{method:'POST',body:form});
+      }else{
+        created=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'blank',project_name:name})});
+      }
       if(currentUser?.id===owner)await openWorkspace(created.project,created.workspace);
     }catch(error){toast(error.message);}
+    finally{linkLocal.disabled=false;}
   },'icon-btn');
   linkLocal.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';linkLocal.title=tr('New project','مشروع جديد');linkLocal.setAttribute('aria-label',linkLocal.title);
   linkLocal.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});projectBuckets.get('local').summary.append(linkLocal);

@@ -5,7 +5,7 @@ from typing import Literal
 
 
 from fastapi.responses import FileResponse
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
@@ -89,6 +89,25 @@ def create_project(data: CreateProject,user: User=Depends(require_user),db: Sess
     if github_source:
         require_advanced(db,user,start=True); db.commit()
     return {"project":manager.project_payload(project),"workspace":manager.workspace_payload(workspace)}
+
+@router.post("/projects/import", status_code=201)
+def import_project(request: Request, project_name: str = Form(...),
+                   file: UploadFile = File(...), user: User = Depends(require_user),
+                   db: Session = Depends(get_db)):
+    if not same_origin(request.headers.get("origin"), settings.public_base_url):
+        raise HTTPException(403, "Project import requires the Gateway origin")
+    from pydantic import ValidationError
+    try:
+        data = CreateProject(project_name=project_name)
+    except ValidationError as exc:
+        raise HTTPException(422, "Invalid project name") from exc
+    db.scalar(select(User).where(User.id == user.id).with_for_update())
+    headroom = manager.require_account_local_headroom(db, user.id)
+    if file.size is None or file.size > headroom:
+        raise HTTPException(413, "ZIP exceeds the available account storage")
+    project, workspace = manager.create(db, user, data.project_name, "blank", archive=file.file)
+    return {"project": manager.project_payload(project), "workspace": manager.workspace_payload(workspace)}
+
 
 @router.post("/workspaces",status_code=201)
 def create_workspace(data: CreateProject,user: User=Depends(require_user),db: Session=Depends(get_db)):

@@ -1,7 +1,7 @@
 """Owned filesystem and Git operations; no shell strings or client local paths."""
 from pathlib import Path, PureWindowsPath
 from datetime import datetime, timezone
-import base64, difflib, os, re, stat, subprocess, uuid, time, tempfile, zipfile, selectors
+import base64, difflib, os, re, stat, subprocess, uuid, time, tempfile, zipfile, selectors, shutil
 from contextlib import contextmanager
 from fastapi import HTTPException
 from sqlalchemy import select, and_, or_, exists
@@ -493,7 +493,48 @@ def require_live_project_quota(db, user_id):
     )
 
 
-def create(db, user, name, source_type, template=None, repository=None, branch=None, github_source=None):
+def import_project_archive(archive, destination, headroom):
+    try:
+        with zipfile.ZipFile(archive) as source:
+            entries = source.infolist()
+            if len(entries) > 10000:
+                raise HTTPException(422, "ZIP contains too many entries")
+            planned = []
+            seen = set()
+            total = 0
+            for entry in entries:
+                name = entry.orig_filename.rstrip("/")
+                parts = name.split("/")
+                kind = stat.S_IFMT(entry.external_attr >> 16)
+                if (not name or "\\" in name or ":" in name or
+                        any(not part or part in {".", ".."} or
+                            any(ord(char) < 32 for char in part) or protected_component(part)
+                            for part in parts) or
+                        kind not in {0, stat.S_IFREG, stat.S_IFDIR} or
+                        entry.flag_bits & 1 or name in seen):
+                    raise HTTPException(422, "ZIP contains a protected or unsupported path")
+                seen.add(name)
+                planned.append((entry, destination.joinpath(*parts)))
+                total += entry.file_size
+            if total > headroom:
+                raise HTTPException(413, f"Project needs {total} bytes after extraction; {headroom} bytes are available")
+            written = 0
+            for entry, path in planned:
+                if entry.is_dir():
+                    path.mkdir(parents=True, exist_ok=True)
+                    continue
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with source.open(entry) as incoming, path.open("xb") as target:
+                    while chunk := incoming.read(1024 * 1024):
+                        written += len(chunk)
+                        if written > headroom:
+                            raise HTTPException(413, "Project exceeds the available storage")
+                        target.write(chunk)
+    except (zipfile.BadZipFile, NotImplementedError, RuntimeError, FileExistsError, NotADirectoryError) as exc:
+        raise HTTPException(422, "Invalid or unsupported project ZIP") from exc
+
+
+def create(db, user, name, source_type, template=None, repository=None, branch=None, github_source=None, *, archive=None):
     if source_type == "github":
         if github_source is None:
             raise HTTPException(503, "GitHub App is not connected or the repository was not selected")
@@ -507,6 +548,7 @@ def create(db, user, name, source_type, template=None, repository=None, branch=N
         if repository or branch:
             raise HTTPException(422, "Repository and branch apply to GitHub projects only")
     require_live_project_quota(db, user.id)
+    headroom = require_account_local_headroom(db, user.id) if archive is not None else None
     project = Project(id=uuid.uuid4(), user_id=user.id, name=name, source_type=source_type, template=template, default_branch="work")
     if source_type == "github":
         project.repository = repository
@@ -518,11 +560,16 @@ def create(db, user, name, source_type, template=None, repository=None, branch=N
     workspace = Workspace(id=uuid.uuid4(), project=project, user_id=user.id, status="creating")
     db.add(project); db.flush(); db.add(workspace); db.flush()
     path = root_for(workspace)
+    created_path = False
     try:
         path.mkdir(parents=True, exist_ok=False)
+        created_path = True
         if source_type == "github":
             clone_github(workspace, github_source["clone_url"], github_source["branch"], github_source["token"],github_source.get("working_paths"))
             workspace.base_commit_sha = git(workspace, "rev-parse", "HEAD").stdout.strip()
+        elif archive is not None:
+            import_project_archive(archive, path, headroom)
+            git(workspace,"init","--initial-branch=work")
         else:
             (path/".gitignore").write_text(".env\n.env.*\n!.env.example\n.venv/\nnode_modules/\n__pycache__/\n",encoding="utf-8")
             (path/"README.md").write_text("# "+name+"\n",encoding="utf-8")
@@ -534,7 +581,16 @@ def create(db, user, name, source_type, template=None, repository=None, branch=N
         require_quota_headroom(workspace,db)
         workspace.status="ready"
         db.commit()
-    except Exception:
+    except Exception as exc:
+        if archive is not None:
+            try:
+                if created_path:
+                    shutil.rmtree(path)
+            finally:
+                db.rollback()
+            if isinstance(exc, OSError) and exc.errno in {28, 122}:
+                raise HTTPException(413, "Project exceeds the available disk quota") from exc
+            raise
         # Preserve any created files and the failed record for diagnosis/recovery.
         workspace.status="failed"
         db.commit()

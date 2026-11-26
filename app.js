@@ -1652,7 +1652,7 @@ applyPrefs();
       if(field.options){input=element('select');for(const option of field.options)input.add(new Option(option.label||option,option.value||option));}
       else{input=element('input');input.type=field.type||'text';}
       input.name=field.name;input.id=id;input.value=field.value??'';input.required=field.required??false;input.autocomplete=field.type==='password'?'off':field.autocomplete||'off';
-      for(const key of ['min','max','minLength','maxLength','pattern'])if(field[key]!==undefined)input[key]=field[key];
+      for(const key of ['min','max','minLength','maxLength','pattern','accept'])if(field[key]!==undefined)input[key]=field[key];
       label.htmlFor=id;label.append(input);
       if(field.type==='password'){
         const reveal=element('button',tr('Show password','إظهار كلمة المرور'),'button ghost small');
