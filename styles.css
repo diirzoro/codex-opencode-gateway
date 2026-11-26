@@ -1925,3 +1925,10 @@ body:has(#workspacePage.active) .app-header{display:none!important}
  #afSavedReports .manage-row .manage-actions{width:100%}
  #adminSubscriptionsBody td:last-child{min-width:160px}
 }
+
+.project-upload-dialog .project-upload-name{overflow-wrap:anywhere}
+.project-upload-dialog progress{display:block;width:100%;height:20px;margin:16px 0 8px;accent-color:var(--accent)}
+.project-upload-dialog progress[hidden]{display:none}
+.project-upload-dialog .project-upload-metrics{font-variant-numeric:tabular-nums}
+.project-upload-dialog[data-result="success"] strong{color:#21834d}
+.project-upload-dialog[data-result="error"] strong{color:var(--danger,#c0392b)}

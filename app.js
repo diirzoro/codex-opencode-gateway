@@ -346,6 +346,29 @@ window.nativeDirectTest=(()=>{
     classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
 
+function uploadWithProgress(path, options, signal) {
+ const {body,method,headers,onUploadProgress}=options;
+ return new Promise((resolve,reject)=>{
+  const xhr=new XMLHttpRequest();
+  const abort=()=>xhr.abort();
+  if(signal.aborted){reject(new DOMException('Upload aborted','AbortError'));return;}
+  xhr.open(method,path);
+  for(const [name,value] of Object.entries(headers||{}))xhr.setRequestHeader(name,value);
+  xhr.upload.onprogress=event=>onUploadProgress(event.loaded,event.lengthComputable?event.total:0);
+  xhr.upload.onload=()=>onUploadProgress(null,0);
+  xhr.onload=()=>resolve(new Response(xhr.status===204?null:xhr.responseText,{
+   status:xhr.status,headers:{
+    'X-Session-Idle-Expires-At':xhr.getResponseHeader('X-Session-Idle-Expires-At')||''
+   }
+  }));
+  xhr.onerror=()=>reject(new Error(tr('Connection interrupted during upload.','انقطع الاتصال أثناء رفع المشروع.')));
+  xhr.onabort=()=>reject(new DOMException('Upload aborted','AbortError'));
+  xhr.onloadend=()=>signal.removeEventListener('abort',abort);
+  signal.addEventListener('abort',abort,{once:true});
+  xhr.send(body);
+ });
+}
+
 const api=async(path,options={})=>{
  // TEST retains its existing native routing. LIVE project file reads now use
  // the SAME Pi Native /file endpoint as the selected conversation, not the
@@ -462,7 +485,7 @@ const api=async(path,options={})=>{
  const revision=authenticationRevision,controller=new AbortController();authenticatedRequests.add(controller);
  const onAbort=()=>controller.abort();options.signal?.addEventListener('abort',onAbort,{once:true});if(options.signal?.aborted)controller.abort();
  let response;
- try{response=await fetch(path,{...options,signal:controller.signal,credentials:'same-origin',headers:{...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(options.headers||{})}});}
+ try{response=options.onUploadProgress?await uploadWithProgress(path,options,controller.signal):await fetch(path,{...options,signal:controller.signal,credentials:'same-origin',headers:{...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(options.headers||{})}});}
  finally{authenticatedRequests.delete(controller);options.signal?.removeEventListener('abort',onAbort);}
  if(revision!==authenticationRevision)throw new Error('Authenticated session changed');
  if(response.ok)window.authSession?.observe(response.headers.get('X-Session-Idle-Expires-At'));
