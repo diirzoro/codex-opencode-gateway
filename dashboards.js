@@ -651,6 +651,11 @@
   openWorkspace=lazyOpenWorkspace;
   const previousOpenGithubProject=window.openGithubProject;
   window.openGithubProject=(...args)=>{initializeWorkspace();if(typeof previousOpenGithubProject!=='function')throw new Error('GitHub project opener is unavailable');return previousOpenGithubProject(...args);};
+  window.chooseNewProject=(...args)=>{
+    initializeWorkspace();
+    return chooseWorkspaceProject(...args);
+  };
+  let chooseWorkspaceProject;
   function initializeWorkspace(){
     if(workspaceInitialized)return;
     workspaceInitialized=true;
@@ -1655,11 +1660,11 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       dialog.addEventListener('close',()=>dialog.remove(),{once:true});
     }
   }
-  window.chooseNewProject=async()=>{
+  chooseWorkspaceProject=async(preferredSource='blank')=>{
     if(linkLocal.disabled)return;
     const owner=currentUser?.id;
     const choice=await window.requestForm(tr('New project','مشروع جديد'),[{
-      name:'source',label:tr('Project source','مصدر المشروع'),options:[
+      name:'source',value:preferredSource,label:tr('Project source','مصدر المشروع'),options:[
         {value:'blank',label:tr('Blank project','مشروع فارغ')},
         {value:'github',label:tr('GitHub project','مشروع GitHub')},
         {value:'zip',label:tr('Upload a ZIP project','رفع مشروع ZIP')}
@@ -1667,7 +1672,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }],tr('Continue','متابعة'));
     if(!choice||currentUser?.id!==owner)return;
     if(choice.source==='github')return window.openGithubProject();
-    const fields=[{name:'name',label:tr('Project name','اسم المشروع'),required:true,maxLength:120}];
+    const fields=[{name:'name',label:tr('Project name','اسم المشروع'),value:pendingIdea.slice(0,120),required:true,maxLength:120}];
     if(choice.source==='zip')fields.push({
       name:'file',label:tr('Project ZIP archive','ملف المشروع ZIP'),type:'file',
       accept:'.zip,application/zip',required:true

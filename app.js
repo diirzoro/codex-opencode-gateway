@@ -801,7 +801,6 @@ $('#registerForm').onsubmit=async event=>{
   if(!loggedIn||loggedIn.status!=='active')throw new Error(lang==='ar'?'لم يتم إنشاء جلسة دخول؛ لا يمكن تجاوز التحقق من البريد.':'No authenticated session; email verification cannot be bypassed.');
   renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));
   $('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');
-  if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120);
  }catch(error){
   if(error.status===429&&!isEdit){
    // Response to an already-accepted message may have been lost; do not send
@@ -967,8 +966,6 @@ window.piExecutionStatus=async()=>{
   return result;
 };
 async function loadProjects(){const projects=await api('/api/projects'),workspaces=await api('/api/workspaces');const list=$('#projectList');list.replaceChildren();if(!projects.length)list.append(textElement('p',t('noProjects')));for(const project of projects){const button=textElement('button',`${project.name} · ${project.source_type}`,'button ghost');button.onclick=()=>{const workspace=workspaces.find(w=>w.project_id===project.id);if(workspace)openWorkspace(project,workspace);else toast('Workspace unavailable')};list.append(button)}}
-$('#sourceType').onchange=()=>{const hint=$('#githubHint');if(hint)hint.hidden=value('sourceType')!=='github';};$('#githubHintOpen').onclick=()=>window.openConnections&&window.openConnections('github');
-$('#createProjectForm').onsubmit=async event=>{event.preventDefault();const button=$('#createProjectButton');button.disabled=true;try{if(value('sourceType')==='github'){document.querySelector('#createProjectForm').closest('dialog')?.close();await window.openGithubProject();return;}const result=await api('/api/projects',{method:'POST',body:JSON.stringify({project_name:value('projectName'),source_type:value('sourceType')})});await openWorkspace(result.project,result.workspace)}catch(error){apiMessage('createProjectMessage',error.message,true)}finally{button.disabled=false}};
 async function openWorkspace(project,workspace){if(['admin','owner'].includes(currentUser?.role)){await page('adminPage');return;}
 if(!currentUser||!project?.id||!workspace?.id||String(workspace.project_id)!==String(project.id))
  throw Error(lang==='ar'?'اختر مشروعًا صحيحًا قبل فتح المحادثة.':'Select a valid project before opening Pi chat.');
@@ -1613,14 +1610,13 @@ const navigationReady=authReady.then(async()=>{
 }).catch(error=>{document.documentElement.classList.remove('bootstrapping');toast(error.message)});
 // GitHub authorization/repository metadata loads only when its UI is opened.
 window.bootstrapGithubStatus=Promise.resolve(null);
-$('#sourceType').querySelector('option[value=github]').disabled=false;
 
 
 Object.assign(copy.en,{newProject:'New project',yourProjects:'Your projects',workspaceLabel:'YOUR WORKSPACE',projectsHint:'Your next idea starts here.',projectsSubhint:'Create a project to keep your work in one place.',notConnected:'Not connected',yourAccount:'Your account',accountHint:'Profile & preferences',getStarted:'Get started',yourSpace:'YOUR IDEAS. YOUR WORKSPACE.',welcomeTitle:'What will you build today?',welcomeSubtitle:'A little less setup. A lot more possibility.',welcomePlaceholder:'Describe an idea, start a project, or make something better…',buildWithAi:'Build with your AI',startBlank:'Start from scratch',useTemplate:'Use a template',openProject:'Open a project',madeForFlow:'A workspace that stays out of your way',filesTogether:'Your files, together',filesTogetherBody:'Start blank or choose a template. Your project has a space of its own.',keepContext:'Pick up where you left off',keepContextBody:'Start a new conversation while keeping the same project files.',reviewClearly:'See every change',reviewClearlyBody:'Browse files, inspect the diff, and commit when you are ready.',independentNotice:'Independent workspace. Pi and GitHub are external services.',pricingTitle:'Simple pricing',pricingSubtitle:'Pay only for the time you use. No hidden fees.',pricingSummary:'Live prices from the plan catalog.',});
 Object.assign(copy.ar,{newProject:'مشروع جديد',yourProjects:'مشاريعك',workspaceLabel:'مساحة عملك',projectsHint:'فكرتك القادمة تبدأ هنا.',projectsSubhint:'أنشئ مشروعًا لتجمع ملفاتك وعملك في مكان واحد.',notConnected:'غير متصل',yourAccount:'حسابك',accountHint:'الملف الشخصي والتفضيلات',getStarted:'ابدأ الآن',yourSpace:'أفكارك. مساحة عملك.',welcomeTitle:'ماذا ستبني اليوم؟',welcomeSubtitle:'خطوات أقل للبدء. مساحة أكبر للإبداع.',welcomePlaceholder:'صِف فكرة، ابدأ مشروعًا، أو طوّر شيئًا موجودًا…',buildWithAi:'ابنِ بمزوّدك الذكي',startBlank:'ابدأ من الصفر',useTemplate:'استخدم قالبًا',openProject:'افتح مشروعًا',madeForFlow:'مساحة تترك لك التركيز على ما تصنعه',filesTogether:'ملفاتك في مكان واحد',filesTogetherBody:'ابدأ بمشروع فارغ أو اختر قالبًا. لكل مشروع مساحة تخصّه.',keepContext:'أكمل من حيث توقفت',keepContextBody:'ابدأ محادثة جديدة مع الاحتفاظ بملفات مشروعك نفسها.',reviewClearly:'كل تغيير أمامك',reviewClearlyBody:'تصفح الملفات وراجع الفروق، ثم احفظ التغييرات عندما تكون جاهزًا.',independentNotice:'منصة مستقلة. Pi وGitHub خدمتان خارجيتان.',pricingTitle:'أسعار بسيطة',pricingSubtitle:'ادفع فقط مقابل المدة التي تستخدمها. لا رسوم خفية.',pricingSummary:'أسعار مباشرة من كتالوج الخطط.',});
 let pendingIdea='';
-$('#welcomePrompt').onsubmit=async event=>{event.preventDefault();pendingIdea=$('#welcomeInput').value.trim();await page(currentUser?'onboarding':'authPage');if(currentUser&&pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)};
-$$('[data-quick]').forEach(button=>button.onclick=async()=>{await page('onboarding');$('#sourceType').value=button.dataset.quick;$('#sourceType').dispatchEvent(new Event('change'))});
+$('#welcomePrompt').onsubmit=async event=>{event.preventDefault();pendingIdea=$('#welcomeInput').value.trim();await page(currentUser?'onboarding':'authPage')};
+$$('[data-quick]').forEach(button=>button.onclick=()=>page('onboarding'));
 $('#welcomeMenu').onclick=()=>{const open=$('#welcomeSidebar').classList.toggle('visible');$('#welcomeMenu').setAttribute('aria-expanded',String(open));};document.addEventListener('keydown',event=>{if(event.key==='Escape'){$('#welcomeSidebar').classList.remove('visible');$('#welcomeMenu').setAttribute('aria-expanded','false');$('#backdrop').click();}});
 applyPrefs();
 
@@ -1735,7 +1731,7 @@ applyPrefs();
   };
   const basePage=page;page=async function(...args){document.querySelectorAll('dialog[data-form-dialog][open]').forEach(dialog=>dialog.close());return basePage(...args);};
   document.addEventListener('DOMContentLoaded',()=>{
-    for(const [id,en,ar] of [['adminPlanForm','Add plan','إضافة خطة'],['adminPolicyForm','Advanced access restrictions','قيود الوصول المتقدمة'],['createProjectForm','Create project','إنشاء مشروع']]){
+    for(const [id,en,ar] of [['adminPlanForm','Add plan','إضافة خطة'],['adminPolicyForm','Advanced access restrictions','قيود الوصول المتقدمة']]){
       const form=document.getElementById(id);if(!form)continue;
       // Label placeholder-only fields before relocating the existing bound form.
       for(const input of form.querySelectorAll('input:not([type=checkbox])'))if(!input.closest('label')){
@@ -1744,20 +1740,14 @@ applyPrefs();
       }
       const root=form.parentElement;window.mountFormDialog(root,form,tr(en,ar));
       const message=document.getElementById(id==='adminPlanForm'?'adminPlanMessage':id==='adminPolicyForm'?'adminPolicyMessage':'projectMessage');if(message)form.append(message);
-      if(id==='createProjectForm'){
-        form.querySelector('h2')?.remove();const pageNode=document.getElementById('onboarding');
-        const openProjectChooser=()=>{
-          if(window.chooseNewProject)void window.chooseNewProject();
-          else form.openDialog();
-        };
-        form.dialogTrigger.onclick=openProjectChooser;
-        new MutationObserver((records)=>{
-          const wasActive=records[0]?.oldValue?.split(/\s+/).includes('active');
-          if(pageNode.classList.contains('active')&&!wasActive)openProjectChooser();
-          else if(!pageNode.classList.contains('active')&&form.formDialog.open)form.formDialog.close();
-        }).observe(pageNode,{attributes:true,attributeOldValue:true,attributeFilter:['class']});
-      }
     }
+    const onboarding=document.getElementById('onboarding');
+    const chooseProject=()=>void window.chooseNewProject?.();
+    document.getElementById('onboardingNewProject').onclick=chooseProject;
+    new MutationObserver(records=>{
+      const wasActive=records[0]?.oldValue?.split(/\s+/).includes('active');
+      if(onboarding.classList.contains('active')&&!wasActive)chooseProject();
+    }).observe(onboarding,{attributes:true,attributeOldValue:true,attributeFilter:['class']});
     const authPage=document.getElementById('authPage'),card=authPage.querySelector('.auth-card');
     const authDialog=element('dialog','','action-form-dialog auth-action-dialog');authDialog.id='authDialog';authDialog.setAttribute('aria-label',tr('Account access','الدخول للحساب'));
     const columns=element('div','','auth-dialog-columns'),workflow=authPage.querySelector('.auth-workflow');
