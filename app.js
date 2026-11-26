@@ -1746,7 +1746,16 @@ applyPrefs();
       const message=document.getElementById(id==='adminPlanForm'?'adminPlanMessage':id==='adminPolicyForm'?'adminPolicyMessage':'projectMessage');if(message)form.append(message);
       if(id==='createProjectForm'){
         form.querySelector('h2')?.remove();const pageNode=document.getElementById('onboarding');
-        new MutationObserver(()=>{if(pageNode.classList.contains('active'))form.openDialog();else if(form.formDialog.open)form.formDialog.close();}).observe(pageNode,{attributes:true,attributeFilter:['class']});
+        const openProjectChooser=()=>{
+          if(window.chooseNewProject)void window.chooseNewProject();
+          else form.openDialog();
+        };
+        form.dialogTrigger.onclick=openProjectChooser;
+        new MutationObserver((records)=>{
+          const wasActive=records[0]?.oldValue?.split(/\s+/).includes('active');
+          if(pageNode.classList.contains('active')&&!wasActive)openProjectChooser();
+          else if(!pageNode.classList.contains('active')&&form.formDialog.open)form.formDialog.close();
+        }).observe(pageNode,{attributes:true,attributeOldValue:true,attributeFilter:['class']});
       }
     }
     const authPage=document.getElementById('authPage'),card=authPage.querySelector('.auth-card');

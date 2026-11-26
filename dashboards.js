@@ -1581,10 +1581,19 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     bar.max=100;bar.value=0;
     bar.setAttribute('aria-label',tr('Upload progress','تقدّم الرفع'));
     const metrics=textElement('p','','project-upload-metrics');
-    const close=textElement('button',tr('Close','إغلاق'),'button');
-    close.type='button';close.disabled=true;
-    close.onclick=()=>dialog.close();
-    dialog.addEventListener('cancel',event=>{if(close.disabled)event.preventDefault();});
+    const controller=new AbortController();
+    let finished=false;
+    const close=textElement('button',tr('Cancel upload','إلغاء الرفع'),'button');
+    close.type='button';
+    close.onclick=()=>{
+      if(finished)dialog.close();
+      else if(!close.disabled)controller.abort();
+    };
+    dialog.addEventListener('cancel',event=>{
+      if(finished)return;
+      event.preventDefault();
+      close.click();
+    });
     dialog.append(title,label,stage,bar,metrics,close);
     document.body.append(dialog);
     dialog.showModal();
@@ -1607,11 +1616,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const form=new FormData();
       form.append('project_name',name);
       form.append('file',file);
-      const created=await api('/api/projects/import',{method:'POST',body:form,
+      const created=await api('/api/projects/import',{method:'POST',body:form,signal:controller.signal,
         onUploadProgress(bytes,maximum){
           if(bytes===null){
             checking=true;
-            stage.textContent=tr('File received. Checking quota and extracting…','اكتمل إرسال الملف. جارٍ فحص الحصة وفك الضغط…');
+            close.disabled=true;
+            stage.textContent=tr('File sent. The server is checking quota and extracting. Cancellation is no longer available.',
+              'اكتمل إرسال الملف. يجري الخادم فحص الحصة وفك الضغط، ولا يمكن الإلغاء في هذه المرحلة.');
             bar.removeAttribute('value');
           }else{
             loaded=bytes;total=maximum;
@@ -1626,8 +1637,10 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       bar.value=100;
       return created;
     }catch(error){
-      dialog.dataset.result='error';
-      stage.textContent=(error.status===413
+      dialog.dataset.result=controller.signal.aborted?'cancelled':'error';
+      stage.textContent=controller.signal.aborted
+        ?tr('Upload cancelled','تم إلغاء الرفع')
+        :(error.status===413
         ?tr('Storage or upload limit exceeded. ','تجاوز الملف حد الرفع أو المساحة المتاحة. ')
         :tr('Project import failed. ','تعذّر استيراد المشروع. '))+error.message;
       bar.hidden=true;
@@ -1635,11 +1648,15 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }finally{
       clearInterval(clock);
       checking=true;updateMetrics();
+      finished=true;
+      close.textContent=tr('Close','إغلاق');
       close.disabled=false;
+      close.focus();
       dialog.addEventListener('close',()=>dialog.remove(),{once:true});
     }
   }
-  const linkLocal=btn('linkWorkspaceLocalProject','New project','مشروع جديد',async()=>{
+  window.chooseNewProject=async()=>{
+    if(linkLocal.disabled)return;
     const owner=currentUser?.id;
     const choice=await window.requestForm(tr('New project','مشروع جديد'),[{
       name:'source',label:tr('Project source','مصدر المشروع'),options:[
@@ -1664,10 +1681,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const created=choice.source==='zip'
         ?await importZipProject(name,result.file)
         :await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'blank',project_name:name})});
-      if(created&&currentUser?.id===owner)await openWorkspace(created.project,created.workspace);
+      if(created&&currentUser?.id===owner){
+        if(window.nativeSession?.active())await window.nativeDirectTest.ensureSession({force:true});
+        if(currentUser?.id===owner)await openWorkspace(created.project,created.workspace);
+      }
     }catch(error){toast(error.message);}
     finally{linkLocal.disabled=false;}
-  },'icon-btn');
+  };
+  const linkLocal=btn('linkWorkspaceLocalProject','New project','مشروع جديد',()=>window.chooseNewProject(),'icon-btn');
   linkLocal.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';linkLocal.title=tr('New project','مشروع جديد');linkLocal.setAttribute('aria-label',linkLocal.title);
   linkLocal.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});projectBuckets.get('local').summary.append(linkLocal);
   function projectFileFolder(project,workspace){
