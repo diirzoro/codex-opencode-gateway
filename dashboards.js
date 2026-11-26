@@ -1568,6 +1568,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const linkGithub=btn('linkWorkspaceGithubProject','Open a GitHub project','فتح مشروع GitHub',()=>window.openGithubProject(),'icon-btn');
   linkGithub.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';linkGithub.title=tr('Open a GitHub project','فتح مشروع GitHub');linkGithub.setAttribute('aria-label',linkGithub.title);
   linkGithub.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});projectBuckets.get('github').summary.append(linkGithub);
+  const importStatus=textElement('p','','muted-small');
+  importStatus.setAttribute('role','status');
+  importStatus.hidden=true;
   const linkLocal=btn('linkWorkspaceLocalProject','New project','مشروع جديد',async()=>{
     const owner=currentUser?.id;
     const choice=await window.requestForm(tr('New project','مشروع جديد'),[{
@@ -1588,6 +1591,18 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       choice.source==='zip'?tr('Upload project','رفع المشروع'):tr('Create project','إنشاء مشروع'));
     if(!result||currentUser?.id!==owner)return;
     const name=String(result.name||'').trim();if(!name)return;
+    importStatus.hidden=choice.source!=='zip';
+    if(choice.source==='zip'){
+      // The current HTTPS ingress caps the multipart request at 40 MiB.
+      const maxZipBytes=40*1024*1024-16*1024;
+      if(!result.file?.size||result.file.size>maxZipBytes){
+        importStatus.textContent=tr('Choose a non-empty ZIP smaller than 40 MiB.',
+          'اختر ملف ZIP غير فارغ وحجمه أقل من 40 MiB.');
+        return;
+      }
+      importStatus.textContent=tr('Uploading and checking available storage…',
+        'جارٍ رفع المشروع والتحقق من المساحة المتاحة…');
+    }
     linkLocal.disabled=true;
     try{
       let created;
@@ -1599,12 +1614,24 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       }else{
         created=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'blank',project_name:name})});
       }
-      if(currentUser?.id===owner)await openWorkspace(created.project,created.workspace);
-    }catch(error){toast(error.message);}
+      if(currentUser?.id===owner){
+        importStatus.hidden=true;
+        await openWorkspace(created.project,created.workspace);
+      }
+    }catch(error){
+      if(choice.source==='zip'&&currentUser?.id===owner){
+        importStatus.hidden=false;
+        importStatus.textContent=error.status===413
+          ?tr('Upload refused. The ZIP or extracted project exceeds the available limit.', 'رُفض الرفع. حجم ملف ZIP أو حجم المشروع بعد فك الضغط يتجاوز الحد المتاح.')+' '+error.message
+          :error.message;
+      }
+      toast(error.message);
+    }
     finally{linkLocal.disabled=false;}
   },'icon-btn');
   linkLocal.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';linkLocal.title=tr('New project','مشروع جديد');linkLocal.setAttribute('aria-label',linkLocal.title);
   linkLocal.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});projectBuckets.get('local').summary.append(linkLocal);
+  projectBuckets.get('local').summary.after(importStatus);
   function projectFileFolder(project,workspace){
     const folder=document.createElement('details');folder.className='sidebar-project-root';
     const summary=document.createElement('summary'),icon=textElement('span','','sidebar-project-icon');icon.innerHTML=FILE_ICONS.directory;
