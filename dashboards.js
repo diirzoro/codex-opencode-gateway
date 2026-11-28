@@ -2281,7 +2281,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     cancelAttachment.hidden=!activeSession||!window.nativeSession?.pendingAttachment(activeSession.id);
     q('sendMessage').disabled=sending||queuing||nativeBusy||anotherProjectRunning||
       Boolean(pendingSubmission)||!workAccess||!runtimeReady||
-      (!(window.nativeSession?.active()&&!busy&&!queueCount&&
+      (!(window.nativeSession?.active()&&
          q('promptInput').value.trim()&&(budgetModes.analysis||budgetModes.execution))&&
        (!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value));
     q('sendMessage').title=anotherProjectRunning?
@@ -2781,8 +2781,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=(stageConsent||choiceContinuation)?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;
     if(!stageConsent&&!event.budgetChoiceConfirmed&&!choiceContinuation&&typedPrompt&&
-       window.nativeSession?.active()&&(budgetModes.analysis||budgetModes.execution)&&
-       !['submitted','waiting_approval'].includes(activeSession?.execution_status)&&!queueCount){
+       window.nativeSession?.active()&&(budgetModes.analysis||budgetModes.execution)){
       showBudgetChoice(prompt);return;
     }
     if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
