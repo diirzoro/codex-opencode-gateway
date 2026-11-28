@@ -1014,7 +1014,7 @@
       version:configuration.version,status:'ready',errors:{},
       agents:agents.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode)),
       default_agent:null,generation:'pi-native',revision:'pi-catalog',
-      policy_revision:'pi-native',
+      policy_revision:'pi-native',budget_modes:providers.budget_modes||{analysis:false,execution:false},
       providers:first.map(p=>({
         ...p,connected:connected.has(p.id),allowed:p.allowed!==false,visible:true,
         default_model:providers.default?.[p.id],
