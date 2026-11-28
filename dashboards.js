@@ -2029,7 +2029,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const owner=currentUser?.id,workspaceId=activeWorkspace?.id,sessionId=activeSession?.id;
     const text=q('promptInput').value.trim();
     if(!owner||!workspaceId||!workAccess||sending||queuing||pendingSubmission||
-       anotherProjectRunning||window.nativeSession?.blocked(sessionId)){
+       anotherProjectRunning||
+       ['submitted','waiting_approval'].includes(activeSession?.execution_status)||
+       window.nativeSession?.blocked(sessionId)){
       toast(tr('Finish the current task before starting a budget stage.',
         'أكمل المهمة الحالية قبل بدء مرحلة الميزانية.'));return;
     }
@@ -2680,7 +2682,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }
     if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
     const stageConsent=budgetApproval;budgetApproval=null;
-    const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=choiceContinuation?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
+    const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=(stageConsent||choiceContinuation)?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
       // A second prompt is added through Pi's own followUp queue and never
