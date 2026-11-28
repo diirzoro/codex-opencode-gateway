@@ -63,7 +63,7 @@
   home.innerHTML='<div class="workspace-home portal-content"><div class="work-home-heading"></div><div class="home-actions"></div><section><h2 id="homeProjectsTitle"></h2><div id="homeProjects"><p role="status">Loading projects… / جارٍ تحميل المشاريع…</p></div></section></div>';
   q('app-main').append(home);
   home.querySelector('.work-home-heading').append(text('span','YOUR WORKSPACE','مساحة عملك','eyebrow'),text('h1','What will you build today?','ماذا ستبني اليوم؟'),text('p','Open a project, continue a conversation, or start something new.','افتح مشروعًا، أكمل محادثة، أو ابدأ فكرة جديدة.','lead'));
-  home.querySelector('.home-actions').append(btn('homeNewProject','New project','مشروع جديد',()=>page('onboarding'),'button'),btn('homeConnections','Settings · Connections','الإعدادات · الاتصالات',()=>openConnections()));
+  home.querySelector('.home-actions').append(btn('homeNewProject','New project','مشروع جديد',()=>page('onboarding'),'button'),btn('homeDemoProject','Try a sample project','جرّب على مشروع جاهز',()=>window.chooseNewProject('demo'),'button ghost'),btn('homeConnections','Settings · Connections','الإعدادات · الاتصالات',()=>openConnections()));
   texts.push([q('homeProjectsTitle'),'Projects / workspaces','المشاريع / مساحات العمل']);
   const settings=document.createElement('main');settings.id='connectionsPage';settings.className='page portal-page';
   settings.innerHTML='<div class="portal-content connections-content"><div class="connections-heading"></div><div id="connectionsProviders"></div><div id="connectionsGithub"></div><div id="connectionsRuntime"></div><section id="connectionsWorkspace" class="manage-card"></section></div>';
@@ -630,7 +630,7 @@
       workspaceAccess.hidden=false;
       workspaceAccess.append(textElement('span',tr('Advanced integrations expired. Core access and free platform models remain available.','انتهت تجربة التكاملات المتقدمة. يبقى الوصول الأساسي ونماذج المنصة المجانية متاحين.')),btn('workspaceAdvancedUpgrade','View plans','عرض الخطط',subscribe));
     }
-    q('homeNewProject').disabled=!workAccess;q('promptInput').disabled=!workAccess;
+    q('homeNewProject').disabled=!workAccess;q('homeDemoProject').disabled=!workAccess;q('promptInput').disabled=!workAccess;
     document.querySelectorAll('#workspacePage .new-session,#sessionList .session').forEach(n=>n.disabled=!workAccess);
     if(!workAccess){q('sendMessage').disabled=true;q('commitButton').disabled=true;q('pushButton').disabled=true;}
   }
@@ -1667,12 +1667,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       name:'source',value:preferredSource,label:tr('Project source','مصدر المشروع'),options:[
         {value:'blank',label:tr('Blank project','مشروع فارغ')},
         {value:'github',label:tr('GitHub project','مشروع GitHub')},
-        {value:'zip',label:tr('Upload a ZIP project','رفع مشروع ZIP')}
+        {value:'zip',label:tr('Upload a ZIP project','رفع مشروع ZIP')},
+        {value:'demo',label:tr('Try a sample project','جرّب على مشروع جاهز')}
       ]
     }],tr('Continue','متابعة'));
     if(!choice||currentUser?.id!==owner)return;
     if(choice.source==='github')return window.openGithubProject();
-    const fields=[{name:'name',label:tr('Project name','اسم المشروع'),value:pendingIdea.slice(0,120),required:true,maxLength:120}];
+    const fields=[{name:'name',label:tr('Project name','اسم المشروع'),value:choice.source==='demo'?tr('Aden Café','مقهى عدن'):pendingIdea.slice(0,120),required:true,maxLength:120}];
     if(choice.source==='zip')fields.push({
       name:'file',label:tr('Project ZIP archive','ملف المشروع ZIP'),type:'file',
       accept:'.zip,application/zip',required:true
@@ -1685,10 +1686,15 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     try{
       const created=choice.source==='zip'
         ?await importZipProject(name,result.file)
-        :await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'blank',project_name:name})});
+        :await api('/api/projects',{method:'POST',body:JSON.stringify(choice.source==='demo'
+          ?{source_type:'template',template:'aden-cafe-demo',project_name:name}
+          :{source_type:'blank',project_name:name})});
       if(created&&currentUser?.id===owner){
         if(window.nativeSession?.active())await window.nativeDirectTest.ensureSession({force:true});
-        if(currentUser?.id===owner)await openWorkspace(created.project,created.workspace);
+        if(currentUser?.id===owner){
+          if(choice.source==='demo')pendingIdea='راجع معاينة المشروع وأصلح التفاف قائمة القهوة على الجوال مع الحفاظ على دعم العربية.';
+          await openWorkspace(created.project,created.workspace);
+        }
       }
     }catch(error){toast(error.message);}
     finally{linkLocal.disabled=false;}

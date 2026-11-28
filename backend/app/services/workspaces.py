@@ -9,6 +9,30 @@ from ..config import settings
 from ..models import Project, Workspace, GithubConnection
 
 TEMPLATES = {
+    "aden-cafe-demo": {
+        "index.html": """<!doctype html>
+<html lang="ar" dir="rtl">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مقهى عدن</title>
+<link rel="stylesheet" href="styles.css">
+<main>
+  <header><p>قهوة يمنية</p><h1>مقهى عدن</h1><p>جلسة هادئة وفنجان من البن اليمني.</p></header>
+  <section aria-labelledby="menu"><h2 id="menu">القائمة</h2>
+    <ul><li>قهوة يمنية بالهيل</li><li>قشر بالقرفة</li><li>شاي عدني بالحليب</li></ul>
+  </section>
+</main>
+</html>
+""",
+        "styles.css": """body { margin: 0; color: #342216; background: #fff5e6; font: 1rem/1.8 system-ui, sans-serif; }
+main { max-width: 52rem; margin: auto; padding: 2rem 1rem; }
+header, section { padding: 1.5rem; border-radius: 1rem; }
+header { color: #fff5e6; background: #633c25; }
+h1 { font-size: clamp(2rem, 8vw, 4rem); margin: 0; }
+ul { display: flex; gap: 1rem; padding: 0; list-style: none; }
+li { min-width: 10rem; padding: 1rem; border-radius: .75rem; background: #f2ddc2; }
+""",
+    },
     "html": {"index.html": "<!doctype html>\n<html lang=\"en\"><meta charset=\"utf-8\"><title>New project</title><link rel=\"stylesheet\" href=\"styles.css\"><h1>New project</h1><script src=\"app.js\"></script></html>\n", "styles.css": "body { font-family: system-ui; margin: 3rem; }\n", "app.js": "'use strict';\n"},
     "python": {"main.py": "def main():\n    print('New project')\n\nif __name__ == '__main__':\n    main()\n", "requirements.txt": "# Add project dependencies here.\n"},
     "node": {"package.json": '{"name":"new-project","private":true,"scripts":{"start":"node index.js"}}\n', "index.js": "console.log('New project');\n"},
