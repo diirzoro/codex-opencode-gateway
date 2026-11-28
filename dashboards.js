@@ -2052,7 +2052,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     dialog.style.maxHeight='85vh';dialog.style.overflow='auto';
     const header=textElement('h2',mode==='analysis'?
       tr('Analyze by budget','تحليل بميزانيتي'):tr('Execute by budget','تنفيذ بميزانيتي'));
-    const status=textElement('p',tr('Loading authorized models…','جارٍ تحميل النماذج المصرّح بها…'));
+    const status=textElement('p',tr('Loading connected providers…','جارٍ تحميل المزوّدين المتصلين…'));
+    const providerSelect=document.createElement('select');
+    const providerLabel=textElement('label',tr('Provider','المزوّد'));
+    providerLabel.append(providerSelect);
+    providerSelect.add(new Option(tr('Choose a provider','اختر مزوّدًا'),''));
+    providerSelect.disabled=true;
     const cards=textElement('div','','budget-model-choices');
     cards.style.display='grid';cards.style.gap='8px';cards.style.maxHeight='40vh';cards.style.overflow='auto';
     const capNote=textElement('p',tr(
@@ -2073,7 +2078,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         'لا توجد خطة تحليل محمّلة. سينفّذ النموذج الطلب الحالي. يُفضّل تشغيل التحليل أولًا لتمرير خطة مراجعة.');
     }
     const search=document.createElement('input');
-    search.type='search';search.placeholder=tr('Search providers or models','ابحث عن مزوّد أو نموذج');
+    search.type='search';search.placeholder=tr('Search models','ابحث عن نموذج');
+    search.disabled=true;
     search.setAttribute('aria-label',search.placeholder);
     const sort=document.createElement('select');
     sort.setAttribute('aria-label',tr('Sort by estimated cost','الترتيب حسب التكلفة التقديرية'));
@@ -2082,7 +2088,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     sort.hidden=mode!=='execution';
     const choices=textElement('div','','budget-dialog-footer');choices.style.display='flex';choices.style.gap='10px';
     choices.append(close,proceed);
-    dialog.append(header,status,planPreview,search,sort,cards,capNote,choices);
+    dialog.append(header,providerLabel,status,planPreview,search,sort,cards,capNote,choices);
     dialog.addEventListener('close',()=>dialog.remove(),{once:true});
     document.body.append(dialog);dialog.showModal();
     let option=null, planId=null, inventoryFingerprint=null, stalePlan=false, scopeRequired=false, confirming=false;
@@ -2121,11 +2127,27 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       const hidden=readChatVisibility(owner);
       const linked=(snapshot.providers||[]).filter(p=>
         p.connected&&p.allowed!==false&&!hidden.has(providerVisibilityId(p.id)));
-      const entries=[];
-      for(const p of linked){
-        const data=await window.workspaceRuntime.loadModels(workspaceId,p.id);
-        if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
-        for(const m of (data?.models||[])){
+      for(const provider of linked)providerSelect.add(new Option(provider.name||provider.id,provider.id));
+      providerSelect.disabled=!linked.length;
+      let entries=[],modelLoad=0;
+      status.textContent=linked.length?tr('Choose a provider to see its models.','اختر مزوّدًا لعرض نماذجه.'):
+        tr('No connected providers are available.','لا توجد مزوّدات متصلة بحسابك.');
+      providerSelect.onchange=async()=>{
+        const generation=++modelLoad;
+        const p=linked.find(provider=>provider.id===providerSelect.value);
+        const current=()=>dialog.open&&currentUser?.id===owner&&activeWorkspace?.id===workspaceId&&
+          activeSession?.id===sessionId&&generation===modelLoad;
+        entries=[];option=null;proceed.disabled=true;search.disabled=true;search.value='';
+        cards.replaceChildren();
+        if(!p){
+          status.textContent=tr('Choose a provider to see its models.','اختر مزوّدًا لعرض نماذجه.');
+          return;
+        }
+        status.textContent=tr('Loading models…','جارٍ تحميل النماذج…');
+        try{
+          const data=await window.workspaceRuntime.loadModels(workspaceId,p.id);
+          if(!current())return;
+          for(const m of (data?.models||[])){
           if(m.allowed===false||m.visible===false||m.enabled===false||
              hidden.has(modelVisibilityId(p.id,m.id)))continue;
           const input=Math.max(300,Math.min(500000,Math.ceil(text.length/3)+1200+inventoryTokens));
@@ -2135,10 +2157,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           const known=[cost.input,cost.output].every(rate=>Number.isFinite(rate)&&rate>=0);
           const amount=known?(input*cost.input+output*cost.output)/1000000:null;
           const minimum=known?(minInput*cost.input+minOutput*cost.output)/1000000:null;
-          entries.push({provider:p,model:m,input,output,minInput,minOutput,amount,minimum});
-        }
-      }
+            entries.push({provider:p,model:m,input,output,minInput,minOutput,amount,minimum});
+          }
+          search.disabled=false;
+          renderBudgetChoices();
+        }catch(error){if(current())status.textContent=error.message;}
+      };
       function renderBudgetChoices(){
+        if(search.disabled)return;
         const query=search.value.trim().toLocaleLowerCase();
         const results=entries.filter(({provider,model})=>
           [provider.id,provider.name,model.id,model.name].join(' ').toLocaleLowerCase().includes(query));
@@ -2157,8 +2183,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           stalePlan?tr('Project files changed. Run Analysis again before using this plan.',
              'تغيّرت ملفات المشروع. أعد التحليل قبل استخدام هذه الخطة.'):
           results.length?
-            tr('Choose a model. The catalog does not specify suitability for each stage.',
-               'اختر نموذجًا. الكتالوج لا يحدّد ملاءمة النماذج لكل مرحلة.'):
+            tr('Choose a model.','اختر نموذجًا.'):
             tr('No authorized models match.','لا توجد نماذج مصرّح بها تطابق البحث.');
         for(const entry of results.slice(0,150)){
           const label=document.createElement('label');label.style.display='block';
@@ -2180,7 +2205,6 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           'Use search to find models beyond the first 150 results.','استخدم البحث للوصول إلى النماذج بعد أول 150 نتيجة.')));
       }
       search.oninput=sort.onchange=renderBudgetChoices;
-      renderBudgetChoices();
       proceed.onclick=async()=>{
         if(!option||stalePlan||confirming)return;
         const selected=option;
@@ -2193,17 +2217,6 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           if(fresh?.budget_modes?.[mode]!==true)throw Error(tr(
             'Administrator disabled this stage.','عطّلت الإدارة هذه المرحلة.'));
           if(!current())return;
-          q('providerSelect').value=selected.provider.id;
-          chosenProvider=selected.provider.id;chosenModel=selected.model.id;
-          await models();
-          if(!current())return;
-          q('modelSelect').value=selected.model.id;
-          if(q('modelSelect').value!==selected.model.id||
-             q('modelSelect').selectedOptions[0]?.disabled)
-            throw Error(tr('Selected model is no longer authorized.','النموذج المختار لم يعد مصرحًا به.'));
-          updateSend();
-          if(q('sendMessage').disabled)throw Error(tr(
-            'Pi is not ready for this model.','Pi غير جاهز لهذا النموذج.'));
           budgetApproval={mode,providerID:selected.provider.id,modelID:selected.model.id,
             estimatedInput:selected.input,estimatedOutput:selected.output,
             approvalId:crypto.randomUUID(),approvedAt:Date.now(),
@@ -2796,15 +2809,15 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     }
     if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
     const stageConsent=budgetApproval;budgetApproval=null;
-    const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=(stageConsent||choiceContinuation)?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
+    const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=stageConsent?.providerID??q('providerSelect').value,model=stageConsent?.modelID??q('modelSelect').value,selectedAgent=(stageConsent||choiceContinuation)?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;
     if(!stageConsent&&!event.budgetChoiceConfirmed&&!choiceContinuation&&typedPrompt){
       showBudgetChoice(prompt);return;
     }
-    if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
+    if(!runtimeReady||(!stageConsent&&!modelsReady)||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(stageConsent&&(!window.nativeSession?.active()||stageConsent.owner!==owner||
        stageConsent.workspaceId!==workspaceId||stageConsent.sessionId!==activeSession?.id||
-       stageConsent.text!==typedPrompt||stageConsent.providerID!==provider||stageConsent.modelID!==model)){
+       stageConsent.text!==typedPrompt)){
       submissionStatus.textContent=tr('The approved request changed. Review the estimate again.',
         'تغيّر الطلب الموافق عليه. راجع التقدير مجددًا.');
       return;
@@ -2824,7 +2837,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         if(sendingPreview)sendingPreview.sessionId=sessionId;
         const receipt=await window.nativeSession.send(sessionId,{
           text:prompt,providerID:provider,modelID:model,agent:selectedAgent,
-          variant:nativeVariant.value||undefined,files:nativeFiles,
+          variant:stageConsent?undefined:nativeVariant.value||undefined,files:nativeFiles,
           ...(stageConsent?{budget:{
                mode:stageConsent.mode,approved:true,
                estimatedInput:stageConsent.estimatedInput,estimatedOutput:stageConsent.estimatedOutput,
