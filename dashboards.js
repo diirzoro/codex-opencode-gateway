@@ -2084,7 +2084,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     dialog.append(header,status,planPreview,search,sort,cards,capNote,choices);
     dialog.addEventListener('close',()=>dialog.remove(),{once:true});
     document.body.append(dialog);dialog.showModal();
-    let option=null, planId=null, inventoryFingerprint=null, stalePlan=false, confirming=false;
+    let option=null, planId=null, inventoryFingerprint=null, stalePlan=false, scopeRequired=false, confirming=false;
     try{
       // Refresh the account's actual permissions before presenting consent.
       const policy=await api('/api/opencode/catalog/providers?connected_only=true&include_connected_models=true');
@@ -2105,9 +2105,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           inventoryTokens=Math.max(0,Number(state?.inventory?.estimatedTreeTokens)||0);
         }else if(state?.has_plan){
           planId=state.plan_id;
-          stalePlan=state.plan_stale===true;
+          scopeRequired=state.plan_requires_scope===true;
+          stalePlan=state.plan_stale===true||scopeRequired;
           planPreview.open=true;
-          planText.textContent=String(state.plan).slice(0,12000);
+          planText.textContent=String(state.plan);
+          if(!scopeRequired)planText.textContent+='\n\n'+tr(
+            'Files approved for editing when you continue. Shell commands are unavailable for this plan.',
+            'الملفات التي ستوافق على تعديلها بالمتابعة. أوامر الطرفية غير متاحة لهذه الخطة.'
+          )+'\n'+(state.plan_files||[]).join('\n');
           inventoryTokens=Math.ceil(planText.textContent.length/3);
         }
       }
@@ -2145,8 +2150,10 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         });
         cards.replaceChildren();
         option=null;proceed.disabled=true;
-        status.textContent=stalePlan?
-          tr('Project files changed. Run Analysis again before using this plan.',
+        status.textContent=scopeRequired?
+          tr('Run Analysis again to create a plan with an explicit file list.',
+             'أعد التحليل لإنشاء خطة تتضمن قائمة ملفات محددة.'):
+          stalePlan?tr('Project files changed. Run Analysis again before using this plan.',
              'تغيّرت ملفات المشروع. أعد التحليل قبل استخدام هذه الخطة.'):
           results.length?
             tr('Choose a model. The catalog does not specify suitability for each stage.',

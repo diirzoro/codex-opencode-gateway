@@ -288,3 +288,51 @@ for(const change of [
     result = subprocess.run([node, "--input-type=module", "-e", check, str(source)],
                             capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
+
+
+def test_budget_file_scope_rejects_another_project_and_filesystem_links(tmp_path):
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node runtime unavailable")
+
+    source = Path(__file__).resolve().parents[2] / "integration" / "pi-central.mjs"
+    check = r"""
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import path from 'node:path';
+import {randomUUID} from 'node:crypto';
+const source=fs.readFileSync(process.argv[1],'utf8');
+const root=process.argv[2], directory=path.join(root,'account-a');
+const other=path.join(root,'account-b');
+for(const dir of [directory,other])fs.mkdirSync(dir);
+const target=path.join(other,'note.txt');
+fs.writeFileSync(target,'account b');
+fs.linkSync(target,path.join(directory,'hard.txt'));
+fs.symlinkSync(target,path.join(directory,'link.txt'));
+fs.symlinkSync(other,path.join(directory,'foreign'));
+const context={path,process,randomUUID,...fs,fsConstants:fs.constants};
+const prelude=source.slice(source.indexOf('function withWorkspaceDirectory('),
+  source.indexOf('\nfunction ',source.indexOf('function withWorkspaceDirectory(')+1));
+const start=source.indexOf('function budgetPathValid(');
+const end=source.indexOf('function latestBudgetPlan(',start);
+const {parseBudgetPlan,writeBudgetFile}=vm.runInNewContext(
+  prelude+source.slice(start,end)+';({parseBudgetPlan,writeBudgetFile})',context);
+const scope={directory};
+const allowed=new Set(['ok.txt','link.txt','hard.txt','foreign/note.txt']);
+for(const file of ['../account-b/note.txt','src/*','.env','missing/../ok.txt'])
+  assert.equal(parseBudgetPlan(JSON.stringify({summary:'Changes',files:[file]})),null);
+for(const file of ['unlisted.txt','../account-b/note.txt','link.txt','hard.txt','foreign/note.txt'])
+  assert.throws(()=>writeBudgetFile(scope,allowed,path.join(directory,file),'changed'));
+writeBudgetFile(scope,allowed,path.join(directory,'ok.txt'),'allowed');
+assert.equal(fs.readFileSync(path.join(directory,'ok.txt'),'utf8'),'allowed');
+assert.equal(fs.readFileSync(target,'utf8'),'account b');
+assert.equal(fs.existsSync(path.join(directory,'unlisted.txt')),false);
+"""
+    result = subprocess.run([node, "--input-type=module", "-e", check, str(source), str(tmp_path)],
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
