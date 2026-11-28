@@ -556,7 +556,8 @@
         const readable=failure?.message||label("Provider request failed.","فشل الطلب لدى المزوّد.");
         if(status){status.dataset.piProviderError=p.kind||"provider_error";status.textContent=readable;}
         const line=document.getElementById("runtimeStatus");if(line)line.textContent=readable;
-        statuses.set(id,"failed");if(activeSession?.id===id)activeSession.execution_status="failed";
+        statuses.set(id,"failed");statusEvents.set(id,(statusEvents.get(id)||0)+1);
+        if(activeSession?.id===id)activeSession.execution_status="failed";
         toast(readable);return;
       }
       if(/^pi\.tool_execution_(start|update|end)$/.test(e.type)){
@@ -608,7 +609,12 @@
       if(e.type==="pi.agent_settled"){
         const finalState=statuses.get(id)==="failed"?"failed":"idle";
         statuses.set(id,finalState);statusEvents.set(id,(statusEvents.get(id)||0)+1);
-        if(activeSession?.id===id)activeSession.execution_status=finalState;
+        if(activeSession?.id===id){
+          activeSession.execution_status=finalState;
+          const submission=document.getElementById("submissionStatus");
+          if(submission&&!submission.dataset.piProviderError)submission.textContent=p.aborted?
+            label("Request stopped.","تم إيقاف الطلب."):"";
+        }
         void history(id,true).then(async()=>{
           if(stream!==source||!current(id,user))return;
           await refreshMessages();
@@ -670,7 +676,7 @@
       }
       if(['session.status','session.idle','session.error'].includes(e.type))statusEvents.set(id,(statusEvents.get(id)||0)+1);
       if(e.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
-      if(e.type==='session.idle')statuses.set(id,'idle');
+      if(e.type==='session.idle'&&statuses.get(id)!=='failed')statuses.set(id,'idle');
       if(e.type==='session.error')statuses.set(id,'failed');
       if(e.type.startsWith('message.')){const state=histories.get(id);if(state){state.journal?.push(e);if(!reduce(state.messages,e))needsSnapshot=true;reconcile(id,state.messages);}else needsSnapshot=true;dirty.messages=true;}
       if(e.type.startsWith('session.'))dirty.status=true;
@@ -912,7 +918,7 @@
     // Pi continues on the server after navigation or browser disconnect.
     void window.refreshWorkspaceQueue?.();
     return {queued:receipt?.queued===true,handled:receipt?.handled===true,
-      pending:receipt?.pending||0};
+      pending:receipt?.pending||0,settled:['idle','failed'].includes(statuses.get(id))};
   }
   // Native owns both cancellation and subsequent execution. Never touch another session.
   async function replaceRunningModel(id,providerID,modelID){
