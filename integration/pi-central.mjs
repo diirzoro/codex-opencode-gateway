@@ -1062,6 +1062,7 @@ class SdkAgent {
   consume(event){
     if(this.closed)return;
     this.last=Date.now();
+    const completedBudget=event.type==="agent_settled"?this.budgetStage:null;
     if(event.type==="agent_start"){
       this.active=true;this.runSawAssistantText=false;
       console.info("[Pi TEST] model run started",this.id.slice(0,15));
@@ -1101,6 +1102,39 @@ class SdkAgent {
       for(const res of this.events)try{res.write("data: "+issue+"\n\n");}catch{this.events.delete(res);}
     }
     if(event.type==="agent_settled"){
+      if(completedBudget){
+        // Only display usage explicitly reported by Pi. Do not infer it from
+        // estimates, and never present model costs as Gateway subscription fees.
+        const messages=Array.isArray(this.session.messages)?this.session.messages:[];
+        let lastUser=-1;
+        for(let i=messages.length-1;i>=0;i--)
+          if(messages[i]?.role==="user"){lastUser=i;break;}
+        const assistantMessages=messages.slice(lastUser+1).filter(m=>m?.role==="assistant");
+        const total={input:0,output:0,cacheRead:0,cacheWrite:0,costUSD:0};
+        let tokenCount=0,costCount=0;
+        for(const m of assistantMessages){
+          const usage=m.usage;
+          if(usage&&typeof usage==="object"){
+            for(const key of ["input","output","cacheRead","cacheWrite"]){
+              if(Number.isFinite(usage[key])&&usage[key]>=0){
+                total[key]+=usage[key];tokenCount++;
+              }
+            }
+            const cost=usage.cost?.total;
+            if(Number.isFinite(cost)&&cost>=0){total.costUSD+=cost;costCount++;}
+          }
+        }
+        this.emitUI("budget_usage",{
+          mode:completedBudget,
+          model:this.budgetModel,
+          tokens:tokenCount?{input:total.input,output:total.output,
+            cacheRead:total.cacheRead,cacheWrite:total.cacheWrite}:null,
+          costUSD:costCount?total.costUSD:null,
+          aborted:Boolean(event.aborted),
+          source:"pi-reported",
+          providerBalance:null
+        });
+      }
       // Native Pi has finished its tool operations. Only now may the staged
       // PDF/TXT files be removed, and only if no queued turn still needs them.
       if(!this.keepQueueOnStop&&!this.queueContinuationActive&&
