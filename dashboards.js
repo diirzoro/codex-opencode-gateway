@@ -2056,9 +2056,29 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const close=btn('budgetCancel', 'Cancel','إلغاء',()=>dialog.close());
     const proceed=btn('budgetProceed','Continue','متابعة',async()=>{});
     close.type=proceed.type='button';proceed.disabled=true;
+    const planPreview=textElement('details','','budget-review-plan');
+    const planSummary=textElement('summary',tr('Review plan, files and tests','مراجعة الخطة والملفات والاختبارات'));
+    const planText=textElement('pre','');planText.style.whiteSpace='pre-wrap';
+    planText.style.maxHeight='180px';planText.style.overflow='auto';
+    planPreview.append(planSummary,planText);
+    planPreview.hidden=mode!=='execution';
+    if(mode==='execution'){
+      planText.textContent=tr(
+        'No verified analysis was loaded. Execution will use the current request. Run Analysis first to pass a reviewed plan.',
+        'لا توجد خطة تحليل محمّلة. سينفّذ النموذج الطلب الحالي. يُفضّل تشغيل التحليل أولًا لتمرير خطة مراجعة.');
+      if(sessionId&&window.nativeSession?.budgetState){
+        window.nativeSession.budgetState(sessionId).then(state=>{
+          if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
+          if(state?.has_plan){
+            planPreview.open=true;
+            planText.textContent=String(state.plan).slice(0,12000);
+          }
+        }).catch(()=>{});
+      }
+    }
     const choices=textElement('div','','budget-dialog-footer');choices.style.display='flex';choices.style.gap='10px';
     choices.append(close,proceed);
-    dialog.append(header,status,cards,capNote,choices);
+    dialog.append(header,status,planPreview,cards,capNote,choices);
     dialog.addEventListener('close',()=>dialog.remove(),{once:true});
     document.body.append(dialog);dialog.showModal();
     let option=null;
