@@ -953,7 +953,7 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
     # Preserve the Pi registry snapshot while concurrent 14-day maintenance
     # may also update the existing provider-policy JSON.
     row = db.scalar(select(PlatformPolicy).where(
-        PlatformPolicy.id == row.id).with_for_update()) or row
+        PlatformPolicy.id == row.id).with_for_update().execution_options(populate_existing=True)) or row
     previous=row.as_payload()
     try:
         existing_rules = json.loads(row.allowed_providers or "[]")
@@ -981,16 +981,32 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
     })
     row.allowed_tools = json.dumps(sorted({t.strip() for t in data.allowed_tools if t.strip()}))
     row.require_tool_approval = data.require_tool_approval
-    db.commit(); db.refresh(row)
-    result = row.as_payload()
-    if result["budget_modes"] != previous["budget_modes"]:
-        # Signed control message to the existing Pi service. Current browser
-        # grants contain an immutable policy snapshot; revoke those grants
-        # immediately so disabled modes cannot be submitted via direct API.
-        # Native Pi histories/projects remain persistent and are not deleted.
-        from .management import _ai_pi_invalidate
+    from .management import _ai_pi_invalidate
+    next_policy = row.as_payload()
+    model_access_changed = any(next_policy[field] != previous[field] for field in (
+        "allowed_providers", "hidden_providers", "allowed_models", "hidden_models"
+    ))
+    if data.budget_modes is not None:
+        next_modes = next_policy["budget_modes"]
+        previous_modes = previous["budget_modes"]
+        if any(previous_modes[mode] and not next_modes[mode] for mode in next_modes):
+            # Apply newly disabled modes before committing. A lost control
+            # connection must never leave an old grant authorizing the mode.
+            _ai_pi_invalidate(budget_modes={
+                mode: previous_modes[mode] and next_modes[mode] for mode in next_modes
+            })
+    db.commit()
+    if model_access_changed:
         _ai_pi_invalidate()
-    return result
+    if data.budget_modes is not None:
+        # Re-read under the policy lock to serialize delivery with concurrent
+        # writes. A delayed response must never restore an earlier policy.
+        row = db.scalar(select(PlatformPolicy).where(PlatformPolicy.id == row.id)
+                        .with_for_update().execution_options(populate_existing=True)) or row
+        _ai_pi_invalidate(budget_modes=row.as_payload()["budget_modes"])
+    else:
+        db.refresh(row)
+    return row.as_payload()
 
 class EmailDeliveryUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)

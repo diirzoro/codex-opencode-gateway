@@ -291,6 +291,7 @@ window.nativeDirectTest=(()=>{
   function nativeFailure(value){
     const kind=String(value?.kind||value?.data?.code||'');
     const messages={
+      quota_exhausted:['The provider reports that this model’s quota is exhausted.','أبلغ المزوّد عن نفاد حصة هذا النموذج.'],
       insufficient_balance:[ 'Insufficient provider credit balance. Add credit to your account.','رصيد المزوّد غير كافٍ. أضف رصيدًا إلى حسابك.' ],
       rate_limited:[ 'Provider request limit reached (not necessarily low balance).','وصلت إلى حد طلبات المزوّد، ولا يعني ذلك بالضرورة نفاد الرصيد.' ],
       invalid_key:[ 'The provider rejected the API key.','المزوّد رفض مفتاح API.' ],

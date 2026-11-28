@@ -244,3 +244,47 @@ def test_budget_estimates_require_known_input_and_output_prices():
     assert not partial["has_input_output_rates"]
     assert partial["price_type"] == "paid"  # Input price is known, full estimate is not.
     assert zero["price_type"] == "free"
+
+
+def test_budget_approval_signature_binds_account_session_project_and_request():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node runtime unavailable")
+
+    source = Path(__file__).resolve().parents[2] / "integration" / "pi-central.mjs"
+    check = """
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import {createHash, createHmac, randomBytes} from 'node:crypto';
+const source=fs.readFileSync(process.argv[1],'utf8');
+const start=source.indexOf('const budgetApprovalSecret=');
+const end=source.indexOf('function budgetProjectInventory(',start);
+const sign=vm.runInNewContext(
+  source.slice(start,end)+';budgetApprovalSignature',{createHash,createHmac,randomBytes});
+const scope={account:{origin:'https://example.test',auth_session_id:'auth-a'},
+  userId:'account-a',workspaceId:'workspace-a',projectId:'project-a'};
+const request={model:{providerID:'test',modelID:'planner'},
+  budget:{mode:'analysis',approvalId:'approval-a',approvedAt:100,
+    estimatedInput:10,estimatedOutput:20,planId:'plan-a'},
+  parts:[{type:'text',text:'read example'}]};
+const original=sign(scope,'session-a',request);
+assert.equal(sign(scope,'session-a',request),original);
+for(const key of ['userId','workspaceId','projectId'])
+  assert.notEqual(sign({...scope,[key]:'changed'},'session-a',request),original);
+assert.notEqual(sign({...scope,account:{...scope.account,auth_session_id:'auth-b'}},
+  'session-a',request),original);
+assert.notEqual(sign(scope,'session-b',request),original);
+for(const change of [
+  {model:{...request.model,modelID:'builder'}},
+  {budget:{...request.budget,planId:'plan-b'}},
+  {parts:[{type:'text',text:'change example'}]}
+]) assert.notEqual(sign(scope,'session-a',{...request,...change}),original);
+"""
+    result = subprocess.run([node, "--input-type=module", "-e", check, str(source)],
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr

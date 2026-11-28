@@ -2022,6 +2022,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     budgetAnalysis.hidden=!budgetModes.analysis;
     budgetExecution.hidden=!budgetModes.execution;
     budgetButtons.hidden=!budgetModes.analysis&&!budgetModes.execution;
+    budgetButtons.style.display=budgetButtons.hidden?'none':'flex';
   }
   showBudgetModes(null);
   const budgetNumber=n=>new Intl.NumberFormat(lang==='ar'?'ar':'en',{maximumFractionDigits:6}).format(n);
@@ -2038,8 +2039,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(!text){
       toast(tr('Write your task in the chat first.','اكتب طلبك في المحادثة أولاً.'));q('promptInput').focus();return;
     }
-    if(attachments.some(a=>!a.cancelled)){
-      toast(tr('Send or remove attachments before budget mode.','أرسل أو أزل المرفقات قبل وضع الميزانية.'));return;
+    if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){
+      toast(tr('Wait for attachments to finish uploading before reviewing the estimate.',
+        'انتظر اكتمال رفع المرفقات قبل مراجعة التقدير.'));return;
     }
     const modeAllowed=mode==='analysis'||mode==='execution';
     if(!modeAllowed)return;
@@ -2053,8 +2055,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const cards=textElement('div','','budget-model-choices');
     cards.style.display='grid';cards.style.gap='8px';cards.style.maxHeight='40vh';cards.style.overflow='auto';
     const capNote=textElement('p',tr(
-      'Estimates are not a spending limit. Provider credits and actual usage cannot be verified here. The optional dollar cap is unavailable until server enforcement is implemented.',
-      'التقديرات ليست سقف إنفاق. لا يمكن تأكيد رصيد المزوّد أو الاستهلاك النهائي هنا. سقف الدولار الاختياري غير متاح حتى يتوفر فرضه على الخادم.'));
+      'This estimate covers the current request and known context. Attachments, extra file reads and model calls can increase usage. Provider balance is unknown and a per-task dollar cap is unavailable.',
+      'يشمل التقدير الطلب الحالي والسياق المعروف. قد تزيد المرفقات وقراءة الملفات والاستدعاءات الإضافية من الاستهلاك. رصيد المزوّد غير معروف وسقف الدولار للمهمة غير متاح.'));
     const close=btn('budgetCancel', 'Cancel','إلغاء',()=>dialog.close());
     const proceed=btn('budgetProceed','Continue','متابعة',async()=>{});
     close.type=proceed.type='button';proceed.disabled=true;
@@ -2068,22 +2070,21 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       planText.textContent=tr(
         'No verified analysis was loaded. Execution will use the current request. Run Analysis first to pass a reviewed plan.',
         'لا توجد خطة تحليل محمّلة. سينفّذ النموذج الطلب الحالي. يُفضّل تشغيل التحليل أولًا لتمرير خطة مراجعة.');
-      if(sessionId&&window.nativeSession?.budgetState){
-        window.nativeSession.budgetState(sessionId).then(state=>{
-          if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
-          if(state?.has_plan){
-            planPreview.open=true;
-            planText.textContent=String(state.plan).slice(0,12000);
-          }
-        }).catch(()=>{});
-      }
     }
+    const search=document.createElement('input');
+    search.type='search';search.placeholder=tr('Search providers or models','ابحث عن مزوّد أو نموذج');
+    search.setAttribute('aria-label',search.placeholder);
+    const sort=document.createElement('select');
+    sort.setAttribute('aria-label',tr('Sort by estimated cost','الترتيب حسب التكلفة التقديرية'));
+    sort.add(new Option(tr('Lowest cost first','الأقل تكلفة أولًا'),'asc'));
+    sort.add(new Option(tr('Highest cost first','الأعلى تكلفة أولًا'),'desc'));
+    sort.hidden=mode!=='execution';
     const choices=textElement('div','','budget-dialog-footer');choices.style.display='flex';choices.style.gap='10px';
     choices.append(close,proceed);
-    dialog.append(header,status,planPreview,cards,capNote,choices);
+    dialog.append(header,status,planPreview,search,sort,cards,capNote,choices);
     dialog.addEventListener('close',()=>dialog.remove(),{once:true});
     document.body.append(dialog);dialog.showModal();
-    let option=null;
+    let option=null, planId=null, inventoryFingerprint=null, stalePlan=false, confirming=false;
     try{
       // Refresh the account's actual permissions before presenting consent.
       const policy=await api('/api/opencode/catalog/providers?connected_only=true&include_connected_models=true');
@@ -2096,82 +2097,113 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       // Estimate from the bounded project-name inventory, never by uploading
       // all source files or secrets to a model before consent.
       let inventoryTokens=0;
-      if(sessionId&&window.nativeSession?.budgetState){
-        try{
-          const state=await window.nativeSession.budgetState(sessionId);
-          if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
-          inventoryTokens=Math.min(12000,Math.max(0,
-            Number(state?.inventory?.estimatedTreeTokens)||0));
-        }catch{/* Project inventory unavailable: estimate remains preliminary. */}
-      }
-      const snapshot=await window.workspaceRuntime.load(workspaceId,{force:true});
-      const linked=(snapshot.providers||[]).filter(p=>p.connected&&p.allowed!==false);
-      const entries=[];
-      for(const p of linked.slice(0,30)){
-        const data=await window.workspaceRuntime.loadModels(workspaceId,p.id);
+      if(sessionId){
+        const state=await window.nativeSession.budgetState(sessionId);
         if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
-        for(const m of (data?.models||[]).slice(0,1000)){
-          if(m.allowed===false||m.visible===false)continue;
-          const input=Math.max(300,Math.min(500000,Math.ceil(text.length/3)+1200+inventoryTokens));
-          const output=mode==='analysis'?1400:2200;
-          const cost=m.cost||{},known=Number.isFinite(cost.input)&&Number.isFinite(cost.output);
-          const amount=known?(input*cost.input+output*cost.output)/1000000:null;
-          entries.push({provider:p,model:m,input,output,amount,
-            free:known&&cost.input===0&&cost.output===0&&
-              (p.id!=='openrouter'||m.id.endsWith(':free'))});
+        inventoryFingerprint=state.inventory?.fingerprint||null;
+        if(mode==='analysis'){
+          inventoryTokens=Math.max(0,Number(state?.inventory?.estimatedTreeTokens)||0);
+        }else if(state?.has_plan){
+          planId=state.plan_id;
+          stalePlan=state.plan_stale===true;
+          planPreview.open=true;
+          planText.textContent=String(state.plan).slice(0,12000);
+          inventoryTokens=Math.ceil(planText.textContent.length/3);
         }
       }
-      entries.sort((a,b)=>
-        (mode==='analysis'?Number(b.free)-Number(a.free):0)||
-        (a.amount??Infinity)-(b.amount??Infinity)||
-        String(a.model.name||a.model.id).localeCompare(String(b.model.name||b.model.id)));
-      status.textContent=entries.length?tr(
-        'Choose a model and review the preliminary estimate before continuing.',
-        'اختر نموذجًا وراجع التقدير الأولي قبل المتابعة.'):
-        tr('No authorized connected models are available.','لا توجد نماذج مربوطة ومصرّح بها.');
-      for(const entry of entries.slice(0,150)){
-        const label=document.createElement('label');label.style.display='block';
-        label.style.border='1px solid var(--border, #aaa)';label.style.padding='9px';
-        label.style.borderRadius='8px';
-        const radio=document.createElement('input');radio.type='radio';radio.name='budget-model-choice';
-        const title=textElement('strong',' '+entry.provider.name+' / '+(entry.model.name||entry.model.id));
-        const description=textElement('small',
-          ' · '+(entry.free?tr('Listed free','مجاني مدرج'):entry.amount===null?
-          tr('Price unknown','السعر غير معروف'):'≈ $'+budgetNumber(entry.amount))+
-          ' · '+tr('Input','إدخال')+' ≈ '+entry.input+
-          ' · '+tr('Output','إخراج')+' ≈ '+entry.output);
-        description.style.display='block';
-        radio.onchange=()=>{option=entry;proceed.disabled=false;};
-        label.append(radio,title,description);cards.append(label);
+      const snapshot=await window.workspaceRuntime.load(workspaceId,{force:true});
+      const hidden=readChatVisibility(owner);
+      const linked=(snapshot.providers||[]).filter(p=>
+        p.connected&&p.allowed!==false&&!hidden.has(providerVisibilityId(p.id)));
+      const entries=[];
+      for(const p of linked){
+        const data=await window.workspaceRuntime.loadModels(workspaceId,p.id);
+        if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
+        for(const m of (data?.models||[])){
+          if(m.allowed===false||m.visible===false||m.enabled===false||
+             hidden.has(modelVisibilityId(p.id,m.id)))continue;
+          const input=Math.max(300,Math.min(500000,Math.ceil(text.length/3)+1200+inventoryTokens));
+          const output=Math.min(mode==='analysis'?1400:2200,m.max_output_tokens||m.maxTokens||Infinity);
+          const minInput=Math.ceil(input*0.7),minOutput=Math.ceil(output*0.5);
+          const cost=m.cost||{};
+          const known=[cost.input,cost.output].every(rate=>Number.isFinite(rate)&&rate>=0);
+          const amount=known?(input*cost.input+output*cost.output)/1000000:null;
+          const minimum=known?(minInput*cost.input+minOutput*cost.output)/1000000:null;
+          entries.push({provider:p,model:m,input,output,minInput,minOutput,amount,minimum});
+        }
       }
-      if(entries.length>150)cards.append(textElement('small',tr(
-        'Showing the first 150 lowest-cost choices.','تُعرض أول 150 خيارًا اقتصاديًا.')));
+      function renderBudgetChoices(){
+        const query=search.value.trim().toLocaleLowerCase();
+        const results=entries.filter(({provider,model})=>
+          [provider.id,provider.name,model.id,model.name].join(' ').toLocaleLowerCase().includes(query));
+        const direction=sort.value==='desc'&&mode==='execution'?-1:1;
+        results.sort((a,b)=>{
+          if(a.amount===null&&b.amount!==null)return 1;
+          if(b.amount===null&&a.amount!==null)return -1;
+          return direction*((a.amount??0)-(b.amount??0))||
+            String(a.model.name||a.model.id).localeCompare(String(b.model.name||b.model.id));
+        });
+        cards.replaceChildren();
+        option=null;proceed.disabled=true;
+        status.textContent=stalePlan?
+          tr('Project files changed. Run Analysis again before using this plan.',
+             'تغيّرت ملفات المشروع. أعد التحليل قبل استخدام هذه الخطة.'):
+          results.length?
+            tr('Choose a model. The catalog does not specify suitability for each stage.',
+               'اختر نموذجًا. الكتالوج لا يحدّد ملاءمة النماذج لكل مرحلة.'):
+            tr('No authorized models match.','لا توجد نماذج مصرّح بها تطابق البحث.');
+        for(const entry of results.slice(0,150)){
+          const label=document.createElement('label');label.style.display='block';
+          label.style.border='1px solid var(--border, #aaa)';label.style.padding='9px';
+          label.style.borderRadius='8px';
+          const radio=document.createElement('input');radio.type='radio';radio.name='budget-model-choice';
+          const title=textElement('strong',' '+entry.provider.name+' / '+(entry.model.name||entry.model.id));
+          const price=entry.amount===null?tr('Price unknown','السعر غير معروف'):
+            entry.amount===0?tr('Listed $0 · free quota unconfirmed','السعر المدرج صفر · الحصة المجانية غير مؤكدة'):
+            '≈ $'+budgetNumber(entry.minimum)+'–$'+budgetNumber(entry.amount);
+          const description=textElement('small',price+
+            ' · '+tr('Input','إدخال')+' ≈ '+entry.minInput+'–'+entry.input+
+            ' · '+tr('Output','إخراج')+' ≈ '+entry.minOutput+'–'+entry.output);
+          description.style.display='block';
+          radio.onchange=()=>{option=entry;proceed.disabled=stalePlan;};
+          label.append(radio,title,description);cards.append(label);
+        }
+        if(results.length>150)cards.append(textElement('small',tr(
+          'Use search to find models beyond the first 150 results.','استخدم البحث للوصول إلى النماذج بعد أول 150 نتيجة.')));
+      }
+      search.oninput=sort.onchange=renderBudgetChoices;
+      renderBudgetChoices();
       proceed.onclick=async()=>{
-        if(!option||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||
-           q('promptInput').value.trim()!==text)return;
-        proceed.disabled=true;
+        if(!option||stalePlan||confirming)return;
+        const selected=option;
+        const current=()=>dialog.open&&currentUser?.id===owner&&activeWorkspace?.id===workspaceId&&
+          activeSession?.id===sessionId&&q('promptInput').value.trim()===text&&option===selected;
+        if(!current())return;
+        confirming=true;proceed.disabled=true;
         try{
           const fresh=await api('/api/opencode/catalog/providers?connected_only=true');
           if(fresh?.budget_modes?.[mode]!==true)throw Error(tr(
             'Administrator disabled this stage.','عطّلت الإدارة هذه المرحلة.'));
-          q('providerSelect').value=option.provider.id;
-          chosenProvider=option.provider.id;chosenModel=option.model.id;
+          if(!current())return;
+          q('providerSelect').value=selected.provider.id;
+          chosenProvider=selected.provider.id;chosenModel=selected.model.id;
           await models();
-          q('modelSelect').value=option.model.id;
-          if(q('modelSelect').value!==option.model.id||
+          if(!current())return;
+          q('modelSelect').value=selected.model.id;
+          if(q('modelSelect').value!==selected.model.id||
              q('modelSelect').selectedOptions[0]?.disabled)
             throw Error(tr('Selected model is no longer authorized.','النموذج المختار لم يعد مصرحًا به.'));
           updateSend();
           if(q('sendMessage').disabled)throw Error(tr(
             'Pi is not ready for this model.','Pi غير جاهز لهذا النموذج.'));
-          budgetApproval={mode,providerID:option.provider.id,modelID:option.model.id,
-            estimatedInput:option.input,estimatedOutput:option.output,
+          budgetApproval={mode,providerID:selected.provider.id,modelID:selected.model.id,
+            estimatedInput:selected.input,estimatedOutput:selected.output,
             approvalId:crypto.randomUUID(),approvedAt:Date.now(),
-            approved:true,owner,workspaceId,text};
+            approved:true,owner,workspaceId,sessionId,text,planId,inventoryFingerprint};
           dialog.close();
           await q('promptForm').onsubmit({preventDefault(){}});
         }catch(error){budgetApproval=null;status.textContent=error.message;toast(error.message);}
-        finally{proceed.disabled=false;}
+        finally{confirming=false;proceed.disabled=!option||stalePlan;}
       };
     }catch(error){if(dialog.open)status.textContent=error.message;}
   }
@@ -2380,12 +2412,20 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   window.refreshWorkspaceChoices=async(preferredProvider='',force=true)=>{if(activeWorkspace&&force)window.workspaceRuntime.invalidate(activeWorkspace.id);return refreshChoices(preferredProvider,force);};
   window.addEventListener('account-provider-changed',event=>{if(currentUser?.id===event.detail.owner&&activeWorkspace&&!sending&&!pendingSubmission)window.refreshWorkspaceChoices(chosenProvider,false).catch(()=>{});});
-  let providerCheckPending=false;
+  let providerCheckPending=false,lastNativePolicyCheck=0;
   setInterval(async()=>{
-    if(window.nativeSession?.active()||providerCheckPending||document.hidden||!currentUser||!activeWorkspace||sending||pendingSubmission||!q('workspacePage').classList.contains('active'))return;
+    if(providerCheckPending||document.hidden||!currentUser||!activeWorkspace||sending||pendingSubmission||!q('workspacePage').classList.contains('active'))return;
     const id=activeWorkspace.id,owner=currentUser.id,previous=window.workspaceRuntime.peek(id);
     providerCheckPending=true;
-    try{if(!previous){await window.refreshWorkspaceChoices(chosenProvider,true);return;}
+    try{
+      if(window.nativeSession?.active()){
+        if(Date.now()-lastNativePolicyCheck<30000)return;
+        lastNativePolicyCheck=Date.now();
+        const state=await api('/api/opencode/catalog/providers?connected_only=true');
+        if(currentUser?.id===owner&&activeWorkspace?.id===id)showBudgetModes(state.budget_modes);
+        return;
+      }
+      if(!previous){await window.refreshWorkspaceChoices(chosenProvider,true);return;}
       const state=await api('/api/workspaces/'+encodeURIComponent(id)+'/runtime/state');
       if(currentUser?.id===owner&&activeWorkspace?.id===id&&(state.policy_revision!==previous.policy_revision||state.revision!==previous.revision||state.generation!==previous.generation))await window.refreshWorkspaceChoices(chosenProvider,true);
     }catch(error){}finally{providerCheckPending=false;}
@@ -2695,6 +2735,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const stageConsent=budgetApproval;budgetApproval=null;
     const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=(stageConsent||choiceContinuation)?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
+    if(stageConsent&&(!window.nativeSession?.active()||stageConsent.owner!==owner||
+       stageConsent.workspaceId!==workspaceId||stageConsent.sessionId!==activeSession?.id||
+       stageConsent.text!==typedPrompt||stageConsent.providerID!==provider||stageConsent.modelID!==model)){
+      submissionStatus.textContent=tr('The approved request changed. Review the estimate again.',
+        'تغيّر الطلب الموافق عليه. راجع التقدير مجددًا.');
+      return;
+    }
     if(window.nativeSession?.active()){
       // A second prompt is added through Pi's own followUp queue and never
       // cancels the active task. Other projects are blocked on the Pi server.
@@ -2710,12 +2757,11 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         const receipt=await window.nativeSession.send(sessionId,{
           text:prompt,providerID:provider,modelID:model,agent:selectedAgent,
           variant:nativeVariant.value||undefined,files:nativeFiles,
-          ...(stageConsent&&stageConsent.owner===owner&&stageConsent.workspaceId===workspaceId&&
-             stageConsent.text===typedPrompt&&stageConsent.providerID===provider&&
-             stageConsent.modelID===model?{budget:{
+          ...(stageConsent?{budget:{
                mode:stageConsent.mode,approved:true,
                estimatedInput:stageConsent.estimatedInput,estimatedOutput:stageConsent.estimatedOutput,
-               approvalId:stageConsent.approvalId,approvedAt:stageConsent.approvedAt
+               approvalId:stageConsent.approvalId,approvedAt:stageConsent.approvedAt,planId:stageConsent.planId,
+               inventoryFingerprint:stageConsent.inventoryFingerprint
              }}:{})
         });
         if(receipt?.handled){

@@ -1031,7 +1031,7 @@ def _ai_pi_control_headers():
     return headers
 
 
-def _ai_pi_invalidate(user_id=None, *, session_id=None, revoke_login=False):
+def _ai_pi_invalidate(user_id=None, *, session_id=None, revoke_login=False, budget_modes=None):
     try:
         with _ai_httpx.Client(
                 transport=_ai_httpx.HTTPTransport(
@@ -1041,7 +1041,8 @@ def _ai_pi_invalidate(user_id=None, *, session_id=None, revoke_login=False):
                         headers=_ai_pi_control_headers(),
                         json={"user_id": str(user_id) if user_id else None,
                               "session_id": str(session_id) if session_id else None,
-                              "revoke_login": bool(revoke_login)}).raise_for_status()
+                              "revoke_login": bool(revoke_login),
+                              **({"budget_modes": budget_modes} if budget_modes is not None else {})}).raise_for_status()
     except (_ai_httpx.HTTPError, OSError):
         raise HTTPException(503, "Access changed, but Pi revocation was not acknowledged; retry before continuing") from None
 

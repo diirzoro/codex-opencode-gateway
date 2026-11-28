@@ -520,7 +520,7 @@
         else if(part?.type==="text_end"&&typeof part.content==="string")piReply(id,part.content,true);
         return;
       }
-      if(e.type==="pi.budget_usage"){
+      if(e.type==="pi.budget_usage"&&activeSession?.id===id){
         const status=document.getElementById("submissionStatus");
         if(status&&!status.dataset.piProviderError){
           const stage=p.mode==="analysis"?label("Analysis","التحليل"):label("Execution","التنفيذ");
@@ -824,11 +824,23 @@
       url:f.url||row.file_base+String(f.path).split('/').map(encodeURIComponent).join('/'),
       filename:f.name||String(f.path).split('/').at(-1)
     }))];
+    const model={providerID,modelID};
+    if(budget){
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(parts)));
+      const partsDigest=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+      const signed=await native(row.workspace_id,
+        'session/'+encodeURIComponent(row.runtime_id)+'/budget_state',{budget,model,partsDigest},{timeout:30000});
+      if(typeof signed?.signature!=='string'||!current(id,user)||epoch!==sendEpoch||
+         (sendGenerations.get(id)||0)!==sendGeneration)
+        throw Error(label('Budget approval expired. Review the estimate again.',
+          'انتهت صلاحية الموافقة. راجع التقدير مجددًا.'));
+      budget={...budget,signature:signed.signature};
+    }
     const pending={messageID,text,files:files.map(f=>({path:f.path,mime:f.mime,name:f.name})),providerID,modelID,agent,variant};uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}
     const submissionController=new AbortController();submissionsInFlight.set(id,submissionController);
     let receipt=null;
     try{receipt=await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
-      messageID,model:{providerID,modelID},queueMode:'followUp',
+      messageID,model,queueMode:'followUp',
       ...(budget?{budget}:{}),
       ...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,
       timeout:files.some(f=>typeof f.url==='string'&&f.url.startsWith('data:'))?300000:30000});}
