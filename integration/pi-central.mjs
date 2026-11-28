@@ -970,6 +970,7 @@ class SdkAgent {
     this.credentialProvider=null;this.settledObserved=false;
     this.runSawAssistantText=false;
     this.budgetStage=null;this.budgetPlan=null;this.budgetModel=null;
+    this.budgetApprovals=new Map();
     this.keepQueueOnStop=false;this.queueContinuationActive=false;
     this.uiRequests=new Map();this.uiWidgets=new Map();
     this.unsub=session.subscribe(event=>this.consume(event));
@@ -2293,6 +2294,14 @@ const server=http.createServer(async(req,res)=>{
         if(!budget||!["analysis","execution"].includes(budgetMode)||
            s.account?.budget_modes?.[budgetMode]!==true)
           return error(res,403,"This budget mode is disabled by the administrator","not_submitted");
+        if(typeof budget.approvalId!=="string"||
+           !/^[0-9a-f-]{36}$/i.test(budget.approvalId)||
+           !Number.isSafeInteger(budget.approvedAt)||
+           Date.now()-budget.approvedAt>180000||
+           budget.approvedAt>Date.now()+10000)
+          return error(res,409,"Budget approval is missing or expired; review the estimate again","not_submitted");
+        if(a.budgetApprovals.has(budget.approvalId))
+          return error(res,409,"This budget approval was already submitted","not_submitted");
         if(budget.approved!==true||!Number.isInteger(budget.estimatedInput)||
            !Number.isInteger(budget.estimatedOutput)||budget.estimatedInput<1||
            budget.estimatedOutput<1||budget.estimatedInput>500000||
@@ -2388,6 +2397,15 @@ const server=http.createServer(async(req,res)=>{
             return error(res,422,"Selected Pi capability is no longer installed","not_submitted");
           }
           prompt="/"+command.name+(message.trim()?" "+message:"");
+        }
+        if(budgetMode){
+          // Bind one consent to one submitted stage. Bounded memory: the
+          // authenticated project/session already scopes this replay map.
+          for(const [id,created] of a.budgetApprovals)
+            if(Date.now()-created>300000)a.budgetApprovals.delete(id);
+          a.budgetApprovals.set(budget.approvalId,Date.now());
+          if(a.budgetApprovals.size>512)
+            a.budgetApprovals.delete(a.budgetApprovals.keys().next().value);
         }
         promptDispatched=true;
         const accepted=await a.command("prompt",{message:prompt,...(images.length?{images}:{})});
