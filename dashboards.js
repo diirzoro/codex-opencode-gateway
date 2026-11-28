@@ -2153,6 +2153,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
             'Pi is not ready for this model.','Pi غير جاهز لهذا النموذج.'));
           budgetApproval={mode,providerID:option.provider.id,modelID:option.model.id,
             estimatedInput:option.input,estimatedOutput:option.output,
+            approvalId:crypto.randomUUID(),approvedAt:Date.now(),
             approved:true,owner,workspaceId,text};
           dialog.close();
           await q('promptForm').onsubmit({preventDefault(){}});
@@ -2268,6 +2269,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     // Workspace shows Pi-configured connections only. New provider discovery
     // belongs to Connections; neither config nor model listing proves credits.
     chatProviderSnapshot=snapshot;
+    showBudgetModes(snapshot.budget_modes);
     const hidden=readChatVisibility(currentUser?.id);
     providers=(snapshot.providers||[]).filter(p=>!hidden.has(providerVisibilityId(p.id)));
     const linkedGroup=document.createElement('optgroup');
@@ -2411,6 +2413,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     historyRevision++;
     if(drawer())closePane();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);window.refreshWorkspaceQueue?.();clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
     pendingSubmission=null;sending=cancelRequested=false;sessionRows=[];providers=[];chosenAgent=chosenProvider=chosenModel='';
+    budgetApproval=null;showBudgetModes(null);
     runtimeReady=agentsReady=modelsReady=workAccess=false;entitlement=null;workspaceDays.hidden=workspaceAccess.hidden=true;workspaceDays.textContent='';workspaceAccess.replaceChildren();homeAccess.replaceChildren();retrySubmission.hidden=retryModels.hidden=true;
     storageData=null;submissionStatus.textContent=storageChip.textContent=activityStage.textContent=activitySummary.textContent='';
     capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;approvalsList.replaceChildren();detailLoads.clear();updateSend();
@@ -2676,6 +2679,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       await window.promptProjectChoice?.();return;
     }
     if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
+    const stageConsent=budgetApproval;budgetApproval=null;
     const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=choiceContinuation?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
     if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
     if(window.nativeSession?.active()){
@@ -2692,7 +2696,14 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         if(sendingPreview)sendingPreview.sessionId=sessionId;
         const receipt=await window.nativeSession.send(sessionId,{
           text:prompt,providerID:provider,modelID:model,agent:selectedAgent,
-          variant:nativeVariant.value||undefined,files:nativeFiles
+          variant:nativeVariant.value||undefined,files:nativeFiles,
+          ...(stageConsent&&stageConsent.owner===owner&&stageConsent.workspaceId===workspaceId&&
+             stageConsent.text===typedPrompt&&stageConsent.providerID===provider&&
+             stageConsent.modelID===model?{budget:{
+               mode:stageConsent.mode,approved:true,
+               estimatedInput:stageConsent.estimatedInput,estimatedOutput:stageConsent.estimatedOutput,
+               approvalId:stageConsent.approvalId,approvedAt:stageConsent.approvedAt
+             }}:{})
         });
         if(receipt?.handled){
           clearSendingPreview();
