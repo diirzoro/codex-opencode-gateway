@@ -231,6 +231,7 @@ def finish(db,challenge,ticket,code):
         row.attempts+=1;db.commit()
         raise HTTPException(400,'Incorrect verification code. Check the code and retry.')
     details=json.loads(credentials.decrypt(row.payload_ciphertext))
+    require_permanent_email(details['email'])
     # Even if the email was free at draft time, a verified User can have appeared
     # meanwhile. Database uniqueness constraints resolve competing drafts safely.
     if db.scalar(select(User.id).where(or_(

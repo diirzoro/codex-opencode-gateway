@@ -440,6 +440,7 @@
     for(const project of data.projects){for(const workspace of project.workspaces){const row=textElement('div','','home-project-row');row.append(textElement('strong',project.name),textElement('small',(project.repository||tr('Local project','مشروع محلي'))+' · '+workspace.status));if(workspace.cache?.warning||workspace.cache?.expired)row.append(textElement('small',window.workspaceRetentionNotice(workspace.cache),'project-retention-warning'));row.append(btn('home-open-'+workspace.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace)));projects.append(row);}}
     if(!projects.children.length)projects.append(text('p','No projects yet. Create your first workspace.','لا توجد مشاريع بعد. أنشئ مساحة عملك الأولى.','home-empty'));
     renderEntitlement();
+    showDemoInvite();
   }
   async function openConnections(focus){await page('connectionsPage');if(focus)q(focus==='github'?'connectionsGithub':'connectionsProviders').scrollIntoView({block:'start',behavior:'smooth'});}
   window.openConnections=openConnections;
@@ -634,7 +635,34 @@
     document.querySelectorAll('#workspacePage .new-session,#sessionList .session').forEach(n=>n.disabled=!workAccess);
     if(!workAccess){q('sendMessage').disabled=true;q('commitButton').disabled=true;q('pushButton').disabled=true;}
   }
-  async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/profile/access');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();}
+  const shownDemoInvites=new Set();
+  function showDemoInvite(){
+    const owner=currentUser?.id;
+    if(!owner||!workAccess||admin()||shownDemoInvites.has(owner)||
+      !q('workspaceHomePage').classList.contains('active')||document.querySelector('dialog[open]'))return;
+    const key='og-cafe-demo-invite:'+owner;
+    try{if(sessionStorage.getItem(key))return;}catch{}
+    const dialog=document.createElement('dialog');
+    dialog.className='workspace-project-chooser project-demo-invite';
+    const heading=textElement('h2',tr('Make the Aden Café site your own','طوّر موقع مقهى عدن بطريقتك'));
+    heading.id='cafe-demo-invite-title';
+    dialog.setAttribute('aria-labelledby',heading.id);
+    const close=textElement('button','×','icon-btn project-demo-close');
+    close.type='button';close.setAttribute('aria-label',tr('Close invitation','إغلاق الدعوة'));
+    close.onclick=()=>dialog.close();
+    const start=textElement('button',tr('Try the demo','جرّب المشروع الآن'),'button project-demo-button');
+    start.type='button';
+    start.onclick=()=>{dialog.close();if(currentUser?.id===owner)void window.chooseNewProject('demo');};
+    dialog.append(close,heading,textElement('p',tr(
+      'Open a ready-made site, preview it, and ask Pi to make your first change.',
+      'افتح موقعًا جاهزًا، عاينه، واطلب من Pi تنفيذ أول تعديل.')),start);
+    dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    document.body.append(dialog);
+    dialog.showModal();
+    shownDemoInvites.add(owner);
+    try{sessionStorage.setItem(key,'1');}catch{}
+  }
+  async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/profile/access');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();showDemoInvite();}
   const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(id==='workspacePage'&&currentUser&&!admin())initializeWorkspace();await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage','onboarding'].includes(id))refreshEntitlement().then(()=>updateSend()).catch(error=>toast(error.message));if(!admin()&&id==='workspacePage'&&activeWorkspace){refreshChoices().catch(error=>toast(error.message));loadWorkspaceDetails();}if(admin())return;if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')loadHome().catch(error=>toast(error.message));if(id==='connectionsPage')loadConnections().catch(error=>toast(error.message));}};
   const previousShow=showPage;showPage=function(id){if(id==='adminPage'&&!admin()){toast('Administrator access required');id=currentUser?'workspaceHomePage':'authPage';}if(admin()&&['workspaceHomePage','connectionsPage','workspacePage'].includes(id))id='adminPage';q('sessionSidebar').classList.remove('open');overlay(false);previousShow(id);syncWorkspacePolling();q('clientWorkspaceHome').classList.toggle('active',['workspaceHomePage','workspacePage'].includes(id));q('clientConnections').classList.toggle('active',id==='connectionsPage');if(['workspaceHomePage','workspacePage','connectionsPage'].includes(id))q('clientNav').querySelectorAll('[data-client-view]').forEach(n=>n.classList.remove('active'));};
   const lazyOpenWorkspace=async function(project,workspace,options={}){
@@ -651,6 +679,11 @@
   openWorkspace=lazyOpenWorkspace;
   const previousOpenGithubProject=window.openGithubProject;
   window.openGithubProject=(...args)=>{initializeWorkspace();if(typeof previousOpenGithubProject!=='function')throw new Error('GitHub project opener is unavailable');return previousOpenGithubProject(...args);};
+  window.chooseNewProject=(...args)=>{
+    initializeWorkspace();
+    return chooseWorkspaceProject(...args);
+  };
+  let chooseWorkspaceProject;
   function initializeWorkspace(){
     if(workspaceInitialized)return;
     workspaceInitialized=true;
@@ -980,13 +1013,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   nativeVariant.onchange=saveNativeSelection;
   q('providerSelect').setAttribute('aria-label','Provider');q('modelSelect').setAttribute('aria-label','Model');
-  const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Pi supports PNG/JPEG/WebP and PDF up to 25 MB combined; TXT/MD up to 256 KB each. PDF requires Pi tools.','Pi يدعم الصور وPDF حتى 25 ميجابايت إجمالًا، وTXT/MD حتى 256 كيلوبايت لكل ملف. قراءة PDF تتطلب أدوات Pi.');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);
+  const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Attach files','إرفاق ملفات');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);
   const attachmentList=textElement('div','','composer-attachments');attachmentList.id='composerAttachments';attachmentList.setAttribute('aria-live','polite');q('promptInput').before(attachmentList);
-  const supportedPiFiles=textElement('small',tr(
-    'Pi attachments: PNG/JPEG/WebP/PDF up to 25 MB total; TXT/MD up to 256 KB per file. Images need a compatible model; PDF requires Pi tools.',
-    'مرفقات Pi: صور PNG وJPEG وWebP وPDF حتى 25 ميجابايت إجمالًا، وTXT/MD حتى 256 كيلوبايت للملف. دعم الصور حسب النموذج، وقراءة PDF بأدوات Pi.'),
-    'pi-attachment-format-hint');
-  attachmentList.before(supportedPiFiles);
   let attachments=[];let attachmentRevision=0;
   const releasePreview=item=>{if(item.preview){URL.revokeObjectURL(item.preview);item.preview=null;}};
   async function cancelUpload(item){
@@ -1027,6 +1055,11 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   async function openAttachPicker(){
     if(!activeWorkspace||window.workspaceSubmissionBlocked?.())return;
     if(!window.nativeSession?.active()){toast(tr('Pi Native is unavailable; no file was sent.','اتصال Pi Native غير متاح؛ لم يُرسل أي ملف.'));return;}
+    const scope=activeWorkspace.id;
+    const accepted=await window.confirmAction(tr(
+      'Supported attachments: PNG, JPEG, WebP and PDF (25 MB total), TXT and MD (256 KB per file).',
+      'الملفات المدعومة: PNG وJPEG وWebP وPDF (25 ميجابايت إجمالًا)، وTXT وMD (256 كيلوبايت لكل ملف).'));
+    if(!accepted||activeWorkspace?.id!==scope||window.workspaceSubmissionBlocked?.())return;
     if(!activeSession)await createSession();
     const picker=document.createElement('input');picker.type='file';picker.multiple=true;picker.hidden=true;picker.accept='.png,.jpg,.jpeg,.webp,.pdf,.txt,.md';
     picker.oncancel=()=>picker.remove();picker.onchange=async()=>{
@@ -1568,16 +1601,133 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const linkGithub=btn('linkWorkspaceGithubProject','Open a GitHub project','فتح مشروع GitHub',()=>window.openGithubProject(),'icon-btn');
   linkGithub.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';linkGithub.title=tr('Open a GitHub project','فتح مشروع GitHub');linkGithub.setAttribute('aria-label',linkGithub.title);
   linkGithub.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});projectBuckets.get('github').summary.append(linkGithub);
-  const linkLocal=btn('linkWorkspaceLocalProject','New project','مشروع جديد',async()=>{
+  async function importZipProject(name,file){
+    const dialog=document.createElement('dialog');
+    dialog.className='workspace-project-chooser project-upload-dialog';
+    const title=textElement('h2',tr('Project upload','رفع المشروع'));
+    title.id='project-upload-title';
+    dialog.setAttribute('aria-labelledby',title.id);
+    const label=textElement('p',name+' · '+file.name,'project-upload-name');
+    const stage=textElement('strong',tr('Uploading file…','جارٍ رفع الملف…'));
+    stage.setAttribute('role','status');
+    const bar=document.createElement('progress');
+    bar.max=100;bar.value=0;
+    bar.setAttribute('aria-label',tr('Upload progress','تقدّم الرفع'));
+    const metrics=textElement('p','','project-upload-metrics');
+    const controller=new AbortController();
+    let finished=false;
+    const close=textElement('button',tr('Cancel upload','إلغاء الرفع'),'button');
+    close.type='button';
+    close.onclick=()=>{
+      if(finished)dialog.close();
+      else if(!close.disabled)controller.abort();
+    };
+    dialog.addEventListener('cancel',event=>{
+      if(finished)return;
+      event.preventDefault();
+      close.click();
+    });
+    dialog.append(title,label,stage,bar,metrics,close);
+    document.body.append(dialog);
+    dialog.showModal();
+    const started=performance.now();
+    let loaded=0,total=0,checking=false;
+    const duration=value=>Math.floor(value/60)+':'+String(Math.floor(value%60)).padStart(2,'0');
+    function updateMetrics(){
+      const elapsed=(performance.now()-started)/1000;
+      const percent=total?Math.min(100,Math.floor(loaded*100/total)):0;
+      const remaining=loaded&&total>loaded&&elapsed>1?duration(elapsed*(total-loaded)/loaded):null;
+      metrics.textContent=tr('Elapsed: ','الوقت المنقضي: ')+duration(elapsed)+
+        (checking?'':' · '+percent+'%'+(remaining?' · '+tr('Estimated remaining: ','المتبقي تقريبًا: ')+remaining:''));
+    }
+    updateMetrics();
+    const clock=setInterval(updateMetrics,1000);
+    try{
+      const maxZipBytes=40*1024*1024-16*1024;
+      if(!file.size||file.size>maxZipBytes)throw new Error(tr(
+        'Choose a non-empty ZIP smaller than 40 MiB.','اختر ملف ZIP غير فارغ وحجمه أقل من 40 MiB.'));
+      const form=new FormData();
+      form.append('project_name',name);
+      form.append('file',file);
+      const created=await api('/api/projects/import',{method:'POST',body:form,signal:controller.signal,
+        onUploadProgress(bytes,maximum){
+          if(bytes===null){
+            checking=true;
+            close.disabled=true;
+            stage.textContent=tr('File sent. The server is checking quota and extracting. Cancellation is no longer available.',
+              'اكتمل إرسال الملف. يجري الخادم فحص الحصة وفك الضغط، ولا يمكن الإلغاء في هذه المرحلة.');
+            bar.removeAttribute('value');
+          }else{
+            loaded=bytes;total=maximum;
+            if(total)bar.value=100*loaded/total;
+            else bar.removeAttribute('value');
+          }
+          updateMetrics();
+        }
+      });
+      dialog.dataset.result='success';
+      stage.textContent=tr('Project imported successfully','تم استيراد المشروع بنجاح');
+      bar.value=100;
+      return created;
+    }catch(error){
+      dialog.dataset.result=controller.signal.aborted?'cancelled':'error';
+      stage.textContent=controller.signal.aborted
+        ?tr('Upload cancelled','تم إلغاء الرفع')
+        :(error.status===413
+        ?tr('Storage or upload limit exceeded. ','تجاوز الملف حد الرفع أو المساحة المتاحة. ')
+        :tr('Project import failed. ','تعذّر استيراد المشروع. '))+error.message;
+      bar.hidden=true;
+      return null;
+    }finally{
+      clearInterval(clock);
+      checking=true;updateMetrics();
+      finished=true;
+      close.textContent=tr('Close','إغلاق');
+      close.disabled=false;
+      close.focus();
+      dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    }
+  }
+  chooseWorkspaceProject=async(preferredSource='blank')=>{
+    if(linkLocal.disabled)return;
     const owner=currentUser?.id;
-    const result=await window.requestForm(tr('New project','مشروع جديد'),[{name:'name',label:tr('Project name','اسم المشروع'),required:true,maxLength:120}],tr('Create project','إنشاء مشروع'));
+    const choice=preferredSource==='demo'?{source:'demo'}:await window.requestForm(tr('New project','مشروع جديد'),[{
+      name:'source',value:preferredSource,label:tr('Project source','مصدر المشروع'),options:[
+        {value:'blank',label:tr('Blank project','مشروع فارغ')},
+        {value:'github',label:tr('GitHub project','مشروع GitHub')},
+        {value:'zip',label:tr('Upload a ZIP project','رفع مشروع ZIP')},
+        {value:'demo',label:tr('Explore the Aden Café demo','جرّب نموذج مقهى عدن')}
+      ]
+    }],tr('Continue','متابعة'));
+    if(!choice||currentUser?.id!==owner)return;
+    if(choice.source==='github')return window.openGithubProject();
+    const fields=[{name:'name',label:tr('Project name','اسم المشروع'),value:choice.source==='demo'?tr('Aden Café','مقهى عدن'):pendingIdea.slice(0,120),required:true,maxLength:120}];
+    if(choice.source==='zip')fields.push({
+      name:'file',label:tr('Project ZIP archive','ملف المشروع ZIP'),type:'file',
+      accept:'.zip,application/zip',required:true
+    });
+    const result=await window.requestForm(tr('New project','مشروع جديد'),fields,
+      choice.source==='zip'?tr('Upload project','رفع المشروع'):tr('Create project','إنشاء مشروع'));
     if(!result||currentUser?.id!==owner)return;
     const name=String(result.name||'').trim();if(!name)return;
+    linkLocal.disabled=true;
     try{
-      const created=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'blank',project_name:name})});
-      if(currentUser?.id===owner)await openWorkspace(created.project,created.workspace);
+      const created=choice.source==='zip'
+        ?await importZipProject(name,result.file)
+        :await api('/api/projects',{method:'POST',body:JSON.stringify(choice.source==='demo'
+          ?{source_type:'template',template:'aden-cafe-demo',project_name:name}
+          :{source_type:'blank',project_name:name})});
+      if(created&&currentUser?.id===owner){
+        if(window.nativeSession?.active())await window.nativeDirectTest.ensureSession({force:true});
+        if(currentUser?.id===owner){
+          if(choice.source==='demo')pendingIdea='راجع معاينة المشروع وأصلح التفاف قائمة القهوة على الجوال مع الحفاظ على دعم العربية.';
+          await openWorkspace(created.project,created.workspace);
+        }
+      }
     }catch(error){toast(error.message);}
-  },'icon-btn');
+    finally{linkLocal.disabled=false;}
+  };
+  const linkLocal=btn('linkWorkspaceLocalProject','New project','مشروع جديد',()=>window.chooseNewProject(),'icon-btn');
   linkLocal.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';linkLocal.title=tr('New project','مشروع جديد');linkLocal.setAttribute('aria-label',linkLocal.title);
   linkLocal.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});projectBuckets.get('local').summary.append(linkLocal);
   function projectFileFolder(project,workspace){
@@ -1744,7 +1894,394 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const picks=textElement('div','','composer-picks'),utilities=textElement('div','','composer-utilities'),actions=textElement('div','','composer-actions');
   const selectIcons=['<circle cx="12" cy="7" r="3"/><path d="M5 21v-3a7 7 0 0 1 14 0v3"/>','<path d="M7 18a5 5 0 0 1-1-10 6 6 0 0 1 11-1 5.5 5.5 0 0 1 1 11Z"/>','<path d="m12 3 9 5v8l-9 5-9-5V8Z M3 8l9 5 9-5M12 13v8"/>'];
   [agent,q('providerSelect'),q('modelSelect')].forEach((select,index)=>{const label=textElement('label','','composer-select');label.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">'+selectIcons[index]+'</svg>';label.append(select);picks.append(label);});
-  picks.append(nativeVariant);
+  const chatVisibility = textElement('button', tr('Visible models', 'النماذج الظاهرة'), 'button');
+  chatVisibility.type = 'button';
+  picks.append(nativeVariant, chatVisibility);
+
+  // These preferences only narrow the conversation picker on this browser.
+  // Pi's account and workspace grants still determine what may run.
+  let chatProviderSnapshot;
+  function chatVisibilityKey(owner) {
+    return 'og-chat-model-visibility:' + owner;
+  }
+  function readChatVisibility(owner) {
+    try {
+      const stored = JSON.parse(localStorage.getItem(chatVisibilityKey(owner)));
+      return new Set(Array.isArray(stored) ? stored : []);
+    } catch {
+      return new Set();
+    }
+  }
+  const providerVisibilityId = providerId => JSON.stringify([providerId]);
+  const modelVisibilityId = (providerId, modelId) => JSON.stringify([providerId, modelId]);
+
+  chatVisibility.onclick = () => {
+    const owner = currentUser?.id;
+    const workspaceId = activeWorkspace?.id;
+    const snapshot = chatProviderSnapshot;
+    if (!owner || !workspaceId || !snapshot) return;
+    const hidden = readChatVisibility(owner);
+    const available = (snapshot.providers || []).filter(p => p.connected && p.allowed !== false);
+    const dialog = document.createElement('dialog');
+    const title = textElement('h2', tr('Conversation visibility', 'الظهور في المحادثات'));
+    dialog.setAttribute('aria-label', title.textContent);
+    const picker = document.createElement('select');
+    picker.setAttribute('aria-label', tr('Provider', 'المزوّد'));
+    for (const provider of available) picker.add(new Option(provider.name, provider.id));
+    const rows = document.createElement('div');
+    rows.style.maxHeight = '45vh';
+    rows.style.overflow = 'auto';
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.placeholder = tr('Search models', 'ابحث عن نموذج');
+    search.oninput = () => {
+      const query = search.value.trim().toLowerCase();
+      for (const row of rows.querySelectorAll('label[data-model]')) {
+        row.hidden = !row.dataset.model.includes(query);
+      }
+    };
+    const setVisible = (key, visible) => visible ? hidden.delete(key) : hidden.add(key);
+    function checkbox(label, key) {
+      const row = document.createElement('label');
+      row.style.display = 'block';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !hidden.has(key);
+      input.onchange = () => setVisible(key, input.checked);
+      row.append(input, document.createTextNode(' ' + label));
+      return row;
+    }
+    const providerToggle = document.createElement('div');
+    let loadRevision = 0;
+    picker.onchange = async () => {
+      const providerId = picker.value;
+      const revision = ++loadRevision;
+      rows.replaceChildren();
+      providerToggle.replaceChildren();
+      if (!providerId) return;
+      providerToggle.append(checkbox(tr('Show this provider in conversations', 'إظهار هذا المزوّد في المحادثات'),
+        providerVisibilityId(providerId)));
+      rows.textContent = tr('Loading models…', 'جارٍ تحميل النماذج…');
+      try {
+        const data = await window.workspaceRuntime.loadModels(workspaceId, providerId);
+        if (!dialog.open || revision !== loadRevision || currentUser?.id !== owner) return;
+        rows.replaceChildren();
+        for (const model of data.models || []) {
+          if (model.allowed === false || model.visible === false) continue;
+          const label = model.name || model.id;
+          const row = checkbox(label, modelVisibilityId(providerId, model.id));
+          row.dataset.model = (label + ' ' + model.id).toLowerCase();
+          rows.append(row);
+        }
+        if (!rows.children.length) rows.textContent = tr('No available models', 'لا توجد نماذج متاحة');
+        search.oninput();
+      } catch {
+        if (dialog.open && revision === loadRevision) {
+          rows.textContent = tr('Could not load models', 'تعذر تحميل النماذج');
+        }
+      }
+    };
+    const save = textElement('button', tr('Save', 'حفظ'), 'button');
+    const cancel = textElement('button', tr('Cancel', 'إلغاء'), 'button');
+    cancel.onclick = () => dialog.close();
+    save.onclick = () => {
+      if (currentUser?.id !== owner || activeWorkspace?.id !== workspaceId) {
+        dialog.close();
+        return;
+      }
+      try {
+        localStorage.setItem(chatVisibilityKey(owner), JSON.stringify([...hidden]));
+      } catch {
+        toast(tr('Could not save visibility preferences', 'تعذر حفظ تفضيلات الظهور'));
+        return;
+      }
+      dialog.close();
+      renderProviders(chatProviderSnapshot);
+    };
+    dialog.append(title, textElement('p', tr('Choose which connected providers and models appear in conversations on this browser.',
+      'اختر المزوّدين والنماذج المرتبطة التي تظهر في المحادثات على هذا المتصفح.')),
+      picker, providerToggle, search, rows, save, cancel);
+    dialog.addEventListener('close', () => dialog.remove(), {once: true});
+    document.body.append(dialog);
+    dialog.showModal();
+    if (available.some(p => p.id === chosenProvider)) picker.value = chosenProvider;
+    picker.onchange();
+  };
+
+  // Budget planning is an opt-in stage in this SAME Pi conversation. Merely
+  // opening the chooser does not call a model or create a new Pi session.
+  let budgetModes={analysis:false,execution:false},budgetApproval=null,budgetChoice=null;
+  const budgetButtons=textElement('div','','composer-budget-actions');
+  budgetButtons.style.display='flex';budgetButtons.style.flexWrap='wrap';budgetButtons.style.gap='6px';
+  const budgetAnalysis=btn('budgetAnalysis','Analyze project','تحليل المشروع',()=>{if(keepBudgetChoice())void chooseBudget('analysis');});
+  const budgetExecution=btn('budgetExecution','Implement code','تنفيذ كود برمجي',()=>{if(keepBudgetChoice())void chooseBudget('execution');});
+  budgetAnalysis.type=budgetExecution.type='button';
+  budgetButtons.append(budgetAnalysis,budgetExecution);
+  function showBudgetModes(value){
+    budgetModes={analysis:value?.analysis!==false,execution:value?.execution!==false};
+    if(!budgetModes.analysis&&!budgetModes.execution)budgetModes={analysis:true,execution:true};
+    const native=window.nativeSession?.active();
+    budgetAnalysis.hidden=budgetAnalysis.disabled=!native||!budgetModes.analysis;
+    budgetExecution.hidden=budgetExecution.disabled=!native||!budgetModes.execution;
+    if(budgetChoice)budgetChoice.notice.hidden=Boolean(native);
+  }
+  showBudgetModes(null);
+  const budgetNumber=n=>new Intl.NumberFormat(lang==='ar'?'ar':'en',{maximumFractionDigits:6}).format(n);
+  async function chooseBudget(mode){
+    const owner=currentUser?.id,workspaceId=activeWorkspace?.id,sessionId=activeSession?.id;
+    const text=q('promptInput').value.trim();
+    if(!owner||!workspaceId||!workAccess||sending||queuing||pendingSubmission||
+       anotherProjectRunning||
+       ['submitted','waiting_approval'].includes(activeSession?.execution_status)||
+       window.nativeSession?.blocked(sessionId)){
+      toast(tr('Finish the current task before starting a budget stage.',
+        'أكمل المهمة الحالية قبل بدء مرحلة الميزانية.'));return;
+    }
+    if(!text){
+      toast(tr('Write your task in the chat first.','اكتب طلبك في المحادثة أولاً.'));q('promptInput').focus();return;
+    }
+    if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){
+      toast(tr('Wait for attachments to finish uploading before reviewing the estimate.',
+        'انتظر اكتمال رفع المرفقات قبل مراجعة التقدير.'));return;
+    }
+    const modeAllowed=mode==='analysis'||mode==='execution';
+    if(!modeAllowed)return;
+    const dialog=document.createElement('dialog');
+    dialog.className='budget-mode-dialog';
+    dialog.style.maxWidth='min(95vw,650px)';
+    dialog.style.maxHeight='85vh';dialog.style.overflow='auto';
+    const header=textElement('h2',mode==='analysis'?
+      tr('Analyze by budget','تحليل بميزانيتي'):tr('Execute by budget','تنفيذ بميزانيتي'));
+    const status=textElement('p',tr('Loading connected providers…','جارٍ تحميل المزوّدين المتصلين…'));
+    const providerSelect=document.createElement('select');
+    const providerLabel=textElement('label',tr('Provider','المزوّد'));
+    providerLabel.append(providerSelect);
+    providerSelect.add(new Option(tr('Choose a provider','اختر مزوّدًا'),''));
+    providerSelect.disabled=true;
+    const cards=textElement('div','','budget-model-choices');
+    cards.style.display='grid';cards.style.gap='8px';cards.style.maxHeight='40vh';cards.style.overflow='auto';
+    const capNote=textElement('p',tr(
+      'This estimate covers the current request and known context. Attachments, extra file reads and model calls can increase usage. Provider balance is unknown and a per-task dollar cap is unavailable.',
+      'يشمل التقدير الطلب الحالي والسياق المعروف. قد تزيد المرفقات وقراءة الملفات والاستدعاءات الإضافية من الاستهلاك. رصيد المزوّد غير معروف وسقف الدولار للمهمة غير متاح.'));
+    const close=btn('budgetCancel', 'Cancel','إلغاء',()=>dialog.close());
+    const proceed=btn('budgetProceed','Continue','متابعة',async()=>{});
+    close.type=proceed.type='button';proceed.disabled=true;
+    const planPreview=textElement('details','','budget-review-plan');
+    const planSummary=textElement('summary',tr('Review plan, files and tests','مراجعة الخطة والملفات والاختبارات'));
+    const planText=textElement('pre','');planText.style.whiteSpace='pre-wrap';
+    planText.style.maxHeight='180px';planText.style.overflow='auto';
+    planPreview.append(planSummary,planText);
+    planPreview.hidden=mode!=='execution';
+    if(mode==='execution'){
+      planText.textContent=tr(
+        'No verified analysis was loaded. Execution will use the current request. Run Analysis first to pass a reviewed plan.',
+        'لا توجد خطة تحليل محمّلة. سينفّذ النموذج الطلب الحالي. يُفضّل تشغيل التحليل أولًا لتمرير خطة مراجعة.');
+    }
+    const search=document.createElement('input');
+    search.type='search';search.placeholder=tr('Search models','ابحث عن نموذج');
+    search.disabled=true;
+    search.setAttribute('aria-label',search.placeholder);
+    const sort=document.createElement('select');
+    sort.setAttribute('aria-label',tr('Sort by estimated cost','الترتيب حسب التكلفة التقديرية'));
+    sort.add(new Option(tr('Lowest cost first','الأقل تكلفة أولًا'),'asc'));
+    sort.add(new Option(tr('Highest cost first','الأعلى تكلفة أولًا'),'desc'));
+    sort.hidden=mode!=='execution';
+    const choices=textElement('div','','budget-dialog-footer');choices.style.display='flex';choices.style.gap='10px';
+    choices.append(close,proceed);
+    dialog.append(header,providerLabel,status,planPreview,search,sort,cards,capNote,choices);
+    dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    document.body.append(dialog);dialog.showModal();
+    let option=null, planId=null, inventoryFingerprint=null, stalePlan=false, scopeRequired=false, confirming=false;
+    try{
+      // Refresh the account's actual permissions before presenting consent.
+      const policy=await api('/api/opencode/catalog/providers?connected_only=true&include_connected_models=true');
+      if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
+      if(policy?.budget_modes?.[mode]!==true){
+        showBudgetModes(policy?.budget_modes);
+        status.textContent=tr('This option is disabled by the administrator.',
+          'هذا الخيار معطل من الإدارة.');return;
+      }
+      // Estimate from the bounded project-name inventory, never by uploading
+      // all source files or secrets to a model before consent.
+      let inventoryTokens=0;
+      if(sessionId){
+        const state=await window.nativeSession.budgetState(sessionId);
+        if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
+        inventoryFingerprint=state.inventory?.fingerprint||null;
+        if(mode==='analysis'){
+          inventoryTokens=Math.max(0,Number(state?.inventory?.estimatedTreeTokens)||0);
+        }else if(state?.has_plan){
+          planId=state.plan_id;
+          scopeRequired=state.plan_requires_scope===true;
+          stalePlan=state.plan_stale===true||scopeRequired;
+          planPreview.open=true;
+          planText.textContent=String(state.plan);
+          if(!scopeRequired)planText.textContent+='\n\n'+tr(
+            'Files approved for editing when you continue. Shell commands are unavailable for this plan.',
+            'الملفات التي ستوافق على تعديلها بالمتابعة. أوامر الطرفية غير متاحة لهذه الخطة.'
+          )+'\n'+(state.plan_files||[]).join('\n');
+          inventoryTokens=Math.ceil(planText.textContent.length/3);
+        }
+      }
+      const snapshot=await window.workspaceRuntime.load(workspaceId,{force:true});
+      const hidden=readChatVisibility(owner);
+      const linked=(snapshot.providers||[]).filter(p=>
+        p.connected&&p.allowed!==false&&!hidden.has(providerVisibilityId(p.id)));
+      for(const provider of linked)providerSelect.add(new Option(provider.name||provider.id,provider.id));
+      providerSelect.disabled=!linked.length;
+      let entries=[],modelLoad=0;
+      status.textContent=linked.length?tr('Choose a provider to see its models.','اختر مزوّدًا لعرض نماذجه.'):
+        tr('No connected providers are available.','لا توجد مزوّدات متصلة بحسابك.');
+      providerSelect.onchange=async()=>{
+        const generation=++modelLoad;
+        const p=linked.find(provider=>provider.id===providerSelect.value);
+        const current=()=>dialog.open&&currentUser?.id===owner&&activeWorkspace?.id===workspaceId&&
+          activeSession?.id===sessionId&&generation===modelLoad;
+        entries=[];option=null;proceed.disabled=true;search.disabled=true;search.value='';
+        cards.replaceChildren();
+        if(!p){
+          status.textContent=tr('Choose a provider to see its models.','اختر مزوّدًا لعرض نماذجه.');
+          return;
+        }
+        status.textContent=tr('Loading models…','جارٍ تحميل النماذج…');
+        try{
+          const data=await window.workspaceRuntime.loadModels(workspaceId,p.id);
+          if(!current())return;
+          for(const m of (data?.models||[])){
+          if(m.allowed===false||m.visible===false||m.enabled===false||
+             hidden.has(modelVisibilityId(p.id,m.id)))continue;
+          const input=Math.max(300,Math.min(500000,Math.ceil(text.length/3)+1200+inventoryTokens));
+          const output=Math.min(mode==='analysis'?1400:2200,m.max_output_tokens||m.maxTokens||Infinity);
+          const minInput=Math.ceil(input*0.7),minOutput=Math.ceil(output*0.5);
+          const cost=m.cost||{};
+          const known=[cost.input,cost.output].every(rate=>Number.isFinite(rate)&&rate>=0);
+          const amount=known?(input*cost.input+output*cost.output)/1000000:null;
+          const minimum=known?(minInput*cost.input+minOutput*cost.output)/1000000:null;
+            entries.push({provider:p,model:m,input,output,minInput,minOutput,amount,minimum});
+          }
+          search.disabled=false;
+          renderBudgetChoices();
+        }catch(error){if(current())status.textContent=error.message;}
+      };
+      function renderBudgetChoices(){
+        if(search.disabled)return;
+        const query=search.value.trim().toLocaleLowerCase();
+        const results=entries.filter(({provider,model})=>
+          [provider.id,provider.name,model.id,model.name].join(' ').toLocaleLowerCase().includes(query));
+        const direction=sort.value==='desc'&&mode==='execution'?-1:1;
+        results.sort((a,b)=>{
+          if(a.amount===null&&b.amount!==null)return 1;
+          if(b.amount===null&&a.amount!==null)return -1;
+          return direction*((a.amount??0)-(b.amount??0))||
+            String(a.model.name||a.model.id).localeCompare(String(b.model.name||b.model.id));
+        });
+        cards.replaceChildren();
+        option=null;proceed.disabled=true;
+        status.textContent=scopeRequired?
+          tr('Run Analysis again to create a plan with an explicit file list.',
+             'أعد التحليل لإنشاء خطة تتضمن قائمة ملفات محددة.'):
+          stalePlan?tr('Project files changed. Run Analysis again before using this plan.',
+             'تغيّرت ملفات المشروع. أعد التحليل قبل استخدام هذه الخطة.'):
+          results.length?
+            tr('Choose a model.','اختر نموذجًا.'):
+            tr('No authorized models match.','لا توجد نماذج مصرّح بها تطابق البحث.');
+        for(const entry of results.slice(0,150)){
+          const label=document.createElement('label');label.style.display='block';
+          label.style.border='1px solid var(--border, #aaa)';label.style.padding='9px';
+          label.style.borderRadius='8px';
+          const radio=document.createElement('input');radio.type='radio';radio.name='budget-model-choice';
+          const title=textElement('strong',' '+entry.provider.name+' / '+(entry.model.name||entry.model.id));
+          const price=entry.amount===null?tr('Price unknown','السعر غير معروف'):
+            entry.amount===0?tr('Listed $0 · free quota unconfirmed','السعر المدرج صفر · الحصة المجانية غير مؤكدة'):
+            '≈ $'+budgetNumber(entry.minimum)+'–$'+budgetNumber(entry.amount);
+          const description=textElement('small',price+
+            ' · '+tr('Input','إدخال')+' ≈ '+entry.minInput+'–'+entry.input+
+            ' · '+tr('Output','إخراج')+' ≈ '+entry.minOutput+'–'+entry.output);
+          description.style.display='block';
+          radio.onchange=()=>{option=entry;proceed.disabled=stalePlan;};
+          label.append(radio,title,description);cards.append(label);
+        }
+        if(results.length>150)cards.append(textElement('small',tr(
+          'Use search to find models beyond the first 150 results.','استخدم البحث للوصول إلى النماذج بعد أول 150 نتيجة.')));
+      }
+      search.oninput=sort.onchange=renderBudgetChoices;
+      proceed.onclick=async()=>{
+        if(!option||stalePlan||confirming)return;
+        const selected=option;
+        const current=()=>dialog.open&&currentUser?.id===owner&&activeWorkspace?.id===workspaceId&&
+          activeSession?.id===sessionId&&q('promptInput').value.trim()===text&&option===selected;
+        if(!current())return;
+        confirming=true;proceed.disabled=true;
+        try{
+          const fresh=await api('/api/opencode/catalog/providers?connected_only=true');
+          if(fresh?.budget_modes?.[mode]!==true)throw Error(tr(
+            'Administrator disabled this stage.','عطّلت الإدارة هذه المرحلة.'));
+          if(!current())return;
+          budgetApproval={mode,providerID:selected.provider.id,modelID:selected.model.id,
+            estimatedInput:selected.input,estimatedOutput:selected.output,
+            approvalId:crypto.randomUUID(),approvedAt:Date.now(),
+            approved:true,owner,workspaceId,sessionId,text,planId,inventoryFingerprint};
+          dialog.close();
+          await q('promptForm').onsubmit({preventDefault(){}});
+        }catch(error){budgetApproval=null;status.textContent=error.message;toast(error.message);}
+        finally{confirming=false;proceed.disabled=!option||stalePlan;}
+      };
+    }catch(error){if(dialog.open)status.textContent=error.message;}
+  }
+  function clearBudgetChoice(){
+    const choice=budgetChoice;
+    budgetChoice=null;
+    choice?.node.remove();
+  }
+  function keepBudgetChoice(){
+    if(!budgetChoice)return false;
+    if(!submissionCurrent(budgetChoice)||q('promptInput').value!==budgetChoice.draft){
+      clearBudgetChoice();return false;
+    }
+    if(!budgetChoice.node.isConnected)q('agentFeed').append(budgetChoice.node);
+    return true;
+  }
+  function showBudgetChoice(prompt){
+    if(keepBudgetChoice())return;
+    const feed=q('agentFeed');
+    workspaceLatestControl(feed);feed.workspaceFollow.following=true;
+    const node=textElement('article','','user-bubble');
+    node.dir='auto';
+    node.append(textElement('div',prompt,'message-content'));
+    const label=textElement('div',tr('How would you like to proceed?','ماذا تريد أن تفعل؟'));
+    const ordinary=btn('budgetOrdinary','Normal chat','محادثة عادية',()=>{
+      if(!keepBudgetChoice())return;
+      void q('promptForm').onsubmit({preventDefault(){},budgetChoiceConfirmed:true});
+    });
+    ordinary.type='button';
+    budgetButtons.append(ordinary);
+    const notice=textElement('small',tr(
+      'Analysis and implementation are currently unavailable for this session.',
+      'التحليل والتنفيذ غير متاحين حاليًا في هذه الجلسة.'));
+    notice.hidden=!budgetAnalysis.disabled||!budgetExecution.disabled;
+    node.append(label,budgetButtons,notice);
+    const choice={node,notice,owner:currentUser?.id,workspaceId:activeWorkspace.id,
+      sessionId:activeSession?.id,draft:q('promptInput').value};
+    budgetChoice=choice;
+    keepBudgetChoice();workspaceFollowLatest(feed);
+    if(window.nativeSession?.active()){
+      void api('/api/opencode/catalog/providers?connected_only=true').then(policy=>{
+        if(budgetChoice!==choice||!keepBudgetChoice())return;
+        showBudgetModes(policy?.budget_modes);
+        if(policy?.budget_modes&&notice.hidden===false)notice.textContent=tr(
+          'Enable analysis or implementation in AI / Pi Policy.',
+          'فعّل التحليل أو التنفيذ من سياسة AI / Pi في لوحة الإدارة.');
+      }).catch(()=>{
+        if(budgetChoice===choice&&notice.hidden===false)notice.textContent=tr(
+          'Could not load the analysis and implementation settings.',
+          'تعذّر تحميل إعدادات التحليل والتنفيذ.');
+      });
+    }else{
+      budgetAnalysis.hidden=budgetExecution.hidden=true;
+      budgetAnalysis.disabled=budgetExecution.disabled=true;
+      notice.hidden=false;
+    }
+  }
   utilities.append(attach);
   projectPanelBrand.append(q('chatGithub'),q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
   const choices=textElement('button','','icon-btn composer-choice-toggle');choices.type='button';choices.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
@@ -1775,8 +2312,9 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     recoveryAction.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
     cancelAttachment.hidden=!activeSession||!window.nativeSession?.pendingAttachment(activeSession.id);
     q('sendMessage').disabled=sending||queuing||nativeBusy||anotherProjectRunning||
-      Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||
-      !selected?.connected||selected.allowed===false||!q('modelSelect').value;
+      Boolean(pendingSubmission)||!workAccess||!runtimeReady||
+      (!q('promptInput').value.trim()&&
+       (!modelsReady||!selected?.connected||selected.allowed===false||!q('modelSelect').value));
     q('sendMessage').title=anotherProjectRunning?
       tr('Another project is running','هناك مهمة قائمة في مشروع آخر'):
       nativeBusy?tr('Verify the previous message receipt before sending','تحقق من استلام الرسالة السابقة أولًا'):
@@ -1850,7 +2388,10 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   function renderProviders(snapshot,preferredProvider=''){
     // Workspace shows Pi-configured connections only. New provider discovery
     // belongs to Connections; neither config nor model listing proves credits.
-    providers=snapshot.providers||[];
+    chatProviderSnapshot=snapshot;
+    showBudgetModes(snapshot.budget_modes);
+    const hidden=readChatVisibility(currentUser?.id);
+    providers=(snapshot.providers||[]).filter(p=>!hidden.has(providerVisibilityId(p.id)));
     const linkedGroup=document.createElement('optgroup');
     linkedGroup.label=tr('My connected providers','المزوّدون المربوطون');
     const browseGroup=document.createElement('optgroup');
@@ -1897,15 +2438,19 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const current=()=>stamp===modelRequest&&activeWorkspace?.id===workspaceId&&q('providerSelect').value===selected?.id;
     modelsReady=false;retryModels.hidden=true;
     const render=rows=>{
-      const zeroPrice=m=>typeof m.cost?.input==='number'&&m.cost.input===0&&
-        typeof m.cost?.output==='number'&&m.cost.output===0;
-      rows=rows.filter(m=>m.visible!==false||m.id===chosenModel)
-        .sort((a,b)=>Number(zeroPrice(b))-Number(zeroPrice(a))||
-          String(a.name||a.id).localeCompare(String(b.name||b.id)));
+      const hidden=readChatVisibility(currentUser?.id);
+      rows=rows.filter(m=>(m.visible!==false||m.id===chosenModel)&&
+        !hidden.has(modelVisibilityId(selected?.id,m.id)))
+        .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)));
       q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));
       for(const model of rows){
-        const option=new Option((model.name||model.id)+
-          (zeroPrice(model)?tr(' · $0 listed price',' · سعر مدرج $0'):''),model.id);
+        const {input,output}=model.cost||{};
+        const paid=[input,output].some(price=>typeof price==='number'&&price>0);
+        const free=input===0&&output===0&&
+          (selected?.id!=='openrouter'||model.id.endsWith(':free'));
+        const price=paid?tr('Paid list price','سعر مدرج مدفوع'):
+          free?tr('$0 list price','سعر مدرج $0'):tr('Price unknown','السعر غير معروف');
+        const option=new Option((model.name||model.id)+' · '+price,model.id);
         option.disabled=model.allowed===false;
         option.title=tr('Pi model · remaining credits not confirmed','نموذج Pi · الرصيد المتبقي غير مؤكد');
         q('modelSelect').add(option);
@@ -1942,12 +2487,20 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   window.refreshWorkspaceChoices=async(preferredProvider='',force=true)=>{if(activeWorkspace&&force)window.workspaceRuntime.invalidate(activeWorkspace.id);return refreshChoices(preferredProvider,force);};
   window.addEventListener('account-provider-changed',event=>{if(currentUser?.id===event.detail.owner&&activeWorkspace&&!sending&&!pendingSubmission)window.refreshWorkspaceChoices(chosenProvider,false).catch(()=>{});});
-  let providerCheckPending=false;
+  let providerCheckPending=false,lastNativePolicyCheck=0;
   setInterval(async()=>{
-    if(window.nativeSession?.active()||providerCheckPending||document.hidden||!currentUser||!activeWorkspace||sending||pendingSubmission||!q('workspacePage').classList.contains('active'))return;
+    if(providerCheckPending||document.hidden||!currentUser||!activeWorkspace||sending||pendingSubmission||!q('workspacePage').classList.contains('active'))return;
     const id=activeWorkspace.id,owner=currentUser.id,previous=window.workspaceRuntime.peek(id);
     providerCheckPending=true;
-    try{if(!previous){await window.refreshWorkspaceChoices(chosenProvider,true);return;}
+    try{
+      if(window.nativeSession?.active()){
+        if(Date.now()-lastNativePolicyCheck<30000)return;
+        lastNativePolicyCheck=Date.now();
+        const state=await api('/api/opencode/catalog/providers?connected_only=true');
+        if(currentUser?.id===owner&&activeWorkspace?.id===id)showBudgetModes(state.budget_modes);
+        return;
+      }
+      if(!previous){await window.refreshWorkspaceChoices(chosenProvider,true);return;}
       const state=await api('/api/workspaces/'+encodeURIComponent(id)+'/runtime/state');
       if(currentUser?.id===owner&&activeWorkspace?.id===id&&(state.policy_revision!==previous.policy_revision||state.revision!==previous.revision||state.generation!==previous.generation))await window.refreshWorkspaceChoices(chosenProvider,true);
     }catch(error){}finally{providerCheckPending=false;}
@@ -1957,7 +2510,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));
     if(!await usableWorkspace(workspace)){toast(tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.'));if(navigate)await page('workspaceHomePage');return;}
     saveNativeDraft();window.closeNativeFile?.();if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}detailLoads.delete(workspace.id);stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;restoreNativeDraft();window.resetWorkspaceQueue?.();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
-    discovery++;modelRequest++;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewStatus.textContent=tr('Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
+    discovery++;modelRequest++;chatProviderSnapshot=null;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewStatus.textContent=tr('Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
     q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
     renderWorkspaceEmpty();q('promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('Pi default','افتراضي Pi'),''));updateSend();
     if(!navigate){
@@ -1988,6 +2541,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     historyRevision++;
     if(drawer())closePane();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);window.refreshWorkspaceQueue?.();clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
     pendingSubmission=null;sending=cancelRequested=false;sessionRows=[];providers=[];chosenAgent=chosenProvider=chosenModel='';
+    budgetApproval=null;showBudgetModes(null);
     runtimeReady=agentsReady=modelsReady=workAccess=false;entitlement=null;workspaceDays.hidden=workspaceAccess.hidden=true;workspaceDays.textContent='';workspaceAccess.replaceChildren();homeAccess.replaceChildren();retrySubmission.hidden=retryModels.hidden=true;
     storageData=null;submissionStatus.textContent=storageChip.textContent=activityStage.textContent=activitySummary.textContent='';
     capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;approvalsList.replaceChildren();detailLoads.clear();updateSend();
@@ -2036,7 +2590,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   function restoreNativeDraft(){if(!window.nativeSession?.active())return;const key=nativeDraftKey();if(key===nativeDraftContext)return;nativeDraftContext=key;let value=null;try{value=JSON.parse(localStorage.getItem(key)||'null');}catch{}q('promptInput').value=value?.text||'';clearAttachments();attachments=Array.isArray(value?.attachments)?value.attachments.map(item=>({...item,owner:currentUser?.id,workspaceId:activeWorkspace?.id,state:'ready'})):[];composerDraftRevision++;window.resizeWorkspaceComposer?.();renderAttachments();
 
   }
-  q('promptInput').addEventListener('input',()=>{composerDraftRevision++;saveNativeDraft();});
+  q('promptInput').addEventListener('input',()=>{clearBudgetChoice();composerDraftRevision++;saveNativeDraft();updateSend();});
   window.addEventListener('beforeunload',saveNativeDraft);
   window.addEventListener('authentication-cleared',()=>{nativeDraftContext='';});
   function takeComposerDraft(isCurrent){
@@ -2164,7 +2718,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   // Session creation and SSE refreshes rebuild the feed while a POST is pending.
   // Keep one clearly unconfirmed preview without affecting request IDs/retries.
-  new MutationObserver(keepSendingPreview).observe(q('agentFeed'),{childList:true});
+  new MutationObserver(()=>{keepSendingPreview();keepBudgetChoice();}).observe(q('agentFeed'),{childList:true});
+  window.addEventListener('authentication-cleared',clearBudgetChoice);
   window.addEventListener('authentication-cleared',clearSendingPreview);
   async function submitPending(){
     if(!pendingSubmission||sending)return;
@@ -2253,8 +2808,21 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
       await window.promptProjectChoice?.();return;
     }
     if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
-    const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=choiceContinuation?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
-    if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
+    const stageConsent=budgetApproval;budgetApproval=null;
+    const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=stageConsent?.providerID??q('providerSelect').value,model=stageConsent?.modelID??q('modelSelect').value,selectedAgent=(stageConsent||choiceContinuation)?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
+    if(!prompt)return;
+    if(!stageConsent&&!event.budgetChoiceConfirmed&&!choiceContinuation&&typedPrompt){
+      showBudgetChoice(prompt);return;
+    }
+    if(!runtimeReady||(!stageConsent&&!modelsReady)||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
+    if(stageConsent&&(!window.nativeSession?.active()||stageConsent.owner!==owner||
+       stageConsent.workspaceId!==workspaceId||stageConsent.sessionId!==activeSession?.id||
+       stageConsent.text!==typedPrompt)){
+      submissionStatus.textContent=tr('The approved request changed. Review the estimate again.',
+        'تغيّر الطلب الموافق عليه. راجع التقدير مجددًا.');
+      return;
+    }
+    clearBudgetChoice();
     if(window.nativeSession?.active()){
       // A second prompt is added through Pi's own followUp queue and never
       // cancels the active task. Other projects are blocked on the Pi server.
@@ -2269,7 +2837,13 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         if(sendingPreview)sendingPreview.sessionId=sessionId;
         const receipt=await window.nativeSession.send(sessionId,{
           text:prompt,providerID:provider,modelID:model,agent:selectedAgent,
-          variant:nativeVariant.value||undefined,files:nativeFiles
+          variant:stageConsent?undefined:nativeVariant.value||undefined,files:nativeFiles,
+          ...(stageConsent?{budget:{
+               mode:stageConsent.mode,approved:true,
+               estimatedInput:stageConsent.estimatedInput,estimatedOutput:stageConsent.estimatedOutput,
+               approvalId:stageConsent.approvalId,approvedAt:stageConsent.approvedAt,planId:stageConsent.planId,
+               inventoryFingerprint:stageConsent.inventoryFingerprint
+             }}:{})
         });
         if(receipt?.handled){
           clearSendingPreview();
@@ -2289,7 +2863,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           return {accepted:true,queued:true};
         }
         if(sendingPreview){const note=sendingPreview.node.querySelector('.sending-preview-status');if(note)note.textContent=tr('Received by Pi','استلمها Pi');}
-        if(!submissionStatus.dataset.piProviderError)submissionStatus.textContent=tr('Pi received the request; awaiting provider response.','استلم Pi الطلب؛ جارٍ انتظار رد المزوّد.');
+        if(!receipt?.settled&&!submissionStatus.dataset.piProviderError)submissionStatus.textContent=tr('Pi received the request; awaiting provider response.','استلم Pi الطلب؛ جارٍ انتظار رد المزوّد.');
         // Pi SSE owns reply presentation. The same Pi session now continues.
         return {accepted:true,queued:false};
       }catch(error){clearSendingPreview();toast(error.message);submissionStatus.textContent=error.message;

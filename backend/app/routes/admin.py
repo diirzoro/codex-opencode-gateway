@@ -66,6 +66,7 @@ class PolicyIn(BaseModel):
     require_tool_approval: bool = True
     hidden_providers: list[str] | None = Field(default=None,max_length=2000)
     hidden_models: dict[str,list[str]] | None = None
+    budget_modes: dict[Literal["analysis", "execution"], bool] | None = None
 
 def _count(db, model, *conditions):
     return db.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
@@ -952,7 +953,7 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
     # Preserve the Pi registry snapshot while concurrent 14-day maintenance
     # may also update the existing provider-policy JSON.
     row = db.scalar(select(PlatformPolicy).where(
-        PlatformPolicy.id == row.id).with_for_update()) or row
+        PlatformPolicy.id == row.id).with_for_update().execution_options(populate_existing=True)) or row
     previous=row.as_payload()
     try:
         existing_rules = json.loads(row.allowed_providers or "[]")
@@ -970,11 +971,44 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
                       'platform_defaults':previous.get('platform_defaults') or {}}
     if isinstance(pi_registry, dict):
         provider_rules['pi_registry'] = pi_registry
+    budget_modes = {**previous["budget_modes"], **(data.budget_modes or {})}
+    if not any(budget_modes.values()):
+        raise HTTPException(422, "Keep at least one project action visible: analysis or execution")
     row.allowed_providers = json.dumps(provider_rules)
-    row.allowed_models = json.dumps({'allowed':sorted({m.strip() for m in data.allowed_models if m.strip()}),'hidden':{key:sorted(set(values)) for key,values in selection.items()}})
+    # Do not erase model curation when editing unrelated general policy.
+    row.allowed_models = json.dumps({
+        'allowed':sorted({m.strip() for m in data.allowed_models if m.strip()}),
+        'hidden':{key:sorted(set(values)) for key,values in selection.items()},
+        'selected':previous.get('selected_models') or {},
+        'budget_modes': budget_modes,
+    })
     row.allowed_tools = json.dumps(sorted({t.strip() for t in data.allowed_tools if t.strip()}))
     row.require_tool_approval = data.require_tool_approval
-    db.commit(); db.refresh(row)
+    from .management import _ai_pi_invalidate
+    next_policy = row.as_payload()
+    model_access_changed = any(next_policy[field] != previous[field] for field in (
+        "allowed_providers", "hidden_providers", "allowed_models", "hidden_models"
+    ))
+    if data.budget_modes is not None:
+        next_modes = next_policy["budget_modes"]
+        previous_modes = previous["budget_modes"]
+        if any(previous_modes[mode] and not next_modes[mode] for mode in next_modes):
+            # Apply newly disabled modes before committing. A lost control
+            # connection must never leave an old grant authorizing the mode.
+            _ai_pi_invalidate(budget_modes={
+                mode: previous_modes[mode] and next_modes[mode] for mode in next_modes
+            })
+    db.commit()
+    if model_access_changed:
+        _ai_pi_invalidate()
+    if data.budget_modes is not None:
+        # Re-read under the policy lock to serialize delivery with concurrent
+        # writes. A delayed response must never restore an earlier policy.
+        row = db.scalar(select(PlatformPolicy).where(PlatformPolicy.id == row.id)
+                        .with_for_update().execution_options(populate_existing=True)) or row
+        _ai_pi_invalidate(budget_modes=row.as_payload()["budget_modes"])
+    else:
+        db.refresh(row)
     return row.as_payload()
 
 class EmailDeliveryUpdate(BaseModel):

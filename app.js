@@ -252,7 +252,8 @@ window.nativeDirectTest=(()=>{
         all,
         connected:all.filter(p=>available.has(p.id)).map(p=>p.id),
         default:value.default&&typeof value.default==='object'?value.default:{},
-        public_free:[]
+        public_free:[],
+        budget_modes:value.budget_modes||{analysis:false,execution:false}
       };
       configuredSnapshot=result;
       return result;
@@ -290,6 +291,7 @@ window.nativeDirectTest=(()=>{
   function nativeFailure(value){
     const kind=String(value?.kind||value?.data?.code||'');
     const messages={
+      quota_exhausted:['The provider reports that this model’s quota is exhausted.','أبلغ المزوّد عن نفاد حصة هذا النموذج.'],
       insufficient_balance:[ 'Insufficient provider credit balance. Add credit to your account.','رصيد المزوّد غير كافٍ. أضف رصيدًا إلى حسابك.' ],
       rate_limited:[ 'Provider request limit reached (not necessarily low balance).','وصلت إلى حد طلبات المزوّد، ولا يعني ذلك بالضرورة نفاد الرصيد.' ],
       invalid_key:[ 'The provider rejected the API key.','المزوّد رفض مفتاح API.' ],
@@ -345,6 +347,29 @@ window.nativeDirectTest=(()=>{
   return {active,testHost,url,direct,ensureSession,catalog,configuredProviders,agents,registry,workspaceRegistry,forget,matches,route,
     classifyError:nativeFailure,rootFromFile,defaultDirectory};
 })();
+
+function uploadWithProgress(path, options, signal) {
+ const {body,method,headers,onUploadProgress}=options;
+ return new Promise((resolve,reject)=>{
+  const xhr=new XMLHttpRequest();
+  const abort=()=>xhr.abort();
+  if(signal.aborted){reject(new DOMException('Upload aborted','AbortError'));return;}
+  xhr.open(method,path);
+  for(const [name,value] of Object.entries(headers||{}))xhr.setRequestHeader(name,value);
+  xhr.upload.onprogress=event=>onUploadProgress(event.loaded,event.lengthComputable?event.total:0);
+  xhr.upload.onload=()=>onUploadProgress(null,0);
+  xhr.onload=()=>resolve(new Response(xhr.status===204?null:xhr.responseText,{
+   status:xhr.status,headers:{
+    'X-Session-Idle-Expires-At':xhr.getResponseHeader('X-Session-Idle-Expires-At')||''
+   }
+  }));
+  xhr.onerror=()=>reject(new Error(tr('Connection interrupted during upload.','انقطع الاتصال أثناء رفع المشروع.')));
+  xhr.onabort=()=>reject(new DOMException('Upload aborted','AbortError'));
+  xhr.onloadend=()=>signal.removeEventListener('abort',abort);
+  signal.addEventListener('abort',abort,{once:true});
+  xhr.send(body);
+ });
+}
 
 const api=async(path,options={})=>{
  // TEST retains its existing native routing. LIVE project file reads now use
@@ -462,7 +487,7 @@ const api=async(path,options={})=>{
  const revision=authenticationRevision,controller=new AbortController();authenticatedRequests.add(controller);
  const onAbort=()=>controller.abort();options.signal?.addEventListener('abort',onAbort,{once:true});if(options.signal?.aborted)controller.abort();
  let response;
- try{response=await fetch(path,{...options,signal:controller.signal,credentials:'same-origin',headers:{...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(options.headers||{})}});}
+ try{response=options.onUploadProgress?await uploadWithProgress(path,options,controller.signal):await fetch(path,{...options,signal:controller.signal,credentials:'same-origin',headers:{...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(options.headers||{})}});}
  finally{authenticatedRequests.delete(controller);options.signal?.removeEventListener('abort',onAbort);}
  if(revision!==authenticationRevision)throw new Error('Authenticated session changed');
  if(response.ok)window.authSession?.observe(response.headers.get('X-Session-Idle-Expires-At'));
@@ -778,7 +803,6 @@ $('#registerForm').onsubmit=async event=>{
   if(!loggedIn||loggedIn.status!=='active')throw new Error(lang==='ar'?'لم يتم إنشاء جلسة دخول؛ لا يمكن تجاوز التحقق من البريد.':'No authenticated session; email verification cannot be bypassed.');
   renderProfile(await api('/api/profile',{method:'PATCH',body:JSON.stringify(prefs)}));
   $('#registerPassword').value='';await page(pendingIdea?'onboarding':'accountPage');
-  if(pendingIdea)$('#projectName').value=pendingIdea.slice(0,120);
  }catch(error){
   if(error.status===429&&!isEdit){
    // Response to an already-accepted message may have been lost; do not send
@@ -944,8 +968,6 @@ window.piExecutionStatus=async()=>{
   return result;
 };
 async function loadProjects(){const projects=await api('/api/projects'),workspaces=await api('/api/workspaces');const list=$('#projectList');list.replaceChildren();if(!projects.length)list.append(textElement('p',t('noProjects')));for(const project of projects){const button=textElement('button',`${project.name} · ${project.source_type}`,'button ghost');button.onclick=()=>{const workspace=workspaces.find(w=>w.project_id===project.id);if(workspace)openWorkspace(project,workspace);else toast('Workspace unavailable')};list.append(button)}}
-$('#sourceType').onchange=()=>{const hint=$('#githubHint');if(hint)hint.hidden=value('sourceType')!=='github';};$('#githubHintOpen').onclick=()=>window.openConnections&&window.openConnections('github');
-$('#createProjectForm').onsubmit=async event=>{event.preventDefault();const button=$('#createProjectButton');button.disabled=true;try{if(value('sourceType')==='github'){document.querySelector('#createProjectForm').closest('dialog')?.close();await window.openGithubProject();return;}const result=await api('/api/projects',{method:'POST',body:JSON.stringify({project_name:value('projectName'),source_type:value('sourceType')})});await openWorkspace(result.project,result.workspace)}catch(error){apiMessage('createProjectMessage',error.message,true)}finally{button.disabled=false}};
 async function openWorkspace(project,workspace){if(['admin','owner'].includes(currentUser?.role)){await page('adminPage');return;}
 if(!currentUser||!project?.id||!workspace?.id||String(workspace.project_id)!==String(project.id))
  throw Error(lang==='ar'?'اختر مشروعًا صحيحًا قبل فتح المحادثة.':'Select a valid project before opening Pi chat.');
@@ -1251,6 +1273,43 @@ function renderPiOptionCards(host,answer,messageId){
  }else host.append(panel);
 }
 // A deliberately small, text-only Markdown subset. Never interpret Agent HTML.
+function splitPiPlan(value){
+ const plans=[];
+ const text=String(value||'').replace(/<pi-budget-plan>[\s\S]*?(?:<\/pi-budget-plan>|$)/gi,block=>{
+  const complete=block.match(/^<pi-budget-plan>\s*([\s\S]*?)\s*<\/pi-budget-plan>$/i);
+  if(complete)try{
+   const plan=JSON.parse(complete[1]);
+   if(typeof plan?.summary==='string'&&Array.isArray(plan.files))plans.push(plan);
+  }catch{/* Ignore invalid internal plan metadata. */}
+  return '';
+ });
+ return {text,plans};
+}
+function visiblePiStreamText(value){
+ let {text}=splitPiPlan(value);
+ text=text.replace(/(^|\n)[ \t]*\x60{3,}(?:pi[_-]choices|json)[^\r\n]*(?:\r?\n|$)[\s\S]*?(?:\r?\n[ \t]*\x60{3,}(?=\s|$)|$)/gi,'$1');
+ const fenceTail=text.match(/(?:^|\n)[ \t]*(`{1,3}[a-z_-]*)$/i);
+ if(fenceTail&&['```json','```pi_choices','```pi-choices'].some(marker=>marker.startsWith(fenceTail[1].toLowerCase())))
+  text=text.slice(0,fenceTail.index);
+ const tail=text.lastIndexOf('<');
+ if(tail>=0&&'<pi-budget-plan>'.startsWith(text.slice(tail).toLowerCase()))text=text.slice(0,tail);
+ return text;
+}
+function renderPiPlan(host,plan){
+ const section=document.createElement('section');section.className='message-table-wrap';
+ section.append(textElement('h3',lang==='ar'?'خطة العمل المقترحة':'Proposed plan'));
+ if(plan.summary.trim())section.append(textElement('p',plan.summary.trim()));
+ const files=plan.files.slice(0,80).map(file=>typeof file==='string'?file:file?.path)
+  .filter(path=>typeof path==='string'&&path.trim());
+ if(files.length){
+  const table=document.createElement('table'),head=document.createElement('thead'),body=document.createElement('tbody');
+  const title=document.createElement('tr'),cell=textElement('th',lang==='ar'?'الملفات المقترحة':'Proposed files');
+  cell.scope='col';title.append(cell);head.append(title);
+  for(const file of files){const row=document.createElement('tr');row.append(textElement('td',file));body.append(row);}
+  table.append(head,body);section.append(table);
+ }
+ host.append(section);
+}
 function renderAgentText(host,value,messageId){
  host.replaceChildren();host.classList.add('message-rich');host.dir='auto';
  // Present paths relative to the verified selected project's root.
@@ -1268,7 +1327,8 @@ function renderAgentText(host,value,messageId){
   }
   node.append(document.createTextNode(text.slice(at)));
  }
- const lines=String(value||'').split('\n');let paragraph=[],list=null;
+ const {text,plans}=splitPiPlan(value);
+ const lines=text.split('\n');let paragraph=[],list=null;
  const cells=line=>{
   const result=[];let text='',code=false,escaped=false;
   for(const char of line.trim()){
@@ -1285,6 +1345,7 @@ function renderAgentText(host,value,messageId){
    const block=textElement('section','','message-code-block'),header=textElement('div','','message-code-header'),pre=document.createElement('pre'),code=document.createElement('code');
    const language=fence[2].trim().split(/\s/)[0].slice(0,40)||'text';
    if(/^pi[_-]choices$/i.test(language))continue;
+   if(/^json$/i.test(language)&&/^\s*\{\s*"(?:question|options)"\s*:/.test(body.join('\n')))continue;
    if(/^json$/i.test(language)){
     try{
      const value=JSON.parse(body.join('\n'));
@@ -1324,7 +1385,8 @@ function renderAgentText(host,value,messageId){
   else{if(list)flush();paragraph.push(lines[i]);}
  }
  flush();
- renderPiOptionCards(host,value,messageId);
+ for(const plan of plans)renderPiPlan(host,plan);
+ renderPiOptionCards(host,text,messageId);
 }
 function compactNativeToolMessages(rows){
  // Fold adjacent tool-only assistant records into a single visual activity
@@ -1404,7 +1466,13 @@ async function refreshMessages(){
    node.append(avatar);
    if(row.id)node.dataset.messageId=row.id;
    const hasText=presentation.hasText;
-   const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text,row.id);node.append(content);
+   let shownText=row.text||'';
+   if(row.role==='user'&&/^\[PI_BUDGET_ANALYSIS_V1:[a-f0-9]{64}\]/.test(shownText)){
+     const boundary='\n\nUser goal:\n',offset=shownText.indexOf(boundary);
+     shownText=offset<0?(lang==='ar'?'طلب تحليل المشروع':'Project analysis request'):
+       shownText.slice(offset+boundary.length);
+   }
+   const content=textElement('div',shownText,'message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,shownText,row.id);node.append(content);
    // Never promote a model's textual claim into a verified file operation.
    // Real Pi toolCall/toolResult activity is displayed separately.
    if(nativeIncremental&&row.role==='assistant'&&hasText&&!presentation.activity.length&&
@@ -1590,14 +1658,13 @@ const navigationReady=authReady.then(async()=>{
 }).catch(error=>{document.documentElement.classList.remove('bootstrapping');toast(error.message)});
 // GitHub authorization/repository metadata loads only when its UI is opened.
 window.bootstrapGithubStatus=Promise.resolve(null);
-$('#sourceType').querySelector('option[value=github]').disabled=false;
 
 
 Object.assign(copy.en,{newProject:'New project',yourProjects:'Your projects',workspaceLabel:'YOUR WORKSPACE',projectsHint:'Your next idea starts here.',projectsSubhint:'Create a project to keep your work in one place.',notConnected:'Not connected',yourAccount:'Your account',accountHint:'Profile & preferences',getStarted:'Get started',yourSpace:'YOUR IDEAS. YOUR WORKSPACE.',welcomeTitle:'What will you build today?',welcomeSubtitle:'A little less setup. A lot more possibility.',welcomePlaceholder:'Describe an idea, start a project, or make something better…',buildWithAi:'Build with your AI',startBlank:'Start from scratch',useTemplate:'Use a template',openProject:'Open a project',madeForFlow:'A workspace that stays out of your way',filesTogether:'Your files, together',filesTogetherBody:'Start blank or choose a template. Your project has a space of its own.',keepContext:'Pick up where you left off',keepContextBody:'Start a new conversation while keeping the same project files.',reviewClearly:'See every change',reviewClearlyBody:'Browse files, inspect the diff, and commit when you are ready.',independentNotice:'Independent workspace. Pi and GitHub are external services.',pricingTitle:'Simple pricing',pricingSubtitle:'Pay only for the time you use. No hidden fees.',pricingSummary:'Live prices from the plan catalog.',});
 Object.assign(copy.ar,{newProject:'مشروع جديد',yourProjects:'مشاريعك',workspaceLabel:'مساحة عملك',projectsHint:'فكرتك القادمة تبدأ هنا.',projectsSubhint:'أنشئ مشروعًا لتجمع ملفاتك وعملك في مكان واحد.',notConnected:'غير متصل',yourAccount:'حسابك',accountHint:'الملف الشخصي والتفضيلات',getStarted:'ابدأ الآن',yourSpace:'أفكارك. مساحة عملك.',welcomeTitle:'ماذا ستبني اليوم؟',welcomeSubtitle:'خطوات أقل للبدء. مساحة أكبر للإبداع.',welcomePlaceholder:'صِف فكرة، ابدأ مشروعًا، أو طوّر شيئًا موجودًا…',buildWithAi:'ابنِ بمزوّدك الذكي',startBlank:'ابدأ من الصفر',useTemplate:'استخدم قالبًا',openProject:'افتح مشروعًا',madeForFlow:'مساحة تترك لك التركيز على ما تصنعه',filesTogether:'ملفاتك في مكان واحد',filesTogetherBody:'ابدأ بمشروع فارغ أو اختر قالبًا. لكل مشروع مساحة تخصّه.',keepContext:'أكمل من حيث توقفت',keepContextBody:'ابدأ محادثة جديدة مع الاحتفاظ بملفات مشروعك نفسها.',reviewClearly:'كل تغيير أمامك',reviewClearlyBody:'تصفح الملفات وراجع الفروق، ثم احفظ التغييرات عندما تكون جاهزًا.',independentNotice:'منصة مستقلة. Pi وGitHub خدمتان خارجيتان.',pricingTitle:'أسعار بسيطة',pricingSubtitle:'ادفع فقط مقابل المدة التي تستخدمها. لا رسوم خفية.',pricingSummary:'أسعار مباشرة من كتالوج الخطط.',});
 let pendingIdea='';
-$('#welcomePrompt').onsubmit=async event=>{event.preventDefault();pendingIdea=$('#welcomeInput').value.trim();await page(currentUser?'onboarding':'authPage');if(currentUser&&pendingIdea)$('#projectName').value=pendingIdea.slice(0,120)};
-$$('[data-quick]').forEach(button=>button.onclick=async()=>{await page('onboarding');$('#sourceType').value=button.dataset.quick;$('#sourceType').dispatchEvent(new Event('change'))});
+$('#welcomePrompt').onsubmit=async event=>{event.preventDefault();pendingIdea=$('#welcomeInput').value.trim();await page(currentUser?'onboarding':'authPage')};
+$$('[data-quick]').forEach(button=>button.onclick=()=>page('onboarding'));
 $('#welcomeMenu').onclick=()=>{const open=$('#welcomeSidebar').classList.toggle('visible');$('#welcomeMenu').setAttribute('aria-expanded',String(open));};document.addEventListener('keydown',event=>{if(event.key==='Escape'){$('#welcomeSidebar').classList.remove('visible');$('#welcomeMenu').setAttribute('aria-expanded','false');$('#backdrop').click();}});
 applyPrefs();
 
@@ -1652,7 +1719,7 @@ applyPrefs();
       if(field.options){input=element('select');for(const option of field.options)input.add(new Option(option.label||option,option.value||option));}
       else{input=element('input');input.type=field.type||'text';}
       input.name=field.name;input.id=id;input.value=field.value??'';input.required=field.required??false;input.autocomplete=field.type==='password'?'off':field.autocomplete||'off';
-      for(const key of ['min','max','minLength','maxLength','pattern'])if(field[key]!==undefined)input[key]=field[key];
+      for(const key of ['min','max','minLength','maxLength','pattern','accept'])if(field[key]!==undefined)input[key]=field[key];
       label.htmlFor=id;label.append(input);
       if(field.type==='password'){
         const reveal=element('button',tr('Show password','إظهار كلمة المرور'),'button ghost small');
@@ -1712,7 +1779,7 @@ applyPrefs();
   };
   const basePage=page;page=async function(...args){document.querySelectorAll('dialog[data-form-dialog][open]').forEach(dialog=>dialog.close());return basePage(...args);};
   document.addEventListener('DOMContentLoaded',()=>{
-    for(const [id,en,ar] of [['adminPlanForm','Add plan','إضافة خطة'],['adminPolicyForm','Advanced access restrictions','قيود الوصول المتقدمة'],['createProjectForm','Create project','إنشاء مشروع']]){
+    for(const [id,en,ar] of [['adminPlanForm','Add plan','إضافة خطة'],['adminPolicyForm','Advanced access restrictions','قيود الوصول المتقدمة']]){
       const form=document.getElementById(id);if(!form)continue;
       // Label placeholder-only fields before relocating the existing bound form.
       for(const input of form.querySelectorAll('input:not([type=checkbox])'))if(!input.closest('label')){
@@ -1721,11 +1788,14 @@ applyPrefs();
       }
       const root=form.parentElement;window.mountFormDialog(root,form,tr(en,ar));
       const message=document.getElementById(id==='adminPlanForm'?'adminPlanMessage':id==='adminPolicyForm'?'adminPolicyMessage':'projectMessage');if(message)form.append(message);
-      if(id==='createProjectForm'){
-        form.querySelector('h2')?.remove();const pageNode=document.getElementById('onboarding');
-        new MutationObserver(()=>{if(pageNode.classList.contains('active'))form.openDialog();else if(form.formDialog.open)form.formDialog.close();}).observe(pageNode,{attributes:true,attributeFilter:['class']});
-      }
     }
+    const onboarding=document.getElementById('onboarding');
+    const chooseProject=()=>void window.chooseNewProject?.();
+    document.getElementById('onboardingNewProject').onclick=chooseProject;
+    new MutationObserver(records=>{
+      const wasActive=records[0]?.oldValue?.split(/\s+/).includes('active');
+      if(onboarding.classList.contains('active')&&!wasActive)chooseProject();
+    }).observe(onboarding,{attributes:true,attributeOldValue:true,attributeFilter:['class']});
     const authPage=document.getElementById('authPage'),card=authPage.querySelector('.auth-card');
     const authDialog=element('dialog','','action-form-dialog auth-action-dialog');authDialog.id='authDialog';authDialog.setAttribute('aria-label',tr('Account access','الدخول للحساب'));
     const columns=element('div','','auth-dialog-columns'),workflow=authPage.querySelector('.auth-workflow');

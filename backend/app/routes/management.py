@@ -473,6 +473,10 @@ _AI_VERIFY_URLS = {
     "xai": "https://api.x.ai/v1/models",
     "together": "https://api.together.xyz/v1/models",
     "cerebras": "https://api.cerebras.ai/v1/models",
+    "nvidia": "https://api.ngc.nvidia.com/v2/users/me",
+    # Authenticated, non-inference OpenCode Console and Go API endpoints.
+    "opencode": "https://opencode.ai/console/api/v1/models",
+    "opencode-go": "https://opencode.ai/inference/go/v1/usage",
 }
 _AI_REFRESH_DAYS = 14
 _AI_STALE_DAYS = 14
@@ -506,11 +510,30 @@ def _ai_pi_supported_providers(db):
            and 0 < len(pid) <= 120}
     rows = list(db.scalars(select(AiProviderCatalog).where(
         AiProviderCatalog.id.in_(ids)).order_by(AiProviderCatalog.name).limit(1000)))
+    methods_by_provider = saved.get("auth_methods")
+    if not isinstance(methods_by_provider, dict):
+        methods_by_provider = {}
+    probe_ids = _ai_probe_provider_ids(saved)
     return [
         {"id": row.id, "name": row.name,
-         "api_key_supported": row.id in _AI_VERIFY_URLS}
+         "auth_methods": [method for method in
+             methods_by_provider.get(row.id, []) if method in ("apiKey", "oauth")]
+             if isinstance(methods_by_provider.get(row.id), list) else [],
+         # An API key may be offered by Pi but must still have an approved,
+         # independently authenticated verifier before Gateway accepts it.
+         "api_key_supported": row.id in _AI_VERIFY_URLS or row.id in probe_ids,
+         "api_key_model_probe": row.id in probe_ids and row.id not in _AI_VERIFY_URLS,
+         "oauth_link_available": False}
         for row in rows if row.id in ids
     ]
+
+
+def _ai_probe_provider_ids(registry):
+    # Only verified Gateway-to-Pi control channels can use inference probes.
+    if "x-pi-gateway-token" not in _ai_pi_control_headers():
+        return set()
+    ids = registry.get("api_key_probe_ids")
+    return {provider_id for provider_id in ids if isinstance(provider_id, str)} if isinstance(ids, list) else set()
 
 
 def _ai_schema(db):
@@ -540,6 +563,9 @@ def _ai_allowed(db, provider_id, model_id=None, rules=None):
     if allowed and provider_id not in allowed:
         return False
     if model_id is not None:
+        selected = rules.get("selected_models") or {}
+        if isinstance(selected, dict) and provider_id in selected and model_id not in selected[provider_id]:
+            return False
         allowed_models = rules.get("allowed_models") or []
         hidden = rules.get("hidden_models") or {}
         if model_id in hidden.get(provider_id, []):
@@ -561,6 +587,9 @@ def _ai_personal_allowed(db, provider_id, model_id=None, rules=None):
     if provider_id in (rules.get("hidden_providers") or []):
         return False
     if model_id is not None:
+        selected = rules.get("selected_models") or {}
+        if isinstance(selected, dict) and provider_id in selected and model_id not in selected[provider_id]:
+            return False
         hidden = rules.get("hidden_models") or {}
         if model_id in hidden.get(provider_id, []) or (
                 provider_id + "/" + model_id) in hidden.get(provider_id, []):
@@ -675,6 +704,7 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
             (func.lower(AiProviderCatalog.name).contains(query.lower())))
     rows = list(db.scalars(provider_query.limit(1000)))
     rules = _ai_policy(db)
+    probe_ids = _ai_probe_provider_ids(_ai_pi_registry(db))
     # Fetch connected model details in ONE indexed query instead of one SQL
     # round-trip per provider. Read-only Dashboard opens stay lightweight.
     details_for = {provider.id for provider in rows
@@ -737,7 +767,8 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                 "platform_models": sorted(shared["models"]) if shared else [],
                 "credential_stored": False,
                 "credential_source": "platform" if shared and not record else "gateway" if record else "none",
-                "api_key_supported": provider.id in _AI_VERIFY_URLS,
+                "api_key_supported": provider.id in _AI_VERIFY_URLS or provider.id in probe_ids,
+                "api_key_model_probe": provider.id in probe_ids and provider.id not in _AI_VERIFY_URLS,
                 "auth_status": owned[provider.id].auth_status if provider.id in owned else "not_connected",
                 "credit_status": record.credit_status if record else "unknown",
                 "last_synced_at": provider.models_synced_at, "stale": stale}
@@ -774,7 +805,8 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
     # Native suggestions are fetched only with explicit pi_supported=true.
     return {"all": rows, "connected": [p["id"] for p in rows if p["connected"]],
             "default": {}, "source": "gateway", "refresh_days": _AI_REFRESH_DAYS,
-            "stale_after_days": _AI_STALE_DAYS}
+            "stale_after_days": _AI_STALE_DAYS,
+            "budget_modes": _ai_policy(db)["budget_modes"]}
 
 
 
@@ -887,6 +919,9 @@ def _ai_verify(provider_id, key):
     if status == 402:
         raise HTTPException(402, "Provider reports insufficient balance; authentication was not independently confirmed")
     if status == 403:
+        if provider_id == "opencode-go":
+            raise HTTPException(403,
+                "OpenCode Go denied access (403); verify the Go subscription and that the key belongs to its workspace; key was not stored")
         raise HTTPException(403, "Provider denied API access; key was not stored")
     if status == 429:
         raise HTTPException(429, "Provider verification rate limited; retry later")
@@ -905,7 +940,29 @@ def _ai_verify(provider_id, key):
     if provider_id == "google":
         if not isinstance(document.get("models"), list):
             raise HTTPException(503, "Google Gemini model verification was inconclusive")
-    elif provider_id not in ("openrouter", "deepseek") and not isinstance(document.get("data"), (list, dict)):
+    elif provider_id == "nvidia":
+        # NGC authenticates the key independently of inference entitlement.
+        account = document.get("user")
+        if not isinstance(account, dict) or not account:
+            raise HTTPException(503, "NVIDIA did not return an authenticated account; key was not stored")
+    elif provider_id == "opencode":
+        # Unlike the public /inference/v1/models list, Console requires
+        # authentication and returns an object keyed by provider ID.
+        entry = document.get("opencode")
+        if not isinstance(entry, dict) or entry.get("id") != "opencode" or not isinstance(entry.get("models"), dict):
+            raise HTTPException(503, "OpenCode account verification was inconclusive")
+    elif provider_id == "opencode-go":
+        # Verify the key directly with Go's authenticated usage API, not
+        # Console's model catalog. The latter may omit provider entries
+        # for account/key scoping reasons unrelated to API-key validity.
+        usage = document.get("usage")
+        if (not isinstance(usage, dict) or
+                any(not isinstance(usage.get(period), dict)
+                    or usage[period].get("status") not in ("ok", "rate-limited")
+                    for period in ("rolling", "weekly", "monthly"))):
+            raise HTTPException(503,
+                "OpenCode Go did not return authenticated usage meters; key was not stored")
+    elif provider_id not in ("openrouter", "deepseek", "opencode", "opencode-go") and not isinstance(document.get("data"), (list, dict)):
         raise HTTPException(503, "Model-provider verification was inconclusive")
     credit = "unknown"
     if provider_id == "deepseek":
@@ -919,9 +976,10 @@ def _ai_save(data, user, db, replace=False):
     # provider whitelist. Admin policy still governs *execution*, but must
     # not prevent a real upstream verification or a personal connection.
     native = _ai_pi_supported_providers(db)
-    if data.provider_id not in {provider["id"] for provider in native}:
+    provider = next((provider for provider in native if provider["id"] == data.provider_id), None)
+    if provider is None:
         raise HTTPException(422, "Provider is not supported by the installed Pi runtime")
-    if data.provider_id not in _AI_VERIFY_URLS:
+    if not (provider.get("api_key_supported") or data.provider_id in _AI_VERIFY_URLS):
         raise HTTPException(422, "Pi supports this provider but Gateway cannot yet verify its API key")
     if not credentials.available():
         raise HTTPException(503, "Encrypted credential storage is not configured")
@@ -934,7 +992,9 @@ def _ai_save(data, user, db, replace=False):
         raise HTTPException(409, "Connection already exists; use replace")
     if existing is None and replace:
         raise HTTPException(404, "Connection not found")
-    credit = _ai_verify(data.provider_id, data.api_key)
+    credit = (_ai_verify(data.provider_id, data.api_key)
+              if data.provider_id in _AI_VERIFY_URLS
+              else _ai_verify_via_pi(data.provider_id, data.api_key))
     # An explicitly verified connection may be the very first record for
     # this provider. Do not require an unrelated periodic catalog download
     # before the user can securely link their key.
@@ -986,7 +1046,30 @@ def _ai_pi_control_headers():
     return headers
 
 
-def _ai_pi_invalidate(user_id=None, *, session_id=None, revoke_login=False):
+def _ai_verify_via_pi(provider_id, key):
+    headers = _ai_pi_control_headers()
+    if "x-pi-gateway-token" not in headers:
+        raise HTTPException(503, "Provider verification is unavailable; key was not stored")
+    try:
+        with _ai_httpx.Client(
+                transport=_ai_httpx.HTTPTransport(
+                    uds=os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")),
+                timeout=18, follow_redirects=False, trust_env=False) as client:
+            response = client.post(
+                "http://pi/internal/provider/verify", headers=headers,
+                json={"provider_id": provider_id, "api_key": key})
+            if response.status_code != 200:
+                status = response.status_code if response.status_code in (402, 403, 422, 429) else 503
+                raise HTTPException(status, "Provider verification failed; key was not stored")
+            data = response.json()
+    except (_ai_httpx.HTTPError, OSError, ValueError):
+        raise HTTPException(503, "Provider verification is unavailable; key was not stored") from None
+    if not isinstance(data, dict) or data.get("verified") is not True or not data.get("model_id"):
+        raise HTTPException(503, "Provider did not return a verified model result; key was not stored")
+    return "unknown"
+
+
+def _ai_pi_invalidate(user_id=None, *, session_id=None, revoke_login=False, budget_modes=None):
     try:
         with _ai_httpx.Client(
                 transport=_ai_httpx.HTTPTransport(
@@ -996,7 +1079,8 @@ def _ai_pi_invalidate(user_id=None, *, session_id=None, revoke_login=False):
                         headers=_ai_pi_control_headers(),
                         json={"user_id": str(user_id) if user_id else None,
                               "session_id": str(session_id) if session_id else None,
-                              "revoke_login": bool(revoke_login)}).raise_for_status()
+                              "revoke_login": bool(revoke_login),
+                              **({"budget_modes": budget_modes} if budget_modes is not None else {})}).raise_for_status()
     except (_ai_httpx.HTTPError, OSError):
         raise HTTPException(503, "Access changed, but Pi revocation was not acknowledged; retry before continuing") from None
 
@@ -1059,7 +1143,8 @@ def ai_pi_bootstrap(request: Request, user: User = Depends(require_user),
              "auth_created_at": int(aware(auth_session.created_at).timestamp()*1000),
              "issued_at": int(issued.timestamp()*1000),
              "expires_at": int(expires.timestamp()*1000),
-             "workspaces": owned_roots, "personal": personal, "shared": shared}
+             "workspaces": owned_roots, "personal": personal, "shared": shared,
+             "budget_modes": rules.get("budget_modes", {"analysis": False, "execution": False})}
     try:
         with _ai_httpx.Client(
                 transport=_ai_httpx.HTTPTransport(
@@ -1130,15 +1215,27 @@ def _ai_model_display_info(row):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    cost = data.get("cost") if isinstance(data.get("cost"), dict) else {}
+    raw_cost = data.get("cost") if isinstance(data.get("cost"), dict) else {}
+    cost = {
+        key: value
+        for key in ("input", "output", "cacheRead", "cacheWrite")
+        if type(value := raw_cost.get(key)) in (int, float) and 0 <= value < float("inf")
+    }
     free = _ai_model_zero_price(row)
-    paid = any(type(cost.get(k)) in (int, float) and cost[k] > 0
-               for k in ("input", "output"))
-    return {"price_type": "free" if free else "paid" if paid else "unknown",
-            "cost": {k: cost.get(k) for k in ("input", "output")
-                     if type(cost.get(k)) in (int, float)},
-            "context_window": data.get("context") or data.get("contextWindow"),
-            "reasoning": bool(data.get("reasoning"))}
+    paid = any(cost.get(key, 0) > 0 for key in ("input", "output"))
+    max_output_tokens = data.get("maxTokens")
+    return {
+        "price_type": "free" if free else "paid" if paid else "unknown",
+        "cost": cost,
+        "has_input_output_rates": "input" in cost and "output" in cost,
+        "context_window": data.get("context") or data.get("contextWindow"),
+        "max_output_tokens": (
+            max_output_tokens
+            if type(max_output_tokens) is int and max_output_tokens > 0
+            else None
+        ),
+        "reasoning": bool(data.get("reasoning")),
+    }
 
 
 class AiBulkModelPreference(BaseModel):
@@ -1158,7 +1255,7 @@ def _ai_models_for_connection(db, record, provider_id):
     def saved_models():
         return list(db.scalars(select(AiProviderModel).where(
             AiProviderModel.provider_id == provider_id,
-            AiProviderModel.active.is_(True)).order_by(AiProviderModel.name).limit(2000)))
+            AiProviderModel.active.is_(True)).order_by(AiProviderModel.name).limit(10000)))
 
     models = saved_models()
     if not models:
@@ -1189,6 +1286,7 @@ def _ai_models_for_connection(db, record, provider_id):
              model.model_id not in disabled and
              _ai_personal_allowed(db, provider_id, model.model_id, rules=rules)),
          "platform_locked": model.model_id in locked,
+         "platform_selectable": _ai_allowed(db, provider_id, model.model_id, rules=rules),
          "admin_allowed": _ai_personal_allowed(db, provider_id, model.model_id, rules=rules),
          "restriction_reason": ("Disabled by administrator policy"
                                 if not _ai_personal_allowed(
@@ -1374,6 +1472,106 @@ class AiPlatformDefaultIn(BaseModel):
     model_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
+class AiProviderModelSelectionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_ids: list[str] = Field(default_factory=list, max_length=10000)
+    # Setting restricted=False clears this provider's selection to inherit
+    # the older default behavior; restricted=True with [] blocks all models.
+    restricted: bool = True
+
+
+def _ai_catalog_models(db, provider_id, *, refresh=False):
+    _ai_schema(db)
+    ids = {row["id"] for row in _ai_pi_supported_providers(db)}
+    if provider_id not in ids:
+        raise HTTPException(404, "Provider not found in installed Pi catalog")
+    if refresh:
+        _ai_refresh_selected_provider(db, provider_id)
+    models = list(db.scalars(select(AiProviderModel).where(
+        AiProviderModel.provider_id == provider_id,
+        AiProviderModel.active.is_(True)).order_by(
+            AiProviderModel.name).limit(10000)))
+    return models
+
+
+@router.get("/opencode/catalog/providers/{provider_id}/models")
+def ai_customer_provider_model_catalog(provider_id: str,
+                                       _: User = Depends(require_user),
+                                       db: Session = Depends(get_db)):
+    models = _ai_catalog_models(db, provider_id)
+    return {"provider_id": provider_id, "count": len(models), "models": [
+        {"id": model.model_id, "name": model.name, **_ai_model_display_info(model)}
+        for model in models
+    ]}
+
+
+@router.get("/admin/ai-catalog/providers/{provider_id}/models")
+def ai_admin_provider_model_catalog(provider_id: str, refresh: bool = False,
+                                    _: User = Depends(require_admin),
+                                    db: Session = Depends(get_db)):
+    models = _ai_catalog_models(db, provider_id, refresh=refresh)
+    rules = _ai_policy(db)
+    selected = rules.get("selected_models") or {}
+    configured = provider_id in selected
+    allowed = set(selected.get(provider_id, [])) if configured else set()
+    return {"provider_id": provider_id, "restricted": configured,
+            "count": len(models), "models": [
+                {"id": model.model_id, "name": model.name,
+                 "selected": model.model_id in allowed if configured else True,
+                 "free_eligible": _ai_model_zero_price(model),
+                 **_ai_model_display_info(model)}
+                for model in models]}
+
+
+@router.put("/admin/ai-catalog/providers/{provider_id}/selection")
+def ai_admin_select_provider_models(provider_id: str,
+                                    data: AiProviderModelSelectionIn,
+                                    user: User = Depends(require_admin),
+                                    db: Session = Depends(get_db)):
+    """Curate BYOK model execution with one atomic existing policy update."""
+    _ai_schema(db)
+    ids = {row["id"] for row in _ai_pi_supported_providers(db)}
+    if provider_id not in ids:
+        raise HTTPException(404, "Provider not found in installed Pi catalog")
+    models = data.model_ids
+    if len(models) != len(set(models)) or any(
+            not isinstance(mid, str) or not 0 < len(mid) <= 300 for mid in models):
+        raise HTTPException(422, "Invalid or duplicate model ID")
+    if data.restricted:
+        valid = set(db.scalars(select(AiProviderModel.model_id).where(
+            AiProviderModel.provider_id == provider_id,
+            AiProviderModel.model_id.in_(models),
+            AiProviderModel.active.is_(True))))
+        if valid != set(models):
+            raise HTTPException(422, "Selected models are not in the saved Pi catalog")
+    from ..models import PlatformPolicy
+    _ai_get_policy(db)
+    row = db.scalar(select(PlatformPolicy).where(
+        PlatformPolicy.id == 1).with_for_update())
+    try:
+        payload = json.loads(row.allowed_models or "[]")
+    except (ValueError, TypeError):
+        raise HTTPException(503, "Saved model policy is invalid") from None
+    if isinstance(payload, list):
+        payload = {"allowed": payload, "hidden": {}}
+    if not isinstance(payload, dict):
+        raise HTTPException(503, "Saved model policy is invalid")
+    selected = payload.get("selected")
+    if not isinstance(selected, dict):
+        selected = {}
+    if data.restricted:
+        selected[provider_id] = sorted(models)
+    else:
+        selected.pop(provider_id, None)
+    payload["selected"] = selected
+    row.allowed_models = json.dumps(payload, separators=(",", ":"))
+    audit(db, user, "ai.provider_models.curated")
+    db.commit()
+    _ai_pi_invalidate()
+    return {"provider_id": provider_id, "restricted": data.restricted,
+            "selected_count": len(models) if data.restricted else None}
+
+
 @router.get("/admin/ai-catalog")
 def ai_admin_catalog_status(_: User = Depends(require_admin),
                             db: Session = Depends(get_db)):
@@ -1447,18 +1645,11 @@ def ai_platform_set_provider(provider_id: str, data: AiPlatformDefaultIn,
             AiProviderModel.model_id.in_(ids), AiProviderModel.active.is_(True)))}
         if set(available) != ids:
             raise HTTPException(422, "Selected Pi models are not in the saved provider catalog")
-        for mid, model in available.items():
+        for mid in ids:
             if not _ai_allowed(db, provider_id, mid):
                 raise HTTPException(403, "Model is disabled by administrator access policy")
-            try:
-                cost = json.loads(model.details_json or "{}").get("cost", {})
-            except ValueError:
-                cost = {}
-            if not isinstance(cost, dict) or cost.get("input") != 0 or cost.get("output") != 0:
-                raise HTTPException(422, "Only models listed at zero input/output cost can be enabled as platform defaults")
-            if provider_id == "openrouter" and not mid.endswith(":free"):
-                raise HTTPException(422, "Only OpenRouter :free models are allowed as platform defaults")
-        if provider_id == "openrouter":
+        openrouter_free_ids = {mid for mid in ids if mid.endswith(":free")} if provider_id == "openrouter" else set()
+        if openrouter_free_ids:
             # One explicit setup-time check against OpenRouter's currently
             # published free models. This does NOT run per prompt or workspace.
             admin_key, _ = _ai_connection_secret_and_models(connection)
@@ -1480,7 +1671,7 @@ def ai_platform_set_provider(provider_id: str, data: AiPlatformDefaultIn,
                          and isinstance(entry.get("pricing"), dict)
                          and str(entry["pricing"].get("prompt")) in {"0", "0.0", "0.000"}
                          and str(entry["pricing"].get("completion")) in {"0", "0.0", "0.000"}}
-            if not ids.issubset(confirmed):
+            if not openrouter_free_ids.issubset(confirmed):
                 raise HTTPException(422, "A selected free model is no longer published by OpenRouter")
     # Lock the existing row so two administrators cannot overwrite selections.
     from ..models import PlatformPolicy
@@ -1526,15 +1717,15 @@ def _ai_catalog_refresh_if_due(*, force=False):
             return False
         try:
             _ai_schema(db)
-            # The Pi-backed PROVIDER NAMES are refreshed once every 14 days;
-            # only free OpenRouter model details accompany this light snapshot.
-            # The last successful registry stamp is separate from per-provider
-            # model sync timestamps, so linking a key cannot delay a refresh.
+            # A legacy names-only snapshot must not delay the first full sync.
             registry = _ai_pi_registry(db)
             last = registry.get("synced_at")
             if not force and isinstance(last, str):
                 try:
-                    if now() - aware(datetime.fromisoformat(last.replace("Z", "+00:00"))) < timedelta(days=_AI_REFRESH_DAYS):
+                    if (registry.get("model_scope") == "full" and
+                            isinstance(registry.get("auth_methods"), dict) and
+                            isinstance(registry.get("api_key_probe_ids"), list) and
+                            now() - aware(datetime.fromisoformat(last.replace("Z", "+00:00"))) < timedelta(days=_AI_REFRESH_DAYS)):
                         return True
                 except (ValueError, OverflowError):
                     pass
@@ -1550,18 +1741,17 @@ def _ai_catalog_refresh_if_due(*, force=False):
                                   timeout=60, trust_env=False) as client:
                 result = client.get("http://pi/provider", params={
                     "directory": os.getenv("PI_CATALOG_DIRECTORY", "/home/tahir/pi-test"),
-                    "models": "free", "providerID": "openrouter"}, headers=headers)
+                    "models": "full"}, headers=headers)
                 result.raise_for_status()
                 payload = result.json()
             all_rows = payload.get("all")
             if not isinstance(all_rows, list) or not all_rows:
                 raise ValueError("Pi returned an empty provider catalog")
             stamped = now()
-            # One light Pi SDK snapshot with all provider names and ONLY
-            # verified zero-priced OpenRouter model metadata. No bulk
-            # downloads of paid or unrelated provider model definitions.
             known = {row.id: row for row in db.scalars(select(AiProviderCatalog))}
             valid = {}
+            auth_methods = {}
+            api_key_probe_ids = set()
             for item in all_rows:
                 if not isinstance(item, dict):
                     continue
@@ -1572,11 +1762,16 @@ def _ai_catalog_refresh_if_due(*, force=False):
                         not pid.replace("-", "").replace("_", "").replace(".", "").isalnum()
                         or not isinstance(incoming, dict)):
                     continue
-                # A malicious, incompatible or incomplete payload must never
-                # push non-free models into the periodic catalog.
-                if pid != "openrouter" and incoming:
-                    raise ValueError("Pi names-only response contained unexpected model data")
                 valid[pid] = (str(item.get("name") or pid)[:200], incoming)
+                # Read only Pi-owned public auth METHOD TYPES; no credentials,
+                # login sessions, account emails or OAuth tokens are copied.
+                methods = item.get("auth_methods")
+                if isinstance(methods, list):
+                    auth_methods[pid] = [
+                        method for method in ("apiKey", "oauth")
+                        if method in methods]
+                if item.get("api_key_probe") is True:
+                    api_key_probe_ids.add(pid)
                 if pid not in known:
                     row = AiProviderCatalog(id=pid, name=valid[pid][0])
                     db.add(row)
@@ -1584,18 +1779,14 @@ def _ai_catalog_refresh_if_due(*, force=False):
             if not valid:
                 raise ValueError("Pi catalog contains no valid providers")
             db.flush()  # parent rows must exist before model foreign keys
-            # Existing model rows for other providers remain untouched.
-            prior = {model.model_id: model for model in db.scalars(
-                select(AiProviderModel).where(
-                    AiProviderModel.provider_id == "openrouter"))}
+            prior = {}
+            for model in db.scalars(select(AiProviderModel).where(
+                    AiProviderModel.provider_id.in_(valid))):
+                prior.setdefault(model.provider_id, {})[model.model_id] = model
             for pid, (name, incoming) in valid.items():
                 row = known[pid]
                 row.name = name
-                if pid != "openrouter":
-                    # Only the name is synchronized. Keep all previously
-                    # imported personal models/counts/status as-is.
-                    continue
-                old_models = prior
+                old_models = prior.get(pid, {})
                 # Never deactivate a healthy saved catalog because a provider
                 # temporarily returned an empty or incomplete inventory.
                 if not incoming and old_models:
@@ -1618,15 +1809,12 @@ def _ai_catalog_refresh_if_due(*, force=False):
                         metadata = json.dumps({"id": model_id, "name": model.name})
                     model.details_json = metadata
                     model.active = True
-                # Periodic discovery intentionally returns only OpenRouter
-                # :free models. Preserve other models that customers had
-                # explicitly linked previously; never deactivate a paid
-                # model from an intentionally incomplete free-only snapshot.
+                if not seen and old_models:
+                    continue
                 for model_id, previous in old_models.items():
-                    if model_id not in seen and (pid != "openrouter" or
-                                                 model_id.endswith(":free")):
+                    if model_id not in seen:
                         previous.active = False
-                row.model_count = len(set(old_models) | seen)
+                row.model_count = len(seen)
                 row.models_synced_at = stamped
                 row.last_sync_error = None
             # Store the provenance of supported providers in the EXISTING
@@ -1647,7 +1835,10 @@ def _ai_catalog_refresh_if_due(*, force=False):
             if not isinstance(rules, dict):
                 raise ValueError("Invalid existing Gateway provider policy")
             rules["pi_registry"] = {"synced_at": stamped.isoformat(),
-                                    "provider_ids": sorted(valid)}
+                                    "model_scope": "full",
+                                    "provider_ids": sorted(valid),
+                                    "auth_methods": auth_methods,
+                                    "api_key_probe_ids": sorted(api_key_probe_ids)}
             policy.allowed_providers = json.dumps(rules, separators=(",", ":"))
             db.commit()
             return True

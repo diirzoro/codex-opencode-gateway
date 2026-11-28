@@ -147,7 +147,8 @@
     progress.setAttribute('aria-live','polite');box.append(progress);
     // Admin-only inventory controls reuse this SAME page and the SAME
     // persisted Pi catalog; customer workspaces never download the directory.
-    if(platform&&admin()){
+    {
+      const canCurate=platform&&admin();
       const inventory=section(body,tr('Pi supported provider inventory','فهرس مزوّدات Pi المحفوظ'));
       const status=node('p',tr('Reading saved provider count…','جارٍ قراءة عدد المزوّدات المحفوظة…'),'provider-picker-help');
       status.setAttribute('role','status');
@@ -171,8 +172,151 @@
           (data.last_synced_at?new Date(data.last_synced_at).toLocaleString(lang):tr('Pending','لم يكتمل بعد'))+
           ' · '+tr('Automatic: every 14 days','تلقائي: كل 14 يومًا');
       }
-      inventory.append(status,update);
-      showInventory().catch(error=>{if(alive())status.textContent=error.message||String(error);});
+      if(canCurate)inventory.append(status,update);
+      // Admin curation: discover all Pi-known models for the selected provider
+      // only on an explicit click, then enforce the saved selection server-side.
+      const curate=document.createElement('details');
+      curate.append(node('summary',canCurate?tr('Administrator model policy','سياسة النماذج للإدارة'):tr('Browse provider models','تصفح نماذج المزوّدين')));
+      inventory.append(curate);
+      const providerPick=document.createElement('select');
+      const placeholder=document.createElement('option');
+      placeholder.value='';
+      placeholder.textContent=tr('Choose a provider…','اختر المزوّد…');
+      providerPick.append(placeholder);
+      const modelStatus=node('p',tr('Choose a provider, then load its complete Pi catalog.',
+        'اختر المزوّد، ثم اجلب جميع نماذجه من Pi.'),'provider-picker-help');
+      modelStatus.setAttribute('role','status');
+      const modelControls=node('div');modelControls.hidden=true;
+      const search=document.createElement('input');
+      search.type='search';
+      search.placeholder=tr('Find a model…','ابحث عن نموذج…');
+      const modelsList=node('div','','provider-model-catalog');
+      modelsList.style.maxHeight='420px';
+      modelsList.style.overflowY='auto';
+      modelsList.style.padding='8px';
+      const selection=new Map();
+      const makeControl=(text,fn)=>{
+        const control=document.createElement('button');
+        control.type='button';control.textContent=text;
+        control.addEventListener('click',fn);
+        return control;
+      };
+      const setChecked=value=>{
+        for(const box of selection.values())box.checked=value;
+      };
+      const saveModels=makeControl(tr('Save selected models','حفظ النماذج المحددة'),async()=>{
+        saveModels.disabled=true;
+        modelStatus.textContent=tr('Saving administrator selection…','جارٍ حفظ اختيارات الإدارة…');
+        try{
+          const ids=[...selection].filter(([,box])=>box.checked).map(([id])=>id);
+          await api('/api/admin/ai-catalog/providers/'+encodeURIComponent(providerPick.value)+'/selection',{
+            method:'PUT',body:JSON.stringify({model_ids:ids,restricted:true})
+          });
+          modelStatus.textContent=tr('Allowed model selection saved and enforced.',
+            'تم حفظ النماذج المسموحة وتطبيق الصلاحيات.');
+        }catch(error){modelStatus.textContent=error.message||String(error);}
+        finally{saveModels.disabled=false;}
+      });
+      const resetModels=makeControl(tr('Allow all Pi models (remove restriction)',
+        'السماح بكل نماذج Pi (إزالة التقييد)'),async()=>{
+        resetModels.disabled=true;
+        try{
+          await api('/api/admin/ai-catalog/providers/'+encodeURIComponent(providerPick.value)+'/selection',{
+            method:'PUT',body:JSON.stringify({model_ids:[],restricted:false})
+          });
+          setChecked(true);
+          modelStatus.textContent=tr('This provider is unrestricted by model selection.',
+            'تمت إزالة تقييد نماذج هذا المزوّد.');
+        }catch(error){modelStatus.textContent=error.message||String(error);}
+        finally{resetModels.disabled=false;}
+      });
+      const toolbar=node('div','','provider-model-toolbar');
+      const catalogPrice=document.createElement('select');
+      catalogPrice.setAttribute('aria-label',tr('Filter by price','تصفية بحسب السعر'));
+      for(const [value,label] of [
+        ['',tr('All prices','كل الأسعار')],['free',tr('Free','مجاني')],
+        ['paid',tr('Paid','مدفوع')],['unknown',tr('Price unknown','السعر غير معروف')]
+      ])catalogPrice.add(new Option(label,value));
+      const shownModels=node('span');
+      shownModels.setAttribute('role','status');
+      toolbar.append(search,catalogPrice,shownModels);
+      if(canCurate)toolbar.append(
+        makeControl(tr('Select all','تحديد الكل'),()=>setChecked(true)),
+        makeControl(tr('Select none','إلغاء الكل'),()=>setChecked(false)),
+        saveModels,resetModels);
+      modelControls.append(toolbar,modelsList);
+      const loadModels=makeControl(tr('Load all provider models','جلب جميع نماذج المزوّد'),async()=>{
+        const providerId=providerPick.value;
+        if(!providerId)return;
+        providerPick.disabled=true;
+        loadModels.disabled=true;
+        modelControls.hidden=true;
+        modelStatus.textContent=tr('Reading models from installed Pi…',
+          'جارٍ تحميل كتالوج النماذج…');
+        try{
+          const base=canCurate?'/api/admin/ai-catalog/providers/':'/api/opencode/catalog/providers/';
+          const data=await api(base+encodeURIComponent(providerId)+
+            (canCurate?'/models?refresh=true':'/models'));
+          if(!alive())return;
+          selection.clear();modelsList.replaceChildren();
+          const fragment=document.createDocumentFragment();
+          for(const item of data.models||[]){
+            const line=document.createElement('label');
+            line.className='provider-model-choice';
+            line.dataset.price=item.price_type||'unknown';
+            const box=document.createElement('input');box.type='checkbox';
+            box.checked=item.selected===true;
+            const name=document.createElement('span');
+            name.textContent=(item.name||item.id)+' ('+item.id+')';
+            const price=document.createElement('span');
+            price.className='provider-model-tag';
+            price.textContent=item.price_type==='free'
+              ?tr('Free','مجاني'):item.price_type==='paid'
+                ?tr('Paid','مدفوع'):tr('Price unknown','السعر غير معروف');
+            box.hidden=!canCurate;
+            line.append(box,name,price);fragment.append(line);
+            selection.set(item.id,box);
+          }
+          modelsList.append(fragment);
+          modelControls.hidden=false;
+          filterCatalog();
+          modelStatus.textContent=canCurate?tr('Select allowed models and save.',
+            'حدد النماذج المسموحة ثم احفظ.'):'';
+        }catch(error){modelStatus.textContent=error.message||String(error);}
+        finally{loadModels.disabled=false;providerPick.disabled=false;}
+      });
+      function filterCatalog(){
+        const query=search.value.trim().toLowerCase();
+        let shown=0;
+        for(const checkbox of selection.values()){
+          const row=checkbox.parentElement;
+          row.hidden=(query&&!row.textContent.toLowerCase().includes(query))||
+            (catalogPrice.value!==''&&row.dataset.price!==catalogPrice.value);
+          if(!row.hidden)shown++;
+        }
+        shownModels.textContent=shown+' / '+selection.size+' '+tr('models','نموذج');
+      }
+      search.addEventListener('input',filterCatalog);
+      catalogPrice.addEventListener('change',filterCatalog);
+      providerPick.addEventListener('change',()=>{
+        modelControls.hidden=true;
+        selection.clear();
+        modelsList.replaceChildren();
+        modelStatus.textContent='';
+      });
+      curate.append(providerPick,loadModels,modelStatus,modelControls);
+      curate.addEventListener('toggle',()=>{
+        if(!curate.open||providerPick.options.length>1)return;
+        api('/api/opencode/catalog/providers?pi_supported=true').then(data=>{
+        if(!alive())return;
+        for(const item of data.connectable||[]){
+          const option=document.createElement('option');
+          option.value=item.id;option.textContent=item.name||item.id;
+          providerPick.append(option);
+        }
+      }).catch(error=>{if(alive())modelStatus.textContent=error.message||String(error);});
+      });
+      if(canCurate)showInventory().catch(error=>{if(alive())status.textContent=error.message||String(error);});
     }
     const connectedBox=section(body,tr('Connected providers and models','المزوّدون المربوطون والنماذج'));
     // Provider credentials are account-wide and must not switch projects.
@@ -198,6 +342,27 @@
       const host=node('div'),f=node('form','','manage-form');
       const providerField=replaceExisting?null:input(f,tr('Find a supported provider','ابحث عن اسم المزوّد'),'provider_id');
       let approvedProviders=[],suggestions=null,providerHint=null,searchProviderButton=null;
+      // Reflect the authentication methods reported by the installed Pi
+      // integration. Only a provider-verified API key may currently be saved.
+      let methodHint=null;
+      const authDescription=p=>{
+        const declared=new Set(Array.isArray(p?.auth_methods)?p.auth_methods:[]);
+        const methods=[];
+        if(p?.api_key_model_probe)methods.push(tr(
+          'API key — verified with one short model request that may use provider credits',
+          'مفتاح API — يُتحقق منه بطلب نموذج قصير قد يستهلك من رصيد المزوّد'));
+        else if(p?.api_key_supported)methods.push(tr('API key — verified before saving',
+          'مفتاح API — يتم التحقق منه قبل الحفظ'));
+        else if(declared.has('apiKey'))methods.push(tr(
+          'API key — awaiting a safe provider verification method',
+          'مفتاح API — يحتاج آلية تحقق آمنة قبل تفعيله'));
+        if(declared.has('oauth'))methods.push(tr(
+          'Account sign-in / OAuth — offered by Pi, not yet enabled securely in Gateway',
+          'تسجيل الحساب / OAuth — يدعمه Pi، لكن الربط الآمن غير مفعّل بعد في Gateway'));
+        return methods.length?methods.join(' · '):tr(
+          'No verified connection method available in Gateway',
+          'لا توجد طريقة ربط موثقة متاحة حاليًا في Gateway');
+      };
       const selectedProvider=()=>{
         const text=providerField?.value.trim().toLowerCase()||'';
         return approvedProviders.find(p=>p.api_key_supported===true&&
@@ -234,6 +399,11 @@
       }
       const key=input(f,tr('Personal API key','مفتاح API الشخصي'),'api_key');
       key.type='password';key.required=true;key.autocomplete='off';key.maxLength=8192;
+      methodHint=node('p','','provider-picker-help');
+      methodHint.setAttribute('role','status');
+      methodHint.textContent=tr('Choose a provider to see available authentication methods.',
+        'اختر مزوّدًا لمعرفة طرق المصادقة المتاحة.');
+      f.append(methodHint);
       f.append(node('p',tr('The key is verified with the provider before encrypted storage. It is never returned to your browser.','يتم التحقق من المفتاح لدى المزوّد قبل حفظه مشفرًا، ولا يُعاد إلى المتصفح.')));
       const feedback=node('p','','provider-feedback');feedback.setAttribute('role','status');f.append(feedback);
       const submit=node('button',replaceExisting?tr('Verify and replace','تحقق واستبدل'):tr('Verify and connect','تحقق واربط'),'button');
@@ -247,22 +417,24 @@
           if(!dialog.open)return;
           const text=providerField.value.trim().toLowerCase();
           const matches=approvedProviders.filter(p=>!text||
-            p.name.toLowerCase().includes(text)||p.id.toLowerCase().includes(text)).slice(0,12);
+            p.name.toLowerCase().includes(text)||p.id.toLowerCase().includes(text));
           suggestions.replaceChildren();
           for(const item of matches){
             const option=node('button','','provider-real-option');option.type='button';
             option.setAttribute('role','option');
             option.append(node('strong',item.name),node('small',
-              item.api_key_supported?item.id:
-              tr('Pi supported · API key verification unavailable',
-                 'يدعمه Pi · ربط API غير متاح حاليًا')));
-            option.disabled=item.api_key_supported!==true;
+              authDescription(item)));
+            // Discovery is useful for all Pi providers, even ones whose
+            // OAuth flow has not been safely connected to Gateway yet.
+            option.disabled=false;
             option.onclick=()=>{
               providerField.value=item.id;
               suggestions.hidden=true;
               providerField.setAttribute('aria-expanded','false');
               providerHint.textContent=tr('Selected provider: ','المزوّد المختار: ')+item.name;
-              submit.disabled=false;key.focus();
+              methodHint.textContent=authDescription(item);
+              submit.disabled=!item.api_key_supported;
+              if(item.api_key_supported)key.focus();
             };
             suggestions.append(option);
           }
@@ -273,6 +445,7 @@
             tr('Pi provider selected: ','تم اختيار مزوّد من Pi: ')+matched.name:
             tr('Results come from the installed Pi provider registry. Only verified API-key integrations can be linked.',
               'النتائج مأخوذة من سجل المزوّدين في Pi. الربط متاح فقط حيث يدعم Gateway التحقق من المفتاح.');
+          methodHint.textContent=authDescription(matched);
           submit.disabled=!matched;
         };
         // Clicking Search explicitly opens real, backend-supported names.
@@ -303,18 +476,20 @@
           approvedProviders=data.connectable.filter(p=>p&&
             typeof p.id==='string'&&typeof p.name==='string'&&
             /^[a-zA-Z0-9._-]{1,120}$/.test(p.id)).map(p=>({
-              id:p.id,name:p.name,api_key_supported:p.api_key_supported===true
+              id:p.id,name:p.name,api_key_supported:p.api_key_supported===true,
+              api_key_model_probe:p.api_key_model_probe===true,
+              auth_methods:Array.isArray(p.auth_methods)?p.auth_methods.filter(
+                method=>method==='apiKey'||method==='oauth'):[]
             }));
           if(!approvedProviders.length)throw Error(tr(
             'No saved Pi providers are available yet.',
             'لم تُحفظ قائمة مزوّدات Pi بعد.'));
-          if(!approvedProviders.some(p=>p.api_key_supported))
-            throw Error(tr('Pi providers were found, but API-key verification is not configured for any of them.',
-              'عُثر على مزوّدات Pi، لكن التحقق من مفاتيح API غير مهيأ لأي منها.'));
+          // Authentication methods may be discoverable before a verifier is
+          // implemented. Never hide the providers or fabricate a connection.
           searchProviderButton.disabled=false;
           providerHint.textContent=tr(
-            'Search the Pi-supported provider names saved by Gateway (updated every 14 days). Unsupported API-key methods cannot be linked.',
-            'ابحث في أسماء مزوّدات Pi المحفوظة في Gateway (تُحدّث كل 14 يومًا). لا يمكن ربط مزوّد دون آلية آمنة للتحقق من مفتاحه.');
+            'Browse Pi-supported providers and view the authentication methods available in Gateway. Only verified methods can connect.',
+            'تصفّح مزوّدي Pi وطرق المصادقة المتاحة في Gateway. لا يتم الربط إلا بعد التحقق الحقيقي.');
           if(dialog.open&&providerField.value.trim())showMatches();
         }).catch(error=>{
           if(host.isConnected){providerHint.textContent=error.message;submit.disabled=true;}
@@ -386,15 +561,25 @@
         models.append(node('p',tr('No models are stored for this provider yet.','لا توجد نماذج محفوظة لهذا المزوّد بعد.')));
         return;
       }
-      records.sort((a,b)=>Number(b.price_type==='free')-Number(a.price_type==='free')||
-        String(a.name||a.id).localeCompare(String(b.name||b.id)));
+      records.sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)));
       const panelTitle=node('p',tr(
         'Choose models for your personal API key. Platform defaults are managed separately. Restricted models cannot run until an administrator allows them.',
         'اختر نماذج مفتاح API الشخصي. نماذج المنصة يديرها الأدمن بشكل مستقل. النموذج المحجوب لا يعمل حتى تسمح به الإدارة.'),'provider-model-help');
       const filter=node('input','','provider-model-search');filter.type='search';
       filter.placeholder=tr('Search models within this provider…','ابحث في نماذج هذا المزوّد…');
-      const onlyFree=node('label','','provider-free-filter'),freeCheck=node('input');
-      freeCheck.type='checkbox';onlyFree.append(freeCheck,node('span',tr('Show free models only','عرض المجانية فقط')));
+      const priceLabel=node('label','','provider-free-filter');
+      const priceFilter=node('select');
+      for(const [value,label] of [
+        ['',tr('All prices','كل الأسعار')],
+        ['free',tr('Free','مجاني')],
+        ['paid',tr('Paid','مدفوع')],
+        ['unknown',tr('Price unknown','السعر غير معروف')]
+      ]){
+        const option=node('option',label);
+        option.value=value;
+        priceFilter.append(option);
+      }
+      priceLabel.append(node('span',tr('Price','السعر')),priceFilter);
       const bar=node('div','','provider-model-toolbar');
       const shown=node('small','','provider-model-counter');
       const selectAll=button(tr('Enable all','تحديد الكل'),()=>bulk(true));
@@ -413,7 +598,7 @@
           const m=item.model;
           item.row.hidden=(!!search&&!String(m.name||m.id).toLowerCase().includes(search)
             &&!m.id.toLowerCase().includes(search))||
-            (freeCheck.checked&&m.price_type!=='free');
+            (priceFilter.value!==''&&(m.price_type||'unknown')!==priceFilter.value);
         }
         updateCounter();
       }
@@ -494,7 +679,7 @@
           // saving fails, restore the exact previous state for this row.
           void sendBulk([m.id],enabled,new Map([[m.id,!enabled]]));
         });
-        if(platform&&admin()&&!isCustomerAdmin&&m.free_eligible&&m.admin_allowed!==false){
+        if(platform&&admin()&&!isCustomerAdmin&&m.platform_selectable===true){
           const adminLabel=node('label','','provider-platform-choice');
           const platformCheck=node('input');platformCheck.type='checkbox';
           platformCheck.checked=m.platform_locked===true;
@@ -503,14 +688,17 @@
         }
         list.append(row);items.push({row,toggle,model:m});
       }
-      filter.oninput=repaint;freeCheck.onchange=repaint;
-      bar.append(shown,selectAll,clearAll,onlyFree);
+      filter.oninput=repaint;priceFilter.onchange=repaint;
+      bar.append(shown,selectAll,clearAll,priceLabel);
       models.append(panelTitle,filter,bar,list);
       updateCounter();
       if(platform&&admin()&&!isCustomerAdmin){
         const adminBar=node('div','','provider-platform-controls');
         const platformAll=button(tr('Select all free for platform','اختيار جميع المجانية للمنصة'),()=>{
-          for(const check of platformChoices.values())check.checked=true;
+          for(const {model} of items){
+            const check=platformChoices.get(model.id);
+            if(check&&model.free_eligible&&(p.id!=='openrouter'||model.id.endsWith(':free')))check.checked=true;
+          }
         });
         const platformNone=button(tr('Clear platform selection','إلغاء جميع اختيارات المنصة'),()=>{
           for(const check of platformChoices.values())check.checked=false;
@@ -528,7 +716,7 @@
           }catch(error){toast(error.message||String(error));}
           finally{saving=false;save.disabled=false;}
         });
-        adminBar.append(node('p',tr('Administrator defaults: only verified free models are eligible.','اختيارات الأدمن للمنصة: النماذج المجانية المتحقَّق منها فقط.')),
+        adminBar.append(node('p',tr('Choose the models to publish to customers. Paid or unpriced models may charge the platform provider account.','اختر النماذج التي تنشرها للعملاء. قد تُخصم تكلفة النماذج المدفوعة أو مجهولة السعر من حساب المنصة لدى المزوّد.')),
           platformAll,platformNone,save);
         models.append(adminBar);
       }

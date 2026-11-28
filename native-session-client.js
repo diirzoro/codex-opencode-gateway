@@ -452,7 +452,7 @@
     if(!view.node.isConnected)feed.append(view.node);
     if(!view.frame)view.frame=requestAnimationFrame(()=>{
       view.frame=0;if(piLive.get(id)!==view)return;
-      view.content.textContent=view.text;
+      view.content.textContent=visiblePiStreamText(view.text);
       if(feed.workspaceFollow?.following)feed.scrollTop=feed.scrollHeight;
     });
   }
@@ -520,6 +520,23 @@
         else if(part?.type==="text_end"&&typeof part.content==="string")piReply(id,part.content,true);
         return;
       }
+      if(e.type==="pi.budget_usage"&&activeSession?.id===id){
+        const status=document.getElementById("submissionStatus");
+        if(status&&!status.dataset.piProviderError){
+          const stage=p.mode==="analysis"?label("Analysis","التحليل"):label("Execution","التنفيذ");
+          const tokens=p.tokens&&Number.isFinite(p.tokens.input)&&Number.isFinite(p.tokens.output)?
+            label("Input","إدخال")+": "+p.tokens.input+" · "+
+            label("Output","إخراج")+": "+p.tokens.output:
+            label("Token usage not reported","لم يبلغ Pi عن استخدام التوكنات");
+          const cost=Number.isFinite(p.costUSD)?
+            " · "+label("Model cost","تكلفة النموذج")+": $"+p.costUSD.toFixed(6):
+            " · "+label("Actual model cost not reported","لم تُبلّغ تكلفة النموذج الفعلية");
+          status.textContent=stage+" · "+tokens+cost+" · "+label(
+            "Provider balance not available; Gateway subscription is separate.",
+            "رصيد المزوّد غير متاح؛ اشتراك Gateway منفصل.");
+        }
+        return;
+      }
       if(e.type==="pi.run_outcome"){
         if(p.kind==="no_text"&&activeSession?.id===id){
           const message=label(
@@ -539,7 +556,8 @@
         const readable=failure?.message||label("Provider request failed.","فشل الطلب لدى المزوّد.");
         if(status){status.dataset.piProviderError=p.kind||"provider_error";status.textContent=readable;}
         const line=document.getElementById("runtimeStatus");if(line)line.textContent=readable;
-        statuses.set(id,"failed");if(activeSession?.id===id)activeSession.execution_status="failed";
+        statuses.set(id,"failed");statusEvents.set(id,(statusEvents.get(id)||0)+1);
+        if(activeSession?.id===id)activeSession.execution_status="failed";
         toast(readable);return;
       }
       if(/^pi\.tool_execution_(start|update|end)$/.test(e.type)){
@@ -591,7 +609,12 @@
       if(e.type==="pi.agent_settled"){
         const finalState=statuses.get(id)==="failed"?"failed":"idle";
         statuses.set(id,finalState);statusEvents.set(id,(statusEvents.get(id)||0)+1);
-        if(activeSession?.id===id)activeSession.execution_status=finalState;
+        if(activeSession?.id===id){
+          activeSession.execution_status=finalState;
+          const submission=document.getElementById("submissionStatus");
+          if(submission&&!submission.dataset.piProviderError)submission.textContent=p.aborted?
+            label("Request stopped.","تم إيقاف الطلب."):"";
+        }
         void history(id,true).then(async()=>{
           if(stream!==source||!current(id,user))return;
           await refreshMessages();
@@ -653,7 +676,7 @@
       }
       if(['session.status','session.idle','session.error'].includes(e.type))statusEvents.set(id,(statusEvents.get(id)||0)+1);
       if(e.type==='session.status')statuses.set(id,p.status?.type==='idle'?'idle':'submitted');
-      if(e.type==='session.idle')statuses.set(id,'idle');
+      if(e.type==='session.idle'&&statuses.get(id)!=='failed')statuses.set(id,'idle');
       if(e.type==='session.error')statuses.set(id,'failed');
       if(e.type.startsWith('message.')){const state=histories.get(id);if(state){state.journal?.push(e);if(!reduce(state.messages,e))needsSnapshot=true;reconcile(id,state.messages);}else needsSnapshot=true;dirty.messages=true;}
       if(e.type.startsWith('session.'))dirty.status=true;
@@ -788,7 +811,7 @@
       return {status:'idle'};
     });
   }
-  async function send(id,{text,providerID,modelID,agent,variant,files=[]}){
+  async function send(id,{text,providerID,modelID,agent,variant,files=[],budget=null}){
     const row=await context(id);
     if(!activeProject||!activeWorkspace||!activeSession||
        String(row.project_id)!==String(activeProject.id)||
@@ -797,7 +820,8 @@
       throw Error(label('Pi session is not bound to the current project. Select its project first.',
         'جلسة Pi ليست مرتبطة بالمشروع الحالي. اختر المشروع أولًا.'));
     if(blocked(id))throw Error(label('Recover this conversation before sending. Your draft is preserved.','استعد هذه المحادثة قبل الإرسال. مسودتك محفوظة.'));
-    const user=owner(),sendEpoch=epoch,sendGeneration=sendGenerations.get(id)||0,seenStatus=statusEvents.get(id)||0;select(id,{providerID,modelID,agent,variant});
+    const user=owner(),sendEpoch=epoch,sendGeneration=sendGenerations.get(id)||0,seenStatus=statusEvents.get(id)||0;
+    if(!budget)select(id,{providerID,modelID,agent,variant});
     if(streamId!==id)await start();
     const bytes=new Uint8Array(14);crypto.getRandomValues(bytes);const alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
     const messageID='msg_'+((BigInt(Date.now())*4096n)&0xffffffffffffn).toString(16).padStart(12,'0')+Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');
@@ -807,11 +831,24 @@
       url:f.url||row.file_base+String(f.path).split('/').map(encodeURIComponent).join('/'),
       filename:f.name||String(f.path).split('/').at(-1)
     }))];
+    const model={providerID,modelID};
+    if(budget){
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(parts)));
+      const partsDigest=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+      const signed=await native(row.workspace_id,
+        'session/'+encodeURIComponent(row.runtime_id)+'/budget_state',{budget,model,partsDigest},{timeout:30000});
+      if(typeof signed?.signature!=='string'||!current(id,user)||epoch!==sendEpoch||
+         (sendGenerations.get(id)||0)!==sendGeneration)
+        throw Error(label('Budget approval expired. Review the estimate again.',
+          'انتهت صلاحية الموافقة. راجع التقدير مجددًا.'));
+      budget={...budget,signature:signed.signature};
+    }
     const pending={messageID,text,files:files.map(f=>({path:f.path,mime:f.mime,name:f.name})),providerID,modelID,agent,variant};uncertain.set(id,pending);try{sessionStorage.setItem(storageKey('uncertain',id),JSON.stringify(pending));}catch{}
     const submissionController=new AbortController();submissionsInFlight.set(id,submissionController);
     let receipt=null;
     try{receipt=await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
-      messageID,model:{providerID,modelID},queueMode:'followUp',
+      messageID,model,queueMode:'followUp',
+      ...(budget?{budget}:{}),
       ...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,
       timeout:files.some(f=>typeof f.url==='string'&&f.url.startsWith('data:'))?300000:30000});}
     catch(error){
@@ -882,7 +919,7 @@
     // Pi continues on the server after navigation or browser disconnect.
     void window.refreshWorkspaceQueue?.();
     return {queued:receipt?.queued===true,handled:receipt?.handled===true,
-      pending:receipt?.pending||0};
+      pending:receipt?.pending||0,settled:['idle','failed'].includes(statuses.get(id))};
   }
   // Native owns both cancellation and subsequent execution. Never touch another session.
   async function replaceRunningModel(id,providerID,modelID){
@@ -1014,7 +1051,7 @@
       version:configuration.version,status:'ready',errors:{},
       agents:agents.filter(a=>a?.name&&!a.hidden&&['primary','all'].includes(a.mode)),
       default_agent:null,generation:'pi-native',revision:'pi-catalog',
-      policy_revision:'pi-native',
+      policy_revision:'pi-native',budget_modes:providers.budget_modes||{analysis:false,execution:false},
       providers:first.map(p=>({
         ...p,connected:connected.has(p.id),allowed:p.allowed!==false,visible:true,
         default_model:providers.default?.[p.id],
@@ -1022,7 +1059,11 @@
           .map(([mid,m])=>({...m,id:mid,allowed:true,visible:true}))
       }))};
   }
-  window.nativeSession={ready,active,route,start,stop,send,recover,forceStop,resetContext,archives,readArchive,projectArchives,projectArchiveMessages,deleteProjectArchive,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
+  async function budgetState(id){
+    const row=await context(id);
+    return native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/budget_state');
+  }
+  window.nativeSession={budgetState,ready,active,route,start,stop,send,recover,forceStop,resetContext,archives,readArchive,projectArchives,projectArchiveMessages,deleteProjectArchive,pendingAttachment,cancelPendingAttachment,replaceRunningModel,permissions,requests,discovery,select,selection,blocked,invalidate:id=>id?snapshots.delete(id):snapshots.clear(),peek:id=>snapshots.get(id),clear};
   window.addEventListener('authentication-cleared',clear);
   window.addEventListener('account-provider-changed',()=>{snapshots.clear();discoveryReads.clear();});
   window.addEventListener('native-agent-inventory-updated',event=>{
