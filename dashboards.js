@@ -2018,11 +2018,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   budgetAnalysis.type=budgetExecution.type='button';
   budgetButtons.append(budgetAnalysis,budgetExecution);
   function showBudgetModes(value){
-    budgetModes={analysis:value?.analysis===true,execution:value?.execution===true};
+    budgetModes={analysis:value?.analysis!==false,execution:value?.execution!==false};
+    if(!budgetModes.analysis&&!budgetModes.execution)budgetModes={analysis:true,execution:true};
     const native=window.nativeSession?.active();
-    budgetAnalysis.disabled=!native||!budgetModes.analysis;
-    budgetExecution.disabled=!native||!budgetModes.execution;
-    if(budgetChoice)budgetChoice.notice.hidden=!budgetAnalysis.disabled||!budgetExecution.disabled;
+    budgetAnalysis.hidden=budgetAnalysis.disabled=!native||!budgetModes.analysis;
+    budgetExecution.hidden=budgetExecution.disabled=!native||!budgetModes.execution;
+    if(budgetChoice)budgetChoice.notice.hidden=Boolean(native);
   }
   showBudgetModes(null);
   const budgetNumber=n=>new Intl.NumberFormat(lang==='ar'?'ar':'en',{maximumFractionDigits:6}).format(n);
@@ -2263,6 +2264,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           'تعذّر تحميل إعدادات التحليل والتنفيذ.');
       });
     }else{
+      budgetAnalysis.hidden=budgetExecution.hidden=true;
       budgetAnalysis.disabled=budgetExecution.disabled=true;
       notice.hidden=false;
     }
