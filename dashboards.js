@@ -2007,6 +2007,1100 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     if (available.some(p => p.id === chosenProvider)) picker.value = chosenProvider;
     picker.onchange();
   };
+
+  // Budget planning is an opt-in stage in this SAME Pi conversation. Merely
+  // opening the chooser does not call a model or create a new Pi session.
+  let budgetModes={analysis:false,execution:false},budgetApproval=null;
+  const budgetButtons=textElement('div','','composer-budget-actions');
+  budgetButtons.style.display='flex';budgetButtons.style.flexWrap='wrap';budgetButtons.style.gap='6px';
+  const budgetAnalysis=btn('budgetAnalysis','Analyze by budget','تحليل بميزانيتي',()=>chooseBudget('analysis'));
+  const budgetExecution=btn('budgetExecution','Execute by budget','تنفيذ بميزانيتي',()=>chooseBudget('execution'));
+  budgetAnalysis.type=budgetExecution.type='button';
+  budgetButtons.append(budgetAnalysis,budgetExecution);
+  function showBudgetModes(value){
+    budgetModes={analysis:value?.analysis===true,execution:value?.execution===true};
+    budgetAnalysis.hidden=!budgetModes.analysis;
+    budgetExecution.hidden=!budgetModes.execution;
+    budgetButtons.hidden=!budgetModes.analysis&&!budgetModes.execution;
+  }
+  showBudgetModes(null);
+  const budgetNumber=n=>new Intl.NumberFormat(lang==='ar'?'ar':'en',{maximumFractionDigits:6}).format(n);
+  async function chooseBudget(mode){
+    const owner=currentUser?.id,workspaceId=activeWorkspace?.id,sessionId=activeSession?.id;
+    const text=q('promptInput').value.trim();
+    if(!owner||!workspaceId||!workAccess||sending||queuing||pendingSubmission||
+       anotherProjectRunning||window.nativeSession?.blocked(sessionId)){
+      toast(tr('Finish the current task before starting a budget stage.',
+        'أكمل المهمة الحالية قبل بدء مرحلة الميزانية.'));return;
+    }
+    if(!text){
+      toast(tr('Write your task in the chat first.','اكتب طلبك في المحادثة أولاً.'));q('promptInput').focus();return;
+    }
+    if(attachments.some(a=>!a.cancelled)){
+      toast(tr('Send or remove attachments before budget mode.','أرسل أو أزل المرفقات قبل وضع الميزانية.'));return;
+    }
+    const modeAllowed=mode==='analysis'||mode==='execution';
+    if(!modeAllowed)return;
+    const dialog=document.createElement('dialog');
+    dialog.className='budget-mode-dialog';
+    dialog.style.maxWidth='min(95vw,650px)';
+    dialog.style.maxHeight='85vh';dialog.style.overflow='auto';
+    const header=textElement('h2',mode==='analysis'?
+      tr('Analyze by budget','تحليل بميزانيتي'):tr('Execute by budget','تنفيذ بميزانيتي'));
+    const status=textElement('p',tr('Loading authorized models…','جارٍ تحميل النماذج المصرّح بها…'));
+    const cards=textElement('div','','budget-model-choices');
+    cards.style.display='grid';cards.style.gap='8px';cards.style.maxHeight='40vh';cards.style.overflow='auto';
+    const capNote=textElement('p',tr(
+      'Estimates are not a spending limit. Provider credits and actual usage cannot be verified here. The optional dollar cap is unavailable until server enforcement is implemented.',
+      'التقديرات ليست سقف إنفاق. لا يمكن تأكيد رصيد المزوّد أو الاستهلاك النهائي هنا. سقف الدولار الاختياري غير متاح حتى يتوفر فرضه على الخادم.'));
+    const close=btn('budgetCancel', 'Cancel','إلغاء',()=>dialog.close());
+    const proceed=btn('budgetProceed','Continue','متابعة',async()=>{});
+    close.type=proceed.type='button';proceed.disabled=true;
+    const choices=textElement('div','','budget-dialog-footer');choices.style.display='flex';choices.style.gap='10px';
+    choices.append(close,proceed);
+    dialog.append(header,status,cards,capNote,choices);
+    dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    document.body.append(dialog);dialog.showModal();
+    let option=null;
+    try{
+      // Refresh the account's actual permissions before presenting consent.
+      const policy=await api('/api/opencode/catalog/providers?connected_only=true&include_connected_models=true');
+      if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
+      if(policy?.budget_modes?.[mode]!==true){
+        showBudgetModes(policy?.budget_modes);
+        status.textContent=tr('This option is disabled by the administrator.',
+          'هذا الخيار معطل من الإدارة.');return;
+      }
+      const snapshot=await window.workspaceRuntime.load(workspaceId,{force:true});
+      const linked=(snapshot.providers||[]).filter(p=>p.connected&&p.allowed!==false);
+      const entries=[];
+      for(const p of linked.slice(0,30)){
+        const data=await window.workspaceRuntime.loadModels(workspaceId,p.id);
+        if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
+        for(const m of (data?.models||[]).slice(0,1000)){
+          if(m.allowed===false||m.visible===false)continue;
+          const input=Math.max(300,Math.min(500000,Math.ceil(text.length/3)+1200));
+          const output=mode==='analysis'?1400:2200;
+          const cost=m.cost||{},known=Number.isFinite(cost.input)&&Number.isFinite(cost.output);
+          const amount=known?(input*cost.input+output*cost.output)/1000000:null;
+          entries.push({provider:p,model:m,input,output,amount,
+            free:known&&cost.input===0&&cost.output===0&&
+              (p.id!=='openrouter'||m.id.endsWith(':free'))});
+        }
+      }
+      entries.sort((a,b)=>
+        (mode==='analysis'?Number(b.free)-Number(a.free):0)||
+        (a.amount??Infinity)-(b.amount??Infinity)||
+        String(a.model.name||a.model.id).localeCompare(String(b.model.name||b.model.id)));
+      status.textContent=entries.length?tr(
+        'Choose a model and review the preliminary estimate before continuing.',
+        'اختر نموذجًا وراجع التقدير الأولي قبل المتابعة.'):
+        tr('No authorized connected models are available.','لا توجد نماذج مربوطة ومصرّح بها.');
+      for(const entry of entries.slice(0,150)){
+        const label=document.createElement('label');label.style.display='block';
+        label.style.border='1px solid var(--border, #aaa)';label.style.padding='9px';
+        label.style.borderRadius='8px';
+        const radio=document.createElement('input');radio.type='radio';radio.name='budget-model-choice';
+        const title=textElement('strong',' '+entry.provider.name+' / '+(entry.model.name||entry.model.id));
+        const description=textElement('small',
+          ' · '+(entry.free?tr('Listed free','مجاني مدرج'):entry.amount===null?
+          tr('Price unknown','السعر غير معروف'):'≈ ,q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
+  const choices=textElement('button','','icon-btn composer-choice-toggle');choices.type='button';choices.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
+  choices.onclick=()=>{const open=picks.classList.toggle('open');choices.setAttribute('aria-expanded',String(open));};
+  controls.replaceChildren(utilities,choices,picks,actions,retryModels);
+  document.addEventListener('click',event=>{if(!picks.contains(event.target)&&!choices.contains(event.target)){picks.classList.remove('open');choices.setAttribute('aria-expanded','false');}});
+  controls.addEventListener('keydown',event=>{if(event.key==='Escape'){picks.classList.remove('open');choices.setAttribute('aria-expanded','false');choices.focus();}});
+  window.addEventListener('workspace-provider-disconnected',event=>{
+    if(activeWorkspace?.id!==event.detail.workspaceId)return;
+    const id=event.detail.providerId;providers=providers.filter(p=>p.id!==id);runtimeReady=false;
+    for(const option of [...q('providerSelect').options])if(option.value===id)option.remove();
+    if(chosenProvider===id){chosenProvider=chosenModel='';modelRequest++;modelsReady=false;retryModels.hidden=true;q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));}
+    updateSend();
+  });
+  updateSend=function(){
+    if(pendingSubmission&&pendingSubmission.owner!==currentUser?.id){pendingSubmission=null;retrySubmission.hidden=true;submissionStatus.textContent='';}
+    const selected=providers.find(p=>p.id===q('providerSelect').value);
+    agent.disabled=!workAccess||!agentsReady;
+    q('providerSelect').disabled=!workAccess||!providers.some(p=>(p.connected)&&p.allowed!==false);
+    q('modelSelect').disabled=!workAccess||!modelsReady||!selected?.connected||selected.allowed===false||q('modelSelect').options.length<2;
+    const busy=['submitted','waiting_approval'].includes(activeSession?.execution_status);
+    renderAttachments();
+    attach.disabled=!workAccess||sending||Boolean(pendingSubmission)||busy;attachmentList.querySelectorAll('button').forEach(button=>button.disabled=sending||Boolean(pendingSubmission));
+    // The SDK supports followUp() while streaming. Only a genuinely
+    // uncertain transport receipt blocks Native sending, not a running task.
+    const nativeBusy=Boolean(window.nativeSession?.active()&&window.nativeSession.blocked(activeSession?.id));
+    manualModel.hidden=!window.nativeSession?.active();
+    recoveryAction.hidden=!window.nativeSession?.active()||!activeSession||!window.nativeSession.blocked(activeSession.id);
+    cancelAttachment.hidden=!activeSession||!window.nativeSession?.pendingAttachment(activeSession.id);
+    q('sendMessage').disabled=sending||queuing||nativeBusy||anotherProjectRunning||
+      Boolean(pendingSubmission)||!workAccess||!runtimeReady||!modelsReady||
+      !selected?.connected||selected.allowed===false||!q('modelSelect').value;
+    q('sendMessage').title=anotherProjectRunning?
+      tr('Another project is running','هناك مهمة قائمة في مشروع آخر'):
+      nativeBusy?tr('Verify the previous message receipt before sending','تحقق من استلام الرسالة السابقة أولًا'):
+      (busy||queueCount)?tr('Add to Pi task queue','إضافة إلى طابور Pi'):tr('Send','إرسال');
+    q('sendMessage').setAttribute('aria-label',q('sendMessage').title);
+    // Unconfirmed Native receipt is still an actionable stop: even an idle
+    // runtime needs a verified session-scoped stop to unblock the saved draft.
+    q('stopAgent').disabled=(!busy&&!sending&&!pendingSubmission&&!nativeBusy)||Boolean(cancelRequested);
+  }
+  // A rejected model-switch request can reveal a prior Pi run that is
+  // genuinely still active. Show the Stop control after Native reconciliation
+  // without killing the queue or resending the rejected prompt.
+  window.addEventListener('workspace-native-execution-changed',event=>{
+    if(activeSession?.id===event.detail?.sessionId)updateSend();
+  });
+  // Existing entitlement rendering also updates workspace buttons. Reapply the
+  // session/submission guards without changing subscription or billing logic.
+  const renderAccess=renderEntitlement;renderEntitlement=function(){renderAccess();updateSend();};
+  // One Project has one Native session: no separate conversation list, search or lifecycle actions.
+  function renderRuntimeSessions(rows){
+    if(!Array.isArray(rows))return;
+    sessionRows=rows.filter(row=>row.workspace_id===activeWorkspace?.id).slice(0,1);
+    updateSend();
+  }
+  refreshSessions=async function(){
+    if(!activeWorkspace)return;
+    const workspaceId=activeWorkspace.id,owner=currentUser?.id;
+    if(sessionListPending?.workspaceId===workspaceId&&sessionListPending.owner===owner)return sessionListPending.promise;
+    const history=++historyRevision;
+    const promise=(async()=>{
+      let rows=await api('/api/workspaces/'+workspaceId+'/sessions');
+      if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+      if(!Array.isArray(rows)||rows.length>1)throw Error('One Project must have exactly one Native session');
+      if(!rows.length&&window.nativeSession?.active()){
+        // A new Project opens its single Native conversation immediately,
+        // not a second "New chat" flow and not a Python session creator.
+        if(!workAccess)await refreshEntitlement();
+        if(!workAccess)return rows;
+        const created=await api('/api/workspaces/'+workspaceId+'/sessions',{
+          method:'POST',body:JSON.stringify({title:activeProject?.name||'Project'})
+        });
+        if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+        rows=[created];
+      }
+      renderRuntimeSessions(rows);
+      const current=rows.find(row=>row.id===activeSession?.id);
+      if(current)activeSession={...activeSession,...current};
+      else if(!activeSession&&rows.length)await selectSession(rows[0]);
+      updateSend();return rows;
+    })();
+    sessionListPending={workspaceId,owner,promise};try{return await promise;}finally{if(sessionListPending?.promise===promise)sessionListPending=null;}
+  };
+  function renderAgents(snapshot){
+    agent.title=tr('Pi native coding agent and installed skills / extension commands','وكيل Pi الأساسي ومهارات Pi وأوامر الإضافات');
+    agent.hidden=false;
+    agent.replaceChildren(new Option(tr('Pi coding agent · default','وكيل Pi للبرمجة · الافتراضي'),''));
+    const kinds={skill:tr('Skill','مهارة'),extension:tr('Extension','إضافة'),prompt:tr('Prompt template','قالب أمر')};
+    for(const row of snapshot.agents||[]){
+      const label=row.name+' · '+(kinds[row.source]||tr('Pi command','أمر Pi'));
+      const option=new Option(label,row.name);
+      option.disabled=Boolean(row.hidden);
+      option.title=row.description||label;
+      agent.add(option);
+    }
+    agentsReady=snapshot.agents!==null;
+    agent.value=(snapshot.agents||[]).some(row=>row.name===chosenAgent&&!row.hidden)?chosenAgent:'';
+    chosenAgent=agent.value;
+    agent.onchange=()=>{chosenAgent=agent.value;saveNativeSelection();updateSend();};
+    updateSend();
+  }
+  function renderProviders(snapshot,preferredProvider=''){
+    // Workspace shows Pi-configured connections only. New provider discovery
+    // belongs to Connections; neither config nor model listing proves credits.
+    chatProviderSnapshot=snapshot;
+    showBudgetModes(snapshot.budget_modes);
+    const hidden=readChatVisibility(currentUser?.id);
+    providers=(snapshot.providers||[]).filter(p=>!hidden.has(providerVisibilityId(p.id)));
+    const linkedGroup=document.createElement('optgroup');
+    linkedGroup.label=tr('My connected providers','المزوّدون المربوطون');
+    const browseGroup=document.createElement('optgroup');
+    browseGroup.label=tr('Pi catalog · requires connection','فهرس Pi · يحتاج ربطًا للتشغيل');
+    for(const p of providers){
+      const label=p.name+' · '+(p.connected?
+        tr('Verified','موثق'):tr('Catalog','فهرس'));
+      const option=new Option(label,p.id);
+      (p.connected?linkedGroup:browseGroup).append(option);
+    }
+    q('providerSelect').replaceChildren(new Option(tr('Provider','المزوّد'),''));
+    if(linkedGroup.children.length)q('providerSelect').append(linkedGroup);
+    if(browseGroup.children.length)q('providerSelect').append(browseGroup);
+    if(preferredProvider)chosenProvider=preferredProvider;
+    if(!providers.some(p=>p.id===chosenProvider)){chosenProvider='';chosenModel='';}
+    if(!chosenProvider){const configured=snapshot.config?.model;const configuredProvider=providers.find(p=>typeof configured==='string'&&configured.startsWith(p.id+'/'));const connected=providers.filter(p=>p.connected&&p.allowed!==false);chosenProvider=configuredProvider?.id||connected[0]?.id||providers[0]?.id||'';if(configuredProvider)chosenModel=configured.slice(configuredProvider.id.length+1);}
+    if(providers.some(p=>p.id===chosenProvider))q('providerSelect').value=chosenProvider;
+    q('providerSelect').onchange=()=>{chosenProvider=q('providerSelect').value;chosenModel='';models();};q('modelSelect').onchange=()=>{chosenModel=q('modelSelect').value;renderNativeVariants();saveNativeSelection();updateSend();};models();
+  }
+  refreshChoices=async function(preferredProvider='',force=false){
+    if(!activeWorkspace)return;
+    const workspaceId=activeWorkspace.id,stamp=++discovery,started=performance.now();
+    const current=()=>stamp===discovery&&activeWorkspace?.id===workspaceId;
+    runtimeReady=false;updateSend();
+    const cached=window.workspaceRuntime.peek(workspaceId),cachedAgents=window.workspaceRuntime.peekAgents(workspaceId);
+    if(cached)renderProviders(cached,preferredProvider);if(cachedAgents)renderAgents(cachedAgents);
+    q('runtimeStatus').textContent=cached?tr('Refreshing Pi…','جارٍ تحديث Pi…'):tr('Starting Pi…','جارٍ بدء Pi…');
+    const agentsJob=window.workspaceRuntime.loadAgents(workspaceId).then(snapshot=>{
+      if(!current())return;renderAgents(snapshot);
+      performance.measure('Pi agents populated '+workspaceId,{start:started,end:performance.now()});
+    }).catch(error=>{if(current()){agentsReady=false;agent.title=error.message;updateSend();}});
+    const providersJob=window.workspaceRuntime.load(workspaceId,{force}).then(snapshot=>{
+      if(!current())return;
+      runtimeReady=snapshot.health?.healthy===true&&snapshot.providers!==null;
+      renderProviders(snapshot,preferredProvider);renderAgents(snapshot);
+      q('runtimeStatus').textContent='Pi '+snapshot.version+' · '+snapshot.status;
+      for(const error of Object.values(snapshot.errors||{}))toast(error.detail);
+      performance.measure('Pi providers populated '+workspaceId,{start:started,end:performance.now()});
+    }).catch(error=>{if(current()){runtimeReady=false;q('runtimeStatus').textContent=error.message;updateSend();toast(error.message);}});
+    await Promise.allSettled([agentsJob,providersJob]);
+  }
+  async function models(){
+    const stamp=++modelRequest,workspaceId=activeWorkspace?.id,selected=providers.find(p=>p.id===q('providerSelect').value);
+    const current=()=>stamp===modelRequest&&activeWorkspace?.id===workspaceId&&q('providerSelect').value===selected?.id;
+    modelsReady=false;retryModels.hidden=true;
+    const render=rows=>{
+      const hidden=readChatVisibility(currentUser?.id);
+      rows=rows.filter(m=>(m.visible!==false||m.id===chosenModel)&&
+        !hidden.has(modelVisibilityId(selected?.id,m.id)))
+        .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)));
+      q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));
+      for(const model of rows){
+        const {input,output}=model.cost||{};
+        const paid=[input,output].some(price=>typeof price==='number'&&price>0);
+        const free=input===0&&output===0&&
+          (selected?.id!=='openrouter'||model.id.endsWith(':free'));
+        const price=paid?tr('Paid list price','سعر مدرج مدفوع'):
+          free?tr('$0 list price','سعر مدرج $0'):tr('Price unknown','السعر غير معروف');
+        const option=new Option((model.name||model.id)+' · '+price,model.id);
+        option.disabled=model.allowed===false;
+        option.title=tr('Pi model · remaining credits not confirmed','نموذج Pi · الرصيد المتبقي غير مؤكد');
+        q('modelSelect').add(option);
+      }
+      const preferred=chosenModel||selected?.default_model||'';
+      q('modelSelect').value=rows.some(m=>m.id===preferred&&m.allowed!==false)?preferred:(window.nativeSession?.active()?rows.find(m=>m.allowed!==false)?.id||'':'');
+    };
+    render(selected&&workspaceId?window.workspaceRuntime.peekModels(workspaceId,selected.id)?.models||[]:[]);updateSend();
+    if(!runtimeReady||!selected||selected.allowed===false)return;
+    if(!selected.connected){
+      // Browse the saved Pi catalog without requiring credentials. These
+      // options are explicitly disabled until a verified connection exists.
+      try{
+        const data=await api('/api/workspaces/'+encodeURIComponent(workspaceId)+
+          '/providers/'+encodeURIComponent(selected.id)+'/models');
+        if(!current())return;
+        render(Object.entries(data.models||{}).map(([id,m])=>({
+          ...m,id,allowed:false,visible:true
+        })));
+        q('modelSelect').title=tr('Connect a verified provider key to run these Pi models.',
+          'تحتاج إلى ربط مفتاح موثق لدى المزوّد لتشغيل هذه النماذج.');
+        updateSend();
+      }catch(error){if(current())q('modelSelect').title=error.message;}
+      return;
+    }
+    if(q('modelSelect').options.length===1)q('modelSelect').options[0].textContent=tr('Loading models…','جارٍ تحميل النماذج…');
+    try{
+      const data=await window.workspaceRuntime.loadModels(workspaceId,selected.id);
+      if(!current())return;render(data.models);modelsReady=data.allowed!==false&&data.connected===true;
+      chosenModel=q('modelSelect').value;
+      q('modelSelect').title=tr('Pi model · available credits are not confirmed until Pi processes a request','نموذج Pi · لا يُؤكد توفر الرصيد حتى يعالج Pi طلبًا');
+      renderNativeVariants();updateSend();
+    }catch(error){if(current()){q('modelSelect').title=error.message;q('modelSelect').options[0].textContent=tr('Could not load models','تعذر تحميل النماذج');retryModels.hidden=false;updateSend();toast(error.message);}}
+  }
+  window.refreshWorkspaceChoices=async(preferredProvider='',force=true)=>{if(activeWorkspace&&force)window.workspaceRuntime.invalidate(activeWorkspace.id);return refreshChoices(preferredProvider,force);};
+  window.addEventListener('account-provider-changed',event=>{if(currentUser?.id===event.detail.owner&&activeWorkspace&&!sending&&!pendingSubmission)window.refreshWorkspaceChoices(chosenProvider,false).catch(()=>{});});
+  let providerCheckPending=false;
+  setInterval(async()=>{
+    if(window.nativeSession?.active()||providerCheckPending||document.hidden||!currentUser||!activeWorkspace||sending||pendingSubmission||!q('workspacePage').classList.contains('active'))return;
+    const id=activeWorkspace.id,owner=currentUser.id,previous=window.workspaceRuntime.peek(id);
+    providerCheckPending=true;
+    try{if(!previous){await window.refreshWorkspaceChoices(chosenProvider,true);return;}
+      const state=await api('/api/workspaces/'+encodeURIComponent(id)+'/runtime/state');
+      if(currentUser?.id===owner&&activeWorkspace?.id===id&&(state.policy_revision!==previous.policy_revision||state.revision!==previous.revision||state.generation!==previous.generation))await window.refreshWorkspaceChoices(chosenProvider,true);
+    }catch(error){}finally{providerCheckPending=false;}
+  },10000);
+  openWorkspace=async function(project,workspace,{navigate=true}={}){
+    if(admin()){await page('adminPage');return;}
+    if(sending||pendingSubmission)throw new Error(tr('Confirm or cancel the pending submission before switching workspaces.','تحقق من الطلب المعلّق أو ألغِه قبل تغيير مساحة العمل.'));
+    if(!await usableWorkspace(workspace)){toast(tr('Project files are unavailable. Create or open another project.','ملفات المشروع غير متاحة. أنشئ مشروعًا أو افتح مشروعًا آخر.'));if(navigate)await page('workspaceHomePage');return;}
+    saveNativeDraft();window.closeNativeFile?.();if(activeWorkspace?.id!==workspace.id){clearAttachments();storageData=null;storageChip.textContent='';}detailLoads.delete(workspace.id);stopEvents();workspaceSelectionRevision++;activeProject=project;activeWorkspace=workspace;activeSession=null;restoreNativeDraft();window.resetWorkspaceQueue?.();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);retrySubmission.hidden=true;submissionStatus.textContent='';capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();activityStage.textContent=activitySummary.textContent='';try{localStorage.setItem('og-workspace',workspace.id);}catch(error){}
+    discovery++;modelRequest++;chatProviderSnapshot=null;chosenAgent=chosenProvider=chosenModel='';providers=[];runtimeReady=agentsReady=modelsReady=false;retryModels.hidden=true;q('providerSelect').replaceChildren(new Option(tr('Loading providers…','جارٍ تحميل المزوّدات…'),''));q('modelSelect').replaceChildren(new Option(tr('Model','النموذج'),''));events.replaceChildren();changesStamp++;changedFiles.replaceChildren();diffView.textContent='';clearPreview();previewStatus.textContent=tr('Select Start to check this project’s preview availability.','اختر التشغيل للتحقق من توفر معاينة هذا المشروع.');previewPath.hidden=false;filesTree.replaceChildren();filesStatus.textContent=tr('Loading files…','جارٍ تحميل الملفات…');
+    q('stopAgent').disabled=true;q('workspaceRepo').textContent=project.name;q('workspaceBranch').textContent=project.branch||'—';
+    renderWorkspaceEmpty();q('promptInput').value=pendingIdea;window.resizeWorkspaceComposer?.();pendingIdea='';agent.hidden=false;agent.replaceChildren(new Option(tr('Pi default','افتراضي Pi'),''));updateSend();
+    if(!navigate){
+      syncWorkspacePolling();
+      // Conversation navigation keeps the page mounted. Restart discovery for
+      // this workspace after resetting its choices; no page() re-entry needed.
+      if(q('workspacePage').classList.contains('active'))refreshChoices().catch(error=>toast(error.message));
+      return;
+    }
+    await page('workspacePage');
+    window.authSession?.workspaceOpened();
+
+  };
+  async function refreshSessionStatus(){
+    if(!activeSession)return;const sessionId=activeSession.id,workspaceId=activeWorkspace?.id,owner=currentUser?.id;
+    if(statusPending?.sessionId===sessionId)return statusPending.promise;
+    const promise=(async()=>{const row=await api('/api/sessions/'+sessionId);if(activeSession?.id!==sessionId||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+      activeSession={...activeSession,...row};q('runtimeStatus').textContent=row.status;if(['completed','failed','cancelled'].includes(row.execution_status))window.renderWorkspaceEventLine?.(row.execution_status);
+      if(!pendingSubmission&&!['submitted','waiting_approval'].includes(row.execution_status)){
+        try{sessionStorage.removeItem('og-submit:'+owner+':'+sessionId);}catch(error){}
+      }
+      sessionRows=sessionRows.map(s=>s.id===row.id?{...s,...row}:s);renderRuntimeSessions(sessionRows);updateSend();await refreshMessageQueue();return row;
+    })();statusPending={sessionId,promise};try{return await promise;}finally{if(statusPending?.promise===promise)statusPending=null;}
+  }
+  window.refreshWorkspaceSessionStatus=refreshSessionStatus;
+  let eventRefreshTimer=null;
+  window.addEventListener('authentication-cleared',()=>{
+    historyRevision++;
+    if(drawer())closePane();window.resetWorkspaceQuestions?.();window.refreshWorkspaceTodos?.(true);window.refreshWorkspaceQueue?.();clearAttachments();clearTimeout(eventRefreshTimer);clearInterval(storageTimer);storageTimer=null;discovery++;modelRequest++;changesStamp++;
+    pendingSubmission=null;sending=cancelRequested=false;sessionRows=[];providers=[];chosenAgent=chosenProvider=chosenModel='';
+    budgetApproval=null;showBudgetModes(null);
+    runtimeReady=agentsReady=modelsReady=workAccess=false;entitlement=null;workspaceDays.hidden=workspaceAccess.hidden=true;workspaceDays.textContent='';workspaceAccess.replaceChildren();homeAccess.replaceChildren();retrySubmission.hidden=retryModels.hidden=true;
+    storageData=null;submissionStatus.textContent=storageChip.textContent=activityStage.textContent=activitySummary.textContent='';
+    capabilityView.open=false;capabilityWorkspace='';capabilityBody.replaceChildren();changedFiles.replaceChildren();diffView.textContent='';frame.srcdoc='';frame.hidden=true;approvalsList.replaceChildren();detailLoads.clear();updateSend();
+  });
+  window.addEventListener('workspace-execution-event',event=>{
+    if(activeSession?.id!==event.detail.sessionId)return;
+    const sessionId=event.detail.sessionId;clearTimeout(eventRefreshTimer);eventRefreshTimer=setTimeout(()=>{if(activeSession?.id!==sessionId)return;refreshSessionStatus().then(row=>{if(!row||activeSession?.id!==row.id)return;refreshMessages().catch(()=>{});if(['failed','completed','cancelled'].includes(row.execution_status)&&panelMode==='changes'&&!shell.classList.contains('sessions-collapsed'))refreshGit().catch(error=>toast(error.message));}).catch(error=>toast(error.message));},50);
+  });
+  const originalSession=selectSession;selectSession=async function(session){
+    if(sending||pendingSubmission){toast(tr('Finish or confirm the pending submission before changing sessions.','أكمل أو تحقق من الطلب المعلّق قبل تغيير الجلسة.'));return;}
+    // Restored sessions can arrive before background access initialization.
+    // Resolve access for this selection without delaying the page shell.
+    if(!workAccess)await refreshEntitlement();
+    if(!workAccess){toast(tr('Subscribe to resume this conversation.','اشترك لاستئناف هذه المحادثة.'));return;}
+    saveNativeDraft();window.resetWorkspaceQueue?.();activityStage.textContent=activitySummary.textContent='';await originalSession(session);if(activeSession?.id!==session.id)return;
+    if(window.nativeSession?.active()){restoreNativeDraft();const selected=window.nativeSession.selection(session.id);chosenProvider=selected?.providerID||activeSession.model?.providerID||'';chosenModel=selected?.modelID||activeSession.model?.id||'';chosenAgent=selected?.agent||activeSession.agent||'';await refreshChoices(chosenProvider);}
+    if(drawer())closePane();
+    sessionRows=sessionRows.map(row=>row.id===session.id?{...row,...activeSession}:row);
+    let saved=null;try{saved=JSON.parse(sessionStorage.getItem('og-submit:'+currentUser.id+':'+session.id)||'null');}catch(error){}
+    if(saved?.request_id){pendingSubmission={...saved,owner:currentUser.id,workspaceId:activeWorkspace.id,sessionId:session.id,recovered:true};retrySubmission.hidden=false;submissionStatus.textContent=tr('Checking the previous submission; it will not be resent automatically.','جارٍ التحقق من الطلب السابق؛ لن يُعاد إرساله تلقائيًا.');await submitPending();}
+    renderRuntimeSessions(sessionRows);updateSend();window.refreshWorkspaceQueue?.();if(panelMode==='changes'&&!shell.classList.contains('sessions-collapsed'))loadChanges();loadApprovals().catch(()=>{});
+  };
+  async function createSession({checked=false,title:conversationTitle=''}={}){
+    if(sessionCreating)return sessionCreating;
+    if(!activeWorkspace)return;
+    if(!window.nativeSession?.active()&&(sending||pendingSubmission||sessionRows.some(s=>s.workspace_id===activeWorkspace.id&&['submitted','waiting_approval'].includes(s.execution_status))))throw new Error(tr('Finish or stop running work before creating another conversation.','أكمل التنفيذ الجاري أو أوقفه قبل إنشاء محادثة أخرى.'));
+    saveNativeDraft();const workspaceId=activeWorkspace.id,owner=currentUser?.id;
+    const promise=(async()=>{if(!checked)await refreshEntitlement();if(!workAccess||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+      const title=activeProject?.name||'Project';
+      const row=await api('/api/workspaces/'+workspaceId+'/sessions',{method:'POST',body:JSON.stringify({title})});
+      if(activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+      // Creation already opens the session server-side. Select once, without a
+      // second creation or an auto-restore/open race during list refresh.
+      await originalSession(row);if(window.nativeSession?.active()){if(sending)nativeDraftContext=nativeDraftKey();else restoreNativeDraft();}await refreshSessions();return activeSession;
+    })();sessionCreating=promise;updateSend();try{return await promise;}finally{if(sessionCreating===promise)sessionCreating=null;updateSend();}
+  }
+
+
+
+  // Separate the submitted text from the next draft before any network wait.
+  // Input revisions protect even an identical new draft (or deliberate deletion).
+  let composerDraftRevision=0;
+  let nativeDraftContext='';
+  const nativeDraftKey=()=>currentUser&&activeWorkspace?'og-native-draft:'+currentUser.id+':'+activeWorkspace.id+':'+(activeSession?.id||'new'):'';
+  function saveNativeDraft(){if(!window.nativeSession?.active()||!nativeDraftContext)return;try{localStorage.setItem(nativeDraftContext,JSON.stringify({text:q('promptInput').value,attachments:attachments.filter(a=>a.path&&!a.error&&!a.cancelled&&!a.nativeInline).map(({name,path,size,type,temporary,id})=>({name,path,size,type,temporary,id}))}));}catch{}}
+  function restoreNativeDraft(){if(!window.nativeSession?.active())return;const key=nativeDraftKey();if(key===nativeDraftContext)return;nativeDraftContext=key;let value=null;try{value=JSON.parse(localStorage.getItem(key)||'null');}catch{}q('promptInput').value=value?.text||'';clearAttachments();attachments=Array.isArray(value?.attachments)?value.attachments.map(item=>({...item,owner:currentUser?.id,workspaceId:activeWorkspace?.id,state:'ready'})):[];composerDraftRevision++;window.resizeWorkspaceComposer?.();renderAttachments();
+
+  }
+  q('promptInput').addEventListener('input',()=>{composerDraftRevision++;saveNativeDraft();});
+  window.addEventListener('beforeunload',saveNativeDraft);
+  window.addEventListener('authentication-cleared',()=>{nativeDraftContext='';});
+  function takeComposerDraft(isCurrent){
+    const input=q('promptInput'),value=input.value,revision=composerDraftRevision,storageContext=nativeDraftContext;
+    let confirmed=false,restored=false;
+    input.value='';window.resizeWorkspaceComposer?.();
+    return {
+      restore(){
+        if(!confirmed&&!restored&&isCurrent()&&composerDraftRevision===revision&&input.value===''){
+          input.value=value;restored=true;window.resizeWorkspaceComposer?.();
+        }
+      },
+      confirm(){
+        confirmed=true;
+        if(window.nativeSession?.active()&&storageContext&&storageContext!==nativeDraftContext){try{const stored=JSON.parse(localStorage.getItem(storageContext)||'null');if(stored?.text===value)localStorage.removeItem(storageContext);}catch{}}
+        if(restored&&isCurrent()&&composerDraftRevision===revision&&input.value===value){
+          input.value='';window.resizeWorkspaceComposer?.();
+        }saveNativeDraft();
+      }
+    };
+  }
+
+  const queueView=document.createElement('details');queueView.className='composer-message-queue';queueView.hidden=true;queueView.setAttribute('aria-label',tr('Queued messages','الرسائل المنتظرة'));attachmentList.before(queueView);
+  let queuePolling=false;
+  const queueCurrent=(owner,id)=>currentUser?.id===owner&&activeSession?.id===id;
+  async function refreshMessageQueue(){
+    if(window.nativeSession?.active()){
+      if(queuePolling)return;
+      const owner=currentUser?.id,id=activeSession?.id,revision=++queueRevision;
+      if(!id){queueCount=0;queueView.hidden=true;return;}
+      queuePolling=true;
+      try{
+        const data=await api('/api/sessions/'+id+'/queue');
+        if(revision!==queueRevision||!queueCurrent(owner,id))return;
+        const entries=[
+          ...(data.steering||[]).map(text=>({text,mode:'steer'})),
+          ...(data.followUps||[]).map(text=>({text,mode:'followUp'}))
+        ];
+        queueCount=Number(data.pending)||entries.length;
+        queueView.replaceChildren();
+        queueView.hidden=!queueCount;
+        if(queueCount){
+          queueView.append(textElement('summary',tr('Pi queue · ','طابور Pi · ')+queueCount));
+          queueView.append(textElement('small',
+            tr('Runs in order within this project. Stop cancels the current run only; waiting Pi messages continue.',
+              'يُنفّذ بالترتيب داخل هذا المشروع. الإيقاف يوقف المهمة الحالية فقط وتتابع الرسائل المنتظرة.')));
+          for(const item of entries.slice(0,10)){
+            const line=textElement('div','','queued-message');
+            line.append(textElement('p',String(item.text).slice(0,360)),
+              textElement('small',item.mode==='steer'?
+                tr('Next turn','الدور التالي'):tr('Waiting','بانتظار التنفيذ')));
+            queueView.append(line);
+          }
+        }
+        updateSend();
+      }catch(error){if(queueCurrent(owner,id))submissionStatus.textContent=error.message;}
+      finally{queuePolling=false;}
+      return;
+    }
+    if(queuePolling)return;
+    const owner=currentUser?.id,id=activeSession?.id,revision=++queueRevision;
+    if(!id){queueCount=0;queueView.hidden=true;queueView.replaceChildren();queueSignature='';return;}
+    queuePolling=true;
+    try{
+      const data=await api('/api/sessions/'+id+'/queue');
+      if(revision!==queueRevision||!queueCurrent(owner,id))return;
+      queueCount=(data.items||[]).filter(item=>item.state!=='failed').length;
+      const signature=JSON.stringify([owner,id,lang,data]);
+      if(signature!==queueSignature){
+        const open=queueSignature&&queueView.open;queueView.replaceChildren();queueView.open=Boolean(open);queueView.hidden=!data.items?.length;
+        queueView.append(textElement('summary',tr('Queued messages: ','الرسائل المنتظرة: ')+queueCount));
+        queueView.append(textElement('small',data.paused?tr('Paused after stop/failure. Resume explicitly when ready.','الطابور متوقف بعد الإيقاف أو الفشل. استأنفه عندما تكون جاهزًا.'):tr('Runs in order after the current task. Pending approvals still block execution.','تُنفّذ بالترتيب بعد المهمة الحالية، مع انتظار الموافقات المطلوبة.')));
+        for(const item of data.items||[]){
+          const row=textElement('div','','queued-message'),text=textElement('p',item.text);row.append(text);
+          const label=item.state==='failed'?tr('Not dispatched; review and resend.','تعذر الإرسال؛ راجع الرسالة وأعد إرسالها.'):item.state==='claimed'?tr('Preparing submission…','جارٍ تجهيز الإرسال…'):tr('Waiting in queue','بانتظار التنفيذ');row.append(textElement('small',label));
+          const remove=textElement('button',tr('Remove','إزالة'),'button ghost small');remove.type='button';remove.disabled=item.state==='claimed';
+          remove.onclick=async()=>{if(!queueCurrent(owner,id)||remove.disabled)return;remove.disabled=true;try{await api('/api/sessions/'+id+'/queue/'+encodeURIComponent(item.request_id),{method:'DELETE'});queueSignature='';await refreshMessageQueue();}catch(error){if(queueCurrent(owner,id))toast(error.message);}finally{remove.disabled=false;}};row.append(remove);queueView.append(row);
+        }
+        if(data.paused&&queueCount){const resume=textElement('button',tr('Resume queued messages','استئناف الرسائل المنتظرة'),'button ghost small');resume.type='button';resume.onclick=async()=>{if(!queueCurrent(owner,id))return;resume.disabled=true;try{await api('/api/sessions/'+id+'/queue/dispatch',{method:'POST',body:JSON.stringify({resume:true})});await refreshSessionStatus();}catch(error){if(queueCurrent(owner,id))toast(error.message);}finally{resume.disabled=false;}};queueView.append(resume);}
+        queueSignature=signature;
+      }
+      updateSend();
+      if(queueCount&&activeSession.execution_status==='completed')await api('/api/sessions/'+id+'/queue/dispatch',{method:'POST',body:JSON.stringify({resume:false})});
+    }catch(error){/* Keep known queue entries on discovery failure; never resend. */}finally{queuePolling=false;}
+  }
+  window.refreshWorkspaceQueue=refreshMessageQueue;
+  window.resetWorkspaceQueue=()=>{queueRevision++;queueCount=0;queueSignature='';queueView.hidden=true;queueView.replaceChildren();};
+  window.addEventListener('authentication-cleared',window.resetWorkspaceQueue);
+  async function queueFollowup(payload,owner,id){
+    if(queuing||!queueCurrent(owner,id))return;queuing=true;updateSend();
+    const draft=takeComposerDraft(()=>queueCurrent(owner,id));
+    try{
+      // Persist only a digest + id for uncertain retries, never message text.
+      const bytes=new TextEncoder().encode(JSON.stringify({...payload,request_id:null}));
+      const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(value=>value.toString(16).padStart(2,'0')).join('');
+      const key='og-queue:'+owner+':'+id;let previous=null;try{previous=JSON.parse(sessionStorage.getItem(key));}catch(error){}
+      if(previous?.digest===digest)payload.request_id=previous.request_id;
+      try{sessionStorage.setItem(key,JSON.stringify({digest,request_id:payload.request_id}));}catch(error){}
+      if(!queueCurrent(owner,id))return;
+      await api('/api/sessions/'+id+'/queue',{method:'POST',body:JSON.stringify(payload)});
+      if(!queueCurrent(owner,id))return;
+      try{sessionStorage.removeItem(key);}catch(error){}
+      sentAttachments(payload);draft.confirm();
+      submissionStatus.textContent=tr('Added to this conversation’s queue.','أُضيفت إلى طابور هذه المحادثة.');await refreshMessageQueue();
+    }catch(error){if(queueCurrent(owner,id)){submissionStatus.textContent=error.message;toast(error.message);}}
+    finally{draft.restore();queuing=false;updateSend();}
+  }
+  const submissionCurrent=p=>currentUser?.id===p.owner&&activeWorkspace?.id===p.workspaceId&&activeSession?.id===p.sessionId;
+  let sendingPreview=null;
+  function clearSendingPreview(){const preview=sendingPreview;sendingPreview=null;preview?.node.remove();}
+  function keepSendingPreview(){
+    if(!sendingPreview)return;
+    if(currentUser?.id!==sendingPreview.owner||activeWorkspace?.id!==sendingPreview.workspaceId||(sendingPreview.sessionId&&activeSession?.id!==sendingPreview.sessionId)){clearSendingPreview();return;}
+    const delivered=[...q('agentFeed').querySelectorAll('.user-bubble[data-message-id]')].some(node=>!sendingPreview.existingIds.has(node.dataset.messageId)&&node.querySelector('.message-content')?.textContent===sendingPreview.text);
+    if(delivered){clearSendingPreview();return;}
+    if(!sendingPreview.node.isConnected)q('agentFeed').append(sendingPreview.node);
+  }
+  function showSendingPreview(prompt){
+    clearSendingPreview();
+    const feed=q('agentFeed');workspaceLatestControl(feed);feed.workspaceFollow.following=true;
+    const node=textElement('article','','user-bubble sending-preview');node.dir='auto';
+    node.append(textElement('div',prompt,'message-content'));
+    const status=textElement('small',tr('Sending…','جارٍ الإرسال…'),'sending-preview-status');status.setAttribute('role','status');node.append(status);
+    sendingPreview={node,text:prompt,owner:currentUser.id,workspaceId:activeWorkspace.id,existingIds:new Set([...q('agentFeed').querySelectorAll('[data-message-id]')].map(row=>row.dataset.messageId))};keepSendingPreview();workspaceFollowLatest(feed);
+  }
+  // Session creation and SSE refreshes rebuild the feed while a POST is pending.
+  // Keep one clearly unconfirmed preview without affecting request IDs/retries.
+  new MutationObserver(keepSendingPreview).observe(q('agentFeed'),{childList:true});
+  window.addEventListener('authentication-cleared',clearSendingPreview);
+  async function submitPending(){
+    if(!pendingSubmission||sending)return;
+    sending=true;updateSend();const pending=pendingSubmission;
+    try{
+      let result;
+      try{result=await api('/api/sessions/'+pending.sessionId+'/submissions/'+pending.request_id);}catch(error){if(error.status!==404)throw error;if(pending.recovered)throw new Error(tr('Submission is not confirmed yet. Check again; no automatic resend occurred.','لم يتأكد الطلب بعد. تحقق مجددًا؛ لم تحدث إعادة إرسال تلقائية.'));}
+      if(!result){if(!submissionCurrent(pending))return;result=await api('/api/sessions/'+pending.sessionId+'/messages',{method:'POST',body:JSON.stringify(pending.payload)});}
+      if(!submissionCurrent(pending))return;
+      sentAttachments(pending.payload);pendingSubmission=null;retrySubmission.hidden=true;submissionStatus.textContent=tr('Submission confirmed.','تم تأكيد الطلب.');
+      pending.draft?.confirm();
+      await refreshSessionStatus();await refreshMessages();
+    }catch(error){if(submissionCurrent(pending)){retrySubmission.hidden=false;submissionStatus.textContent=error.message;toast(error.message);}}
+    finally{sending=false;updateSend();}
+  }
+  window.workspaceSubmissionBlocked=()=>sending||queuing||Boolean(pendingSubmission)||
+    (!window.nativeSession?.active()&&['submitted','waiting_approval'].includes(activeSession?.execution_status));
+  // Continue is a plain follow-up in the existing Pi session, not a second
+  // invocation of the agent's slash command. Re-applying that command can
+  // consume the selection without generating an assistant reply.
+  let choiceContinuation=false;
+  // The inline Pi recommendation table uses the SAME existing composer submit.
+  // Do not overwrite an unfinished user draft or include unrelated attachments.
+  window.submitWorkspacePiChoice=async({owner,sessionId,text}={})=>{
+    const error=(en,ar)=>({accepted:false,reason:tr(en,ar)});
+    if(!window.nativeSession?.active()||!activeSession||
+       String(activeSession.id)!==String(sessionId)||
+       String(currentUser?.id)!==String(owner))
+      return error('Return to the original Pi conversation before continuing.',
+        'ارجع إلى محادثة Pi الأصلية قبل المتابعة.');
+    if(!workAccess||sending||queuing||pendingSubmission||anotherProjectRunning)
+      return error('Pi is not ready to receive this choice yet. Please retry.',
+        'Pi ليس جاهزًا لاستقبال الاختيار الآن. حاول مجددًا.');
+    if(window.nativeSession.blocked(sessionId))
+      return error('Verify the previous Pi submission receipt before trying again.',
+        'تحقق من استلام Pi للرسالة السابقة قبل إعادة المحاولة.');
+    if(attachments.some(item=>!item.cancelled))
+      return error('Send or remove the existing attachments first.',
+        'أرسل المرفقات الحالية أو أزلها أولًا.');
+    const input=q('promptInput'),form=q('promptForm');
+    if(input.value.trim())
+      return error('You have an unsent draft. Send or clear it before continuing.',
+        'لديك مسودة غير مرسلة. أرسلها أو امسحها قبل المتابعة.');
+    if(!String(text||'').trim()||String(text).length>5000||typeof form?.onsubmit!=='function')
+      return error('This choice cannot be submitted. Please retry.',
+        'تعذّر إرسال هذا الاختيار. حاول مجددًا.');
+    if(q('sendMessage').disabled)
+      return error('Select an available Pi provider and model, then retry.',
+        'اختر مزوّد Pi ونموذجًا متاحًا ثم حاول مجددًا.');
+    input.value=String(text);
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+    window.resizeWorkspaceComposer?.();
+    // Invoke the existing submit handler and await the real Native Pi receipt.
+    // Dispatch-only would falsely show "continued" even after an HTTP failure.
+    try{
+      choiceContinuation=true;
+      let receipt;
+      try{receipt=await form.onsubmit({preventDefault(){}});}
+      finally{choiceContinuation=false;}
+      if(receipt?.accepted===true&&!receipt?.handled)return receipt;
+      if(receipt?.handled){
+        return {accepted:false,handled:true,reason:tr(
+          'The Pi command intercepted the choice without starting a model response. Select regular Pi chat and continue; nothing was resent.',
+          'اعترض أمر Pi الاختيار دون بدء رد من النموذج. اختر محادثة Pi العادية ثم تابع؛ لم تُعَد الرسالة تلقائيًا.')};
+      }
+      const uncertain=Boolean(window.nativeSession?.blocked(sessionId));
+      if(!uncertain&&input.value===text){
+        input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));
+      }
+      return {accepted:false,uncertain,
+        reason:receipt?.reason||submissionStatus.textContent||
+          tr('Pi has not confirmed the choice. Please retry.','لم يؤكد Pi استلام الاختيار؛ حاول مجددًا.')};
+    }catch(cause){
+      return {accepted:false,uncertain:Boolean(window.nativeSession?.blocked(sessionId)),
+        reason:cause?.message||tr('Pi submission failed.','تعذّر إرسال الاختيار إلى Pi.')};
+    }
+  };
+  q('promptForm').onsubmit=async event=>{
+    event.preventDefault();if(sending||queuing||pendingSubmission)return;
+    if(anotherProjectRunning){
+      submissionStatus.textContent=executionLockBanner.textContent;
+      return;
+    }
+    if(!activeProject||!activeWorkspace||activeWorkspace.project_id!==activeProject.id){
+      submissionStatus.textContent=tr('Select an existing project before chatting with Pi.','اختر مشروعًا موجودًا قبل الدردشة مع Pi.');
+      await window.promptProjectChoice?.();return;
+    }
+    if(attachments.some(a=>!a.cancelled&&(!a.path||a.error))){submissionStatus.textContent=tr('Wait for uploads or remove failed attachments before sending.','انتظر الرفع أو أزل المرفقات التي فشل رفعها قبل الإرسال.');return;}
+    const stageConsent=budgetApproval;budgetApproval=null;
+    const typedPrompt=q('promptInput').value.trim(),prompt=typedPrompt|| (attachments.some(a=>a.path&&!a.cancelled&&!a.error)?tr('Inspect the attached files with your actual Pi tools. Describe what you can verify, or explain clearly when the selected model or tools cannot read them. Do not guess file contents.','افحص المرفقات باستخدام أدوات Pi الفعلية، واشرح ما تأكدت منه أو وضح صراحةً إذا لم يستطع النموذج أو الأدوات قراءة الملفات. لا تخمن محتواها.'):'');const provider=q('providerSelect').value,model=q('modelSelect').value,selectedAgent=choiceContinuation?'':agent.value,workspaceId=activeWorkspace.id,owner=currentUser?.id;
+    if(!prompt)return;if(!runtimeReady||!modelsReady||!provider||!model){toast(tr('Connect a provider and select a model before sending.','اربط مزوّدًا واختر نموذجًا قبل الإرسال.'));return;}
+    if(window.nativeSession?.active()){
+      // A second prompt is added through Pi's own followUp queue and never
+      // cancels the active task. Other projects are blocked on the Pi server.
+      const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);sending=true;updateSend();
+      // Immediate visual receipt; no Python entitlement round-trip per Pi prompt.
+      showSendingPreview(prompt);
+      delete submissionStatus.dataset.piProviderError;
+      submissionStatus.textContent=tr('Sending directly to Pi…','جارٍ الإرسال مباشرة إلى Pi…');
+      try{if(!workAccess){clearSendingPreview();return;}if(!activeSession)await createSession({checked:true});
+        if(currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||!activeSession)return;
+        const sessionId=activeSession.id,nativeFiles=attachments.filter(a=>!a.cancelled).map(a=>({path:a.path,mime:a.type,url:a.url,name:a.name}));
+        if(sendingPreview)sendingPreview.sessionId=sessionId;
+        const receipt=await window.nativeSession.send(sessionId,{
+          text:prompt,providerID:provider,modelID:model,agent:selectedAgent,
+          variant:nativeVariant.value||undefined,files:nativeFiles,
+          ...(stageConsent&&stageConsent.owner===owner&&stageConsent.workspaceId===workspaceId&&stageConsent.text===typedPrompt&&stageConsent.providerID===provider&&stageConsent.modelID===model?{budget:{mode:stageConsent.mode,approved:true,estimatedInput:stageConsent.estimatedInput,estimatedOutput:stageConsent.estimatedOutput}}:{})
+        });
+        if(receipt?.handled){
+          clearSendingPreview();
+          // Pi did not create a model turn. Keep the unsent text and attached
+          // files available instead of falsely consuming the user's draft.
+          submissionStatus.textContent=tr(
+            'The selected Pi command handled the input without starting a model reply. Your draft is preserved. Select normal Pi chat to send it to the model.',
+            'عالج أمر Pi المحدد الإدخال دون بدء رد من النموذج. بقيت مسودتك محفوظة. اختر محادثة Pi العادية لإرسالها إلى النموذج.');
+          return {accepted:true,handled:true,queued:false};
+        }
+        sentAttachments({attachments:nativeFiles});draft.confirm();
+        if(receipt?.queued){
+          submissionStatus.textContent=tr('Added to Pi queue ('+receipt.pending+' pending).',
+            'أُضيفت الرسالة إلى طابور Pi ('+receipt.pending+' منتظرة).');
+          clearSendingPreview();
+          await refreshMessageQueue();
+          return {accepted:true,queued:true};
+        }
+        if(sendingPreview){const note=sendingPreview.node.querySelector('.sending-preview-status');if(note)note.textContent=tr('Received by Pi','استلمها Pi');}
+        if(!submissionStatus.dataset.piProviderError)submissionStatus.textContent=tr('Pi received the request; awaiting provider response.','استلم Pi الطلب؛ جارٍ انتظار رد المزوّد.');
+        // Pi SSE owns reply presentation. The same Pi session now continues.
+        return {accepted:true,queued:false};
+      }catch(error){clearSendingPreview();toast(error.message);submissionStatus.textContent=error.message;
+        return {accepted:false,reason:error.message,uncertain:Boolean(window.nativeSession?.blocked(activeSession?.id))};
+      }finally{draft.restore();sending=false;updateSend();}return;
+    }
+    // LIVE must not silently fall back to the legacy Python AI queue if Native is unavailable.
+    if(location.hostname==='opencode-gateway.codes'&&!window.nativeSession?.active()){
+      submissionStatus.textContent=tr('Pi Native is unavailable. Nothing was sent.','اتصال Pi الأصلي غير متاح. لم تُرسل الرسالة.');
+      toast(submissionStatus.textContent);
+      return;
+    }
+    if(activeSession&&(['submitted','waiting_approval'].includes(activeSession.execution_status)||queueCount)){
+      await queueFollowup({request_id:crypto.randomUUID(),text:prompt,provider_id:provider,model_id:model,attachments:attachments.filter(a=>!a.cancelled).map(item=>({path:item.path})),response_language:lang,...(selectedAgent?{agent_id:selectedAgent}:{})},owner,activeSession.id);return;
+    }
+    // Synchronous lock precedes entitlement, creation, runtime and network waits.
+    const draft=takeComposerDraft(()=>currentUser?.id===owner&&activeWorkspace?.id===workspaceId);
+    sending=true;cancelRequested=false;updateSend();submissionStatus.textContent=tr('Submitting…','جارٍ الإرسال…');showSendingPreview(prompt);
+    try{
+      await refreshEntitlement();if(!workAccess||cancelRequested||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+      if(!activeSession)await createSession({checked:true});
+      if(!activeSession||cancelRequested||activeWorkspace?.id!==workspaceId||currentUser?.id!==owner)return;
+      const requestId=crypto.randomUUID(),sessionId=activeSession.id;if(sendingPreview)sendingPreview.sessionId=sessionId;
+      const payload={request_id:requestId,text:prompt,provider_id:provider,model_id:model,attachments:attachments.filter(a=>!a.cancelled).map(a=>({path:a.path})),response_language:lang,...(selectedAgent?{agent_id:selectedAgent}:{})};
+      const pending={request_id:requestId,sessionId,workspaceId,owner,payload,draft};pendingSubmission=pending;
+      try{sessionStorage.setItem('og-submit:'+owner+':'+sessionId,JSON.stringify({request_id:requestId}));}catch(error){}
+      const result=await api('/api/sessions/'+sessionId+'/messages',{method:'POST',body:JSON.stringify(payload)});
+      if(!submissionCurrent(pending))return;
+      clearSendingPreview();
+      sentAttachments(payload);pendingSubmission=null;retrySubmission.hidden=true;activeSession.execution_status=result.status;updateSend();
+      draft.confirm();submissionStatus.textContent=tr('Submission confirmed.','تم تأكيد الطلب.');
+      await refreshSessionStatus();await refreshMessages();
+    }catch(error){
+      if(activeWorkspace?.id===workspaceId&&currentUser?.id===owner){
+        if(pendingSubmission&&error.status>=400&&error.status<500&&error.status!==408){
+          // A definitive rejection did not dispatch this submission. Retain
+          // uncertain transport/server outcomes, but let rejected input be fixed.
+          try{sessionStorage.removeItem('og-submit:'+owner+':'+pendingSubmission.sessionId);}catch(storageError){}
+          pendingSubmission=null;retrySubmission.hidden=true;await refreshSessionStatus().catch(()=>{});
+        }
+        // A missing response is an uncertain result. Keep the same request ID;
+        // checking/retrying this receipt cannot create a second runtime message.
+        if(pendingSubmission){retrySubmission.hidden=false;submissionStatus.textContent=tr('Submission result is uncertain. Check or retry this same request.','نتيجة الإرسال غير مؤكدة. تحقق أو أعد هذا الطلب نفسه.');}
+        else submissionStatus.textContent=error.message;toast(error.message);
+      }
+    }finally{draft.restore();clearSendingPreview();sending=false;cancelRequested=false;updateSend();}
+  };
+  q('stopAgent').onclick=async()=>{
+    if(cancelRequested)return;cancelRequested=true;updateSend();
+    try{
+      if(pendingSubmission){await api('/api/sessions/'+pendingSubmission.sessionId+'/submissions/'+pendingSubmission.request_id);}
+      if(activeSession){await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});pendingSubmission=null;retrySubmission.hidden=true;await refreshSessionStatus();await refreshMessages();submissionStatus.textContent=tr('Execution cancelled. Completed actions and files are preserved.','أُلغي التنفيذ. تبقى الإجراءات المكتملة والملفات محفوظة.');}
+    }catch(error){cancelRequested=false;toast(error.message);}finally{if(!sending)cancelRequested=false;updateSend();}
+  };
+  async function openRepositoryPicker(onReady=null){
+    const dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog';dialog.setAttribute('aria-label',tr('GitHub repository and branch','مستودع وفرع GitHub'));
+    const close=btn('repositoryClose','Close','إغلاق',()=>dialog.close()),feedback=textElement('p',tr('Loading authorized repositories…','جارٍ تحميل المستودعات المصرّح بها…'),'api-message');feedback.setAttribute('role','status');
+    dialog.append(title('GitHub repository / branch','مستودع GitHub / الفرع'),close,text('p','Your repository stays in GitHub. Pi works on a server-side working copy. Commit and push are separate explicit actions.','يبقى المستودع في GitHub. يعمل Pi على نسخة عمل بالخادم. Commit وPush إجراءان منفصلان باختيارك.'),feedback);
+    document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();
+    try{
+      const state=await api('/api/github/status');if(!dialog.open)return;
+      if(!state.connected){feedback.textContent=tr('Connect GitHub in Settings first.','اربط GitHub من الإعدادات أولًا.');dialog.append(btn('repositoryConnect','Settings · GitHub','الإعدادات · GitHub',()=>{dialog.close();openConnections('github');}));return;}
+      const repos=await api('/api/github/repositories');if(!dialog.open)return;
+      const form=document.createElement('form'),repository=document.createElement('select'),branch=document.createElement('select'),name=document.createElement('input');
+      repository.id='workspaceRepository';branch.id='workspaceRemoteBranch';name.id='workspaceProjectName';name.maxLength=120;name.value=q('projectName').value;
+      function field(en,ar,input){const label=textElement('label',tr(en,ar));label.append(input);form.append(label);}
+      field('Repository','المستودع',repository);field('Branch','الفرع',branch);field('Project name','اسم المشروع',name);
+      const workingPaths=document.createElement('input');workingPaths.placeholder='src, tests';workingPaths.maxLength=2000;field('Working directories (comma-separated)','مجلدات العمل (مفصولة بفواصل)',workingPaths);
+      const fullCopy=document.createElement('input');fullCopy.type='checkbox';fullCopy.id='repositoryFullCopy';field('I explicitly want the complete working copy','أوافق صراحةً على استيراد نسخة العمل كاملة',fullCopy);
+      form.append(textElement('p',tr('This list shows repositories accessible to your connected GitHub account. Only the repository and branch you submit are imported; listing another repository does not import it.','تعرض القائمة المستودعات المتاحة لحساب GitHub المتصل. يُستورد المستودع والفرع اللذان تختارهما فقط؛ ظهور مستودع آخر لا يعني استيراده.')));
+      form.append(textElement('p',tr('Choose working directories, or explicitly allow a complete shallow copy. Selected directories include root files; include dependencies and tests you need. Git history/blobs still count toward the working-copy limit. No files or remote branches are deleted.','اختر مجلدات العمل، أو وافق صراحةً على نسخة كاملة بتاريخ مختصر. المجلدات المختارة تشمل ملفات الجذر؛ اختر التبعيات والفحوص اللازمة. بيانات Git تحتسب ضمن حد نسخة العمل. لا تُحذف ملفات أو فروع بعيدة.')));
+      name.required=repository.required=branch.required=true;branch.disabled=true;repository.add(new Option(tr('Choose repository','اختر مستودعًا'),''));
+      for(const r of repos)repository.add(new Option(r.full_name+(r.private?tr(' · Private',' · خاص'):''),r.full_name));
+      const submit=textElement('button',tr('Create GitHub-backed project','إنشاء مشروع مرتبط بـGitHub'),'button');submit.type='submit';submit.disabled=true;form.append(submit);dialog.append(form);feedback.textContent='';let revision=0;
+      repository.onchange=async()=>{
+        const selected=repository.value,stamp=++revision;branch.replaceChildren();branch.disabled=submit.disabled=true;if(!selected)return;
+        feedback.textContent=tr('Loading branches…','جارٍ تحميل الفروع…');
+        try{const branches=await api('/api/github/branches?repository='+encodeURIComponent(selected));if(!dialog.open||stamp!==revision)return;for(const b of branches)branch.add(new Option(b.name,b.name));const preferred=repos.find(r=>r.full_name===selected)?.default_branch;if(branches.some(b=>b.name===preferred))branch.value=preferred;name.value=name.value||selected.split('/').pop();branch.disabled=false;submit.disabled=!branches.length;feedback.textContent='';}catch(error){if(stamp===revision)feedback.textContent=error.message;}
+      };
+      form.onsubmit=async event=>{event.preventDefault();if(!form.reportValidity()||submit.disabled)return;const paths=workingPaths.value.split(',').map(path=>path.trim()).filter(Boolean);if(!paths.length&&!fullCopy.checked){feedback.textContent=tr('Choose working directories or explicitly allow the complete copy.','اختر مجلدات العمل أو وافق صراحةً على النسخة الكاملة.');return;}submit.disabled=true;feedback.textContent=tr('Preparing a shallow working copy…','جارٍ تجهيز نسخة عمل بتاريخ مختصر…');try{const result=await api('/api/projects',{method:'POST',body:JSON.stringify({source_type:'github',repository:repository.value,branch:branch.value,project_name:name.value,working_paths:paths})});if(!dialog.open)return;dialog.close();await openWorkspace(result.project,result.workspace);if(typeof onReady==='function')await onReady(result.project,result.workspace);}catch(error){if(dialog.open)feedback.textContent=error.message;else toast(error.message);}finally{submit.disabled=false;}};
+    }catch(error){if(dialog.open)feedback.textContent=error.message;}
+  }
+  window.openGithubProject=openRepositoryPicker;
+  const detailLoads=new Map();
+  loadWorkspaceDetails=function(){
+    const workspace=activeWorkspace;if(!workspace)return;
+    if(Date.now()-(detailLoads.get(workspace.id)||0)<10000)return;
+    detailLoads.set(workspace.id,Date.now());
+    loadStorage().catch(()=>{});
+    loadFiles().catch(()=>{});
+    loadProjectGroups().catch(()=>{});
+    refreshSessions().catch(error=>toast(error.message));
+    refreshGit().catch(error=>toast(error.message));
+  };
+  let workspaceLanguage=lang;const workspacePrefs=applyPrefs;applyPrefs=()=>{workspacePrefs();if(workspaceLanguage!==lang&&activeSession){updateProjectIdentity();renderRuntimeSessions(sessionRows);refreshMessages().catch(()=>{});loadApprovals().catch(()=>{});}workspaceLanguage=lang;};
+  createWorkspaceSession=createSession;
+  if(activeProject){q('workspaceRepo').textContent=activeProject.name;q('workspaceBranch').textContent=activeProject.branch||'—';}
+    }catch(error){
+      // Avoid a permanently half-initialized Workspace on first-entry errors.
+      // Expose the real failing operation instead of hiding it behind a
+      // generic "initialization did not complete" message.
+      workspaceInitialized=false;
+      const reason=error?.message||String(error);
+      throw new Error('Workspace initialization failed: '+reason,{cause:error});
+    }
+  }
+  const refundPolicy=text('p','Accepted payments cannot be cancelled or refunded.','المدفوعات المقبولة غير قابلة للإلغاء أو الاسترداد.','refund-policy');refundPolicy.id='subscriptionRefundPolicy';document.querySelector('#landing .pricing').append(refundPolicy);
+  const prefs=applyPrefs;applyPrefs=()=>{prefs();for(const [node,en,ar] of texts){if(!node.firstChild)node.textContent=tr(en,ar);else if(node.firstChild.nodeType===3)node.firstChild.textContent=tr(en,ar);}renderEntitlement();renderStorage();if(q('accountLanguage'))q('accountLanguage').value=lang;if(q('accountAppearance'))q('accountAppearance').value=dark?'dark':'light';document.querySelectorAll('[data-account-en]').forEach(node=>node.textContent=lang==='ar'?node.dataset.accountAr:node.dataset.accountEn);};
+  // The wordmark is a landing-page navigation control for every role.
+  const brand=document.querySelector('#app-header .header-brand');if(brand){brand.setAttribute('role','button');brand.tabIndex=0;brand.setAttribute('aria-label','Pi Gateway — Home');brand.style.cursor='pointer';brand.onclick=()=>page('landing');brand.onkeydown=event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();page('landing');}};}
+  const paymentOrders=document.createElement('section');paymentOrders.id='clientPaymentOrders';document.querySelector('[data-client-panel=billing]').append(paymentOrders);
+  let paymentLoadCounter=0,paymentArchived=false;
+  async function loadPaymentOrders(){
+    // Customer history only. Admin review uses the single finance table.
+    const host=paymentOrders;const token=String(++paymentLoadCounter);host.dataset.paymentLoad=token;
+    host.replaceChildren(title('Subscription and payment history','سجل الاشتراكات والمدفوعات'));
+    {const tabs=textElement('nav','','session-filters');for(const [archived,en,ar] of [[false,'Current','الحالية'],[true,'Archived','المؤرشفة']]){const tab=btn('payments-'+(archived?'archived':'current'),en,ar,()=>{paymentArchived=archived;loadPaymentOrders();});tab.setAttribute('aria-pressed',String(paymentArchived===archived));tabs.append(tab);}host.append(tabs);}
+    const list=await api('/api/billing/orders?archived='+paymentArchived);
+    if(host.dataset.paymentLoad!==token)return;
+    const ACTION_ICONS={view:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.06 12.35a1 1 0 0 1 0-.7C3.42 8.1 7.22 5 12 5s8.58 3.1 9.94 6.65a1 1 0 0 1 0 .7C20.58 15.9 16.78 19 12 19s-8.58-3.1-9.94-6.65Z"/><circle cx="12" cy="12" r="3"/></svg>',resume:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',cancel:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',remove:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>',archive:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v4H3zM5 7v14h14V7M9 12h6"/></svg>',restore:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v4H3zM5 7v14h14V7M12 17v-7m-3 3 3-3 3 3"/></svg>',confirm:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',reject:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/></svg>'};
+    const act=(id,icon,label,action)=>{const b=textElement('button','','icon-btn');b.id=id;b.type='button';b.title=label;b.setAttribute('aria-label',label);b.innerHTML=icon;b.onclick=async()=>{b.disabled=true;try{await action();}catch(error){toast(error.message)}finally{b.disabled=false;}};return b;};
+    for(const order of list){
+      const row=textElement('div','','manage-row');
+      const statuses={awaiting_payment:tr('Awaiting payment','بانتظار الدفع'),pending_review:tr('Awaiting acceptance','بانتظار القبول'),paid:tr('Accepted payment','دفع مقبول'),sandbox_paid:tr('Test payment accepted','دفع تجريبي مقبول'),failed:tr('Payment failed','فشل الدفع'),cancelled:tr('Request cancelled','طلب ملغى'),rejected:tr('Payment rejected','دفع مرفوض')};
+      row.append(textElement('strong',order.plan_name+' · '+order.currency+' '+(order.amount_cents/100).toFixed(2)),textElement('span',(order.email?order.email+' · ':'')+(statuses[order.status]||tr('Payment being checked','جارٍ التحقق من الدفع'))));
+      if(order.created_at)row.append(textElement('small',tr('Requested: ','تاريخ الطلب: ')+new Date(order.created_at).toLocaleString(lang==='ar'?'ar-u-nu-latn':'en')));
+      if(order.paid_at)row.append(textElement('small',tr('Accepted: ','تاريخ القبول: ')+new Date(order.paid_at).toLocaleString(lang==='ar'?'ar-u-nu-latn':'en')));
+      // Keep full Stripe identifiers in payment records/admin, not customer history.
+      // Manual bank or wallet references continue to display unchanged.
+      if(order.payment_reference){
+        const isStripeReference=/^(?:cs_(?:live|test)_|pi_|ch_)/.test(String(order.payment_reference));
+        row.append(textElement('small',isStripeReference
+          ?tr('Payment method: Stripe','وسيلة الدفع: Stripe')
+          :order.payment_reference));
+      }
+      if(order.sender_name)row.append(textElement('small',tr('Sender: ','المرسل: ')+order.sender_name));
+      if(order.sender_email)row.append(textElement('small',order.sender_email));
+      if(order.sender_bank)row.append(textElement('small',tr('From bank: ','البنك المرسل: ')+order.sender_bank));
+      if(order.sender_account)row.append(textElement('small',tr('From account: ','الحساب المرسل: ')+order.sender_account));
+      if(order.payer_name)row.append(textElement('small',tr('Payer: ','الدافع: ')+order.payer_name));
+      if(order.transfer_date)row.append(textElement('small',order.transfer_date));
+      if(order.amount_sent_cents)row.append(textElement('small',tr('Sent: ','المُرسل: ')+(order.amount_sent_cents/100).toFixed(2)+' '+order.currency));
+      if(order.billing_note)row.append(textElement('small',order.billing_note));
+      if(order.reject_reason)row.append(textElement('small',tr('Rejected: ','مرفوض: ')+order.reject_reason));
+      const actions=textElement('div','','manage-actions');
+      if(order.has_receipt){const rl=textElement('a','','icon-btn');rl.href='/api/billing/orders/'+order.id+'/receipt';rl.target='_blank';rl.rel='noopener noreferrer';rl.title=tr('View receipt','عرض الإيصال');rl.setAttribute('aria-label',rl.title);rl.innerHTML=ACTION_ICONS.view;actions.append(rl);}
+      if(order.provider_order_id&&!['paid','sandbox_paid'].includes(order.status))actions.append(act('capture-'+order.id,ACTION_ICONS.confirm,tr('Confirm PayPal payment','تأكيد دفع PayPal'),async()=>{const verified=await api('/api/billing/orders/'+order.id+'/paypal/capture',{method:'POST'});await refreshCustomerBilling();toast(verified.status==='sandbox_paid'?tr('Sandbox payment verified. Real subscription unchanged.','تم التحقق من الدفع التجريبي دون تفعيل اشتراك حقيقي.'):tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));}));
+      if(order.status==='awaiting_payment')actions.append(act('resume-'+order.id,ACTION_ICONS.resume,tr('Payment instructions','تعليمات الدفع'),()=>beginCheckout(order.plan_id,order.method_id)));
+      if(['awaiting_payment','pending_review','failed','rejected'].includes(order.status)&&!order.provider_capture_id&&!order.paid_at){
+        const cancel=act('cancel-'+order.id,ACTION_ICONS.cancel,tr('Cancel unpaid request','إلغاء الطلب غير المقبول'),async()=>{if(!await window.confirmAction(tr('Cancel this request before payment acceptance?','إلغاء الطلب قبل قبول الدفع؟')))return;await api('/api/billing/orders/'+order.id+'/cancel',{method:'POST'});await loadPaymentOrders();});
+        if(order.provider_order_id){cancel.disabled=true;cancel.hidden=true;api('/api/billing/orders/'+order.id+'/cancellation-status').then(state=>{if(host.dataset.paymentLoad===token){cancel.hidden=!state.can_cancel;cancel.disabled=!state.can_cancel;}}).catch(()=>{});}actions.append(cancel);
+      }
+      if(!window.reactivationAccount&&!order.provider_order_id&&['failed','cancelled','rejected'].includes(order.status))actions.append(act('remove-'+order.id,ACTION_ICONS.remove,tr('Remove from history','حذف من السجل'),async()=>{if(!await window.confirmAction(tr('Remove this payment from your history?','حذف هذا الدفع من سجلك؟')))return;await api('/api/billing/orders/'+order.id,{method:'DELETE'});await loadPaymentOrders();}));
+      actions.append(act('archive-payment-'+order.id,order.archived_at?ACTION_ICONS.restore:ACTION_ICONS.archive,order.archived_at?tr('Restore to current history','استعادة إلى السجل الحالي'):tr('Archive payment record','أرشفة العملية'),async()=>{await api('/api/billing/orders/'+order.id+'/archive',{method:'POST',body:JSON.stringify({archived:!order.archived_at})});await loadPaymentOrders();}));
+      if(actions.children.length)row.append(actions);
+      host.append(row);
+    }
+    if(!list.length)host.append(text('p',tr('No payments yet. Successful payments stay here as records.','لا توجد مدفوعات بعد. تبقى المدفوعات الناجحة هنا كسجلات.')));
+  }
+  window.loadReactivationOrders=()=>loadPaymentOrders();
+  async function refreshCustomerBilling(){
+    if(window.reactivationAccount)return window.openReactivation();
+    await oldClientView('billing');await loadPaymentOrders();
+  }
+  async function beginCheckout(planId,methodId){
+    let plans;
+    try{
+      plans=await api('/api/plans',{cache:'no-store'});
+      if(!Array.isArray(plans))throw Error('Invalid plans response');
+    }catch(error){
+      toast(tr('Cannot load subscription plans: ','تعذر تحميل خطط الاشتراك: ')+(error.message||error));
+      return;
+    }
+    const plan=plans.find(p=>p.id===planId);if(!plan)return toast(tr('Plan unavailable','الخطة غير متاحة'));
+    // A failing payment-method inventory must not prevent the checkout dialog
+    // from opening; Stripe TEST readiness is independent of that inventory.
+    let methods=[],methodsError=null;
+    try{
+      methods=await api('/api/billing/available-methods?plan_id='+encodeURIComponent(planId)+'&include_unavailable=true');
+      if(!Array.isArray(methods))throw Error('Invalid payment methods response');
+    }catch(error){methodsError=error;}
+    // The provider's active TEST/LIVE mode and readiness are determined by
+    // saved server-side settings. No separate hardcoded Stripe TEST method.
+    let stripeStatus=null,stripeStatusError=null;
+    try{
+      stripeStatus=await api('/api/billing/stripe/status',{cache:'no-store'});
+    }catch(error){stripeStatusError=error;}
+    // A deployed billing-method catalogue may lag behind Stripe's verified
+    // runtime status. Recover only a genuinely ready provider from the existing
+    // status API; never advertise a disabled/unconfigured LIVE checkout.
+    if(stripeStatus?.checkout_available && plan.currency==='USD' &&
+       ['test','live'].includes(stripeStatus.environment) &&
+       !methods.some(method=>method.kind==='stripe'||method.details?.checkout_mode==='stripe')){
+      methods.unshift({
+        id:'stripe-'+stripeStatus.environment,
+        kind:'stripe',
+        label:'Stripe'+(stripeStatus.environment==='test'?' (TEST)':''),
+        enabled:true,
+        available:true,
+        details:{checkout_mode:'stripe',environment:stripeStatus.environment,
+                 currency:'USD',plan_id:null}
+      });
+    }
+    // If the provider is not ready, keep checkout disabled rather than making
+    // a payment promise the server cannot honor.
+    const reasonCopy={provider_not_connected:tr('Provider is not connected','المزود غير متصل'),processor_not_connected:tr('Payment processor is not connected','معالج الدفع غير متصل'),details_not_configured:tr('Receiving details are not configured','بيانات الاستلام غير مهيأة')};const PAY_ICONS={paypal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5.8h5.9c2 0 3.3 1.2 3.1 3-.3 2.3-2.1 3.8-4.4 3.8H9.4L8.4 18h-2.6l1-6.4H5L7 5.8Z"/><path d="m12.6 8.6 1.4 1.2c1.8-1.2 4-.3 4.5 1.9.5 2.3-1.2 4.2-3.4 4.2h-1.7l-.5 3.1h-2.4l1.2-7.4h1.6"/></svg>',googlepay:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12a7 7 0 1 1-2.1-4.9"/><path d="M18.2 7.5H11.6"/><path d="M19.6 8.2 17 11.2"/></svg>',binance:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M12 3.5 19.5 7.8v8.4L12 20.5l-7.5-4.3V7.8L12 3.5Z"/><path d="M12 8.8 15 10.5v3L12 15.2 9 13.5v-3l3-1.7Z"/><path d="M9.5 8.5h5"/></svg>',bank:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M3 10h18M5 10l7-6 7 6M6.5 14h1.8v3.5H6.5Zm4.6 0h1.8v3.5h-1.8Zm4.6 0h1.8v3.5h-1.8Z"/></svg>',wallet:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a1 1 0 0 0-1-1h-4m-6-5h6"/></svg>'};PAY_ICONS.stripe=PAY_ICONS.googlepay;const payIcon=kind=>{const s=document.createElement('span');s.className='pay-icon';s.setAttribute('aria-hidden','true');s.innerHTML=PAY_ICONS[kind]||PAY_ICONS.wallet;return s;};
+    const dialog=document.createElement('dialog');dialog.className='workspace-repository-dialog checkout-dialog';dialog.setAttribute('aria-label',tr('Subscription checkout','دفع الاشتراك'));
+    dialog.append(title('Subscribe / Payment','الاشتراك / الدفع'),btn('checkoutClose','Close','إغلاق',()=>dialog.close()));
+    if(methodsError)dialog.append(textElement('p',
+      tr('Payment methods could not load: ','تعذر تحميل وسائل الدفع: ')+methodsError.message,
+      'api-message show error'));
+    if(stripeStatusError)dialog.append(textElement('p',
+      tr('Stripe status could not load: ','تعذر تحميل حالة Stripe: ')+stripeStatusError.message,
+      'api-message show error'));
+    const choices=textElement('div','','checkout-plans');for(const p of plans.filter(p=>p.active!==false)){
+      const choiceLabel=(window.planDisplayName?window.planDisplayName(p):p.name)+' · '+(window.planDisplayPrice?window.planDisplayPrice(p):(p.currency+' '+(p.price_cents/100).toFixed(2)))+' · '+(window.planDisplayTerm?window.planDisplayTerm(p):(p.duration_days+' days'));const choice=btn('checkoutPlan-'+p.id,choiceLabel,choiceLabel,()=>{dialog.close();beginCheckout(p.id);});choice.setAttribute('aria-pressed',String(p.id===planId));choices.append(choice);
+    }dialog.append(choices);
+    const summary=textElement('section','','checkout-summary');summary.append(textElement('strong',window.planDisplayName?window.planDisplayName(plan):plan.name),text('span','Total','الإجمالي'),textElement('b',window.planDisplayPrice?window.planDisplayPrice(plan):(plan.currency+' '+(plan.price_cents/100).toFixed(2))),textElement('span',window.planDisplayTerm?window.planDisplayTerm(plan):(plan.duration_days+' days')));dialog.append(summary);
+    dialog.append(text('p','Choose a payment method. Your access activates after receipt is verified.','اختر وسيلة دفع. يُفعّل الوصول بعد التحقق من الاستلام.','checkout-lead'));
+    const select=document.createElement('select');select.id='checkoutMethod';select.hidden=true;
+    const noteWrap=text('label','Billing note (optional)','ملاحظة دفع (اختياري)');noteWrap.htmlFor='checkoutNote';const noteInput=document.createElement('input');noteInput.id='checkoutNote';noteInput.maxLength=500;noteInput.autocomplete='off';noteWrap.append(noteInput);
+    const rows=textElement('fieldset','','checkout-methods');rows.append(text('legend','Payment method','وسيلة الدفع'));
+    for(const method of methods){select.add(new Option(method.label,method.id));const label=textElement('label','','checkout-method');const radio=document.createElement('input');radio.type='radio';radio.name='payment-method';radio.value=method.id;radio.checked=method.id===(methodId||methods[0]?.id);const cardName=textElement('strong',method.label);cardName.prepend(payIcon(method.kind));const baseSub=method.details.checkout_mode==='stripe'?(
+      method.details.environment==='test'
+        ?tr('Stripe · secure TEST checkout · no subscription activation','Stripe · دفع تجريبي آمن · دون تفعيل الاشتراك')
+        :tr('Stripe · secure LIVE checkout','Stripe · دفع حقيقي آمن')
+      ):method.details.checkout_mode==='paypal'?tr('PayPal · official checkout · card / PayPal account','PayPal · دفع رسمي · بطاقة / حساب PayPal'):method.details.checkout_mode==='link'?(method.kind==='googlepay'?tr('Google Pay · hosted by your payment processor','Google Pay · عبر مزوّد الدفع'):tr('Secure hosted checkout','دفع عبر صفحة مزود الدفع')):(method.kind==='binance'?tr('Binance Pay · USDT transfer','Binance Pay · تحويل USDT'):(method.kind==='bank'?tr('Bank transfer','تحويل بنكي'):tr('Wallet transfer','تحويل محفظة')));const copy=textElement('span');copy.append(cardName,textElement('small',method.available?baseSub:tr('Not connected','غير متصل')+' · '+(reasonCopy[method.available_reason]||'')));label.append(radio,copy);rows.append(label);radio.onchange=()=>{select.value=radio.value;};}
+    if(methodId&&methods.some(m=>m.id===methodId))select.value=methodId;
+    const body=textElement('section','','checkout-receipt');body.setAttribute('aria-live','polite');
+    const showError=error=>{let status=body.querySelector('.checkout-error');if(!status){status=textElement('p','','api-message show error checkout-error');status.setAttribute('role','alert');body.prepend(status);}status.textContent=error.message||String(error);};
+    const renderProviderForm=method=>{
+      const dl=document.createElement('dl');dl.className='checkout-details';
+      for(const [label,value] of [[tr('Plan','الخطة'),plan.name],[tr('Amount','المبلغ'),(plan.price_cents/100).toFixed(2)],[tr('Currency','العملة'),plan.currency]]){dl.append(textElement('dt',label),textElement('dd',String(value)));}
+      body.replaceChildren(dl);const phead=textElement('strong',method.label);phead.prepend(payIcon(method.kind));body.prepend(phead);
+      const pfield=(labelText,id,type,extra)=>{const wrap=text('label',labelText,labelText);wrap.htmlFor=id;const inp=document.createElement('input');inp.id=id;inp.type=type;inp.required=true;Object.assign(inp,extra||{});wrap.append(inp);body.append(wrap);return inp;};
+      const payerName=pfield(tr('Your full name','اسمك الكامل'),'payerName','text',{maxLength:150,autocomplete:'name',value:(currentUser||window.reactivationAccount)?.username||''});
+      const payerEmail=pfield(tr('Your email','بريدك الإلكتروني'),'payerEmail','email',{maxLength:254,autocomplete:'email',value:(currentUser||window.reactivationAccount)?.email||''});
+      const locationField=(en,ar,id)=>{const wrap=text('label',en,ar),control=document.createElement('select');control.id=id;wrap.htmlFor=id;control.add(new Option(tr('Select','اختر'),''));wrap.append(control);body.append(wrap);return control;};
+      const payerCountry=locationField('Country','الدولة','payerCountry'),payerRegion=locationField('Region / governorate','المحافظة / المنطقة','payerRegion'),payerCity=locationField('City / district','المدينة / المديرية','payerCity');payerCountry.required=true;
+      let locationRevision=0;
+      const fillLocation=(control,items,selectedName,localize=false)=>{control.replaceChildren(new Option(tr('Select','اختر'),''));for(const item of items){let label=item.name;if(localize&&item.code){try{label=new Intl.DisplayNames([lang],{type:'region'}).of(item.code)||item.name;}catch(error){}}const option=new Option(label,String(item.id));option.dataset.name=item.name;control.add(option);if(item.name===selectedName)control.value=String(item.id);}control.disabled=!items.length;control.required=items.length>0;control.parentElement.hidden=!items.length;};
+      const loadChildren=async(prefill=false)=>{const revision=++locationRevision;go2.disabled=true;payerRegion.replaceChildren(new Option(tr('Select','اختر'),''));payerCity.replaceChildren(new Option(tr('Select','اختر'),''));payerRegion.disabled=payerCity.disabled=true;payerRegion.required=payerCity.required=false;
+        try{const account=currentUser||window.reactivationAccount;if(!payerCountry.value)return;const regions=await api('/api/locations/countries/'+payerCountry.value+'/regions');if(revision!==locationRevision||!body.contains(payerCountry))return;fillLocation(payerRegion,regions,prefill?account?.region:null);if(payerRegion.value){const cities=await api('/api/locations/regions/'+payerRegion.value+'/cities');if(revision===locationRevision&&body.contains(payerCountry))fillLocation(payerCity,cities,prefill?account?.city:null);}else payerCity.parentElement.hidden=true;
+        }catch(error){showError(error);}finally{if(revision===locationRevision)go2.disabled=false;}};
+      payerCountry.onchange=()=>loadChildren();payerRegion.onchange=async()=>{const revision=++locationRevision;go2.disabled=true;payerCity.replaceChildren(new Option(tr('Select','اختر'),''));payerCity.disabled=true;payerCity.required=false;try{if(payerRegion.value){const cities=await api('/api/locations/regions/'+payerRegion.value+'/cities');if(revision===locationRevision&&body.contains(payerCountry))fillLocation(payerCity,cities,null);}else payerCity.parentElement.hidden=true;}catch(error){showError(error);}finally{if(revision===locationRevision)go2.disabled=false;}};
+      const go2=textElement('button',method.kind==='stripe'?tr('Open Stripe checkout','فتح الدفع عبر Stripe'):method.kind==='googlepay'?tr('Pay with Google Pay','الدفع عبر Google Pay'):method.kind==='paypal'?tr('Pay with PayPal','الدفع عبر PayPal'):tr('Pay directly through bank / card','الدفع المباشر عبر البنك / البطاقة'),'button checkout-hosted-link');go2.type='button';
+      if(!method.available)body.append(text('p','This payment method is currently unavailable. Choose another method or contact support.','وسيلة الدفع هذه غير متاحة حاليًا. اختر وسيلة أخرى أو تواصل مع الدعم.','checkout-lead'));
+      body.append(go2);go2.disabled=true;
+      (async()=>{try{const countries=await api('/api/locations/countries');if(!body.contains(payerCountry))return;fillLocation(payerCountry,countries,(currentUser||window.reactivationAccount)?.country,true);payerCountry.parentElement.hidden=false;payerCountry.required=true;if(!countries.length)throw new Error(tr('No countries are configured. Contact administration.','لا توجد دول مهيأة. تواصل مع الإدارة.'));await loadChildren(true);}catch(error){showError(error);go2.disabled=true;}})();
+      let latestOrder=null;
+      const validPayer=()=>!go2.disabled&&[payerName,payerEmail,payerCountry,payerRegion,payerCity].every(field=>!field.required||field.reportValidity());
+      const createProviderOrder=async()=>{body.querySelector('.checkout-error')?.remove();if(!method.available)throw new Error(tr('Could not connect to PayPal. No payment was made.','تعذر الربط مع PayPal. لم يتم خصم أي مبلغ.'));const result=await api('/api/billing/checkout',{method:'POST',body:JSON.stringify({plan_id:planId,method_id:method.id,billing_note:noteInput.value.trim(),payer_name:payerName.value.trim(),payer_email:payerEmail.value.trim(),country_id:Number(payerCountry.value),region_id:payerRegion.value?Number(payerRegion.value):null,city_id:payerCity.value?Number(payerCity.value):null})});latestOrder=result.order;confirmButton.hidden=!latestOrder?.provider_order_id;return result;};
+      const confirmOrder=async(providerId)=>{if(!latestOrder?.id||providerId&&providerId!==latestOrder.provider_order_id)throw new Error(tr('Payment order does not match. Refresh checkout.','طلب الدفع غير مطابق. أعد فتح الدفع.'));const verified=await api('/api/billing/orders/'+latestOrder.id+'/paypal/capture',{method:'POST'});dialog.close();await refreshCustomerBilling();toast(verified.status==='sandbox_paid'?tr('Sandbox payment verified. Real subscription unchanged.','تم التحقق من الدفع التجريبي دون تفعيل اشتراك حقيقي.'):tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));};
+      const confirmButton=btn('confirmPayPalPayment','Confirm PayPal payment','تأكيد دفع PayPal',()=>confirmOrder());confirmButton.hidden=true;body.append(confirmButton);
+      go2.onclick=async()=>{
+        if(method.details.checkout_mode==='stripe'){
+          go2.disabled=true;
+          try{
+            const result=await api('/api/billing/stripe/checkout',{
+              method:'POST',body:JSON.stringify({plan_id:planId})});
+            if(!result?.checkout_url)throw Error(tr('Stripe did not return a checkout page','لم يُعد Stripe صفحة دفع'));
+            const destination=new URL(result.checkout_url);
+            if(destination.protocol!=='https:'||
+              !['checkout.stripe.com','checkout.stripe.dev'].includes(destination.hostname))
+              throw Error('Unexpected Stripe checkout destination');
+            window.location.assign(result.checkout_url);
+          }catch(error){showError(error);go2.disabled=false;}
+          return;
+        }
+        if(!validPayer())return;if(!method.available){showError(new Error(method.kind==='paypal'?tr('Could not connect to PayPal. No payment was made.','تعذر الربط مع PayPal. لم يتم خصم أي مبلغ.'):tr('Could not connect to the bank or payment processor. No payment was made.','تعذر الربط مع البنك أو مزوّد الدفع. لم يتم خصم أي مبلغ.')));return;}go2.disabled=true;try{const result=await createProviderOrder();if(result.automatic_processing&&result.approval_url)window.location.assign(result.approval_url);else if(result.payment_url){const link=textElement('a',tr('Open the payment provider page','فتح صفحة مزود الدفع'),'button checkout-hosted-link');link.href=result.payment_url;link.target='_blank';link.rel='noopener noreferrer';body.append(link);}}catch(error){showError(error);}finally{go2.disabled=false;}};
+      if(method.details.checkout_mode==='paypal'){
+        const host=textElement('div');host.id='paypalButtonHost';host.setAttribute('aria-label','PayPal');body.append(host);
+        (async()=>{try{const status=await api('/api/billing/paypal/status');if(!body.contains(host))return;if(!status.client_id){host.append(text('p','The official PayPal form could not load because payment setup is incomplete.','تعذر تحميل نموذج PayPal الرسمي لأن إعداد الدفع غير مكتمل.','checkout-lead'));return;}
+          const pp=await new Promise((resolve,reject)=>{if(window.paypal)return resolve(window.paypal);const script=document.createElement('script');script.src='https://www.paypal.com/sdk/js?client-id='+encodeURIComponent(status.client_id)+'&currency='+encodeURIComponent(plan.currency)+'&intent=capture&components=buttons&enable-funding=card';script.onload=()=>window.paypal?resolve(window.paypal):reject(new Error('paypal-sdk'));script.onerror=()=>reject(new Error('paypal-sdk'));document.head.append(script);});if(!body.contains(host))return;
+          await pp.Buttons({style:{layout:'vertical'},onClick:(data,actions)=>{if(!validPayer())return actions.reject();if(!method.available||!status.configured){showError(new Error(tr('Could not connect to PayPal. No payment was made.','تعذر الربط مع PayPal. لم يتم خصم أي مبلغ.')));return actions.reject();}return actions.resolve();},createOrder:async()=>{try{const result=await createProviderOrder();if(!result.automatic_processing||!result.order?.provider_order_id)throw new Error(tr('PayPal order is unavailable.','طلب PayPal غير متاح.'));return result.order.provider_order_id;}catch(error){showError(error);throw error;}},onApprove:async data=>{try{await confirmOrder(data.orderID);}catch(error){showError(error);}},onCancel:async()=>{if(!latestOrder?.id)return;try{await api('/api/billing/orders/'+latestOrder.id+'/cancel',{method:'POST'});await loadPaymentOrders();toast(tr('Unaccepted payment request cancelled.','تم إلغاء طلب الدفع قبل قبوله.'));}catch(error){showError(error);}},onError:()=>{if(!body.querySelector('.checkout-error'))showError(new Error(tr('PayPal could not complete this payment. No subscription activated.','تعذر إتمام الدفع عبر PayPal دون تفعيل الاشتراك.')));}}).render(host);go2.hidden=true;
+        }catch(error){host.replaceChildren();go2.hidden=false;body.append(text('p','PayPal buttons could not load. Continue through the official payment page.','تعذر تحميل أزرار PayPal. يمكنك المتابعة إلى صفحة الدفع الرسمية.','checkout-lead'));}})();
+      }
+    };
+    const renderStripeForm=method=>{
+      const isTest=method.details.environment==='test';
+      body.replaceChildren(
+        textElement('strong',isTest?tr('Stripe secure TEST checkout','دفع Stripe التجريبي الآمن'):tr('Stripe secure LIVE checkout','الدفع الحقيقي عبر Stripe')),
+        textElement('p',isTest
+          ?tr('TEST transactions never activate paid subscriptions.','دفعات TEST لا تفعّل اشتراكًا حقيقيًا.')
+          :tr('Your subscription activates only after verified payment confirmation.','يُفعّل اشتراكك فقط بعد تأكيد الدفع الموثق.'),'checkout-lead')
+      );
+      const launch=btn('stripeCheckout','Open Stripe checkout','فتح صفحة دفع Stripe',async()=>{
+        launch.disabled=true;
+        try{
+          const result=await api('/api/billing/stripe/checkout',{
+            method:'POST',body:JSON.stringify({plan_id:planId})});
+          const url=new URL(result.checkout_url);
+          if(url.protocol!=='https:'||!['checkout.stripe.com','checkout.stripe.dev'].includes(url.hostname))
+            throw Error('Unexpected Stripe checkout URL');
+          window.location.assign(url.href);
+        }catch(error){showError(error);launch.disabled=false;}
+      });
+      if(!method.available){
+        launch.disabled=true;
+        body.append(text('p','Stripe is listed but the selected environment is not ready. Check API key, webhook secret and provider suspension in administration.',
+          'Stripe ظاهر، لكن البيئة المختارة غير جاهزة. راجع مفتاح API وسر Webhook وحالة تعليق الوسيلة في الإدارة.','checkout-lead'));
+      }
+      body.append(launch);
+    };
+    const renderManualForm=method=>{
+      const mhead=textElement('strong',method.label);mhead.prepend(payIcon(method.kind));body.replaceChildren(mhead);
+      if(method.kind==='bank')body.append(text('p','Transfer to the account holder below, then upload your proof of transfer.','حوّل إلى صاحب الحساب أدناه، ثم ارفع إثبات التحويل.','checkout-lead'));
+      const labels={account_name:tr('Recipient','المستفيد'),account_reference:tr('Recipient account / address','حساب المستفيد / العنوان'),iban:tr('IBAN','الآيبان'),branch:tr('Branch','الفرع'),bank_name:tr('Bank','البنك'),currency:tr('Currency','العملة'),network:tr('Network','الشبكة'),instructions:tr('Instructions','التعليمات')};
+      if(method.kind==='binance'){labels.account_reference=tr('Binance wallet address or username','عنوان محفظة Binance أو اسم المستخدم');const bAmt=tr('Amount: ','المبلغ: ')+'$'+((plan.price_cents/100).toFixed(2))+' USD',bUsdt=tr('USDT to pay (fixed 1 USD = 1 USDT parity): ','مبلغ USDT المطلوب (تعادل ثابت 1 دولار = 1 USDT): ')+((plan.price_cents/100).toFixed(2))+' USDT',bSend=tr('Send USDT from your Binance account to the address above, then attach the transfer screenshot below.','أرسل USDT من حساب Binance الخاص بك إلى العنوان أعلاه، ثم أرفق لقطة شاشة للتحويل أدناه.');body.append(text('p',bAmt,bAmt),text('p',bUsdt,bUsdt),text('p',bSend,bSend,'checkout-lead'));}
+      const details=document.createElement('dl');details.className='checkout-details';for(const [key,label] of Object.entries(labels)){const value=method.details[key];if(value)details.append(textElement('dt',label),textElement('dd',value));}body.append(details);
+      const form=document.createElement('form');form.dataset.paymentForm='customer';
+      const mkField=(labelText,id,type,extra)=>{const wrap=text('label',labelText,labelText);wrap.htmlFor=id;const inp=document.createElement('input');inp.id=id;inp.type=type;inp.required=true;Object.assign(inp,extra||{});wrap.append(inp);form.append(wrap);return inp;};
+      const sender=mkField(tr('Sender name (account holder)','اسم المُرسل (صاحب الحساب)'),'paymentSender','text',{maxLength:150,autocomplete:'off'});
+      const senderEmail=mkField(tr('Sender email','بريد المُرسل'),'paymentSenderEmail','email',{maxLength:254,autocomplete:'off'});
+      const senderBank=mkField(tr('Sender bank name','اسم بنك المُرسل'),'paymentSenderBank','text',{maxLength:150,autocomplete:'off'});
+      const senderAccount=mkField(tr('Sender account number / IBAN','رقم حساب المُرسل / الآيبان'),'paymentSenderAccount','text',{maxLength:200,autocomplete:'off'});
+      const reference=mkField(tr('Transaction / reference number','رقم العملية / المرجع'),'paymentReference','text',{minLength:3,maxLength:200,autocomplete:'off'});
+      const tdate=mkField(tr('Transfer date','تاريخ التحويل'),'paymentDate','date',{});
+      const sent=mkField(tr('Amount sent','المبلغ المُرسل'),'paymentSent','number',{min:'0.01',step:'0.01'});
+      const fileWrap=text('label','Receipt screenshot (PNG, JPEG, WebP or PDF, up to 5 MB)','صورة الإيصال (PNG أو JPEG أو WebP أو PDF حتى 5 ميجابايت)');fileWrap.htmlFor='paymentReceipt';const receipt=document.createElement('input');receipt.id='paymentReceipt';receipt.type='file';receipt.required=true;receipt.accept='.png,.jpg,.jpeg,.webp,.pdf';fileWrap.append(receipt);form.append(fileWrap);
+      const send=text('button','Submit payment for review','إرسال الدفع للمراجعة','button');send.type='submit';form.append(send);
+      form.onsubmit=async event=>{event.preventDefault();send.disabled=true;try{
+        if(!receipt.files.length)throw new Error(tr('Attach the receipt screenshot first.','أرفق صورة الإيصال أولاً.'));
+        const result=await api('/api/billing/checkout',{method:'POST',body:JSON.stringify({plan_id:planId,method_id:method.id,billing_note:noteInput.value.trim()})});
+        const fd=new FormData();fd.append('file',receipt.files[0]);
+        const up=await fetch('/api/billing/orders/'+result.order.id+'/receipt',{method:'POST',body:fd,credentials:'same-origin'});
+        if(!up.ok)throw new Error((await up.json().catch(()=>({}))).detail||'Receipt upload failed');
+        await api('/api/billing/orders/'+result.order.id+'/reference',{method:'PUT',body:JSON.stringify({reference:reference.value,sender_name:sender.value,sender_email:senderEmail.value,sender_bank:senderBank.value,sender_account:senderAccount.value,transfer_date:tdate.value,amount_sent_cents:Math.round(Number(sent.value)*100)})});
+        dialog.close();await refreshCustomerBilling();
+        toast(tr('Payment submitted. Status: pending verification.','أُرسل الدفع. الحالة: بانتظار التحقق.'));
+      }catch(error){showError(error);}finally{send.disabled=false;}};
+      body.append(form);
+    };
+    const go=btn('createPaymentOrder','Next step','الخطوة التالية',async()=>{
+      const method=methods.find(m=>m.id===select.value);
+      if(!method){toast(tr('Choose a payment method first.','اختر وسيلة الدفع أولاً.'));return;}
+      rows.hidden=true;choices.hidden=true;go.hidden=true;noteWrap.hidden=true;
+      if(method.details.checkout_mode==='stripe')renderStripeForm(method);
+      else if(['paypal','link'].includes(method.details.checkout_mode))renderProviderForm(method);
+      else renderManualForm(method);
+    });go.disabled=!methods.length;
+    if(!methods.length)dialog.append(text('p','No payment method is configured for this plan yet.','لم تُعدّ وسيلة دفع لهذه الخطة بعد.'));
+    dialog.append(rows,select,noteWrap,go,body,textElement('small',tr('Payment for: ','الدفع لحساب: ')+(currentUser||window.reactivationAccount).email),text('p','Accepted payments cannot be cancelled or refunded.','المدفوعات المقبولة غير قابلة للإلغاء أو الاسترداد.','refund-policy'));
+    document.body.append(dialog);dialog.onclose=()=>dialog.remove();dialog.showModal();
+  }
+  // Both environments return to the same checkout screen. The return URL
+  // never activates access: only the signed backend webhook can do so.
+  authReady.then(async()=>{
+    const params=new URLSearchParams(location.search);
+    const result=params.get('stripe_return');
+    const sessionId=params.get('session_id');
+    if(!result)return;
+    history.replaceState(null,'',location.pathname+location.hash);
+    if(result==='cancel'){
+      toast(tr('Stripe checkout cancelled.','أُلغيت عملية الدفع عبر Stripe.'));return;
+    }
+    if(!sessionId)return;
+    try{
+      const item=await api('/api/billing/stripe/checkout/'+encodeURIComponent(sessionId));
+      if(item.environment==='test')
+        toast(tr('Stripe TEST checkout completed; no real subscription activated.','انتهى اختبار Stripe؛ لم يُفعّل اشتراك حقيقي.'));
+      else if(item.status==='paid')
+        toast(tr('Stripe payment confirmed; subscription active.','تم تأكيد دفع Stripe وتفعيل الاشتراك.'));
+      else
+        toast(tr('Waiting for Stripe payment confirmation; no subscription activated yet.','بانتظار تأكيد الدفع من Stripe؛ لم يُفعّل الاشتراك بعد.'));
+      await refreshCustomerBilling();
+    }catch(error){toast(error.message);}
+  }).catch(error=>toast(error.message));
+  // Stripe TEST diagnostic never creates an active paid entitlement.
+  authReady.then(async()=>{
+    const params=new URLSearchParams(location.search);
+    const returned=params.get('stripe_diagnostic');
+    const session=params.get('session_id');
+    if(!returned)return;
+    history.replaceState(null,'',location.pathname+location.hash);
+    if(returned==='cancel'){
+      toast(tr('Stripe test payment was cancelled. No subscription changed.',
+        'أُلغي اختبار دفع Stripe ولم يتغير الاشتراك.'));return;
+    }
+    if(!session){toast('Missing Stripe test session ID');return;}
+    if(!currentUser){
+      toast(tr('Sign in to verify the Stripe test result.','سجّل الدخول للتحقق من نتيجة Stripe التجريبية.'));return;
+    }
+    try{
+      const status=await api('/api/billing/stripe/test-checkout/'+encodeURIComponent(session));
+      const message=status.payment_status==='paid'
+        ?tr('Stripe confirmed a TEST payment. No paid subscription was activated.',
+          'أكد Stripe دفعة تجريبية. لم يُفعّل اشتراك مدفوع.')
+        :tr('Stripe test status: ','حالة اختبار Stripe: ')+(status.payment_status||status.status||'unknown');
+      toast(message);
+    }catch(error){toast(tr('Stripe verification failed: ','تعذر التحقق من Stripe: ')+error.message);}
+  }).catch(error=>toast(error.message));
+  window.beginCheckout=beginCheckout;
+  authReady.then(async()=>{const params=new URLSearchParams(location.search);const ret=params.get('payment_return'),cancel=params.get('payment_cancel');if(!ret&&!cancel)return;history.replaceState(null,'',location.pathname+location.hash);if(window.reactivationAccount){await window.loadManagement();await window.openReactivation();}else if(!currentUser){page('authPage');return;}else await window.openClientView('billing');try{await loadPaymentOrders()}catch(error){toast(error.message)}if(cancel){try{await api('/api/billing/orders/'+encodeURIComponent(cancel)+'/cancel',{method:'POST'});await loadPaymentOrders();toast(tr('Unaccepted payment request cancelled.','تم إلغاء طلب الدفع قبل قبوله.'));}catch(error){toast(error.message);}return}try{const order=await api('/api/billing/orders/'+encodeURIComponent(ret));const status=order&&order.status;if(status==='paid')toast(tr('Payment verified. Subscription active.','تم التحقق من الدفع وتفعيل الاشتراك.'));else if(status==='sandbox_paid')toast(tr('Sandbox payment recorded. Real subscription unchanged.','سُجل الدفع التجريبي دون تفعيل اشتراك حقيقي.'));else if(status)toast(tr('Payment is pending verification. Press Confirm PayPal payment in Payment orders.','الدفع بانتظار التحقق. اضغط تأكيد دفع PayPal في طلبات الدفع.'));else toast(tr('Returned from PayPal. Confirm your payment in Payment orders.','عدت من PayPal. أكد الدفع من طلبات الدفع.'))}catch(error){toast(error.message)}}).catch(error=>toast(error.message));
+  setInterval(async()=>{if(!currentUser||admin()||!document.querySelector('#workspacePage.active,#workspaceHomePage.active'))return;try{await refreshEntitlement();}catch(error){toast(error.message);}},30000);
+  document.addEventListener('click',event=>{if(event.target.closest('#clientNav [data-client-view=billing]'))loadPaymentOrders().catch(e=>toast(e.message));});
+  matchMedia('(max-width:1100px)').addEventListener('change',()=>{q('sessionSidebar').classList.remove('open');overlay(false);});
+  applyPrefs();
+  // Workspace initialization remains lazy until the signed-in user opens it.
+  q('promptInput').disabled=true;q('homeNewProject').disabled=true;
+  window.showBootstrapFrame?.();
+})();
++budgetNumber(entry.amount))+
+          ' · '+tr('Input','إدخال')+' ≈ '+entry.input+
+          ' · '+tr('Output','إخراج')+' ≈ '+entry.output);
+        description.style.display='block';
+        radio.onchange=()=>{option=entry;proceed.disabled=false;};
+        label.append(radio,title,description);cards.append(label);
+      }
+      if(entries.length>150)cards.append(textElement('small',tr(
+        'Showing the first 150 lowest-cost choices.','تُعرض أول 150 خيارًا اقتصاديًا.')));
+      proceed.onclick=async()=>{
+        if(!option||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId||
+           q('promptInput').value.trim()!==text)return;
+        proceed.disabled=true;
+        const input=q('promptInput');
+        try{
+          // Re-check administrator policy immediately before consent. Pi
+          // validates it AGAIN against the authenticated server-side grant.
+          const fresh=await api('/api/opencode/catalog/providers?connected_only=true');
+          if(fresh?.budget_modes?.[mode]!==true)throw Error(tr(
+            'Administrator disabled this stage.','عطّلت الإدارة هذه المرحلة.'));
+          q('providerSelect').value=option.provider.id;
+          chosenProvider=option.provider.id;chosenModel=option.model.id;
+          await models();
+          q('modelSelect').value=option.model.id;
+          if(q('modelSelect').value!==option.model.id||
+             q('modelSelect').selectedOptions[0]?.disabled)
+            throw Error(tr('Selected model is no longer authorized.','النموذج المختار لم يعد مصرحًا به.'));
+          updateSend();
+          if(q('sendMessage').disabled)throw Error(tr(
+            'Pi is not ready for this model.','Pi غير جاهز لهذا النموذج.'));
+          budgetApproval={mode,providerID:option.provider.id,modelID:option.model.id,
+            estimatedInput:option.input,estimatedOutput:option.output,
+            approved:true,owner,workspaceId,text};
+          dialog.close();
+          await q('promptForm').onsubmit({preventDefault(){}});
+        }catch(error){budgetApproval=null;status.textContent=error.message;toast(error.message);}
+        finally{proceed.disabled=false;}
+      };
+    }catch(error){if(dialog.open)status.textContent=error.message;}
+  }
+  utilities.append(budgetButtons);
   utilities.append(attach);
   projectPanelBrand.append(q('chatGithub'),q('openTools'));actions.append(q('stopAgent'),q('sendMessage'));
   const choices=textElement('button','','icon-btn composer-choice-toggle');choices.type='button';choices.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';choices.setAttribute('aria-label',tr('Agent, provider and model','الوكيل والمزوّد والنموذج'));choices.setAttribute('aria-expanded','false');
