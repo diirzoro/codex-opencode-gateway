@@ -206,3 +206,41 @@ def test_customer_catalog_shows_all_price_types_without_admin_selection(monkeypa
     assert result["count"] == 3
     assert [model["price_type"] for model in result["models"]] == ["free", "paid", "unknown"]
     assert all("selected" not in model for model in result["models"])
+
+
+def test_budget_policy_modes_default_off():
+    from app.models.platform import PlatformPolicy
+    policy = PlatformPolicy(allowed_providers="[]", allowed_models="[]",
+                            allowed_tools="[]", require_tool_approval=True)
+    payload = policy.as_payload()
+    assert payload["budget_modes"] == {"analysis": False, "execution": False}
+
+
+def test_budget_modes_are_independent_and_preserve_admin_model_selection():
+    from app.models.platform import PlatformPolicy
+    policy = PlatformPolicy(allowed_providers="[]",
+                            allowed_models='{"budget_modes":{"analysis":true,"execution":false},"selected":{"deepseek":["model-a"]}}',
+                            allowed_tools="[]", require_tool_approval=True)
+    payload = policy.as_payload()
+    assert payload["budget_modes"] == {"analysis": True, "execution": False}
+    assert payload["selected_models"] == {"deepseek": ["model-a"]}
+    assert management._ai_personal_allowed(None, "deepseek", "model-a", rules=payload)
+    assert not management._ai_personal_allowed(None, "deepseek", "model-b", rules=payload)
+
+
+def test_budget_estimates_require_known_input_and_output_prices():
+    known = SimpleNamespace(provider_id="deepseek", model_id="model-a",
+                            details_json='{"cost":{"input":0.15,"output":0.6},"maxTokens":4096,"reasoning":true}')
+    unknown = SimpleNamespace(provider_id="deepseek", model_id="model-b",
+                              details_json='{"cost":{"input":0.15}}')
+    free = SimpleNamespace(provider_id="openrouter", model_id="model-c:free",
+                           details_json='{"cost":{"input":0,"output":0}}')
+    priced = management._ai_model_display_info(known)
+    partial = management._ai_model_display_info(unknown)
+    zero = management._ai_model_display_info(free)
+    assert priced["has_input_output_rates"] and priced["price_type"] == "paid"
+    assert priced["max_output_tokens"] == 4096
+    assert priced["reasoning"] is True
+    assert not partial["has_input_output_rates"]
+    assert partial["price_type"] == "paid"  # Input price is known, full estimate is not.
+    assert zero["price_type"] == "free"
