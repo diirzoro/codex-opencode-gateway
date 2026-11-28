@@ -38,7 +38,13 @@ class PlatformPolicy(Base):
             except ValueError:
                 return []
         provider_rules=load(self.allowed_providers);model_rules=load(self.allowed_models)
+        budget_rules = model_rules.get("budget_modes") if isinstance(model_rules, dict) else None
+        if not isinstance(budget_rules, dict):
+            budget_rules = {}
         return {
+            "budget_modes": {
+                mode: budget_rules.get(mode) is True for mode in ("analysis", "execution")
+            },
             "allowed_providers": provider_rules.get('allowed',[]) if isinstance(provider_rules,dict) else provider_rules,
             "hidden_providers": provider_rules.get('hidden',[]) if isinstance(provider_rules,dict) else [],
             "allowed_models": model_rules.get('allowed',[]) if isinstance(model_rules,dict) else model_rules,

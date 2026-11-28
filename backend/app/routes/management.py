@@ -793,7 +793,8 @@ def ai_catalog_list(provider_id: str | None = None, query: str = "",
     # Native suggestions are fetched only with explicit pi_supported=true.
     return {"all": rows, "connected": [p["id"] for p in rows if p["connected"]],
             "default": {}, "source": "gateway", "refresh_days": _AI_REFRESH_DAYS,
-            "stale_after_days": _AI_STALE_DAYS}
+            "stale_after_days": _AI_STALE_DAYS,
+            "budget_modes": _ai_policy(db)["budget_modes"]}
 
 
 

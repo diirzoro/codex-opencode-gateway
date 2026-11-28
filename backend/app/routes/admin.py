@@ -66,6 +66,7 @@ class PolicyIn(BaseModel):
     require_tool_approval: bool = True
     hidden_providers: list[str] | None = Field(default=None,max_length=2000)
     hidden_models: dict[str,list[str]] | None = None
+    budget_modes: dict[Literal["analysis", "execution"], bool] | None = None
 
 def _count(db, model, *conditions):
     return db.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
@@ -975,7 +976,8 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
     row.allowed_models = json.dumps({
         'allowed':sorted({m.strip() for m in data.allowed_models if m.strip()}),
         'hidden':{key:sorted(set(values)) for key,values in selection.items()},
-        'selected':previous.get('selected_models') or {}
+        'selected':previous.get('selected_models') or {},
+        'budget_modes': {**previous['budget_modes'], **(data.budget_modes or {})},
     })
     row.allowed_tools = json.dumps(sorted({t.strip() for t in data.allowed_tools if t.strip()}))
     row.require_tool_approval = data.require_tool_approval
