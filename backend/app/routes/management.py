@@ -1104,7 +1104,8 @@ def ai_pi_bootstrap(request: Request, user: User = Depends(require_user),
              "auth_created_at": int(aware(auth_session.created_at).timestamp()*1000),
              "issued_at": int(issued.timestamp()*1000),
              "expires_at": int(expires.timestamp()*1000),
-             "workspaces": owned_roots, "personal": personal, "shared": shared}
+             "workspaces": owned_roots, "personal": personal, "shared": shared,
+             "budget_modes": rules.get("budget_modes", {"analysis": False, "execution": False})}
     try:
         with _ai_httpx.Client(
                 transport=_ai_httpx.HTTPTransport(
