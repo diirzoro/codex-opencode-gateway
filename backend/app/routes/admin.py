@@ -971,13 +971,16 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
                       'platform_defaults':previous.get('platform_defaults') or {}}
     if isinstance(pi_registry, dict):
         provider_rules['pi_registry'] = pi_registry
+    budget_modes = {**previous["budget_modes"], **(data.budget_modes or {})}
+    if not any(budget_modes.values()):
+        raise HTTPException(422, "Keep at least one project action visible: analysis or execution")
     row.allowed_providers = json.dumps(provider_rules)
     # Do not erase model curation when editing unrelated general policy.
     row.allowed_models = json.dumps({
         'allowed':sorted({m.strip() for m in data.allowed_models if m.strip()}),
         'hidden':{key:sorted(set(values)) for key,values in selection.items()},
         'selected':previous.get('selected_models') or {},
-        'budget_modes': {**previous['budget_modes'], **(data.budget_modes or {})},
+        'budget_modes': budget_modes,
     })
     row.allowed_tools = json.dumps(sorted({t.strip() for t in data.allowed_tools if t.strip()}))
     row.require_tool_approval = data.require_tool_approval
