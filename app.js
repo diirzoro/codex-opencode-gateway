@@ -252,7 +252,8 @@ window.nativeDirectTest=(()=>{
         all,
         connected:all.filter(p=>available.has(p.id)).map(p=>p.id),
         default:value.default&&typeof value.default==='object'?value.default:{},
-        public_free:[]
+        public_free:[],
+        budget_modes:value.budget_modes||{analysis:false,execution:false}
       };
       configuredSnapshot=result;
       return result;
