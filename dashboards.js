@@ -2014,16 +2014,15 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   const budgetButtons=textElement('div','','composer-budget-actions');
   budgetButtons.style.display='flex';budgetButtons.style.flexWrap='wrap';budgetButtons.style.gap='6px';
   const budgetAnalysis=btn('budgetAnalysis','Analyze project','تحليل المشروع',()=>{if(keepBudgetChoice())void chooseBudget('analysis');});
-  const budgetExecution=btn('budgetExecution','Implement changes','تنفيذ برمجي',()=>{if(keepBudgetChoice())void chooseBudget('execution');});
+  const budgetExecution=btn('budgetExecution','Implement code','تنفيذ كود برمجي',()=>{if(keepBudgetChoice())void chooseBudget('execution');});
   budgetAnalysis.type=budgetExecution.type='button';
   budgetButtons.append(budgetAnalysis,budgetExecution);
   function showBudgetModes(value){
     budgetModes={analysis:value?.analysis===true,execution:value?.execution===true};
-    budgetAnalysis.hidden=!budgetModes.analysis;
-    budgetExecution.hidden=!budgetModes.execution;
-    budgetButtons.hidden=!budgetModes.analysis&&!budgetModes.execution;
-    budgetButtons.style.display=budgetButtons.hidden?'none':'flex';
-    if(budgetChoice)budgetChoice.notice.hidden=!budgetButtons.hidden;
+    const native=window.nativeSession?.active();
+    budgetAnalysis.disabled=!native||!budgetModes.analysis;
+    budgetExecution.disabled=!native||!budgetModes.execution;
+    if(budgetChoice)budgetChoice.notice.hidden=!budgetAnalysis.disabled||!budgetExecution.disabled;
   }
   showBudgetModes(null);
   const budgetNumber=n=>new Intl.NumberFormat(lang==='ar'?'ar':'en',{maximumFractionDigits:6}).format(n);
@@ -2235,31 +2234,37 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
     const node=textElement('article','','user-bubble');
     node.dir='auto';
     node.append(textElement('div',prompt,'message-content'));
-    const label=textElement('div',tr('How would you like to continue?','كيف تريد متابعة هذا الطلب؟'));
-    const ordinary=btn('budgetOrdinary','Continue as normal chat','متابعة كمحادثة عادية',()=>{
+    const label=textElement('div',tr('How would you like to proceed?','ماذا تريد أن تفعل؟'));
+    const ordinary=btn('budgetOrdinary','Normal chat','محادثة عادية',()=>{
       if(!keepBudgetChoice())return;
       void q('promptForm').onsubmit({preventDefault(){},budgetChoiceConfirmed:true});
     });
     ordinary.type='button';
-    const edit=btn('budgetEdit','Edit request','تعديل الطلب',()=>{
-      clearBudgetChoice();q('promptInput').focus();
-    });
-    edit.type='button';
+    budgetButtons.append(ordinary);
     const notice=textElement('small',tr(
       'Analysis and implementation are currently unavailable for this session.',
       'التحليل والتنفيذ غير متاحين حاليًا في هذه الجلسة.'));
-    notice.hidden=!budgetButtons.hidden;
-    node.append(label,budgetButtons,notice,ordinary,edit);
+    notice.hidden=!budgetAnalysis.disabled||!budgetExecution.disabled;
+    node.append(label,budgetButtons,notice);
     const choice={node,notice,owner:currentUser?.id,workspaceId:activeWorkspace.id,
       sessionId:activeSession?.id,draft:q('promptInput').value};
     budgetChoice=choice;
     keepBudgetChoice();workspaceFollowLatest(feed);
     if(window.nativeSession?.active()){
       void api('/api/opencode/catalog/providers?connected_only=true').then(policy=>{
-        if(budgetChoice===choice&&keepBudgetChoice())showBudgetModes(policy?.budget_modes);
-      }).catch(()=>{});
+        if(budgetChoice!==choice||!keepBudgetChoice())return;
+        showBudgetModes(policy?.budget_modes);
+        if(policy?.budget_modes&&notice.hidden===false)notice.textContent=tr(
+          'Enable analysis or implementation in AI / Pi Policy.',
+          'فعّل التحليل أو التنفيذ من سياسة AI / Pi في لوحة الإدارة.');
+      }).catch(()=>{
+        if(budgetChoice===choice&&notice.hidden===false)notice.textContent=tr(
+          'Could not load the analysis and implementation settings.',
+          'تعذّر تحميل إعدادات التحليل والتنفيذ.');
+      });
     }else{
-      budgetButtons.hidden=true;budgetButtons.style.display='none';notice.hidden=false;
+      budgetAnalysis.disabled=budgetExecution.disabled=true;
+      notice.hidden=false;
     }
   }
   utilities.append(attach);
