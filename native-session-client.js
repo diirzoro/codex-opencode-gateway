@@ -520,6 +520,23 @@
         else if(part?.type==="text_end"&&typeof part.content==="string")piReply(id,part.content,true);
         return;
       }
+      if(e.type==="pi.budget_usage"){
+        const status=document.getElementById("submissionStatus");
+        if(status&&!status.dataset.piProviderError){
+          const stage=p.mode==="analysis"?label("Analysis","التحليل"):label("Execution","التنفيذ");
+          const tokens=p.tokens&&Number.isFinite(p.tokens.input)&&Number.isFinite(p.tokens.output)?
+            label("Input","إدخال")+": "+p.tokens.input+" · "+
+            label("Output","إخراج")+": "+p.tokens.output:
+            label("Token usage not reported","لم يبلغ Pi عن استخدام التوكنات");
+          const cost=Number.isFinite(p.costUSD)?
+            " · "+label("Model cost","تكلفة النموذج")+": $"+p.costUSD.toFixed(6):
+            " · "+label("Actual model cost not reported","لم تُبلّغ تكلفة النموذج الفعلية");
+          status.textContent=stage+" · "+tokens+cost+" · "+label(
+            "Provider balance not available; Gateway subscription is separate.",
+            "رصيد المزوّد غير متاح؛ اشتراك Gateway منفصل.");
+        }
+        return;
+      }
       if(e.type==="pi.run_outcome"){
         if(p.kind==="no_text"&&activeSession?.id===id){
           const message=label(
