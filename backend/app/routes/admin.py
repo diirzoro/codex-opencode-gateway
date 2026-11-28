@@ -982,7 +982,15 @@ def write_policy(data: PolicyIn, _: User = Depends(require_admin), db: Session =
     row.allowed_tools = json.dumps(sorted({t.strip() for t in data.allowed_tools if t.strip()}))
     row.require_tool_approval = data.require_tool_approval
     db.commit(); db.refresh(row)
-    return row.as_payload()
+    result = row.as_payload()
+    if result["budget_modes"] != previous["budget_modes"]:
+        # Signed control message to the existing Pi service. Current browser
+        # grants contain an immutable policy snapshot; revoke those grants
+        # immediately so disabled modes cannot be submitted via direct API.
+        # Native Pi histories/projects remain persistent and are not deleted.
+        from .management import _ai_pi_invalidate
+        _ai_pi_invalidate()
+    return result
 
 class EmailDeliveryUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
