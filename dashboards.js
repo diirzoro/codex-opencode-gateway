@@ -2093,6 +2093,17 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         status.textContent=tr('This option is disabled by the administrator.',
           'هذا الخيار معطل من الإدارة.');return;
       }
+      // Estimate from the bounded project-name inventory, never by uploading
+      // all source files or secrets to a model before consent.
+      let inventoryTokens=0;
+      if(sessionId&&window.nativeSession?.budgetState){
+        try{
+          const state=await window.nativeSession.budgetState(sessionId);
+          if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
+          inventoryTokens=Math.min(12000,Math.max(0,
+            Number(state?.inventory?.estimatedTreeTokens)||0));
+        }catch{/* Project inventory unavailable: estimate remains preliminary. */}
+      }
       const snapshot=await window.workspaceRuntime.load(workspaceId,{force:true});
       const linked=(snapshot.providers||[]).filter(p=>p.connected&&p.allowed!==false);
       const entries=[];
@@ -2101,7 +2112,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
         if(!dialog.open||currentUser?.id!==owner||activeWorkspace?.id!==workspaceId)return;
         for(const m of (data?.models||[]).slice(0,1000)){
           if(m.allowed===false||m.visible===false)continue;
-          const input=Math.max(300,Math.min(500000,Math.ceil(text.length/3)+1200));
+          const input=Math.max(300,Math.min(500000,Math.ceil(text.length/3)+1200+inventoryTokens));
           const output=mode==='analysis'?1400:2200;
           const cost=m.cost||{},known=Number.isFinite(cost.input)&&Number.isFinite(cost.output);
           const amount=known?(input*cost.input+output*cost.output)/1000000:null;
