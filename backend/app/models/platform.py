@@ -41,10 +41,14 @@ class PlatformPolicy(Base):
         budget_rules = model_rules.get("budget_modes") if isinstance(model_rules, dict) else None
         if not isinstance(budget_rules, dict):
             budget_rules = {}
+        budget_modes = {
+            mode: budget_rules.get(mode) is not False for mode in ("analysis", "execution")
+        }
+        # Existing installations may still have both legacy defaults disabled.
+        if not any(budget_modes.values()):
+            budget_modes = dict.fromkeys(budget_modes, True)
         return {
-            "budget_modes": {
-                mode: budget_rules.get(mode) is True for mode in ("analysis", "execution")
-            },
+            "budget_modes": budget_modes,
             "allowed_providers": provider_rules.get('allowed',[]) if isinstance(provider_rules,dict) else provider_rules,
             "hidden_providers": provider_rules.get('hidden',[]) if isinstance(provider_rules,dict) else [],
             "allowed_models": model_rules.get('allowed',[]) if isinstance(model_rules,dict) else model_rules,
