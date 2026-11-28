@@ -63,7 +63,7 @@
   home.innerHTML='<div class="workspace-home portal-content"><div class="work-home-heading"></div><div class="home-actions"></div><section><h2 id="homeProjectsTitle"></h2><div id="homeProjects"><p role="status">Loading projects… / جارٍ تحميل المشاريع…</p></div></section></div>';
   q('app-main').append(home);
   home.querySelector('.work-home-heading').append(text('span','YOUR WORKSPACE','مساحة عملك','eyebrow'),text('h1','What will you build today?','ماذا ستبني اليوم؟'),text('p','Open a project, continue a conversation, or start something new.','افتح مشروعًا، أكمل محادثة، أو ابدأ فكرة جديدة.','lead'));
-  home.querySelector('.home-actions').append(btn('homeNewProject','New project','مشروع جديد',()=>page('onboarding'),'button'),btn('homeDemoProject','Explore the Aden Café demo','جرّب نموذج مقهى عدن',()=>window.chooseNewProject('demo'),'button project-demo-button'),btn('homeConnections','Settings · Connections','الإعدادات · الاتصالات',()=>openConnections()));
+  home.querySelector('.home-actions').append(btn('homeNewProject','New project','مشروع جديد',()=>page('onboarding'),'button'),btn('homeConnections','Settings · Connections','الإعدادات · الاتصالات',()=>openConnections()));
   texts.push([q('homeProjectsTitle'),'Projects / workspaces','المشاريع / مساحات العمل']);
   const settings=document.createElement('main');settings.id='connectionsPage';settings.className='page portal-page';
   settings.innerHTML='<div class="portal-content connections-content"><div class="connections-heading"></div><div id="connectionsProviders"></div><div id="connectionsGithub"></div><div id="connectionsRuntime"></div><section id="connectionsWorkspace" class="manage-card"></section></div>';
@@ -440,6 +440,7 @@
     for(const project of data.projects){for(const workspace of project.workspaces){const row=textElement('div','','home-project-row');row.append(textElement('strong',project.name),textElement('small',(project.repository||tr('Local project','مشروع محلي'))+' · '+workspace.status));if(workspace.cache?.warning||workspace.cache?.expired)row.append(textElement('small',window.workspaceRetentionNotice(workspace.cache),'project-retention-warning'));row.append(btn('home-open-'+workspace.id,'Open workspace','فتح مساحة العمل',()=>openWorkspace(project,workspace)));projects.append(row);}}
     if(!projects.children.length)projects.append(text('p','No projects yet. Create your first workspace.','لا توجد مشاريع بعد. أنشئ مساحة عملك الأولى.','home-empty'));
     renderEntitlement();
+    showDemoInvite();
   }
   async function openConnections(focus){await page('connectionsPage');if(focus)q(focus==='github'?'connectionsGithub':'connectionsProviders').scrollIntoView({block:'start',behavior:'smooth'});}
   window.openConnections=openConnections;
@@ -630,11 +631,38 @@
       workspaceAccess.hidden=false;
       workspaceAccess.append(textElement('span',tr('Advanced integrations expired. Core access and free platform models remain available.','انتهت تجربة التكاملات المتقدمة. يبقى الوصول الأساسي ونماذج المنصة المجانية متاحين.')),btn('workspaceAdvancedUpgrade','View plans','عرض الخطط',subscribe));
     }
-    q('homeNewProject').disabled=!workAccess;q('homeDemoProject').disabled=!workAccess;q('promptInput').disabled=!workAccess;
+    q('homeNewProject').disabled=!workAccess;q('promptInput').disabled=!workAccess;
     document.querySelectorAll('#workspacePage .new-session,#sessionList .session').forEach(n=>n.disabled=!workAccess);
     if(!workAccess){q('sendMessage').disabled=true;q('commitButton').disabled=true;q('pushButton').disabled=true;}
   }
-  async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/profile/access');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();}
+  const shownDemoInvites=new Set();
+  function showDemoInvite(){
+    const owner=currentUser?.id;
+    if(!owner||!workAccess||admin()||shownDemoInvites.has(owner)||
+      !q('workspaceHomePage').classList.contains('active')||document.querySelector('dialog[open]'))return;
+    const key='og-cafe-demo-invite:'+owner;
+    try{if(sessionStorage.getItem(key))return;}catch{}
+    const dialog=document.createElement('dialog');
+    dialog.className='workspace-project-chooser project-demo-invite';
+    const heading=textElement('h2',tr('Make the Aden Café site your own','طوّر موقع مقهى عدن بطريقتك'));
+    heading.id='cafe-demo-invite-title';
+    dialog.setAttribute('aria-labelledby',heading.id);
+    const close=textElement('button','×','icon-btn project-demo-close');
+    close.type='button';close.setAttribute('aria-label',tr('Close invitation','إغلاق الدعوة'));
+    close.onclick=()=>dialog.close();
+    const start=textElement('button',tr('Try the demo','جرّب المشروع الآن'),'button project-demo-button');
+    start.type='button';
+    start.onclick=()=>{dialog.close();if(currentUser?.id===owner)void window.chooseNewProject('demo');};
+    dialog.append(close,heading,textElement('p',tr(
+      'Open a ready-made site, preview it, and ask Pi to make your first change.',
+      'افتح موقعًا جاهزًا، عاينه، واطلب من Pi تنفيذ أول تعديل.')),start);
+    dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    document.body.append(dialog);
+    dialog.showModal();
+    shownDemoInvites.add(owner);
+    try{sessionStorage.setItem(key,'1');}catch{}
+  }
+  async function refreshEntitlement(){if(!currentUser||admin())return;entitlement=await api('/api/profile/access');workAccess=entitlement.access.allowed;if(!workAccess){if(activeSession&&!q('stopAgent').disabled){try{await api('/api/sessions/'+activeSession.id+'/stop',{method:'POST'});}catch(error){toast(error.message);}q('stopAgent').disabled=true;}stopEvents();}renderEntitlement();showDemoInvite();}
   const previousPage=page;page=async function(id){await authReady;await interfaceReady;if(admin()&&['workspaceHomePage','connectionsPage'].includes(id))id='adminPage';if(id==='workspacePage'&&currentUser&&!admin())initializeWorkspace();await previousPage(id);if(!currentUser)return;if(!admin()&&['workspaceHomePage','workspacePage','onboarding'].includes(id))refreshEntitlement().then(()=>updateSend()).catch(error=>toast(error.message));if(!admin()&&id==='workspacePage'&&activeWorkspace){refreshChoices().catch(error=>toast(error.message));loadWorkspaceDetails();}if(admin())return;if(q(id)?.classList.contains('active')){if(id==='workspaceHomePage')loadHome().catch(error=>toast(error.message));if(id==='connectionsPage')loadConnections().catch(error=>toast(error.message));}};
   const previousShow=showPage;showPage=function(id){if(id==='adminPage'&&!admin()){toast('Administrator access required');id=currentUser?'workspaceHomePage':'authPage';}if(admin()&&['workspaceHomePage','connectionsPage','workspacePage'].includes(id))id='adminPage';q('sessionSidebar').classList.remove('open');overlay(false);previousShow(id);syncWorkspacePolling();q('clientWorkspaceHome').classList.toggle('active',['workspaceHomePage','workspacePage'].includes(id));q('clientConnections').classList.toggle('active',id==='connectionsPage');if(['workspaceHomePage','workspacePage','connectionsPage'].includes(id))q('clientNav').querySelectorAll('[data-client-view]').forEach(n=>n.classList.remove('active'));};
   const lazyOpenWorkspace=async function(project,workspace,options={}){
