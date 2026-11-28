@@ -1932,3 +1932,18 @@ body:has(#workspacePage.active) .app-header{display:none!important}
 .project-upload-dialog .project-upload-metrics{font-variant-numeric:tabular-nums}
 .project-upload-dialog[data-result="success"] strong{color:#21834d}
 .project-upload-dialog[data-result="error"] strong{color:var(--danger,#c0392b)}
+
+.home-actions .project-demo-button {
+  color: #fff;
+  background: #0d6651;
+  border-color: #0d6651;
+  box-shadow: 0 4px 12px #0d665133;
+}
+.home-actions .project-demo-button:hover:not(:disabled) {
+  background: #094b3b;
+  border-color: #094b3b;
+}
+.home-actions .project-demo-button:focus-visible {
+  outline: 2px solid #16856b;
+  outline-offset: 3px;
+}

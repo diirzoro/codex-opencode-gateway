@@ -63,7 +63,7 @@
   home.innerHTML='<div class="workspace-home portal-content"><div class="work-home-heading"></div><div class="home-actions"></div><section><h2 id="homeProjectsTitle"></h2><div id="homeProjects"><p role="status">Loading projects… / جارٍ تحميل المشاريع…</p></div></section></div>';
   q('app-main').append(home);
   home.querySelector('.work-home-heading').append(text('span','YOUR WORKSPACE','مساحة عملك','eyebrow'),text('h1','What will you build today?','ماذا ستبني اليوم؟'),text('p','Open a project, continue a conversation, or start something new.','افتح مشروعًا، أكمل محادثة، أو ابدأ فكرة جديدة.','lead'));
-  home.querySelector('.home-actions').append(btn('homeNewProject','New project','مشروع جديد',()=>page('onboarding'),'button'),btn('homeDemoProject','Try a sample project','جرّب على مشروع جاهز',()=>window.chooseNewProject('demo'),'button ghost'),btn('homeConnections','Settings · Connections','الإعدادات · الاتصالات',()=>openConnections()));
+  home.querySelector('.home-actions').append(btn('homeNewProject','New project','مشروع جديد',()=>page('onboarding'),'button'),btn('homeDemoProject','Explore the Aden Café demo','جرّب نموذج مقهى عدن',()=>window.chooseNewProject('demo'),'button project-demo-button'),btn('homeConnections','Settings · Connections','الإعدادات · الاتصالات',()=>openConnections()));
   texts.push([q('homeProjectsTitle'),'Projects / workspaces','المشاريع / مساحات العمل']);
   const settings=document.createElement('main');settings.id='connectionsPage';settings.className='page portal-page';
   settings.innerHTML='<div class="portal-content connections-content"><div class="connections-heading"></div><div id="connectionsProviders"></div><div id="connectionsGithub"></div><div id="connectionsRuntime"></div><section id="connectionsWorkspace" class="manage-card"></section></div>';
@@ -985,13 +985,8 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   }
   nativeVariant.onchange=saveNativeSelection;
   q('providerSelect').setAttribute('aria-label','Provider');q('modelSelect').setAttribute('aria-label','Model');
-  const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Pi supports PNG/JPEG/WebP and PDF up to 25 MB combined; TXT/MD up to 256 KB each. PDF requires Pi tools.','Pi يدعم الصور وPDF حتى 25 ميجابايت إجمالًا، وTXT/MD حتى 256 كيلوبايت لكل ملف. قراءة PDF تتطلب أدوات Pi.');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);
+  const attach=btn('attachFiles','','',()=>openAttachPicker(),'icon-btn');attach.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>';attach.title=tr('Attach files','إرفاق ملفات');attach.setAttribute('aria-label',attach.title);controls.prepend(attach);
   const attachmentList=textElement('div','','composer-attachments');attachmentList.id='composerAttachments';attachmentList.setAttribute('aria-live','polite');q('promptInput').before(attachmentList);
-  const supportedPiFiles=textElement('small',tr(
-    'Pi attachments: PNG/JPEG/WebP/PDF up to 25 MB total; TXT/MD up to 256 KB per file. Images need a compatible model; PDF requires Pi tools.',
-    'مرفقات Pi: صور PNG وJPEG وWebP وPDF حتى 25 ميجابايت إجمالًا، وTXT/MD حتى 256 كيلوبايت للملف. دعم الصور حسب النموذج، وقراءة PDF بأدوات Pi.'),
-    'pi-attachment-format-hint');
-  attachmentList.before(supportedPiFiles);
   let attachments=[];let attachmentRevision=0;
   const releasePreview=item=>{if(item.preview){URL.revokeObjectURL(item.preview);item.preview=null;}};
   async function cancelUpload(item){
@@ -1032,6 +1027,11 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   async function openAttachPicker(){
     if(!activeWorkspace||window.workspaceSubmissionBlocked?.())return;
     if(!window.nativeSession?.active()){toast(tr('Pi Native is unavailable; no file was sent.','اتصال Pi Native غير متاح؛ لم يُرسل أي ملف.'));return;}
+    const scope=activeWorkspace.id;
+    const accepted=await window.confirmAction(tr(
+      'Supported attachments: PNG, JPEG, WebP and PDF (25 MB total), TXT and MD (256 KB per file).',
+      'الملفات المدعومة: PNG وJPEG وWebP وPDF (25 ميجابايت إجمالًا)، وTXT وMD (256 كيلوبايت لكل ملف).'));
+    if(!accepted||activeWorkspace?.id!==scope||window.workspaceSubmissionBlocked?.())return;
     if(!activeSession)await createSession();
     const picker=document.createElement('input');picker.type='file';picker.multiple=true;picker.hidden=true;picker.accept='.png,.jpg,.jpeg,.webp,.pdf,.txt,.md';
     picker.oncancel=()=>picker.remove();picker.onchange=async()=>{
@@ -1663,12 +1663,12 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
   chooseWorkspaceProject=async(preferredSource='blank')=>{
     if(linkLocal.disabled)return;
     const owner=currentUser?.id;
-    const choice=await window.requestForm(tr('New project','مشروع جديد'),[{
+    const choice=preferredSource==='demo'?{source:'demo'}:await window.requestForm(tr('New project','مشروع جديد'),[{
       name:'source',value:preferredSource,label:tr('Project source','مصدر المشروع'),options:[
         {value:'blank',label:tr('Blank project','مشروع فارغ')},
         {value:'github',label:tr('GitHub project','مشروع GitHub')},
         {value:'zip',label:tr('Upload a ZIP project','رفع مشروع ZIP')},
-        {value:'demo',label:tr('Try a sample project','جرّب على مشروع جاهز')}
+        {value:'demo',label:tr('Explore the Aden Café demo','جرّب نموذج مقهى عدن')}
       ]
     }],tr('Continue','متابعة'));
     if(!choice||currentUser?.id!==owner)return;
