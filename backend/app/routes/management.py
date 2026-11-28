@@ -1174,15 +1174,27 @@ def _ai_model_display_info(row):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    cost = data.get("cost") if isinstance(data.get("cost"), dict) else {}
+    raw_cost = data.get("cost") if isinstance(data.get("cost"), dict) else {}
+    cost = {
+        key: value
+        for key in ("input", "output", "cacheRead", "cacheWrite")
+        if type(value := raw_cost.get(key)) in (int, float) and 0 <= value < float("inf")
+    }
     free = _ai_model_zero_price(row)
-    paid = any(type(cost.get(k)) in (int, float) and cost[k] > 0
-               for k in ("input", "output"))
-    return {"price_type": "free" if free else "paid" if paid else "unknown",
-            "cost": {k: cost.get(k) for k in ("input", "output")
-                     if type(cost.get(k)) in (int, float)},
-            "context_window": data.get("context") or data.get("contextWindow"),
-            "reasoning": bool(data.get("reasoning"))}
+    paid = any(cost.get(key, 0) > 0 for key in ("input", "output"))
+    max_output_tokens = data.get("maxTokens")
+    return {
+        "price_type": "free" if free else "paid" if paid else "unknown",
+        "cost": cost,
+        "has_input_output_rates": "input" in cost and "output" in cost,
+        "context_window": data.get("context") or data.get("contextWindow"),
+        "max_output_tokens": (
+            max_output_tokens
+            if type(max_output_tokens) is int and max_output_tokens > 0
+            else None
+        ),
+        "reasoning": bool(data.get("reasoning")),
+    }
 
 
 class AiBulkModelPreference(BaseModel):
