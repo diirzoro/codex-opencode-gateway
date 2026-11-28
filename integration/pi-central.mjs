@@ -1276,6 +1276,14 @@ class SdkAgent {
         type:"pi.provider_error",properties:{kind:piProviderFailure(e)}
       })+"\n\n");}catch{this.events.delete(res);}
     }).finally(async()=>{
+      // A rejected/handled SDK preflight may finish without agent_settled.
+      // Fail closed and restore the original tool set before any future run.
+      if(this.budgetStage && !this.settledObserved){
+        this.budgetPlan=null;
+        try{this.session.setActiveToolsByName(this.session.getAllTools().map(t=>t.name));}
+        catch{this.close();}
+        this.budgetStage=null;
+      }
       // Stop with pending native work retains the SAME provider credential,
       // model and per-account execution reservation for the queued messages.
       if(this.keepQueueOnStop&&Number(this.session.pendingMessageCount)>0){
@@ -2245,7 +2253,7 @@ const server=http.createServer(async(req,res)=>{
       if(a.active||a.running||executing.has(a)){
         // A budget stage cannot silently become a queued continuation of a
         // different model, or inherit read-only permissions from another run.
-        if(budgetMode)return error(res,409,"Wait for the current Pi run to finish before starting a budget stage","not_submitted");
+        if(budgetMode||a.budgetStage)return error(res,409,"Wait for this budget stage to finish before queuing any other prompt","not_submitted");
         if(images.length&&Array.isArray(a.session.model?.input)&&
            !a.session.model.input.includes("image"))
           return error(res,422,"Selected Pi model cannot read images","not_submitted");
@@ -2280,6 +2288,7 @@ const server=http.createServer(async(req,res)=>{
         // Keep the original Pi command/skill mechanism. Do not invent agents.
         let prompt=message;
         if(budgetMode){
+          if(b.agent)return error(res,422,"Budget stages require ordinary Pi chat, not extension commands","not_submitted");
           if(typeof a.session.getAllTools!=="function"||
              typeof a.session.setActiveToolsByName!=="function"){
             releaseExecution(a);
