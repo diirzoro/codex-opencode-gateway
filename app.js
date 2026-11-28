@@ -1273,6 +1273,43 @@ function renderPiOptionCards(host,answer,messageId){
  }else host.append(panel);
 }
 // A deliberately small, text-only Markdown subset. Never interpret Agent HTML.
+function splitPiPlan(value){
+ const plans=[];
+ const text=String(value||'').replace(/<pi-budget-plan>[\s\S]*?(?:<\/pi-budget-plan>|$)/gi,block=>{
+  const complete=block.match(/^<pi-budget-plan>\s*([\s\S]*?)\s*<\/pi-budget-plan>$/i);
+  if(complete)try{
+   const plan=JSON.parse(complete[1]);
+   if(typeof plan?.summary==='string'&&Array.isArray(plan.files))plans.push(plan);
+  }catch{/* Ignore invalid internal plan metadata. */}
+  return '';
+ });
+ return {text,plans};
+}
+function visiblePiStreamText(value){
+ let {text}=splitPiPlan(value);
+ text=text.replace(/(^|\n)[ \t]*\x60{3,}(?:pi[_-]choices|json)[^\r\n]*(?:\r?\n|$)[\s\S]*?(?:\r?\n[ \t]*\x60{3,}(?=\s|$)|$)/gi,'$1');
+ const fenceTail=text.match(/(?:^|\n)[ \t]*(`{1,3}[a-z_-]*)$/i);
+ if(fenceTail&&['```json','```pi_choices','```pi-choices'].some(marker=>marker.startsWith(fenceTail[1].toLowerCase())))
+  text=text.slice(0,fenceTail.index);
+ const tail=text.lastIndexOf('<');
+ if(tail>=0&&'<pi-budget-plan>'.startsWith(text.slice(tail).toLowerCase()))text=text.slice(0,tail);
+ return text;
+}
+function renderPiPlan(host,plan){
+ const section=document.createElement('section');section.className='message-table-wrap';
+ section.append(textElement('h3',lang==='ar'?'خطة العمل المقترحة':'Proposed plan'));
+ if(plan.summary.trim())section.append(textElement('p',plan.summary.trim()));
+ const files=plan.files.slice(0,80).map(file=>typeof file==='string'?file:file?.path)
+  .filter(path=>typeof path==='string'&&path.trim());
+ if(files.length){
+  const table=document.createElement('table'),head=document.createElement('thead'),body=document.createElement('tbody');
+  const title=document.createElement('tr'),cell=textElement('th',lang==='ar'?'الملفات المقترحة':'Proposed files');
+  cell.scope='col';title.append(cell);head.append(title);
+  for(const file of files){const row=document.createElement('tr');row.append(textElement('td',file));body.append(row);}
+  table.append(head,body);section.append(table);
+ }
+ host.append(section);
+}
 function renderAgentText(host,value,messageId){
  host.replaceChildren();host.classList.add('message-rich');host.dir='auto';
  // Present paths relative to the verified selected project's root.
@@ -1290,7 +1327,8 @@ function renderAgentText(host,value,messageId){
   }
   node.append(document.createTextNode(text.slice(at)));
  }
- const lines=String(value||'').split('\n');let paragraph=[],list=null;
+ const {text,plans}=splitPiPlan(value);
+ const lines=text.split('\n');let paragraph=[],list=null;
  const cells=line=>{
   const result=[];let text='',code=false,escaped=false;
   for(const char of line.trim()){
@@ -1307,6 +1345,7 @@ function renderAgentText(host,value,messageId){
    const block=textElement('section','','message-code-block'),header=textElement('div','','message-code-header'),pre=document.createElement('pre'),code=document.createElement('code');
    const language=fence[2].trim().split(/\s/)[0].slice(0,40)||'text';
    if(/^pi[_-]choices$/i.test(language))continue;
+   if(/^json$/i.test(language)&&/^\s*\{\s*"(?:question|options)"\s*:/.test(body.join('\n')))continue;
    if(/^json$/i.test(language)){
     try{
      const value=JSON.parse(body.join('\n'));
@@ -1346,7 +1385,8 @@ function renderAgentText(host,value,messageId){
   else{if(list)flush();paragraph.push(lines[i]);}
  }
  flush();
- renderPiOptionCards(host,value,messageId);
+ for(const plan of plans)renderPiPlan(host,plan);
+ renderPiOptionCards(host,text,messageId);
 }
 function compactNativeToolMessages(rows){
  // Fold adjacent tool-only assistant records into a single visual activity
@@ -1426,7 +1466,13 @@ async function refreshMessages(){
    node.append(avatar);
    if(row.id)node.dataset.messageId=row.id;
    const hasText=presentation.hasText;
-   const content=textElement('div',row.text||'','message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,row.text,row.id);node.append(content);
+   let shownText=row.text||'';
+   if(row.role==='user'&&/^\[PI_BUDGET_ANALYSIS_V1:[a-f0-9]{64}\]/.test(shownText)){
+     const boundary='\n\nUser goal:\n',offset=shownText.indexOf(boundary);
+     shownText=offset<0?(lang==='ar'?'طلب تحليل المشروع':'Project analysis request'):
+       shownText.slice(offset+boundary.length);
+   }
+   const content=textElement('div',shownText,'message-content');if(row.role==='assistant'&&hasText)renderAgentText(content,shownText,row.id);node.append(content);
    // Never promote a model's textual claim into a verified file operation.
    // Real Pi toolCall/toolResult activity is displayed separately.
    if(nativeIncremental&&row.role==='assistant'&&hasText&&!presentation.activity.length&&
