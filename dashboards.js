@@ -2850,7 +2850,7 @@ details.append(textElement('summary',tr('Tool activity','نشاط الأدوات
           return {accepted:true,queued:true};
         }
         if(sendingPreview){const note=sendingPreview.node.querySelector('.sending-preview-status');if(note)note.textContent=tr('Received by Pi','استلمها Pi');}
-        if(!submissionStatus.dataset.piProviderError)submissionStatus.textContent=tr('Pi received the request; awaiting provider response.','استلم Pi الطلب؛ جارٍ انتظار رد المزوّد.');
+        if(!receipt?.settled&&!submissionStatus.dataset.piProviderError)submissionStatus.textContent=tr('Pi received the request; awaiting provider response.','استلم Pi الطلب؛ جارٍ انتظار رد المزوّد.');
         // Pi SSE owns reply presentation. The same Pi session now continues.
         return {accepted:true,queued:false};
       }catch(error){clearSendingPreview();toast(error.message);submissionStatus.textContent=error.message;
