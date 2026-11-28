@@ -2054,9 +2054,10 @@ function providerCatalog(models,providerDefinitions=[],mode="full",selectedProvi
     if(row){
       row.name=provider.name||row.name;
       row.auth_methods=provider.auth_methods||[];
+      row.api_key_probe=provider.api_key_probe===true;
     }else grouped.set(provider.id,{
       id:provider.id,name:provider.name||provider.id,models:{},
-      auth_methods:provider.auth_methods||[]
+      auth_methods:provider.auth_methods||[],api_key_probe:provider.api_key_probe===true
     });
   }
   // Free-mode snapshots include ALL provider names supplied by installed Pi,
@@ -2078,6 +2079,57 @@ function providerCatalog(models,providerDefinitions=[],mode="full",selectedProvi
   });
   return {all,connected:[],default:{}};
 }
+async function providerProbeRuntime(){
+  const {ModelRuntime}=await import("@earendil-works/pi-coding-agent");
+  const {InMemoryCredentialStore}=await import("@earendil-works/pi-ai");
+  return ModelRuntime.create({
+    credentials:new InMemoryCredentialStore(),modelsPath:null,allowModelNetwork:false
+  });
+}
+function providerProbeModels(runtime,providerId){
+  const provider=runtime.getProviders().find(item=>item.id===providerId);
+  if(!provider?.auth?.apiKey?.login)return [];
+  return runtime.getModels().filter(model=>{
+    if(model.provider!==providerId||!model.input?.includes("text")||model.reasoning||
+       !["openai-completions","openai-responses","anthropic-messages","google-generative-ai"].includes(model.api)||
+       ![model.cost?.input,model.cost?.output].every(rate=>Number.isFinite(rate)&&rate>=0&&rate<=5))
+      return false;
+    try{
+      const url=new URL(model.baseUrl);
+      // Only code-shipped Pi endpoints are read. No custom model files,
+      // destination supplied by the customer, or inferred company domain.
+      return url.protocol==="https:"&&!url.username&&!url.password&&!url.port&&
+        !url.hash&&!url.search&&/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(url.hostname)&&
+        net.isIP(url.hostname)===0&&!/\.(local|internal|localhost|test)$/i.test(url.hostname);
+    }catch{return false;}
+  }).sort((a,b)=>(a.cost.input+a.cost.output)-(b.cost.input+b.cost.output)||a.id.localeCompare(b.id));
+}
+let providerProbeActive=false;
+async function verifyNativeProviderKey(providerId,key){
+  if(providerProbeActive)throw Object.assign(new Error("Provider verification is busy. Try again shortly."),{status:429});
+  providerProbeActive=true;
+  try{
+    const runtime=await providerProbeRuntime();
+    const [model]=providerProbeModels(runtime,providerId);
+    if(!model)throw Object.assign(new Error("No supported verification model is available for this provider."),{status:422});
+    // Keep this key in a fresh private runtime; never install a shared override.
+    try{
+      await runtime.setRuntimeApiKey(providerId,key);
+      const response=await runtime.completeSimple(model,{messages:[
+        {role:"user",content:"Reply with OK.",timestamp:Date.now()}
+      ]},{maxTokens:8,signal:AbortSignal.timeout(12000)});
+      if(!["stop","length"].includes(response?.stopReason)||!response.content?.some(
+         part=>part.type==="text"&&typeof part.text==="string"&&part.text.trim())){
+        const status={invalid_key:422,access_denied:403,rate_limited:429,
+          insufficient_balance:402,quota_exhausted:429}[piProviderFailure(response)]||503;
+        throw Object.assign(new Error("Provider verification did not receive a model response."),{status});
+      }
+      return {model_id:model.id,verified:true};
+    }finally{
+      await runtime.removeRuntimeApiKey(providerId);
+    }
+  }finally{providerProbeActive=false;}
+}
 async function nativeDiscovery(userId) {
   const cached=modelsSnapshots.get(userId);
   if(cached&&Date.now()-cached.time<CATALOG_TTL_MS)return cached;
@@ -2087,8 +2139,10 @@ async function nativeDiscovery(userId) {
   const pending=(async()=>{
     const runtime=await piModels();
     const models=runtime.getModels();
+    const trustedRuntime=await providerProbeRuntime();
     const providers=runtime.getProviders().map(provider=>({
       id:provider.id,name:provider.name||provider.id,
+      api_key_probe:providerProbeModels(trustedRuntime,provider.id).length>0,
       auth_methods:[
         ...(provider.auth?.apiKey?.login?["apiKey"]:[]),
         ...(provider.auth?.oauth?.login?["oauth"]:[])
@@ -2151,6 +2205,21 @@ const server=http.createServer(async(req,res)=>{
     if(!["GET","POST","PATCH","PUT","DELETE"].includes(req.method))return error(res,405,"Method not allowed");
     // Restricted control plane: Gateway speaks to Pi over the original UDS.
     // Nginx sends Host test.opencode-gateway.codes, never pi-internal.
+    if(pathname==="/internal/provider/verify"&&req.method==="POST"){
+      const token=req.headers["x-pi-gateway-token"];
+      const expected=gatewayOrigin(req)==="https://test.opencode-gateway.codes"?
+        process.env.PI_GATEWAY_TEST_TOKEN:process.env.PI_GATEWAY_LIVE_TOKEN||process.env.PI_GATEWAY_INTERNAL_TOKEN;
+      if(!expected||expected.length<32||typeof token!=="string"||!fromGateway(req))
+        return error(res,403,"Authenticated local verification only");
+      const data=await body(req,12000);
+      if(typeof data?.provider_id!=="string"||!/^[a-zA-Z0-9_.-]{1,120}$/.test(data.provider_id)||
+         typeof data.api_key!=="string"||data.api_key.length<8||data.api_key.length>8192||
+         /[\x00-\x1f\x7f]/.test(data.api_key))
+        return error(res,422,"Invalid provider or credential");
+      try{return json(res,200,await verifyNativeProviderKey(data.provider_id,data.api_key));}
+      catch(e){return error(res,[402,403,422,429].includes(e?.status)?e.status:503,
+        "Provider model verification failed; key was not saved");}
+    }
     if(pathname==="/internal/bootstrap"&&req.method==="POST"){
       if(!fromGateway(req))return error(res,403,"Local Gateway handoff only");
       const payload=await body(req);

@@ -348,7 +348,10 @@
       const authDescription=p=>{
         const declared=new Set(Array.isArray(p?.auth_methods)?p.auth_methods:[]);
         const methods=[];
-        if(p?.api_key_supported)methods.push(tr('API key — verified before saving',
+        if(p?.api_key_model_probe)methods.push(tr(
+          'API key — verified with one short model request that may use provider credits',
+          'مفتاح API — يُتحقق منه بطلب نموذج قصير قد يستهلك من رصيد المزوّد'));
+        else if(p?.api_key_supported)methods.push(tr('API key — verified before saving',
           'مفتاح API — يتم التحقق منه قبل الحفظ'));
         else if(declared.has('apiKey'))methods.push(tr(
           'API key — awaiting a safe provider verification method',
@@ -474,6 +477,7 @@
             typeof p.id==='string'&&typeof p.name==='string'&&
             /^[a-zA-Z0-9._-]{1,120}$/.test(p.id)).map(p=>({
               id:p.id,name:p.name,api_key_supported:p.api_key_supported===true,
+              api_key_model_probe:p.api_key_model_probe===true,
               auth_methods:Array.isArray(p.auth_methods)?p.auth_methods.filter(
                 method=>method==='apiKey'||method==='oauth'):[]
             }));

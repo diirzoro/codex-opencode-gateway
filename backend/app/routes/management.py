@@ -513,6 +513,7 @@ def _ai_pi_supported_providers(db):
     methods_by_provider = saved.get("auth_methods")
     if not isinstance(methods_by_provider, dict):
         methods_by_provider = {}
+    probe_ids = _ai_probe_provider_ids(saved)
     return [
         {"id": row.id, "name": row.name,
          "auth_methods": [method for method in
@@ -520,10 +521,19 @@ def _ai_pi_supported_providers(db):
              if isinstance(methods_by_provider.get(row.id), list) else [],
          # An API key may be offered by Pi but must still have an approved,
          # independently authenticated verifier before Gateway accepts it.
-         "api_key_supported": row.id in _AI_VERIFY_URLS,
+         "api_key_supported": row.id in _AI_VERIFY_URLS or row.id in probe_ids,
+         "api_key_model_probe": row.id in probe_ids and row.id not in _AI_VERIFY_URLS,
          "oauth_link_available": False}
         for row in rows if row.id in ids
     ]
+
+
+def _ai_probe_provider_ids(registry):
+    # Only verified Gateway-to-Pi control channels can use inference probes.
+    if "x-pi-gateway-token" not in _ai_pi_control_headers():
+        return set()
+    ids = registry.get("api_key_probe_ids")
+    return {provider_id for provider_id in ids if isinstance(provider_id, str)} if isinstance(ids, list) else set()
 
 
 def _ai_schema(db):
@@ -694,6 +704,7 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
             (func.lower(AiProviderCatalog.name).contains(query.lower())))
     rows = list(db.scalars(provider_query.limit(1000)))
     rules = _ai_policy(db)
+    probe_ids = _ai_probe_provider_ids(_ai_pi_registry(db))
     # Fetch connected model details in ONE indexed query instead of one SQL
     # round-trip per provider. Read-only Dashboard opens stay lightweight.
     details_for = {provider.id for provider in rows
@@ -756,7 +767,8 @@ def _ai_provider_rows(db, user_id, *, query="", include_connected_models=False, 
                 "platform_models": sorted(shared["models"]) if shared else [],
                 "credential_stored": False,
                 "credential_source": "platform" if shared and not record else "gateway" if record else "none",
-                "api_key_supported": provider.id in _AI_VERIFY_URLS,
+                "api_key_supported": provider.id in _AI_VERIFY_URLS or provider.id in probe_ids,
+                "api_key_model_probe": provider.id in probe_ids and provider.id not in _AI_VERIFY_URLS,
                 "auth_status": owned[provider.id].auth_status if provider.id in owned else "not_connected",
                 "credit_status": record.credit_status if record else "unknown",
                 "last_synced_at": provider.models_synced_at, "stale": stale}
@@ -964,9 +976,10 @@ def _ai_save(data, user, db, replace=False):
     # provider whitelist. Admin policy still governs *execution*, but must
     # not prevent a real upstream verification or a personal connection.
     native = _ai_pi_supported_providers(db)
-    if data.provider_id not in {provider["id"] for provider in native}:
+    provider = next((provider for provider in native if provider["id"] == data.provider_id), None)
+    if provider is None:
         raise HTTPException(422, "Provider is not supported by the installed Pi runtime")
-    if data.provider_id not in _AI_VERIFY_URLS:
+    if not (provider.get("api_key_supported") or data.provider_id in _AI_VERIFY_URLS):
         raise HTTPException(422, "Pi supports this provider but Gateway cannot yet verify its API key")
     if not credentials.available():
         raise HTTPException(503, "Encrypted credential storage is not configured")
@@ -979,7 +992,9 @@ def _ai_save(data, user, db, replace=False):
         raise HTTPException(409, "Connection already exists; use replace")
     if existing is None and replace:
         raise HTTPException(404, "Connection not found")
-    credit = _ai_verify(data.provider_id, data.api_key)
+    credit = (_ai_verify(data.provider_id, data.api_key)
+              if data.provider_id in _AI_VERIFY_URLS
+              else _ai_verify_via_pi(data.provider_id, data.api_key))
     # An explicitly verified connection may be the very first record for
     # this provider. Do not require an unrelated periodic catalog download
     # before the user can securely link their key.
@@ -1029,6 +1044,29 @@ def _ai_pi_control_headers():
     if 32 <= len(token) <= 4096:
         headers["x-pi-gateway-token"] = token
     return headers
+
+
+def _ai_verify_via_pi(provider_id, key):
+    headers = _ai_pi_control_headers()
+    if "x-pi-gateway-token" not in headers:
+        raise HTTPException(503, "Provider verification is unavailable; key was not stored")
+    try:
+        with _ai_httpx.Client(
+                transport=_ai_httpx.HTTPTransport(
+                    uds=os.getenv("PI_SOCKET", "/run/pi-central/pi.sock")),
+                timeout=18, follow_redirects=False, trust_env=False) as client:
+            response = client.post(
+                "http://pi/internal/provider/verify", headers=headers,
+                json={"provider_id": provider_id, "api_key": key})
+            if response.status_code != 200:
+                status = response.status_code if response.status_code in (402, 403, 422, 429) else 503
+                raise HTTPException(status, "Provider verification failed; key was not stored")
+            data = response.json()
+    except (_ai_httpx.HTTPError, OSError, ValueError):
+        raise HTTPException(503, "Provider verification is unavailable; key was not stored") from None
+    if not isinstance(data, dict) or data.get("verified") is not True or not data.get("model_id"):
+        raise HTTPException(503, "Provider did not return a verified model result; key was not stored")
+    return "unknown"
 
 
 def _ai_pi_invalidate(user_id=None, *, session_id=None, revoke_login=False, budget_modes=None):
@@ -1686,6 +1724,7 @@ def _ai_catalog_refresh_if_due(*, force=False):
                 try:
                     if (registry.get("model_scope") == "full" and
                             isinstance(registry.get("auth_methods"), dict) and
+                            isinstance(registry.get("api_key_probe_ids"), list) and
                             now() - aware(datetime.fromisoformat(last.replace("Z", "+00:00"))) < timedelta(days=_AI_REFRESH_DAYS)):
                         return True
                 except (ValueError, OverflowError):
@@ -1712,6 +1751,7 @@ def _ai_catalog_refresh_if_due(*, force=False):
             known = {row.id: row for row in db.scalars(select(AiProviderCatalog))}
             valid = {}
             auth_methods = {}
+            api_key_probe_ids = set()
             for item in all_rows:
                 if not isinstance(item, dict):
                     continue
@@ -1730,6 +1770,8 @@ def _ai_catalog_refresh_if_due(*, force=False):
                     auth_methods[pid] = [
                         method for method in ("apiKey", "oauth")
                         if method in methods]
+                if item.get("api_key_probe") is True:
+                    api_key_probe_ids.add(pid)
                 if pid not in known:
                     row = AiProviderCatalog(id=pid, name=valid[pid][0])
                     db.add(row)
@@ -1795,7 +1837,8 @@ def _ai_catalog_refresh_if_due(*, force=False):
             rules["pi_registry"] = {"synced_at": stamped.isoformat(),
                                     "model_scope": "full",
                                     "provider_ids": sorted(valid),
-                                    "auth_methods": auth_methods}
+                                    "auth_methods": auth_methods,
+                                    "api_key_probe_ids": sorted(api_key_probe_ids)}
             policy.allowed_providers = json.dumps(rules, separators=(",", ":"))
             db.commit()
             return True

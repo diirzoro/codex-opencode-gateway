@@ -338,3 +338,39 @@ assert.equal(fs.existsSync(path.join(directory,'unlisted.txt')),false);
     result = subprocess.run([node, "--input-type=module", "-e", check, str(source), str(tmp_path)],
                             capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("status, body, expected", [
+    (200, {"verified": True, "model_id": "fixture-model"}, None),
+    (200, {"verified": True}, 503),
+    (200, {"verified": False, "model_id": "fixture-model"}, 503),
+    (403, {}, 403),
+    (429, {}, 429),
+])
+def test_dynamic_provider_probe_requires_model_success(monkeypatch, status, body, expected):
+    class ProbeClient(FakeClient):
+        def post(self, url, *, headers, json):
+            assert url == "http://pi/internal/provider/verify"
+            assert headers["x-pi-gateway-token"] == "test-token"
+            assert json == {"provider_id": "fixture", "api_key": "dummy-key-for-test"}
+            return self.response
+
+    client = ProbeClient(SimpleNamespace(status_code=status, json=lambda: body))
+    monkeypatch.setattr(management, "_ai_pi_control_headers",
+                        lambda: {"x-pi-gateway-token": "test-token"})
+    monkeypatch.setattr(management._ai_httpx, "Client", lambda **kwargs: client)
+    if expected is None:
+        assert management._ai_verify_via_pi("fixture", "dummy-key-for-test") == "unknown"
+    else:
+        with pytest.raises(HTTPException) as exc:
+            management._ai_verify_via_pi("fixture", "dummy-key-for-test")
+        assert exc.value.status_code == expected
+
+
+def test_dynamic_provider_probe_has_no_network_fallback_without_control_token(monkeypatch):
+    monkeypatch.setattr(management, "_ai_pi_control_headers", lambda: {})
+    monkeypatch.setattr(management._ai_httpx, "Client",
+                        lambda **kwargs: pytest.fail("Missing token must prevent the probe"))
+    with pytest.raises(HTTPException) as exc:
+        management._ai_verify_via_pi("fixture", "dummy-key-for-test")
+    assert exc.value.status_code == 503
