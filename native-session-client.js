@@ -788,7 +788,7 @@
       return {status:'idle'};
     });
   }
-  async function send(id,{text,providerID,modelID,agent,variant,files=[]}){
+  async function send(id,{text,providerID,modelID,agent,variant,files=[],budget=null}){
     const row=await context(id);
     if(!activeProject||!activeWorkspace||!activeSession||
        String(row.project_id)!==String(activeProject.id)||
@@ -812,6 +812,7 @@
     let receipt=null;
     try{receipt=await native(row.workspace_id,'session/'+encodeURIComponent(row.runtime_id)+'/prompt_async',{
       messageID,model:{providerID,modelID},queueMode:'followUp',
+      ...(budget?{budget}:{}),
       ...(variant?{variant}:{}),...(agent?{agent}:{}),parts},{signal:submissionController.signal,
       timeout:files.some(f=>typeof f.url==='string'&&f.url.startsWith('data:'))?300000:30000});}
     catch(error){
