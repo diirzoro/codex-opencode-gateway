@@ -1422,7 +1422,7 @@ function latestBudgetPlan(worker){
     const message=rows[i];
     const text=(message?.content||[]).filter(p=>p?.type==="text")
       .map(p=>String(p.text||"")).join("\n");
-    if(message?.role!=="user"||!text.startsWith("[PI_BUDGET_ANALYSIS_V1]"))continue;
+    if(message?.role!=="user"||!/^\[PI_BUDGET_ANALYSIS_V1(?::[a-f0-9]{64})?\]/.test(text))continue;
     let summary="";
     for(let k=i+1;k<rows.length&&rows[k]?.role!=="user";k++){
       if(rows[k]?.role!=="assistant")continue;
@@ -1431,7 +1431,8 @@ function latestBudgetPlan(worker){
       if(response)summary=response;
     }
     if(summary)found={summary:summary.slice(0,12000),
-      model:null,createdAt:typeof message.timestamp==="number"?message.timestamp:0};
+      model:null,fingerprint:text.match(/^\[PI_BUDGET_ANALYSIS_V1:([a-f0-9]{64})\]/)?.[1]||null,
+      createdAt:typeof message.timestamp==="number"?message.timestamp:0};
   }
   return found;
 }
@@ -2427,7 +2428,7 @@ const server=http.createServer(async(req,res)=>{
             a.session.setActiveToolsByName(readOnly);
             a.budgetInventory=budgetProjectInventory(s);
             a.budgetPlan=null;
-            prompt="[PI_BUDGET_ANALYSIS_V1] File inventory (names only, filtered):\n"+
+            prompt="[PI_BUDGET_ANALYSIS_V1:"+a.budgetInventory.fingerprint+"] File inventory (names only, filtered):\n"+
               (a.budgetInventory?.files||[]).join("\n")+"\n\n"+
               "READ-ONLY PROJECT ANALYSIS. Do not alter any file, run commands, or disclose secrets. "+
               "Inspect only the files needed with available read-only tools. "+
