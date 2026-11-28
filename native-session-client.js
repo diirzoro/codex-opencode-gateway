@@ -452,7 +452,7 @@
     if(!view.node.isConnected)feed.append(view.node);
     if(!view.frame)view.frame=requestAnimationFrame(()=>{
       view.frame=0;if(piLive.get(id)!==view)return;
-      view.content.textContent=view.text;
+      view.content.textContent=visiblePiStreamText(view.text);
       if(feed.workspaceFollow?.following)feed.scrollTop=feed.scrollHeight;
     });
   }
