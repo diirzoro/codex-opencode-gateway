@@ -208,12 +208,14 @@ def test_customer_catalog_shows_all_price_types_without_admin_selection(monkeypa
     assert all("selected" not in model for model in result["models"])
 
 
-def test_budget_policy_modes_default_off():
+def test_budget_policy_modes_default_on():
     from app.models.platform import PlatformPolicy
     policy = PlatformPolicy(allowed_providers="[]", allowed_models="[]",
                             allowed_tools="[]", require_tool_approval=True)
     payload = policy.as_payload()
-    assert payload["budget_modes"] == {"analysis": False, "execution": False}
+    assert payload["budget_modes"] == {"analysis": True, "execution": True}
+    policy.allowed_models = '{"budget_modes":{"analysis":false,"execution":false}}'
+    assert policy.as_payload()["budget_modes"] == {"analysis": True, "execution": True}
 
 
 def test_budget_modes_are_independent_and_preserve_admin_model_selection():
